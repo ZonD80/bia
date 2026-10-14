@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bia · display</title>
+  <style>
+    :root { --bg:#0c0e12; --panel:#14181f; --line:#2a3140; --txt:#e8edf5; --dim:#8b95a7; --acc:#3d8bfd; }
+    * { box-sizing: border-box; }
+    html, body { height:100%; margin:0; background:var(--bg); color:var(--txt); font:14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+    body { display:flex; align-items:center; justify-content:center; padding:24px; }
+    .box { max-width:36em; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:24px; }
+    h1 { font-size:16px; margin:0 0 12px; }
+    p, code { color:var(--dim); }
+    code { color:var(--txt); font:13px ui-monospace, Menlo, monospace; }
+    a { color:var(--acc); }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>machine display</h1>
+    <p>This page shows display :0 once x11vnc is listening on <code>:5900</code>.</p>
+    <p>The session starts that server. If this text is showing, noVNC is not installed (<code>/usr/share/novnc/vnc.html</code>).</p>
+    <p><a href="/">back to chat</a></p>
+  </div>
+</body>
+</html>

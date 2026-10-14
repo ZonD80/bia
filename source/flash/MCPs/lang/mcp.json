@@ -1,0 +1,46 @@
+{
+  "name": "lang",
+  "version": "1.0.0",
+  "description": "Languages you hear and speak, on this machine (no cloud). Speech is transcribed with per-phrase language detection ([speech ru] \u2026 [en] \u2026); voices speak each language. lang_install(lang) learns a language: downloads its verified voice and enables it (do it without asking when [new language heard: \u2026] arrives or someone speaks or asks for a language; tell them you are learning it first). lang_list shows what is learned; lang_catalog(query) lists languages (~99 heard, ~42 spoken) and voices; lang_voice picks a voice; lang_preview makes a sample to send; lang_default sets the default language; lang_disable stops a language and its new-language notices; lang_remove deletes it (ask first). lang_transcribe(file) transcribes any recording; lang_synthesize(text, lang) makes an audio file. lang_settings: noise suppression, pause splitting, hallucination filter, discovery, echo filter, speaker check, and the Whisper model for calls and voice notes. lang_enroll saves a voice print for the opt-in speaker check.",
+  "command": {
+    "aarch64": "bin/aarch64/bia-mcp-lang",
+    "x86_64": "bin/x86_64/bia-mcp-lang"
+  },
+  "args": [],
+  "env": {
+    "BIA_SPEECH_DIR": "/usr/local/lib/bia/speech",
+    "LD_LIBRARY_PATH": "/usr/local/lib/bia/speech/lib"
+  },
+  "keywords": [
+    "language",
+    "languages",
+    "lang",
+    "learn",
+    "speak",
+    "voice",
+    "voices",
+    "speech",
+    "stt",
+    "tts",
+    "transcribe",
+    "transcription",
+    "accent",
+    "russian",
+    "spanish",
+    "german",
+    "french",
+    "noise",
+    "whisper",
+    "piper"
+  ],
+  "examples": [
+    "system|telegram:123|<issued>|<delivered>|[new language heard: es (Spanish), not installed yet. \u2026] -> say(channel='telegram:123', message='I hear Spanish \u2014 learning it now, one moment.'); discover(path='mcp/lang', enable=true); lang_install(lang='es')",
+    "root|console|<issued>|<delivered>|learn to speak Ukrainian -> lang_install(lang='uk')",
+    "root|console|<issued>|<delivered>|which languages do you know? -> lang_list()",
+    "root|console|<issued>|<delivered>|use a male Russian voice -> lang_catalog(query='ru'); lang_voice(lang='ru', voice='piper-ru_RU-dmitri-medium')",
+    "root|console|<issued>|<delivered>|let me hear the German voice -> lang_preview(lang='de'); say(files=['speech/previews/\u2026'])",
+    "root|console|<issued>|<delivered>|transcribe inbox/telegram/meeting.ogg -> lang_transcribe(file='inbox/telegram/meeting.ogg')",
+    "root|console|<issued>|<delivered>|forget French -> ask first; then lang_remove(lang='fr')",
+    "root|console|<issued>|<delivered>|voice notes are badly transcribed -> lang_settings(file_model='whisper-small')"
+  ]
+}

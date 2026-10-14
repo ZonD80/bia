@@ -1,0 +1,56 @@
+#!/bin/bash
+# dpkg pre-invoke hook (/etc/dpkg/dpkg.cfg.d/bia-keep-debs): keep a copy of each
+# custom .deb (not downloaded from a repository) dpkg is about to unpack in
+# /home/bia/files/debs, so a fold carries it and unfold can reinstall it. Covers
+# `dpkg -i file.deb` and `apt install ./file.deb`; repository packages come from
+# /var/cache/apt/archives and are skipped (unfold installs those by name). dpkg hooks
+# get no file list, so the paths are read from the calling dpkg's command line.
+# Must never fail: a non-zero pre-invoke aborts dpkg.
+STORE=/home/bia/files/debs
+
+keep() {
+  # Only on a booted bia system (not in the image build chroot).
+  [ "$(cat /proc/1/comm 2>/dev/null)" = systemd ] || [ -n "${BIA_KEEP_DEBS_TEST:-}" ] || return 0
+  [ -d /home/bia ] || return 0
+  case ${DPKG_HOOK_ACTION:-} in
+    install|unpack|"") ;;
+    *) return 0 ;;
+  esac
+  local pid=$PPID n=0 comm deb pkg ver arch name
+  # dash may exec the hook directly (parent = dpkg) or keep a shell in between.
+  while [ "$n" -lt 4 ] && [ "$pid" -gt 1 ]; do
+    comm=$(cat "/proc/$pid/comm" 2>/dev/null)
+    [ "$comm" = dpkg ] && break
+    pid=$(awk '{print $4}' "/proc/$pid/stat" 2>/dev/null) || return 0
+    n=$((n + 1))
+  done
+  [ "$comm" = dpkg ] || return 0
+  local cwd
+  cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null) || cwd=/
+  mkdir -p "$STORE" || return 0
+  while IFS= read -r -d '' deb; do
+    case $deb in
+      *.deb) ;;
+      *) continue ;;
+    esac
+    case $deb in
+      /*) ;;
+      *) deb="$cwd/$deb" ;;
+    esac
+    case $deb in
+      /var/cache/apt/archives/*) continue ;;
+    esac
+    [ -f "$deb" ] || continue
+    pkg=$(dpkg-deb -f "$deb" Package 2>/dev/null) || continue
+    ver=$(dpkg-deb -f "$deb" Version 2>/dev/null) || continue
+    arch=$(dpkg-deb -f "$deb" Architecture 2>/dev/null) || continue
+    [ -n "$pkg" ] && [ -n "$ver" ] && [ -n "$arch" ] || continue
+    # Debian archive naming: the epoch colon is written as %3a.
+    name="${pkg}_${ver//:/%3a}_${arch}.deb"
+    [ -f "$STORE/$name" ] && continue
+    ln -f "$deb" "$STORE/$name" 2>/dev/null || cp -f "$deb" "$STORE/$name" 2>/dev/null || true
+  done < "/proc/$pid/cmdline"
+}
+
+keep 2>/dev/null || true
+exit 0

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Visible boot progress: dhcpcd itself prints almost nothing to the console.
+[ -n "$IFACE" ] || exit 0
+[ "$IFACE" = lo ] && exit 0
+msg="bia-network: bringing up $IFACE (dhcp)…"
+echo "$msg" >&2
+[ -w /dev/console ] && echo "$msg" >/dev/console 2>/dev/null || true
+exit 0

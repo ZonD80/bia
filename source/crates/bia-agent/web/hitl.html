@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>bia · human task</title>
+  <style>
+    :root {
+      --bg: #0c0e12;
+      --panel: #14181f;
+      --line: #2a3140;
+      --txt: #e8edf5;
+      --dim: #8b95a7;
+      --acc: #3d8bfd;
+      --ok: #3dd68c;
+      --err: #ff6b6b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--txt);
+      font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+    }
+
+    body {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+    }
+
+    #bar {
+      background: #1558b0;
+      color: #fff;
+      padding: 8px 12px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    #bar h1 {
+      font: 600 14px/1.2 ui-sans-serif, system-ui, sans-serif;
+      margin: 0;
+    }
+
+    #bar a {
+      color: #fff;
+    }
+
+    #msg {
+      padding: 10px 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      white-space: pre-wrap;
+      color: var(--dim);
+    }
+
+    #view {
+      min-height: 0;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      background: #000;
+      position: relative;
+    }
+
+    #view iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    #view .hint {
+      color: var(--dim);
+      padding: 24px;
+      max-width: 40em;
+    }
+
+    #foot {
+      display: flex;
+      gap: 8px;
+      padding: 10px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      align-items: center;
+    }
+
+    #foot textarea {
+      flex: 1;
+      min-height: 44px;
+      resize: vertical;
+      background: #0f131a;
+      color: var(--txt);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      font: inherit;
+    }
+
+    #foot button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    #done {
+      background: var(--ok);
+      color: #0c0e12;
+    }
+
+    #fail {
+      background: var(--err);
+      color: #fff;
+    }
+
+    #st {
+      font-size: 12px;
+      color: var(--dim);
+      padding: 0 12px 8px;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="bar">
+    <h1 id="title">human task</h1>
+    <a id="ext" hidden target="_blank" rel="noopener">open URL</a>
+    <a href="/gui" target="_blank" rel="noopener">machine display /gui</a>
+  </div>
+  <div id="msg"></div>
+  <div id="view">
+    <div class="hint" id="hint">loading…</div>
+  </div>
+  <div id="st"></div>
+  <div id="foot">
+    <textarea id="note" placeholder="optional note back to bia"></textarea>
+    <button id="done">Done</button>
+    <button id="fail">Failed</button>
+  </div>
+  <script>
+    const cred = { credentials: 'include' };
+    const id = location.pathname.split('/').filter(Boolean)[1];
+    const $ = k => document.getElementById(k);
+
+    function status(s) { $('st').textContent = s || ''; }
+
+    async function finish(ok) {
+      const note = $('note').value;
+      const r = await fetch('/v1/hitl/' + id + '/finish', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ok, note })
+      });
+      if (!r.ok) { status(await r.text()); return; }
+      status(ok ? 'reported to bia' : 'reported as failed');
+      $('done').disabled = $('fail').disabled = true;
+    }
+
+    $('done').onclick = () => finish(true);
+    $('fail').onclick = () => finish(false);
+
+    function showFrame(src) {
+      $('hint').remove();
+      const f = document.createElement('iframe');
+      f.src = src;
+      $('view').appendChild(f);
+    }
+
+    async function boot() {
+      const r = await fetch('/v1/hitl/' + id, cred);
+      if (r.status === 401) { location.href = '/'; return; }
+      if (!r.ok) { $('hint').textContent = 'no such task'; return; }
+      const t = await r.json();
+      document.title = 'bia · ' + (t.title || id);
+      $('title').textContent = t.title || id;
+      $('msg').textContent = t.message || '';
+      if (t.done) { status('already finished'); $('done').disabled = $('fail').disabled = true; }
+      const url = (t.url || '').trim();
+      const local = /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url);
+      if (url && !local) {
+        $('ext').hidden = false;
+        $('ext').href = url;
+        $('ext').textContent = 'open URL';
+      }
+      showFrame('/gui');
+      status('machine display. Do the action in the view, then Done.');
+    }
+    boot();
+  </script>
+</body>
+
+</html>

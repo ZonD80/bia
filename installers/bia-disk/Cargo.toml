@@ -1,0 +1,10 @@
+[package]
+name = "bia-disk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPT layout for bia images"
+
+[dependencies]
+gpt = "4.1"
+anyhow.workspace = true

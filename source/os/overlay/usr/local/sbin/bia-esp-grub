@@ -1,0 +1,240 @@
+#!/bin/bash
+# Install Debian shim + signed GRUB (Secure Boot stock path) onto a FAT tree.
+# Also stages i386-pc BIOS images when present (x86_64).
+#
+#   bia-esp-grub <arm64|x86_64> <fat-root> [root-label] [kernel-dir-prefix]
+#
+# Env:
+#   SYSROOT   Debian tree with shim-signed + grub-efi-*-signed (default /)
+#   CMDLINE   kernel cmdline (default from root-label)
+#   BOOTLABEL ESP filesystem label used by GRUB search fallback (default BIABOOT)
+#   BOOTUUID  ESP filesystem UUID for GRUB search (preferred; auto-detected from FAT)
+#   COEXIST=1 install only under <fat-root><prefix> (Windows shared ESP);
+#             PREFIX defaults to /EFI/bia. Does not touch EFI/BOOT or EFI/Microsoft.
+#   RESCUE_CPIO rescue overlay installed next to the kernel (default
+#             $SYSROOT/usr/local/share/bia/rescue.cpio.gz; empty = hook only)
+set -euo pipefail
+ARCH=${1:?arch}
+FAT=${2:?fat root}
+ROOTLABEL=${3:-BIAROOT}
+PREFIX=${4:-}
+SYSROOT=${SYSROOT:-/}
+BOOTLABEL=${BOOTLABEL:-BIABOOT}
+COEXIST=${COEXIST:-0}
+RESCUE_CPIO=${RESCUE_CPIO-$SYSROOT/usr/local/share/bia/rescue.cpio.gz}
+HERE=$(cd "$(dirname "$0")" && pwd)
+# One-shot GRUB rescue entry (bia-update writes bia-rescue/next.cfg to use it).
+rescue_hook() {
+  "$HERE/bia-rescue-hook" "$FAT" "${RESCUE_CPIO:-/nonexistent}"
+}
+CMDLINE=${CMDLINE:-root=LABEL=$ROOTLABEL rootfstype=ext4 rootwait rw net.ifnames=0 console=tty0 console=ttyS0,115200}
+
+# Menu title: distinguish disk vs flash so firmware boot menus are unambiguous
+# when both drives are present.
+entry_title() {
+  case "$ROOTLABEL" in
+    BIADISK) echo "bia disk" ;;
+    BIAFLASH|BIAROOT) echo "bia flash" ;;
+    *) echo "bia" ;;
+  esac
+}
+ENTRY_TITLE=$(entry_title)
+
+esp_uuid() {
+  local src
+  if [ -n "${BOOTUUID:-}" ]; then
+    printf '%s\n' "$BOOTUUID"
+    return 0
+  fi
+  src=$(findmnt -n -o SOURCE "$FAT" 2>/dev/null || true)
+  if [ -n "$src" ]; then
+    blkid -s UUID -o value "$src" 2>/dev/null || true
+  fi
+}
+BOOTUUID=$(esp_uuid)
+
+case $ARCH in
+  arm64|aarch64)
+    ARCH=arm64
+    BOOT_EFI=BOOTAA64.EFI
+    GRUB_EFI=grubaa64.efi
+    MM_EFI=mmaa64.efi
+    ;;
+  x86_64|amd64)
+    ARCH=x86_64
+    BOOT_EFI=BOOTX64.EFI
+    GRUB_EFI=grubx64.efi
+    MM_EFI=mmx64.efi
+    ;;
+  *) echo "unknown arch $ARCH"; exit 1 ;;
+esac
+
+if [ "$COEXIST" = 1 ] && [ -z "$PREFIX" ]; then
+  PREFIX=/EFI/bia
+fi
+
+find1() {
+  local p
+  for p in "$@"; do
+    if [ -f "$SYSROOT$p" ]; then
+      echo "$SYSROOT$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+SHIM=
+GRUB=
+MM=
+case $ARCH in
+  x86_64)
+    SHIM=$(find1 \
+      /usr/lib/shim/shimx64.efi.signed \
+      /usr/lib/shim/BOOTX64.EFI \
+      /usr/lib/shim/shimx64.efi) || true
+    GRUB=$(find1 \
+      /usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed \
+      /usr/lib/grub-efi/grubx64.efi.signed \
+      /usr/lib/grub/x86_64-efi-signed/grubx64.efi) || true
+    MM=$(find1 \
+      /usr/lib/shim/mmx64.efi.signed \
+      /usr/lib/shim/mmx64.efi) || true
+    ;;
+  arm64)
+    SHIM=$(find1 \
+      /usr/lib/shim/shimaa64.efi.signed \
+      /usr/lib/shim/BOOTAA64.EFI \
+      /usr/lib/shim/shimaa64.efi) || true
+    GRUB=$(find1 \
+      /usr/lib/grub/arm64-efi-signed/grubaa64.efi.signed \
+      /usr/lib/grub-efi/grubaa64.efi.signed \
+      /usr/lib/grub/arm64-efi-signed/grubaa64.efi) || true
+    MM=$(find1 \
+      /usr/lib/shim/mmaa64.efi.signed \
+      /usr/lib/shim/mmaa64.efi) || true
+    ;;
+esac
+
+[ -n "$SHIM" ] || { echo "no signed shim under $SYSROOT (install shim-signed)"; exit 1; }
+[ -n "$GRUB" ] || { echo "no signed grub under $SYSROOT (install grub-efi-*-signed)"; exit 1; }
+
+if [ -n "$PREFIX" ]; then
+  KPATH="${PREFIX}/vmlinuz-lts"
+  IPATH="${PREFIX}/initramfs-lts"
+else
+  KPATH=/vmlinuz-lts
+  IPATH=/initramfs-lts
+fi
+
+write_cfg() {
+  local out=$1
+  local search_file=$2
+  local search_block
+  mkdir -p "$(dirname "$out")"
+  # Prefer ESP UUID so a USB stick with the same FAT label (or /vmlinuz-lts)
+  # cannot steal $root when both drives are present.
+  if [ -n "$BOOTUUID" ]; then
+    search_block="search --no-floppy --fs-uuid $BOOTUUID --set=root
+if [ -z \"\$root\" ]; then
+  search --no-floppy --set=root --label $BOOTLABEL
+fi
+if [ -z \"\$root\" ]; then
+  search --no-floppy --set=root --file $search_file
+fi"
+  else
+    search_block="search --no-floppy --set=root --label $BOOTLABEL
+if [ -z \"\$root\" ]; then
+  search --no-floppy --set=root --file $search_file
+fi"
+  fi
+  # No insmod of disk modules: signed GRUB only runs modules baked into the EFI binary.
+  cat > "$out" <<EOF
+set default=0
+set timeout=10
+$search_block
+menuentry "$ENTRY_TITLE" {
+  linux $KPATH $CMDLINE
+  initrd $IPATH
+}
+EOF
+}
+
+if [ "$COEXIST" = 1 ]; then
+  dest="$FAT$PREFIX"
+  mkdir -p "$dest"
+  cp -f "$SHIM" "$dest/$BOOT_EFI"
+  cp -f "$GRUB" "$dest/$GRUB_EFI"
+  if [ -n "$MM" ]; then
+    cp -f "$MM" "$dest/$MM_EFI"
+  fi
+  # Coexist grub.cfg: no ESP label required; paths are absolute from the ESP root.
+  cat > "$dest/grub.cfg" <<EOF
+set default=0
+set timeout=10
+menuentry "$ENTRY_TITLE" {
+  linux $KPATH $CMDLINE
+  initrd $IPATH
+}
+EOF
+  rm -f "$dest/limine.conf" "$dest/limine.cfg" 2>/dev/null || true
+  rescue_hook
+  echo "== bia-esp-grub coexist: $dest (shim=$(basename "$SHIM"), grub=$(basename "$GRUB"), root=$ROOTLABEL, entry=$ENTRY_TITLE)"
+  ls -lh "$dest/$BOOT_EFI" "$dest/$GRUB_EFI" "$dest/grub.cfg"
+  exit 0
+fi
+
+mkdir -p "$FAT/EFI/BOOT" "$FAT/EFI/debian" "$FAT/boot/grub"
+
+# Removable/fallback path: firmware loads BOOT*.EFI (= shim); shim loads grub*.efi
+# next to it. Never install fbx64.efi (shim fallback reboot loop on USB).
+cp -f "$SHIM" "$FAT/EFI/BOOT/$BOOT_EFI"
+cp -f "$GRUB" "$FAT/EFI/BOOT/$GRUB_EFI"
+cp -f "$SHIM" "$FAT/EFI/debian/$BOOT_EFI"
+cp -f "$GRUB" "$FAT/EFI/debian/$GRUB_EFI"
+if [ -n "$MM" ]; then
+  cp -f "$MM" "$FAT/EFI/BOOT/$MM_EFI"
+  cp -f "$MM" "$FAT/EFI/debian/$MM_EFI"
+fi
+rm -f "$FAT/EFI/BOOT/fbx64.efi" "$FAT/EFI/BOOT/fb"*.efi \
+  "$FAT/EFI/debian/fbx64.efi" "$FAT/EFI/debian/fb"*.efi 2>/dev/null || true
+
+write_cfg "$FAT/boot/grub/grub.cfg" /vmlinuz-lts
+write_cfg "$FAT/EFI/BOOT/grub.cfg" /vmlinuz-lts
+write_cfg "$FAT/EFI/debian/grub.cfg" /vmlinuz-lts
+rescue_hook
+
+# BIOS: modules + core.img that loads (,gpt1)/boot/grub/grub.cfg (ESP = GPT p1).
+if [ "$ARCH" = x86_64 ] && [ -d "$SYSROOT/usr/lib/grub/i386-pc" ]; then
+  mkdir -p "$FAT/boot/grub/i386-pc"
+  cp -a "$SYSROOT/usr/lib/grub/i386-pc/." "$FAT/boot/grub/i386-pc/"
+  if command -v grub-mkimage >/dev/null 2>&1; then
+    # Prefer the running system's binary (bia-update has already copied the new OS).
+    grub-mkimage -O i386-pc \
+      -d "$SYSROOT/usr/lib/grub/i386-pc" \
+      -o "$FAT/boot/grub/i386-pc/core.img" \
+      -p '(,gpt1)/boot/grub' \
+      biosdisk part_gpt fat search search_fs_file search_fs_uuid search_label \
+      configfile normal linux linux16 chain echo ls \
+      || echo "grub-mkimage failed; BIOS embed needs core.img"
+  elif [ "$SYSROOT" != / ] && [ -x "$SYSROOT/usr/bin/grub-mkimage" ]; then
+    if chroot "$SYSROOT" grub-mkimage -O i386-pc -o /tmp/bia-grub-core.img \
+      -p '(,gpt1)/boot/grub' \
+      biosdisk part_gpt fat search search_fs_file search_fs_uuid search_label \
+      configfile normal linux linux16 chain echo ls \
+      && cp -f "$SYSROOT/tmp/bia-grub-core.img" "$FAT/boot/grub/i386-pc/core.img"; then
+      rm -f "$SYSROOT/tmp/bia-grub-core.img"
+    else
+      echo "grub-mkimage (chroot) failed; BIOS embed needs core.img"
+    fi
+  else
+    echo "grub-mkimage missing; BIOS core.img not built"
+  fi
+fi
+
+rm -f "$FAT/EFI/limine.conf" "$FAT/EFI/limine.cfg" \
+  "$FAT/limine.conf" "$FAT/limine.cfg" \
+  "$FAT/EFI/BOOT/limine.conf" "$FAT/EFI/BOOT/limine.cfg" 2>/dev/null || true
+
+echo "== bia-esp-grub: $FAT ($ARCH, shim=$(basename "$SHIM"), grub=$(basename "$GRUB"), root=$ROOTLABEL, boot=$BOOTLABEL, uuid=${BOOTUUID:-none}, entry=$ENTRY_TITLE)"
+ls -lh "$FAT/EFI/BOOT/$BOOT_EFI" "$FAT/EFI/BOOT/$GRUB_EFI" "$FAT/boot/grub/grub.cfg"

@@ -1,0 +1,34 @@
+{
+  "name": "screen",
+  "version": "1.0.0",
+  "description": "See the real desktop and move the mouse and keyboard. This is the whole screen, not a web page. Call screen_shot first. You can see that picture. x and y are pixels from the top-left. screen_click clicks there. screen_cursor_move_human moves the mouse along a curved path with pauses, like a person \u2014 use it before a captcha click or when a site watches the cursor. screen_type types text into the window that has focus. screen_key presses one key, such as Return or ctrl+c. Do not guess coordinates. Look at the picture first.",
+  "command": {
+    "aarch64": "bin/aarch64/bia-mcp-screen",
+    "x86_64": "bin/x86_64/bia-mcp-screen"
+  },
+  "args": [],
+  "keywords": [
+    "screen",
+    "display",
+    "desktop",
+    "mouse",
+    "keyboard",
+    "click",
+    "type",
+    "key",
+    "screenshot",
+    "resolution",
+    "window",
+    "gui",
+    "x11",
+    "cursor",
+    "human",
+    "captcha"
+  ],
+  "examples": [
+    "root|console|<issued>|<delivered>|what is on the screen -> discover(path='mcp/screen', enable=true); screen_shot()",
+    "root|console|<issued>|<delivered>|click the button at the bottom right -> screen_shot(); screen_click(x=900, y=700)",
+    "root|console|<issued>|<delivered>|move the mouse like a person to the checkbox -> screen_cursor_move_human(x=420, y=310)",
+    "root|console|<issued>|<delivered>|type hello and press enter -> screen_type(text='hello'); screen_key(key='Return')"
+  ]
+}

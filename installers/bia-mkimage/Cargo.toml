@@ -1,0 +1,10 @@
+[package]
+name = "bia-mkimage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Host tool: create a raw disk image with the bia GPT layout (filesystems are made by tools/mkimage.sh)"
+
+[dependencies]
+bia-disk = { path = "../bia-disk" }
+anyhow.workspace = true

@@ -1,0 +1,17 @@
+ext4
+exfat
+vfat
+nls_utf8
+nls_cp437
+overlay
+tun
+virtio_pci
+virtio_blk
+virtio_net
+virtio_console
+nvme
+ahci
+xhci_pci
+usb_storage
+sd_mod
+snd-aloop

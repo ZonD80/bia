@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "source/crates/bia-agent",
+    "source/crates/bia-pki",
+    "source/crates/bia-mcp",
+    "source/crates/bia-mcp-system",
+    "source/crates/bia-mcp-telegram",
+    "source/crates/bia-mcp-whatsapp",
+    "source/crates/bia-mcp-secrets",
+    "source/crates/bia-mcp-chrome",
+    "source/crates/bia-mcp-screen",
+    "source/crates/bia-mcp-carry",
+    "source/crates/bia-speech",
+    "source/crates/bia-mcp-lang",
+    "installers/bia-disk",
+    "installers/bia-mkimage",
+    "installers/bia-flash",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "unwind"
+strip = false
+debug = 1
+
+# bia-mcp-telegram: LTO off + no debuginfo so the dylib final link stays light/fast.
+[profile.release-telegram]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = 0
+
+# bia-mcp-whatsapp: voip stack is heavy; skip LTO for faster links.
+[profile.release-whatsapp]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = 0
+
+# Patched: accept() waits on PhoneCallWaiting/Accepted until ready phoneCall.
+[patch.crates-io]
+tgcalls = { path = "source/vendor/tgcalls" }
+# Patched: sync ExternalFrameSender for the paced TTS/silence audio thread.
+ntgcalls = { path = "source/vendor/ntgcalls" }

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Write the stick from the existing x86_64 root.img, wipe stick.
+# Override: ERASE=0 ./make_flash_stick   MODEL=repo[:file.gguf] adds a local model
+exec env SKIP_BUILD=1 \
+  ERASE="${ERASE:-1}" \
+  make -C "$(dirname "$0")/.." ARCH=x86_64 flash

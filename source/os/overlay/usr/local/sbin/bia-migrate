@@ -1,0 +1,1008 @@
+#!/bin/sh
+# Copy the running system onto the other drive.
+#   bia-migrate to-disk [--wipe] [--partition=DEV] [--shrink-from=DEV] [--size-mib=N]
+#   bia-migrate to-flash
+#
+# Empty internal disk: wipe GPT, new ESP + BIADISK (default).
+# Windows already present: coexist — install onto a chosen/created volume and
+# share the existing ESP (EFI/bia + efibootmgr). Requires volume args unless --wipe.
+set -eu
+
+log() { echo "bia-migrate: $*" >&2; }
+
+root_disk() {
+  src=$(findmnt -n -o SOURCE /)
+  base=${src##*/}
+  if [ -f "/sys/class/block/$base/partition" ]; then
+    basename "$(dirname "$(readlink -f "/sys/class/block/$base")")"
+  else
+    echo "$base"
+  fi
+}
+
+part_name() {
+  disk=$1
+  n=$2
+  if [ -b "${disk}p${n}" ]; then
+    echo "${disk}p${n}"
+  else
+    echo "${disk}${n}"
+  fi
+}
+
+parent_disk() {
+  base=${1##*/}
+  if [ -f "/sys/class/block/$base/partition" ]; then
+    echo "/dev/$(basename "$(dirname "$(readlink -f "/sys/class/block/$base")")")"
+  else
+    echo "$1"
+  fi
+}
+
+part_num() {
+  base=${1##*/}
+  cat "/sys/class/block/$base/partition" 2>/dev/null || echo ""
+}
+
+dev_bytes() {
+  name=${1##*/}
+  sec=$(cat "/sys/class/block/$name/size" 2>/dev/null || echo 0)
+  echo $((sec * 512))
+}
+
+mib() { echo $(( ($1 + 1048575) / 1048576 )); }
+
+part_uuid() {
+  blkid -s PARTUUID -o value "$1" 2>/dev/null || true
+}
+
+fstype_of() {
+  blkid -s TYPE -o value "$1" 2>/dev/null || true
+}
+
+label_of() {
+  blkid -s LABEL -o value "$1" 2>/dev/null || true
+}
+
+efi_loader_name() {
+  case $(uname -m) in
+    aarch64|arm64) echo BOOTAA64.EFI ;;
+    *) echo BOOTX64.EFI ;;
+  esac
+}
+
+release_part() {
+  dev=$1
+  swapoff "$dev" 2>/dev/null || true
+  while tgt=$(findmnt -nr -o TARGET -S "$dev" 2>/dev/null | tail -1) && [ -n "$tgt" ]; do
+    log "unmounting $tgt ($dev)"
+    umount "$tgt" 2>/dev/null || umount -l "$tgt" 2>/dev/null || {
+      log "could not unmount $tgt"
+      return 1
+    }
+  done
+}
+
+# Drop every mount and swap on the target so sfdisk can rewrite it.
+release_disk() {
+  disk=$1
+  base=${disk##*/}
+  for p in /sys/block/"$base"/"$base"*; do
+    [ -e "$p" ] || continue
+    release_part "/dev/${p##*/}" || return 1
+  done
+}
+
+settle() {
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=10 || true
+  fi
+}
+
+mount_wait() {
+  dev=$1
+  fstype=$2
+  mnt=$3
+  i=0
+  err=/run/bia-mig-mount.err
+  while [ "$i" -lt 40 ]; do
+    if mount -t "$fstype" "$dev" "$mnt" 2>"$err"; then
+      return 0
+    fi
+    # NTFS/fuse and auto-detect
+    if [ "$fstype" = "auto" ] || [ "$fstype" = "ntfs" ]; then
+      if mount "$dev" "$mnt" 2>"$err"; then
+        return 0
+      fi
+    fi
+    log "waiting for $dev to accept a mount"
+    sleep 0.25
+    i=$((i + 1))
+  done
+  log "mount $dev on $mnt failed"
+  cat "$err" >&2 || true
+  return 1
+}
+
+# True if a FAT volume has EFI/Microsoft (Windows Boot Manager).
+esp_has_windows() {
+  dev=$1
+  mkdir -p /run/bia-mig-probe
+  umount /run/bia-mig-probe 2>/dev/null || true
+  if ! mount -t vfat -o ro "$dev" /run/bia-mig-probe 2>/dev/null; then
+    return 1
+  fi
+  ok=1
+  [ -d /run/bia-mig-probe/EFI/Microsoft ] || [ -d /run/bia-mig-probe/efi/Microsoft ] && ok=0
+  umount /run/bia-mig-probe 2>/dev/null || true
+  return $ok
+}
+
+# Print path of Windows ESP on $disk, or empty.
+find_windows_esp() {
+  disk=$1
+  base=${disk##*/}
+  for p in /sys/block/"$base"/"$base"*; do
+    [ -e "$p" ] || continue
+    dev=/dev/${p##*/}
+    ft=$(fstype_of "$dev")
+    case "$ft" in
+      vfat|fat|fat32|msdos|efi) ;;
+      *) continue ;;
+    esac
+    if esp_has_windows "$dev"; then
+      echo "$dev"
+      return 0
+    fi
+  done
+  return 1
+}
+
+looks_like_windows_system() {
+  dev=$1
+  ft=$(fstype_of "$dev")
+  case "$ft" in
+    ntfs|fuseblk) ;;
+    *) return 1 ;;
+  esac
+  mkdir -p /run/bia-mig-probe
+  umount /run/bia-mig-probe 2>/dev/null || true
+  if ! mount -t ntfs3 -o ro "$dev" /run/bia-mig-probe 2>/dev/null \
+    && ! mount -t ntfs-3g -o ro "$dev" /run/bia-mig-probe 2>/dev/null \
+    && ! mount -o ro "$dev" /run/bia-mig-probe 2>/dev/null; then
+    return 1
+  fi
+  hit=1
+  [ -d /run/bia-mig-probe/Windows/System32 ] || [ -d /run/bia-mig-probe/windows/system32 ] && hit=0
+  umount /run/bia-mig-probe 2>/dev/null || true
+  return $hit
+}
+
+is_esp_part() {
+  dev=$1
+  ft=$(fstype_of "$dev")
+  case "$ft" in
+    vfat|fat|fat32|msdos|efi) ;;
+    *) return 1 ;;
+  esac
+  mkdir -p /run/bia-mig-probe
+  umount /run/bia-mig-probe 2>/dev/null || true
+  mount -t vfat -o ro "$dev" /run/bia-mig-probe 2>/dev/null || return 1
+  ok=1
+  [ -d /run/bia-mig-probe/EFI ] || [ -d /run/bia-mig-probe/efi ] && ok=0
+  umount /run/bia-mig-probe 2>/dev/null || true
+  return $ok
+}
+
+# Human inventory for the agent when coexist needs volume args.
+inventory() {
+  disk=$1
+  base=${disk##*/}
+  {
+    echo "Windows is on $disk. Refusing to wipe the whole disk."
+    echo "Choose a volume, then call again with one of:"
+    echo "  partition=/dev/...          format that partition as BIADISK"
+    echo "  shrink_from=/dev/... size_mib=N   shrink that volume, create N MiB BIADISK"
+    echo "  size_mib=N                  create N MiB BIADISK from unallocated free space"
+    echo "  wipe=true                   erase the whole disk (destroys Windows)"
+    echo ""
+    echo "Partitions:"
+    for p in /sys/block/"$base"/"$base"*; do
+      [ -e "$p" ] || continue
+      dev=/dev/${p##*/}
+      sz=$(mib "$(dev_bytes "$dev")")
+      ft=$(fstype_of "$dev")
+      lb=$(label_of "$dev")
+      note=""
+      if is_esp_part "$dev"; then note="$note ESP"; fi
+      if looks_like_windows_system "$dev"; then note="$note Windows-system"; fi
+      if esp_has_windows "$dev"; then note="$note Windows-boot"; fi
+      printf '  %s  %sMiB  type=%s  label=%s%s\n' "$dev" "$sz" "${ft:-?}" "${lb:--}" "$note"
+    done
+    echo ""
+    echo "Unallocated (parted free):"
+    parted -s -m "$disk" unit MiB print free 2>/dev/null || echo "  (parted unavailable)"
+  } | tee /dev/stderr
+}
+
+need_system_bytes() {
+  root_used=$(df -B1 -P / | awk 'NR==2 {print $3}')
+  data_used=0
+  if findmnt -n /mnt >/dev/null 2>&1; then
+    data_used=$(du -sk /mnt 2>/dev/null | awk '{print $1 * 1024}')
+  fi
+  slack=$((256 * 1048576))
+  echo $((root_used + data_used + slack))
+}
+
+# EFI plus one ext4 for the whole machine (wipe path).
+prepare_wipe() {
+  disk=$1
+  bootlabel=$2
+  rootlabel=$3
+  command -v sfdisk >/dev/null 2>&1 || { log "sfdisk is missing (package fdisk)"; return 1; }
+  mine=$(root_disk)
+  [ "${disk##*/}" != "$mine" ] || { log "refusing to format the disk that is / ($disk)"; return 1; }
+  log "running from /dev/$mine, wiping and copying onto $disk"
+  release_disk "$disk"
+
+  need=$(need_system_bytes)
+  esp_part=$((256 * 1048576))
+  disk_bytes=$(dev_bytes "$disk")
+  [ "$disk_bytes" -ge $((esp_part + need)) ] || {
+    log "target $(mib "$disk_bytes") MiB is too small for $(mib "$need") MiB of system and files"
+    return 1
+  }
+  bios_part=$((1 * 1048576))
+  log "layout on $disk: EFI $(mib "$esp_part") MiB ($bootlabel), BIOS $(mib "$bios_part") MiB, one ext4 $rootlabel for the rest"
+  sfdisk --wipe always --label gpt "$disk" <<EOF
+,+$(mib "$esp_part")M,uefi,*
+,+$(mib "$bios_part")M,biosboot
+,+
+EOF
+  log "partition table written, waiting for devices"
+  settle
+  EFI_DEV=$(part_name "$disk" 1)
+  BIOS_DEV=$(part_name "$disk" 2)
+  ROOT_DEV=$(part_name "$disk" 3)
+  i=0
+  while [ "$i" -lt 20 ] && { [ ! -b "$EFI_DEV" ] || [ ! -b "$ROOT_DEV" ]; }; do
+    log "waiting for partitions on $disk"
+    sleep 0.25
+    i=$((i + 1))
+  done
+  [ -b "$EFI_DEV" ] && [ -b "$ROOT_DEV" ] || { log "partitions did not appear on $disk"; return 1; }
+  log "formatting $EFI_DEV as $bootlabel"
+  mkfs.vfat -F 32 -n "$bootlabel" "$EFI_DEV"
+  log "formatting $ROOT_DEV as $rootlabel"
+  mkfs.ext4 -F -L "$rootlabel" "$ROOT_DEV"
+  log "filesystems ready"
+  settle
+}
+
+format_biadisk() {
+  root=$1
+  [ -b "$root" ] || { log "$root is not a block device"; return 1; }
+  disk=$(parent_disk "$root")
+  mine=$(root_disk)
+  [ "${disk##*/}" != "$mine" ] || { log "refusing to format a partition on the live root disk"; return 1; }
+  is_esp_part "$root" && { log "refusing to format the ESP $root"; return 1; }
+  looks_like_windows_system "$root" && {
+    log "refusing to format Windows system volume $root (has \\Windows\\System32)"
+    return 1
+  }
+  need=$(need_system_bytes)
+  have=$(dev_bytes "$root")
+  [ "$have" -ge "$need" ] || {
+    log "$root is $(mib "$have") MiB; need about $(mib "$need") MiB"
+    return 1
+  }
+  release_part "$root" || return 1
+  log "formatting $root as BIADISK"
+  mkfs.ext4 -F -L BIADISK "$root"
+  settle
+  ROOT_DEV=$root
+}
+
+# Create BIADISK of size_mib from unallocated space on $disk.
+create_from_free() {
+  disk=$1
+  size_mib=$2
+  command -v parted >/dev/null 2>&1 || { log "parted is missing"; return 1; }
+  mine=$(root_disk)
+  [ "${disk##*/}" != "$mine" ] || { log "refusing to edit the live root disk"; return 1; }
+  need=$(need_system_bytes)
+  want=$((size_mib * 1048576))
+  [ "$want" -ge "$need" ] || {
+    log "size_mib=$size_mib is too small; need about $(mib "$need") MiB"
+    return 1
+  }
+  gap=$(parted -s -m "$disk" unit B print free 2>/dev/null | awk -F: '
+    $5 == "free" {
+      start=$2; end=$3; size=$4
+      gsub(/B/,"",start); gsub(/B/,"",end); gsub(/B/,"",size)
+      if (size+0 > best+0) { best=size; bs=start; be=end }
+    }
+    END { if (best+0 > 0) print bs, be, best }
+  ')
+  [ -n "$gap" ] || { log "no unallocated free space on $disk"; return 1; }
+  set -- $gap
+  gap_start=$1
+  gap_end=$2
+  gap_size=$3
+  [ "$gap_size" -ge "$want" ] || {
+    log "largest free gap is $(mib "$gap_size") MiB; need $size_mib MiB"
+    return 1
+  }
+  align=1048576
+  start=$(( (gap_start + align - 1) / align * align ))
+  end=$(( start + want ))
+  [ "$end" -le "$gap_end" ] || end=$gap_end
+  log "creating BIADISK in free space: ${start}B .. ${end}B ($size_mib MiB request)"
+  parted -s "$disk" unit B mkpart BIADISK ext4 "$start" "$end"
+  settle
+  ROOT_DEV=""
+  base=${disk##*/}
+  for p in /sys/block/"$base"/"$base"*; do
+    [ -e "$p" ] || continue
+    dev=/dev/${p##*/}
+    st=$(( $(cat "/sys/class/block/${p##*/}/start") * 512 ))
+    diff=$((st - start))
+    [ "$diff" -lt 0 ] && diff=$((0 - diff))
+    if [ "$st" -eq "$start" ] || [ "$diff" -lt "$align" ]; then
+      ROOT_DEV=$dev
+      break
+    fi
+  done
+  [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ] || { log "new partition did not appear"; return 1; }
+  log "formatting $ROOT_DEV as BIADISK"
+  mkfs.ext4 -F -L BIADISK "$ROOT_DEV"
+  settle
+}
+
+shrink_fs() {
+  dev=$1
+  new_bytes=$2
+  ft=$(fstype_of "$dev")
+  release_part "$dev" || return 1
+  case "$ft" in
+    ext4|ext3|ext2)
+      log "checking $dev ($ft)"
+      e2fsck -f -y "$dev" || true
+      log "shrinking $ft on $dev to $(mib "$new_bytes") MiB"
+      resize2fs "$dev" "$((new_bytes / 1024))K"
+      ;;
+    ntfs)
+      command -v ntfsresize >/dev/null 2>&1 || { log "ntfsresize missing (ntfs-3g)"; return 1; }
+      log "checking NTFS on $dev (Windows should be shut down cleanly)"
+      ntfsresize -f -i "$dev" >/run/bia-mig-ntfs.info 2>&1 || true
+      log "shrinking NTFS on $dev to $(mib "$new_bytes") MiB"
+      ntfsresize -f -s "$new_bytes" "$dev"
+      ;;
+    *)
+      log "cannot shrink filesystem type '${ft:-unknown}' on $dev"
+      return 1
+      ;;
+  esac
+}
+
+# Shrink $from by size_mib and create BIADISK in the freed space.
+shrink_and_create() {
+  disk=$1
+  from=$2
+  size_mib=$3
+  command -v parted >/dev/null 2>&1 || { log "parted is missing"; return 1; }
+  [ -b "$from" ] || { log "$from is not a block device"; return 1; }
+  [ "$(parent_disk "$from")" = "$disk" ] || {
+    log "$from is not on $disk"
+    return 1
+  }
+  is_esp_part "$from" && { log "refusing to shrink the ESP"; return 1; }
+  looks_like_windows_system "$from" && {
+    log "shrinking Windows system volume $from; ensure Windows was shut down cleanly"
+  }
+  n=$(part_num "$from")
+  [ -n "$n" ] || { log "cannot determine partition number for $from"; return 1; }
+  need=$(need_system_bytes)
+  want=$((size_mib * 1048576))
+  [ "$want" -ge "$need" ] || {
+    log "size_mib=$size_mib is too small; need about $(mib "$need") MiB"
+    return 1
+  }
+  part_b=$(dev_bytes "$from")
+  # leave at least 1 GiB on the shrunk volume
+  min_keep=$((1024 * 1048576))
+  [ "$part_b" -gt $((want + min_keep)) ] || {
+    log "$from is only $(mib "$part_b") MiB; need $size_mib MiB free plus ≥1024 MiB remaining"
+    return 1
+  }
+  new_part_b=$((part_b - want))
+  # shrink filesystem a bit smaller than the new partition (16 MiB slack)
+  fs_b=$((new_part_b - 16 * 1048576))
+  [ "$fs_b" -gt "$min_keep" ] || { log "shrink math failed"; return 1; }
+  shrink_fs "$from" "$fs_b" || return 1
+
+  base=${from##*/}
+  start_sec=$(cat "/sys/class/block/$base/start")
+  start_b=$((start_sec * 512))
+  new_end_b=$((start_b + new_part_b))
+  # align end down to 1 MiB
+  align=1048576
+  new_end_b=$(( new_end_b / align * align ))
+  log "resizing partition $n to end at ${new_end_b}B"
+  parted -s "$disk" unit B resizepart "$n" "$new_end_b"
+  settle
+
+  create_start=$new_end_b
+  create_end=$((create_start + want))
+  disk_end=$(dev_bytes "$disk")
+  [ "$create_end" -le "$disk_end" ] || create_end=$disk_end
+  log "creating BIADISK ${create_start}B .. ${create_end}B"
+  parted -s "$disk" unit B mkpart BIADISK ext4 "$create_start" "$create_end"
+  settle
+
+  ROOT_DEV=""
+  dbase=${disk##*/}
+  for p in /sys/block/"$dbase"/"$dbase"*; do
+    [ -e "$p" ] || continue
+    dev=/dev/${p##*/}
+    st=$(( $(cat "/sys/class/block/${p##*/}/start") * 512 ))
+    diff=$((st - create_start))
+    [ "$diff" -lt 0 ] && diff=$((0 - diff))
+    if [ "$st" -eq "$create_start" ] || [ "$diff" -lt "$align" ]; then
+      ROOT_DEV=$dev
+      break
+    fi
+  done
+  [ -n "$ROOT_DEV" ] && [ -b "$ROOT_DEV" ] || { log "new BIADISK partition did not appear"; return 1; }
+  log "formatting $ROOT_DEV as BIADISK"
+  mkfs.ext4 -F -L BIADISK "$ROOT_DEV"
+  settle
+}
+
+run_copy() {
+  what=$1
+  dest=$2
+  shift 2
+  log "starting $what"
+  ( "$@"; echo $? > /run/bia-mig-status ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    used=$(df -kP "$dest" 2>/dev/null | awk 'NR==2 {printf "%d MiB", $3/1024}')
+    log "$what: ${used:-working}"
+    sleep 3
+  done
+  wait "$pid" || true
+  st=$(cat /run/bia-mig-status 2>/dev/null || echo 1)
+  [ "$st" = 0 ] || { log "$what failed (exit $st)"; return 1; }
+  log "$what finished"
+}
+
+virtual_fs() {
+  case "$1" in
+    proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2|cgroup|autofs|bpf|tracefs|securityfs|pstore|configfs|debugfs|fusectl|mqueue|hugetlbfs|ramfs|nsfs|rpc_pipefs|binfmt_misc|overlay|squashfs) return 0 ;;
+  esac
+  return 1
+}
+
+copy_root_tree() {
+  root=$1
+  mkdir -p /run/bia-mig-root
+  umount /run/bia-mig-root 2>/dev/null || true
+  log "mounting $root"
+  mount_wait "$root" ext4 /run/bia-mig-root
+  mnt_sep=0
+  findmnt -n /mnt >/dev/null 2>&1 && mnt_sep=1
+  copy_os() {
+    set -o pipefail
+    excl=
+    [ "$mnt_sep" = 1 ] && excl="--exclude=./mnt"
+    tar -C / --one-file-system \
+      --exclude=./proc --exclude=./sys --exclude=./dev --exclude=./run \
+      --exclude=./tmp --exclude=./flash --exclude=./lost+found \
+      $excl \
+      -cf - . | tar -C /run/bia-mig-root -xf -
+  }
+  run_copy "root filesystem" /run/bia-mig-root copy_os
+  mkdir -p /run/bia-mig-root/proc /run/bia-mig-root/sys /run/bia-mig-root/dev \
+    /run/bia-mig-root/run /run/bia-mig-root/tmp /run/bia-mig-root/mnt \
+    /run/bia-mig-root/boot
+  chmod 1777 /run/bia-mig-root/tmp
+  findmnt -rn -o TARGET,FSTYPE > /run/bia-mig-mounts
+  while read -r tgt fst; do
+    case "$tgt" in
+      /|/boot|/mnt|/proc|/sys|/dev|/run|/tmp|/flash) continue ;;
+      /proc/*|/sys/*|/dev/*|/run/*) continue ;;
+    esac
+    virtual_fs "$fst" && continue
+    log "also copying $tgt ($fst) onto the same filesystem"
+    mkdir -p "/run/bia-mig-root$tgt"
+    set -o pipefail
+    tar -C "$tgt" --one-file-system -cf - . | tar -C "/run/bia-mig-root$tgt" -xf -
+  done < /run/bia-mig-mounts
+  if [ "$mnt_sep" = 1 ]; then
+    src_k=$(du -sk /mnt 2>/dev/null | awk '{print $1}')
+    log "folding /mnt into /home/bia, about $(( ${src_k:-0} / 1024 )) MiB"
+    copy_mnt() {
+      set -o pipefail
+      mkdir -p /run/bia-mig-root/home/bia
+      tar -C /mnt --one-file-system -cf - . | tar -C /run/bia-mig-root/home/bia -xf -
+    }
+    run_copy "files, MCPs and models" /run/bia-mig-root copy_mnt
+  fi
+  swap_line=""
+  free_b=$(df -B1 -P /run/bia-mig-root | awk 'NR==2 {print $4}')
+  if [ "${free_b:-0}" -gt $((1536 * 1048576)) ]; then
+    log "writing 1024 MiB swap file"
+    dd if=/dev/zero of=/run/bia-mig-root/swapfile bs=1048576 count=1024 >/dev/null
+    chmod 600 /run/bia-mig-root/swapfile
+    mkswap /run/bia-mig-root/swapfile >/dev/null
+    swap_line="/swapfile  none  swap  sw,nofail 0 0"
+  else
+    log "not enough free space for a swap file"
+  fi
+  echo "$swap_line" > /run/bia-mig-swap-line
+}
+
+write_boot_notice() {
+  rootlabel=$1
+  case "$rootlabel" in
+    BIADISK) where="the internal disk" ;;
+    BIAFLASH) where="the flash drive" ;;
+    *) where="$rootlabel" ;;
+  esac
+  mkdir -p /run/bia-mig-root/home/bia/files/state
+  printf '%s\n' "system was migrated onto $where and this boot is from that disk" \
+    > /run/bia-mig-root/home/bia/files/state/boot_notice
+  log "next boot from $rootlabel will be told this was a migration"
+}
+
+install_kernel_files() {
+  dest=$1
+  k=$(ls /boot/vmlinuz-* 2>/dev/null | grep -v '\.old$' | head -1 || true)
+  i=$(ls /boot/initrd.img-* /boot/initramfs-* 2>/dev/null | grep -v '\.old$' | head -1 || true)
+  [ -n "$k" ] && [ -n "$i" ] || { log "no kernel in /boot"; return 1; }
+  log "installing kernel $(basename "$k") and $(basename "$i") -> $dest"
+  cp -f "$k" "$dest/vmlinuz-lts"
+  cp -f "$i" "$dest/initramfs-lts"
+}
+
+menu_title_for() {
+  case "$1" in
+    BIADISK) echo "bia disk" ;;
+    BIAFLASH|BIAROOT) echo "bia flash" ;;
+    *) echo "bia" ;;
+  esac
+}
+
+write_grub_conf() {
+  dest=$1
+  rootlabel=$2
+  path_prefix=$3
+  entry=$(menu_title_for "$rootlabel")
+  if [ -n "$path_prefix" ]; then
+    kpath="${path_prefix}/vmlinuz-lts"
+    ipath="${path_prefix}/initramfs-lts"
+  else
+    kpath=/vmlinuz-lts
+    ipath=/initramfs-lts
+  fi
+  cmdline="root=LABEL=$rootlabel rootfstype=ext4 rootwait rw net.ifnames=0 console=tty0 console=ttyS0,115200"
+  # Prefer ESP UUID so an inserted flash stick cannot steal GRUB's $root.
+  esp_uuid=${ESP_UUID:-}
+  if [ -z "$esp_uuid" ] && [ -n "${EFI_DEV:-}" ]; then
+    esp_uuid=$(blkid -s UUID -o value "$EFI_DEV" 2>/dev/null || true)
+  fi
+  mkdir -p "$dest/boot/grub" "$dest/EFI/BOOT" "$dest/EFI/debian"
+  for out in "$dest/boot/grub/grub.cfg" "$dest/EFI/BOOT/grub.cfg" "$dest/EFI/debian/grub.cfg"; do
+    if [ -n "$esp_uuid" ]; then
+      cat > "$out" <<EOF
+set default=0
+set timeout=10
+search --no-floppy --fs-uuid $esp_uuid --set=root
+if [ -z "\$root" ]; then
+  search --no-floppy --set=root --label $bootlabel_for_search
+fi
+if [ -z "\$root" ]; then
+  search --no-floppy --set=root --file /vmlinuz-lts
+fi
+menuentry "$entry" {
+  linux $kpath $cmdline
+  initrd $ipath
+}
+EOF
+    else
+      cat > "$out" <<EOF
+set default=0
+set timeout=10
+search --no-floppy --set=root --label $bootlabel_for_search
+if [ -z "\$root" ]; then
+  search --no-floppy --set=root --file /vmlinuz-lts
+fi
+menuentry "$entry" {
+  linux $kpath $cmdline
+  initrd $ipath
+}
+EOF
+    fi
+  done
+}
+
+# Register a named UEFI entry and put it first so Removable Media (USB) does not
+# win over the internal disk when both are present.
+register_efi_entry() {
+  disk=$1
+  efi=$2
+  loader_path=$3
+  label=$4
+  prefer_first=${5:-0}
+  if [ ! -d /sys/firmware/efi ]; then
+    log "legacy BIOS boot: no UEFI boot entry to register (the disk boots through its BIOS GRUB; on a UEFI machine pick '$label' or the disk in the firmware menu)"
+    return 0
+  fi
+  command -v efibootmgr >/dev/null 2>&1 || {
+    log "efibootmgr missing; pick $loader_path from the firmware boot menu ($label)"
+    return 0
+  }
+  prev=$(efibootmgr 2>/dev/null | awk '/BootOrder:/{print $2; exit}')
+  pn=$(part_num "$efi")
+  [ -n "$pn" ] || pn=1
+  # Drop previous bia / bia disk / bia flash entries so labels stay unique.
+  efibootmgr 2>/dev/null | awk '
+    BEGIN { IGNORECASE=1 }
+    /^\s*Boot[0-9A-Fa-f]{4}/ {
+      line=$0
+      sub(/^Boot[0-9A-Fa-f]{4}\*?[ \t]*/, "", line)
+      if (line ~ /^(bia|bia disk|bia flash)([ \t]|$)/) print substr($1,5,4)
+    }
+  ' | while read -r id; do
+    [ -n "$id" ] && efibootmgr -b "$id" -B >/dev/null 2>&1 || true
+  done
+  log "registering EFI boot entry '$label'"
+  efibootmgr -c -d "$disk" -p "$pn" -l "$loader_path" -L "$label" >/run/bia-mig-efiboot.txt 2>&1 \
+    || log "efibootmgr create failed: $(cat /run/bia-mig-efiboot.txt 2>/dev/null)"
+  new=$(efibootmgr 2>/dev/null | awk -v lab="$label" '
+    BEGIN { IGNORECASE=1 }
+    /^\s*Boot[0-9A-Fa-f]{4}/ {
+      line=$0
+      sub(/^Boot[0-9A-Fa-f]{4}\*?[ \t]*/, "", line)
+      if (index(line, lab) == 1) { print substr($1,5,4); exit }
+    }
+  ')
+  if [ -z "$new" ]; then
+    return 0
+  fi
+  if [ "$prefer_first" = 1 ]; then
+    if [ -n "$prev" ]; then
+      case ",$prev," in
+        *",$new,"*)
+          rest=$(echo "$prev" | tr ',' '\n' | grep -v -i "^${new}$" | paste -sd, -)
+          if [ -n "$rest" ]; then
+            efibootmgr -o "${new},${rest}" >/dev/null 2>&1 || true
+          else
+            efibootmgr -o "$new" >/dev/null 2>&1 || true
+          fi
+          ;;
+        *) efibootmgr -o "${new},${prev}" >/dev/null 2>&1 || true ;;
+      esac
+    else
+      efibootmgr -o "$new" >/dev/null 2>&1 || true
+    fi
+    log "BootOrder prefers '$label' so an inserted flash stick does not steal boot"
+  elif [ -n "$prev" ]; then
+    case ",$prev," in
+      *",$new,"*) efibootmgr -o "$prev" >/dev/null 2>&1 || true ;;
+      *) efibootmgr -o "${prev},${new}" >/dev/null 2>&1 || true ;;
+    esac
+  fi
+}
+
+# Exclusive ESP (wipe / to-flash): own label, shim + signed GRUB tree.
+finish_boot_wipe() {
+  efi=$1
+  rootlabel=$2
+  bootlabel=$3
+  bootlabel_for_search=$bootlabel
+  swap_line=$(cat /run/bia-mig-swap-line 2>/dev/null || true)
+  cat > /run/bia-mig-root/etc/fstab <<EOF
+LABEL=$rootlabel  /     ext4  noatime 0 1
+LABEL=$bootlabel  /boot vfat  noatime,nofail 0 2
+$swap_line
+EOF
+  write_boot_notice "$rootlabel"
+  mkdir -p /run/bia-mig-efi
+  umount /run/bia-mig-efi 2>/dev/null || true
+  log "mounting $efi"
+  mount_wait "$efi" vfat /run/bia-mig-efi
+  install_kernel_files /run/bia-mig-efi || return 1
+  if [ -d /boot/EFI ]; then
+    cp -a /boot/EFI /run/bia-mig-efi/
+  fi
+  if [ -d /boot/boot ]; then
+    cp -a /boot/boot /run/bia-mig-efi/
+  fi
+  EFI_DEV=$efi
+  ESP_UUID=$(blkid -s UUID -o value "$efi" 2>/dev/null || true)
+  export EFI_DEV ESP_UUID
+  write_grub_conf /run/bia-mig-efi "$rootlabel" ""
+  /usr/local/sbin/bia-rescue-hook /run/bia-mig-efi || log "rescue hook not installed; carry_update will not work from this disk"
+  log "syncing"
+  sync
+  # Legacy BIOS embed when a BIOS boot partition exists (wipe layout p2).
+  disk=$(parent_disk "$efi")
+  if [ "$(uname -m)" = x86_64 ] && [ -f /run/bia-mig-efi/boot/grub/i386-pc/core.img ] && command -v python3 >/dev/null; then
+    log "embedding BIOS GRUB on $disk"
+    python3 /usr/local/share/bia/grub-bios-embed.py --raw-pc "$disk" /run/bia-mig-efi/boot/grub/i386-pc \
+      || log "BIOS embed failed (UEFI still works)"
+  fi
+  loader=$(efi_loader_name)
+  entry=$(menu_title_for "$rootlabel")
+  # Prefer the internal disk entry when this is BIADISK, so USB Removable does not win.
+  prefer=0
+  [ "$rootlabel" = BIADISK ] && prefer=1
+  register_efi_entry "$disk" "$efi" "\\EFI\\BOOT\\$loader" "$entry" "$prefer"
+  umount /run/bia-mig-efi
+  umount /run/bia-mig-root
+  log "bootable $rootlabel is ready ('$entry')."
+}
+
+# Shared Windows ESP: EFI/bia only (shim + grub + kernel); fstab by PARTUUID; efibootmgr entry.
+finish_boot_coexist() {
+  efi=$1
+  rootlabel=$2
+  disk=$3
+  pu=$(part_uuid "$efi")
+  [ -n "$pu" ] || { log "no PARTUUID for ESP $efi"; return 1; }
+  swap_line=$(cat /run/bia-mig-swap-line 2>/dev/null || true)
+  cat > /run/bia-mig-root/etc/fstab <<EOF
+LABEL=$rootlabel  /     ext4  noatime 0 1
+PARTUUID=$pu  /boot vfat  noatime,nofail,umask=0077 0 2
+$swap_line
+EOF
+  write_boot_notice "$rootlabel"
+  mkdir -p /run/bia-mig-efi
+  umount /run/bia-mig-efi 2>/dev/null || true
+  log "mounting shared ESP $efi (not relabeling)"
+  mount_wait "$efi" vfat /run/bia-mig-efi
+  loader=$(efi_loader_name)
+  case $loader in
+    BOOTAA64.EFI) grub_efi=grubaa64.efi; mm_efi=mmaa64.efi ;;
+    *) grub_efi=grubx64.efi; mm_efi=mmx64.efi ;;
+  esac
+  mkdir -p /run/bia-mig-efi/EFI/bia
+  src_shim=""
+  for c in /boot/EFI/BOOT/"$loader" /boot/EFI/debian/"$loader"; do
+    [ -f "$c" ] && src_shim=$c && break
+  done
+  src_grub=""
+  for c in /boot/EFI/BOOT/"$grub_efi" /boot/EFI/debian/"$grub_efi"; do
+    [ -f "$c" ] && src_grub=$c && break
+  done
+  [ -n "$src_shim" ] && [ -n "$src_grub" ] || { log "no shim/grub under /boot/EFI"; return 1; }
+  log "installing shim+grub -> EFI/bia/ (leaving EFI/Microsoft and EFI/Boot alone)"
+  cp -f "$src_shim" "/run/bia-mig-efi/EFI/bia/$loader"
+  cp -f "$src_grub" "/run/bia-mig-efi/EFI/bia/$grub_efi"
+  for c in /boot/EFI/BOOT/"$mm_efi" /boot/EFI/debian/"$mm_efi"; do
+    [ -f "$c" ] && cp -f "$c" "/run/bia-mig-efi/EFI/bia/$mm_efi" && break
+  done
+  install_kernel_files /run/bia-mig-efi/EFI/bia || return 1
+  entry=$(menu_title_for "$rootlabel")
+  cmdline="root=LABEL=$rootlabel rootfstype=ext4 rootwait rw net.ifnames=0 console=tty0 console=ttyS0,115200"
+  cat > /run/bia-mig-efi/EFI/bia/grub.cfg <<EOF
+set default=0
+set timeout=10
+menuentry "$entry" {
+  linux /EFI/bia/vmlinuz-lts $cmdline
+  initrd /EFI/bia/initramfs-lts
+}
+EOF
+  /usr/local/sbin/bia-rescue-hook /run/bia-mig-efi || log "rescue hook not installed; carry_update will not work from this disk"
+  log "syncing ESP"
+  sync
+
+  # Windows stays ahead in BootOrder; entry is named distinctly from flash.
+  register_efi_entry "$disk" "$efi" "\\EFI\\bia\\$loader" "$entry" 0
+
+  umount /run/bia-mig-efi
+  umount /run/bia-mig-root
+  log "BIADISK ready beside Windows ('$entry'; Windows stays the default BootOrder, next boot is one-shot)."
+}
+
+copy_system_wipe() {
+  efi=$1
+  root=$2
+  rootlabel=$3
+  bootlabel=$4
+  copy_root_tree "$root" || return 1
+  finish_boot_wipe "$efi" "$rootlabel" "$bootlabel"
+}
+
+copy_system_coexist() {
+  efi=$1
+  root=$2
+  rootlabel=$3
+  disk=$4
+  copy_root_tree "$root" || return 1
+  finish_boot_coexist "$efi" "$rootlabel" "$disk"
+}
+
+parse_to_disk_args() {
+  WIPE=0
+  DISK=""
+  PARTITION=""
+  SHRINK_FROM=""
+  SIZE_MIB=""
+  shift # drop to-disk
+  for a in "$@"; do
+    case "$a" in
+      --wipe|wipe=true|--wipe=true) WIPE=1 ;;
+      --wipe=false|wipe=false) WIPE=0 ;;
+      --disk=*) DISK=${a#--disk=} ;;
+      disk=*) DISK=${a#disk=} ;;
+      --partition=*) PARTITION=${a#--partition=} ;;
+      partition=*) PARTITION=${a#partition=} ;;
+      --shrink-from=*) SHRINK_FROM=${a#--shrink-from=} ;;
+      shrink_from=*) SHRINK_FROM=${a#shrink_from=} ;;
+      --size-mib=*) SIZE_MIB=${a#--size-mib=} ;;
+      size_mib=*) SIZE_MIB=${a#size_mib=} ;;
+      *) log "unknown arg: $a"; return 1 ;;
+    esac
+  done
+}
+
+# Whole-disk node (/dev/sda), not a partition. Accepts partition and returns its parent.
+normalize_disk() {
+  d=$1
+  case "$d" in
+    /dev/*) ;;
+    *) d="/dev/$d" ;;
+  esac
+  [ -b "$d" ] || { log "$d is not a block device"; return 1; }
+  base=${d##*/}
+  if [ -f "/sys/class/block/$base/partition" ]; then
+    d=$(parent_disk "$d")
+  fi
+  [ -b "$d" ] || { log "cannot resolve disk for $1"; return 1; }
+  # must be a whole disk (no partition file)
+  base=${d##*/}
+  [ ! -f "/sys/class/block/$base/partition" ] || { log "$d is still a partition; pass the disk (e.g. /dev/sda)"; return 1; }
+  echo "$d"
+}
+
+resolve_to_disk() {
+  # Explicit disk= wins. Else parent of partition/shrink_from.
+  if [ -n "$DISK" ]; then
+    DISK=$(normalize_disk "$DISK") || return 1
+    return 0
+  fi
+  if [ -n "$PARTITION" ]; then
+    DISK=$(normalize_disk "$(parent_disk "$PARTITION")") || return 1
+    log "disk inferred from partition $PARTITION -> $DISK"
+    return 0
+  fi
+  if [ -n "$SHRINK_FROM" ]; then
+    DISK=$(normalize_disk "$(parent_disk "$SHRINK_FROM")") || return 1
+    log "disk inferred from shrink_from $SHRINK_FROM -> $DISK"
+    return 0
+  fi
+  log "pass disk=/dev/... (whole disk), or partition=/dev/..."
+  log "list candidates with: lsblk -d -o NAME,SIZE,MODEL,TRAN,SERIAL"
+  return 1
+}
+
+cmd_to_disk() {
+  parse_to_disk_args "$@" || exit 1
+  resolve_to_disk || exit 1
+  disk=$DISK
+  log "target disk $disk"
+
+  win_esp=""
+  if win_esp=$(find_windows_esp "$disk"); then
+    log "Windows ESP at $win_esp"
+  else
+    win_esp=""
+  fi
+
+  if [ -n "$win_esp" ] && [ "$WIPE" != 1 ]; then
+    # Coexist path
+    if [ -n "$PARTITION" ]; then
+      format_biadisk "$PARTITION" || exit 1
+    elif [ -n "$SHRINK_FROM" ] && [ -n "$SIZE_MIB" ]; then
+      shrink_and_create "$disk" "$SHRINK_FROM" "$SIZE_MIB" || exit 1
+    elif [ -n "$SIZE_MIB" ] && [ -z "$SHRINK_FROM" ] && [ -z "$PARTITION" ]; then
+      create_from_free "$disk" "$SIZE_MIB" || exit 1
+    else
+      inventory "$disk"
+      exit 1
+    fi
+    EFI_DEV=$win_esp
+    copy_system_coexist "$EFI_DEV" "$ROOT_DEV" BIADISK "$disk" || exit 1
+    reboot_into_disk
+    return 0
+  fi
+
+  if [ -n "$win_esp" ] && [ "$WIPE" = 1 ]; then
+    log "wipe=true: destroying Windows on $disk"
+  fi
+
+  # Exclusive wipe path (no Windows, or forced wipe)
+  if [ -n "$PARTITION$SHRINK_FROM$SIZE_MIB" ] && [ "$WIPE" != 1 ] && [ -z "$win_esp" ]; then
+    log "volume args are only for Windows-coexist; this disk has no Windows ESP — wiping as usual"
+  fi
+  prepare_wipe "$disk" BIADBOOT BIADISK || exit 1
+  copy_system_wipe "$EFI_DEV" "$ROOT_DEV" BIADISK BIADBOOT || exit 1
+  reboot_into_disk
+}
+
+# One-shot BootNext to "bia disk", then reboot (do not power off).
+prefer_boot_once() {
+  want=$1
+  command -v efibootmgr >/dev/null 2>&1 || {
+    log "efibootmgr missing; pick '$want' in the firmware menu on reboot"
+    return 0
+  }
+  id=$(efibootmgr 2>/dev/null | awk -v lab="$want" '
+    BEGIN { IGNORECASE=1 }
+    /^\s*Boot[0-9A-Fa-f]{4}/ {
+      line=$0
+      sub(/^Boot[0-9A-Fa-f]{4}\*?[ \t]*/, "", line)
+      if (index(line, lab) == 1) { print substr($1,5,4); exit }
+    }
+  ')
+  if [ -n "$id" ] && efibootmgr -n "$id" >/dev/null 2>&1; then
+    log "next boot → $want ($id)"
+    return 0
+  fi
+  log "could not set BootNext to '$want'; pick it in the firmware menu"
+}
+
+reboot_into_disk() {
+  if [ ! -d /sys/firmware/efi ]; then
+    # Legacy BIOS keeps its own boot order (the stick first) and nothing here can
+    # change it: a reboot would start the stick again. Power off instead.
+    sync
+    log "legacy BIOS boot: bia cannot change the boot order. Powering off: remove the flash stick, then turn the computer on to start bia from the disk."
+    systemctl poweroff || poweroff || true
+    sleep infinity
+  fi
+  prefer_boot_once "bia disk"
+  sync
+  log "rebooting into the disk (not powering off)"
+  systemctl reboot || reboot || true
+  sleep infinity
+}
+
+cmd_to_flash() {
+  DISK=""
+  shift # drop to-flash
+  for a in "$@"; do
+    case "$a" in
+      --disk=*) DISK=${a#--disk=} ;;
+      disk=*) DISK=${a#disk=} ;;
+      *) log "unknown arg: $a"; exit 1 ;;
+    esac
+  done
+  if [ -z "$DISK" ]; then
+    log "pass disk=/dev/... (the flash stick)"
+    log "list candidates with: lsblk -d -o NAME,SIZE,MODEL,TRAN,SERIAL"
+    exit 1
+  fi
+  disk=$(normalize_disk "$DISK") || exit 1
+  log "target flash disk $disk"
+  prepare_wipe "$disk" BIAFBOOT BIAFLASH || exit 1
+  copy_system_wipe "$EFI_DEV" "$ROOT_DEV" BIAFLASH BIAFBOOT || exit 1
+}
+
+case "${1:-}" in
+  to-disk)
+    cmd_to_disk "$@"
+    ;;
+  to-flash)
+    cmd_to_flash "$@"
+    ;;
+  *)
+    echo "usage: bia-migrate to-disk [--disk=DEV] [--wipe] [--partition=DEV] [--shrink-from=DEV] [--size-mib=N]" >&2
+    echo "       bia-migrate to-flash [--disk=DEV]" >&2
+    exit 1
+    ;;
+esac

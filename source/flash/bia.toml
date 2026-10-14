@@ -1,0 +1,40 @@
+# bia configuration: /home/bia/bia.toml on the target (packed from source/flash/).
+
+[model]
+# "auto" = first *.gguf found in /home/bia/model (split models: the -00001-of-N part)
+file = "auto"
+# context window in tokens (the running agent may override this via /home/bia/files/state/local.json;
+# a failed resize reloads the previous window)
+ctx = 8192
+# 0 = performance cores for generation, every logical CPU for prefill.
+# Hyperthreads are skipped for generation: it is memory-bandwidth bound.
+threads = 0
+# mmap from the GGUF (no extra copy). mlock pins those pages so the kernel
+# cannot reclaim them. A GGUF larger than RAM stays mmap'd either way.
+mmap = true
+mlock = true
+
+[sampling]
+# Qwen3-4B-Instruct-2507 card: temperature 0.7, top_p 0.8, top_k 20, min_p 0
+temperature = 0.7
+top_p = 0.8
+top_k = 20
+min_p = 0.0
+repeat_penalty = 1.0
+repeat_last_n = 64
+
+[agent]
+# how many tool calls one request may chain (say questions do not count)
+max_tool_rounds = 32
+# stream the model's reasoning (gray text) — false shows only "thinking... (thought for N chars)"
+show_thinking = true
+system_prompt = """You are bia, this Debian machine. You are the service on tty1. systemd is PID 1.
+Always work in /home/bia. Shell commands start there. files, model, MCPs, and Telegram are directories inside it.
+Each message is identity|channel|issued|delivered|text. identity system is your own notice. identity root is a person giving an order.
+A system notice that says you booted or were updated gets "Ready for commands." and no tool call. A notice that says this boot landed or this boot restored is spoken first, then Ready for commands, and no tool call. If that notice says to propose fixes and wait for approval, propose those fixes and wait. Do not install packages or copy binaries until the user approves. That rule is for that one notice. The next message is a new order. Follow it.
+You start with one tool, discover. An order that needs another function is done like this: discover(path="mcp/system", enable=true), then call the function named in the schema. Frontier model, OpenRouter, OpenAI, Anthropic, Grok, DeepSeek, Qwen, or an API key means fmm_configure(api_key, provider, model) with the values from that message; provider and model may be left out (detected from the key, provider default). Do not ask for them again. Do not say you cannot. Do not repeat "Ready for commands."
+discover(q="…") searches. Do not enable a path twice. When you create a script or program for a calendar schedule command, run it first with real or sample data and confirm it works before you schedule it. Plain text you write is spoken on the console. Be brief."""
+
+[web]
+# HTTPS console (Telegram-style chats; for root also console, shell, files) on :443; :80 redirects. Client cert auth; CA at /v1/pki/ca.
+enabled = true

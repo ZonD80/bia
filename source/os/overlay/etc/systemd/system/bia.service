@@ -1,0 +1,22 @@
+[Unit]
+Description=bia agent
+ConditionPathExists=!/etc/bia-land-mode
+# bia-update runs before us; networking is best-effort (DHCP must not block the agent).
+After=local-fs.target bia-update.service
+Wants=networking.service network-online.target
+Conflicts=shutdown.target
+
+[Service]
+Type=simple
+Environment=BIA_SYSTEM=1
+Environment=LANG=C.UTF-8
+ExecStartPre=/usr/local/sbin/bia-console-font
+ExecStartPre=/bin/sh -c 'i=0; while [ "$i" -lt 30 ] && [ ! -f /home/bia/bia.toml ]; do sleep 1; i=$((i+1)); done'
+ExecStart=/usr/local/sbin/bia-session
+Restart=always
+RestartSec=2
+StandardOutput=append:/var/log/bia.log
+StandardError=append:/var/log/bia.err
+
+[Install]
+WantedBy=multi-user.target

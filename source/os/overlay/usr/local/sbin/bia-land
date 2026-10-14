@@ -1,0 +1,510 @@
+#!/bin/bash
+# ISO boots this in setup: ask for the network, install onto a disk, reboot.
+# The installed disk boots this in wait: bring that network up and run land.
+set -euo pipefail
+
+trap 'umount /run/bia-land-efi 2>/dev/null || true; umount /run/bia-land-root 2>/dev/null || true' EXIT
+
+# The first VT plus every active kernel console (ttyS0 on x86, ttyAMA0 on arm64).
+TERMS=(/dev/tty1)
+for c in $(cat /sys/class/tty/console/active 2>/dev/null); do
+  case $c in tty0|tty1) continue ;; esac
+  [ -c "/dev/$c" ] && TERMS+=("/dev/$c")
+done
+[ "${#TERMS[@]}" -gt 1 ] || TERMS+=(/dev/ttyS0)
+
+say() {
+  local n=0 t
+  for t in "${TERMS[@]}"; do
+    if [ -c "$t" ]; then
+      printf '%s\n' "$*" >"$t" 2>/dev/null || true
+      n=1
+    fi
+  done
+  [ "$n" = 1 ] || printf '%s\n' "$*"
+}
+
+ask() {
+  local dir t line pid
+  say "$1"
+  dir=$(mktemp -d /run/bia-land.XXXXXX)
+  : >"$dir/pids"
+  for t in "${TERMS[@]}"; do
+    [ -c "$t" ] || continue
+    (
+      trap - EXIT
+      IFS= read -r line <"$t" || exit 0
+      printf '%s\n' "$line" >"$dir/pending"
+      mv -f "$dir/pending" "$dir/answer"
+    ) &
+    echo $! >>"$dir/pids"
+  done
+  if ! [ -s "$dir/pids" ]; then
+    IFS= read -r REPLY || REPLY=
+    rm -rf "$dir"
+    return 0
+  fi
+  while [ ! -s "$dir/answer" ]; do
+    sleep 0.2
+  done
+  REPLY=$(tr -d '\r' <"$dir/answer")
+  while read -r pid; do
+    kill "$pid" 2>/dev/null || true
+  done <"$dir/pids"
+  wait 2>/dev/null || true
+  rm -rf "$dir"
+  say "> $REPLY"
+}
+
+ask_yn() {
+  local a
+  while true; do
+    ask "$1 [yes/no]"
+    a=$(printf '%s' "$REPLY" | tr '[:upper:]' '[:lower:]')
+    case $a in
+      y|yes) return 0 ;;
+      n|no) return 1 ;;
+    esac
+    say "Answer yes or no."
+  done
+}
+
+valid_ip() {
+  printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'
+}
+
+valid_cidr() {
+  local addr prefix
+  printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' || return 1
+  addr=${1%/*}
+  prefix=${1#*/}
+  valid_ip "$addr" || return 1
+  [ "$prefix" -le 32 ]
+}
+
+part_name() {
+  case $1 in
+    *[0-9]) echo "${1}p${2}" ;;
+    *) echo "${1}${2}" ;;
+  esac
+}
+
+dev_bytes() {
+  local name=${1##*/} sec
+  sec=$(cat "/sys/class/block/$name/size" 2>/dev/null || echo 0)
+  echo $((sec * 512))
+}
+
+live_disk() {
+  local src base
+  {
+    awk '$3=="iso9660" || $3=="udf" {print $1}' /proc/mounts
+    findmnt -nro SOURCE / 2>/dev/null || true
+  } | while read -r src; do
+    [ -n "$src" ] || continue
+    src=${src#/dev/}
+    src=${src%%\[*}
+    [ -e "/sys/class/block/$src" ] || continue
+    if [ -f "/sys/class/block/$src/partition" ]; then
+      base=$(basename "$(dirname "$(readlink -f "/sys/class/block/$src")")")
+    else
+      base=$src
+    fi
+    printf '%s\n' "$base"
+  done
+}
+
+is_live() {
+  local name=$1 hit
+  hit=$(live_disk | grep -x "$name" || true)
+  [ -n "$hit" ]
+}
+
+carry_bin() {
+  local arch
+  case $(uname -m) in
+    aarch64|arm64) arch=aarch64 ;;
+    x86_64) arch=x86_64 ;;
+    *) arch=$(uname -m) ;;
+  esac
+  echo "/home/bia/MCPs/carry/bin/$arch/bia-mcp-carry"
+}
+
+write_net() {
+  local root=$1 dhcpcd
+  mkdir -p "$root/etc/network"
+  dhcpcd=$(command -v dhcpcd || true)
+  if [ "$DHCP" = 1 ]; then
+    cat >"$root/etc/network/interfaces" <<EOF
+auto lo
+iface lo inet loopback
+
+auto $IFACE
+iface $IFACE inet manual
+    up ${dhcpcd:-dhcpcd} -4 -w --timeout 60 $IFACE
+    down ${dhcpcd:-dhcpcd} -x $IFACE
+EOF
+  else
+    cat >"$root/etc/network/interfaces" <<EOF
+auto lo
+iface lo inet loopback
+
+auto $IFACE
+iface $IFACE inet static
+    address $ADDR
+    gateway $GW
+EOF
+  fi
+  {
+    for ns in $DNS; do
+      printf 'nameserver %s\n' "$ns"
+    done
+  } >"$root/etc/resolv.conf"
+}
+
+pick_network() {
+  local -a ifaces=()
+  local n name
+  for n in /sys/class/net/*; do
+    name=${n##*/}
+    [ "$name" = lo ] && continue
+    [ -e "$n" ] || continue
+    ifaces+=("$name")
+  done
+  [ "${#ifaces[@]}" -gt 0 ] || { say "No network interface."; exit 1; }
+  if [ "${#ifaces[@]}" -eq 1 ]; then
+    IFACE=${ifaces[0]}
+    say "Network interface $IFACE"
+  else
+    say "Network interfaces: ${ifaces[*]}"
+    while true; do
+      ask "Which interface?"
+      for name in "${ifaces[@]}"; do
+        if [ "$REPLY" = "$name" ]; then
+          IFACE=$name
+          break 2
+        fi
+      done
+      say "Type one of: ${ifaces[*]}"
+    done
+  fi
+  if ask_yn "Use DHCP?"; then
+    DHCP=1
+    DNS="1.1.1.1 1.0.0.1"
+    say "DHCP on $IFACE. DNS from the server, or 1.1.1.1 and 1.0.0.1 until a lease arrives."
+  else
+    DHCP=0
+    while true; do
+      ask "Address with prefix (for example 192.168.1.20/24)"
+      if valid_cidr "$REPLY"; then
+        ADDR=$REPLY
+        break
+      fi
+      say "Enter an IPv4 address and a prefix length."
+    done
+    while true; do
+      ask "Default gateway"
+      if valid_ip "$REPLY"; then
+        GW=$REPLY
+        break
+      fi
+      say "Enter an IPv4 gateway."
+    done
+    while true; do
+      ask "DNS servers [1.1.1.1 1.0.0.1]"
+      if [ -z "$REPLY" ]; then
+        DNS="1.1.1.1 1.0.0.1"
+        break
+      fi
+      DNS=$REPLY
+      local ok=1 ns
+      for ns in $DNS; do
+        valid_ip "$ns" || ok=0
+      done
+      [ "$ok" = 1 ] && break
+      say "Enter IPv4 addresses separated by spaces."
+    done
+    say "Static $ADDR via $GW on $IFACE, DNS $DNS"
+  fi
+}
+
+pick_disk() {
+  local name typ rest
+  local -a disks=()
+  say "Disks that can be installed (the boot medium is hidden):"
+  while read -r name typ rest; do
+    [ "$typ" = disk ] || continue
+    case $name in
+      loop*|ram*|fd*|sr*|zram*|dm-*) continue ;;
+    esac
+    is_live "$name" && continue
+    disks+=("$name")
+    say "  $name  $rest"
+  done < <(lsblk -dn -o NAME,TYPE,SIZE,MODEL)
+  [ "${#disks[@]}" -gt 0 ] || { say "No disk to install onto."; exit 1; }
+  while true; do
+    ask "Type the disk name to erase and install onto"
+    for name in "${disks[@]}"; do
+      if [ "$REPLY" = "$name" ]; then
+        DISK=/dev/$name
+        return 0
+      fi
+    done
+    say "Type one of: ${disks[*]}"
+  done
+}
+
+settle() {
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm settle --timeout=10 || true
+  fi
+}
+
+release_disk() {
+  local disk=$1 base dev tgt
+  base=${disk##*/}
+  for dev in /sys/block/"$base"/"$base"*; do
+    [ -e "$dev" ] || continue
+    dev=/dev/${dev##*/}
+    swapoff "$dev" 2>/dev/null || true
+    while tgt=$(findmnt -nr -o TARGET -S "$dev" 2>/dev/null | tail -1) && [ -n "$tgt" ]; do
+      say "Unmounting $tgt"
+      umount "$tgt" 2>/dev/null || umount -l "$tgt"
+    done
+  done
+}
+
+install_disk() {
+  local disk=$1 bytes need used esp efi root k i conf
+  command -v sfdisk >/dev/null 2>&1 || { say "sfdisk is missing"; exit 1; }
+  command -v mkfs.ext4 >/dev/null 2>&1 || { say "mkfs.ext4 is missing"; exit 1; }
+  command -v mkfs.vfat >/dev/null 2>&1 || { say "mkfs.vfat is missing"; exit 1; }
+  bytes=$(dev_bytes "$disk")
+  # df on the live overlay is the RAM upper layer, not the ISO. Prefer the disc size.
+  used=0
+  src=$(awk '$3=="iso9660" || $3=="udf" {print $1; exit}' /proc/mounts)
+  if [ -n "$src" ]; then
+    case $src in
+      /dev/*) ;;
+      *) src=/dev/$src ;;
+    esac
+    if [ -b "$src" ]; then
+      used=$(blockdev --getsize64 "$src" 2>/dev/null || echo 0)
+    fi
+  fi
+  if [ "${used:-0}" -lt 100000000 ]; then
+    say "Measuring the system"
+    used=$(du -sx -B1 / | awk '{print $1}')
+  fi
+  esp=$((256 * 1048576))
+  need=$((esp + used + 256 * 1048576))
+  if [ "$bytes" -lt "$need" ]; then
+    say "$disk is too small for this system."
+    exit 1
+  fi
+  say "Erasing $disk and installing bia land."
+  release_disk "$disk"
+  sfdisk --wipe always --label gpt "$disk" <<EOF
+,+256M,uefi,*
+,+1M,biosboot
+,+
+EOF
+  settle
+  efi=$(part_name "$disk" 1)
+  root=$(part_name "$disk" 3)
+  local i=0
+  while [ "$i" -lt 40 ] && { [ ! -b "$efi" ] || [ ! -b "$root" ]; }; do
+    sleep 0.25
+    i=$((i + 1))
+  done
+  [ -b "$efi" ] && [ -b "$root" ] || { say "Partitions did not appear on $disk"; exit 1; }
+  say "Formatting EFI $efi and root $root"
+  mkfs.vfat -F 32 -n BIALBOOT "$efi"
+  mkfs.ext4 -F -L BIALAND "$root"
+  settle
+  mkdir -p /run/bia-land-root /run/bia-land-efi
+  mount -t ext4 "$root" /run/bia-land-root
+  mount -t vfat "$efi" /run/bia-land-efi
+  say "Copying the system. This takes a while."
+  copy_root &
+  local cpid=$!
+  while kill -0 "$cpid" 2>/dev/null; do
+    used=$(df -hP /run/bia-land-root 2>/dev/null | awk 'NR==2 {print $3}')
+    say "copying... ${used:-0}"
+    sleep 5
+  done
+  wait "$cpid"
+  mkdir -p /run/bia-land-root/proc /run/bia-land-root/sys /run/bia-land-root/dev \
+    /run/bia-land-root/run /run/bia-land-root/tmp /run/bia-land-root/boot \
+    /run/bia-land-root/home/bia/files/state
+  chmod 1777 /run/bia-land-root/tmp
+  write_net /run/bia-land-root
+  printf 'bia-land\n' >/run/bia-land-root/etc/hostname
+  cat >/run/bia-land-root/etc/hosts <<EOF
+127.0.0.1 localhost
+127.0.1.1 bia-land
+::1 localhost ip6-localhost ip6-loopback
+EOF
+  printf 'wait\n' >/run/bia-land-root/etc/bia-land-mode
+  rm -f /run/bia-land-root/home/bia/files/state/boot_notice
+  local swap_line="" free_b
+  free_b=$(df -B1 -P /run/bia-land-root | awk 'NR==2 {print $4}')
+  if [ "${free_b:-0}" -gt $((512 * 1048576)) ]; then
+    say "Writing a 256 MiB swap file"
+    dd if=/dev/zero of=/run/bia-land-root/swapfile bs=1048576 count=256 status=none
+    chmod 600 /run/bia-land-root/swapfile
+    mkswap /run/bia-land-root/swapfile >/dev/null
+    swap_line="/swapfile  none  swap  sw,nofail 0 0"
+  fi
+  cat >/run/bia-land-root/etc/fstab <<EOF
+LABEL=BIALAND  /      ext4  noatime 0 1
+LABEL=BIALBOOT /boot  vfat  noatime,nofail 0 2
+$swap_line
+EOF
+  k=$(ls /boot/vmlinuz-* 2>/dev/null | grep -v '\.old$' | head -1 || true)
+  i=$(ls /boot/initrd.img-* /boot/initramfs-* 2>/dev/null | grep -v '\.old$' | head -1 || true)
+  [ -n "$k" ] && [ -n "$i" ] || { say "No kernel in /boot"; exit 1; }
+  cp -f "$k" /run/bia-land-efi/vmlinuz-lts
+  cp -f "$i" /run/bia-land-efi/initramfs-lts
+  if [ -d /boot/EFI ]; then
+    cp -a /boot/EFI /run/bia-land-efi/
+  fi
+  if [ -d /boot/boot ]; then
+    cp -a /boot/boot /run/bia-land-efi/
+  fi
+  cmdline='root=LABEL=BIALAND rootfstype=ext4 rootwait rw net.ifnames=0 console=tty0 console=ttyS0,115200'
+  mkdir -p /run/bia-land-efi/boot/grub /run/bia-land-efi/EFI/BOOT /run/bia-land-efi/EFI/debian
+  for conf in /run/bia-land-efi/boot/grub/grub.cfg \
+    /run/bia-land-efi/EFI/BOOT/grub.cfg /run/bia-land-efi/EFI/debian/grub.cfg; do
+    cat >"$conf" <<EOF
+set default=0
+set timeout=10
+search --no-floppy --set=root --label BIALBOOT
+if [ -z "\$root" ]; then
+  search --no-floppy --set=root --file /vmlinuz-lts
+fi
+menuentry "bia" {
+  linux /vmlinuz-lts $cmdline
+  initrd /initramfs-lts
+}
+EOF
+  done
+  /usr/local/sbin/bia-rescue-hook /run/bia-land-efi || say "rescue hook not installed"
+  sync
+  umount /run/bia-land-efi
+  umount /run/bia-land-root
+  if [ "$DHCP" = 1 ]; then
+    say "Installed on $disk. DHCP on $IFACE."
+  else
+    say "Installed on $disk. $ADDR via $GW, DNS $DNS, interface $IFACE."
+  fi
+  say "Eject this ISO, then the disk boots and waits for another bia to fly here."
+  ask "Press enter to reboot"
+  systemctl reboot || true
+  sleep 30
+  exit 1
+}
+
+copy_root() {
+  trap - EXIT
+  set +e
+  tar -C / --one-file-system \
+    --exclude=./proc --exclude=./sys --exclude=./dev --exclude=./run \
+    --exclude=./tmp --exclude=./mnt --exclude=./media --exclude=./lost+found \
+    --exclude=./boot/efiboot.img --exclude=./EFI --exclude=./home/bia/model --exclude=./swapfile \
+    -cf - . | tar -C /run/bia-land-root -xf -
+  local a=${PIPESTATUS[0]} b=${PIPESTATUS[1]}
+  set -e
+  # tar exits 1 when a file changes while it is read. The extract must succeed.
+  [ "$b" = 0 ] || { say "Copy onto the disk failed."; return 1; }
+  [ "$a" = 0 ] || [ "$a" = 1 ] || { say "Copy onto the disk failed."; return 1; }
+}
+
+online() {
+  timeout 10 bash -c 'exec 3<>/dev/tcp/deb.debian.org/80' 2>/dev/null
+}
+
+wait_land() {
+  local bin have i
+  say "bia land: bringing up $IFACE"
+  write_net /
+  ifup -a || true
+  have=0
+  i=0
+  while [ "$i" -lt 90 ]; do
+    if ip -4 -o addr show scope global | grep -q .; then
+      have=1
+      break
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  if [ "$have" != 1 ]; then
+    say "No IPv4 address yet. Retrying."
+    exit 1
+  fi
+  ip -4 -br addr show scope global | while read -r line; do
+    say "  $line"
+  done
+  # The agent that lands here installs its packages and talks to its model over
+  # the internet: do not take a flight before the internet is reachable.
+  i=0
+  until online; do
+    if [ $((i % 12)) = 0 ]; then
+      say "No internet on $IFACE yet (deb.debian.org unreachable). The agent that flies here needs it. Waiting."
+    fi
+    sleep 5
+    i=$((i + 1))
+  done
+  say "Internet reachable."
+  bin=$(carry_bin)
+  [ -x "$bin" ] || { say "Missing $bin"; exit 1; }
+  say "Waiting for another bia to fly here."
+  say "When both sides show the same code, type those digits and press enter."
+  set +e
+  "$bin" --land 2>&1 | while IFS= read -r line; do
+    say "$line"
+  done
+  exit "${PIPESTATUS[0]}"
+}
+
+phase=setup
+if [ -f /etc/bia-land-mode ]; then
+  phase=$(tr -d '[:space:]' </etc/bia-land-mode)
+fi
+fstype=$(findmnt -n -o FSTYPE / 2>/dev/null || true)
+label=$(findmnt -n -o LABEL / 2>/dev/null || true)
+case $fstype in
+  iso9660|overlay) phase=setup ;;
+esac
+if [ "$label" = BIALAND ] && [ "$fstype" = ext4 ]; then
+  phase=wait
+fi
+
+say "bia land ($phase)"
+case $phase in
+  setup)
+    say "This installs a bia server with no model. Another machine can fly onto it."
+    pick_network
+    pick_disk
+    install_disk "$DISK"
+    ;;
+  wait)
+    IFACE=$(awk '/^auto / && $2 != "lo" {print $2; exit}' /etc/network/interfaces 2>/dev/null || true)
+    [ -n "${IFACE:-}" ] || IFACE=eth0
+    if grep -q 'inet manual' /etc/network/interfaces 2>/dev/null; then
+      DHCP=1
+    else
+      DHCP=0
+      ADDR=$(awk '/address / {print $2; exit}' /etc/network/interfaces)
+      GW=$(awk '/gateway / {print $2; exit}' /etc/network/interfaces)
+    fi
+    DNS=$(awk '/^nameserver / {print $2}' /etc/resolv.conf 2>/dev/null | tr '\n' ' ')
+    DNS=${DNS:-1.1.1.1 1.0.0.1}
+    wait_land
+    ;;
+  *)
+    say "Unknown land mode: $phase"
+    exit 1
+    ;;
+esac

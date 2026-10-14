@@ -1,0 +1,16 @@
+[package]
+name = "tgcalls"
+version = "0.2.0"
+edition = "2021"
+authors = ["Ankit Chaubey <ankitchaubey.dev@gmail.com>"]
+description = "Vendored tgcalls 0.2.0 with accept() Waiting/Accepted fix"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ankit-chaubey/tgcalls"
+
+[dependencies]
+ferogram = "0.6.5"
+ntgcalls = "=3.0.0"
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1.23.1", features = ["full"] }
+tracing = "0.1"

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#17212b">
+<title>bia</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script>try { var t = localStorage.getItem('bia.theme'); if (t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches)) document.documentElement.classList.add('light'); } catch (e) {}</script>
+</head>
+<body>
+<div id="boot" hidden></div>
+<div id="app" hidden>
+  <aside id="side"></aside>
+  <main id="main"></main>
+</div>
+<div id="toasts"></div>
+<noscript>bia's web console needs JavaScript.</noscript>
+<script>setTimeout(function () { if (document.getElementById('boot').hidden && document.getElementById('app').hidden) document.body.insertAdjacentHTML('beforeend', '<p style="text-align:center;margin-top:30vh;font:15px system-ui;color:#888">The console did not load. <a href="" onclick="location.reload();return false">Reload</a></p>'); }, 8000);</script>
+<script src="/emoji.js"></script>
+<script src="/term.js"></script>
+<script src="/pki.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,2980 @@
+{
+ "asr": {
+  "whisper-base": {
+   "kind": "whisper",
+   "langs": [],
+   "note": "better accuracy, about 2x slower than tiny",
+   "sha256": "911b2083efd7c0dca2ac3b358b75222660dc09fb716d64fbfc417ba6c99ff3de",
+   "size": 207557382,
+   "size_name": "base",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2"
+  },
+  "whisper-small": {
+   "kind": "whisper",
+   "langs": [],
+   "note": "best accuracy here, slow on CPU; voice notes only",
+   "sha256": "486a46afbb7ba798507190ffe02fea2dd726049af212e774537efac6afb210a6",
+   "size": 639387718,
+   "size_name": "small",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2"
+  },
+  "whisper-tiny": {
+   "kind": "whisper",
+   "langs": [],
+   "note": "fast; bundled; used for calls and language detection",
+   "sha256": "c46116994e539aa165266d96b325252728429c12535eb9d8b6a2b10f129e66b1",
+   "size": 116204861,
+   "size_name": "tiny",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2"
+  }
+ },
+ "extras": {
+  "gtcrn": {
+   "kind": "denoiser",
+   "sha256": "e77603ac0c23dac3227dd2d7135b3a585cbee2679048aecfa886657d3ae1b534",
+   "size": 535638,
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx"
+  },
+  "silero-vad": {
+   "kind": "vad",
+   "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+   "size": 643854,
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+  },
+  "speaker-campplus": {
+   "kind": "speaker",
+   "note": "speaker check (opt-in)",
+   "sha256": "c46fad10b5f81e1aa4a60c162714208577093655076c5450f8c469e522ec54ef",
+   "size": 29292684,
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM%2B%2B.onnx"
+  }
+ },
+ "languages": {
+  "af": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Afrikaans",
+   "voices": []
+  },
+  "am": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Amharic",
+   "voices": []
+  },
+  "ar": {
+   "default_voice": "piper-ar_JO-kareem-medium",
+   "hear": true,
+   "name": "Arabic",
+   "voices": [
+    "piper-ar_JO-SA_dii-high",
+    "piper-ar_JO-SA_miro-high",
+    "piper-ar_JO-SA_miro_V2-high",
+    "piper-ar_JO-kareem-low",
+    "piper-ar_JO-kareem-medium"
+   ]
+  },
+  "as": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Assamese",
+   "voices": []
+  },
+  "az": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Azerbaijani",
+   "voices": []
+  },
+  "ba": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Bashkir",
+   "voices": []
+  },
+  "be": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Belarusian",
+   "voices": []
+  },
+  "bg": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Bulgarian",
+   "voices": []
+  },
+  "bn": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Bengali",
+   "voices": []
+  },
+  "bo": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Tibetan",
+   "voices": []
+  },
+  "br": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Breton",
+   "voices": []
+  },
+  "bs": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Bosnian",
+   "voices": []
+  },
+  "ca": {
+   "default_voice": "piper-ca_ES-upc_ona-medium",
+   "hear": true,
+   "name": "Catalan",
+   "voices": [
+    "piper-ca_ES-upc_ona-medium",
+    "piper-ca_ES-upc_ona-x_low",
+    "piper-ca_ES-upc_pau-x_low"
+   ]
+  },
+  "cs": {
+   "default_voice": "piper-cs_CZ-jirka-medium",
+   "hear": true,
+   "name": "Czech",
+   "voices": [
+    "piper-cs_CZ-jirka-low",
+    "piper-cs_CZ-jirka-medium"
+   ]
+  },
+  "cy": {
+   "default_voice": "piper-cy_GB-bu_tts-medium",
+   "hear": true,
+   "name": "Welsh",
+   "voices": [
+    "piper-cy_GB-bu_tts-medium",
+    "piper-cy_GB-gwryw_gogleddol-medium"
+   ]
+  },
+  "da": {
+   "default_voice": "piper-da_DK-talesyntese-medium",
+   "hear": true,
+   "name": "Danish",
+   "voices": [
+    "piper-da_DK-talesyntese-medium"
+   ]
+  },
+  "de": {
+   "default_voice": "piper-de_DE-thorsten-medium",
+   "hear": true,
+   "name": "German",
+   "voices": [
+    "piper-de_DE-dii-high",
+    "piper-de_DE-eva_k-x_low",
+    "piper-de_DE-glados-high",
+    "piper-de_DE-glados-low",
+    "piper-de_DE-glados-medium",
+    "piper-de_DE-glados_turret-high",
+    "piper-de_DE-glados_turret-low",
+    "piper-de_DE-glados_turret-medium",
+    "piper-de_DE-karlsson-low",
+    "piper-de_DE-kerstin-low",
+    "piper-de_DE-miro-high",
+    "piper-de_DE-pavoque-low",
+    "piper-de_DE-ramona-low",
+    "piper-de_DE-thorsten-high",
+    "piper-de_DE-thorsten-low",
+    "piper-de_DE-thorsten-medium",
+    "piper-de_DE-thorsten_emotional-medium"
+   ]
+  },
+  "el": {
+   "default_voice": "piper-el_GR-rapunzelina-low",
+   "hear": true,
+   "name": "Greek",
+   "voices": [
+    "piper-el_GR-rapunzelina-low"
+   ]
+  },
+  "en": {
+   "default_voice": "piper-en_US-lessac-medium",
+   "hear": true,
+   "name": "English",
+   "voices": [
+    "kokoro-multi-v1_0",
+    "piper-en_GB-alan-low",
+    "piper-en_GB-alan-medium",
+    "piper-en_GB-alba-medium",
+    "piper-en_GB-aru-medium",
+    "piper-en_GB-cori-high",
+    "piper-en_GB-cori-medium",
+    "piper-en_GB-dii-high",
+    "piper-en_GB-jenny_dioco-medium",
+    "piper-en_GB-miro-high",
+    "piper-en_GB-northern_english_male-medium",
+    "piper-en_GB-semaine-medium",
+    "piper-en_GB-southern_english_female-low",
+    "piper-en_GB-southern_english_female-medium",
+    "piper-en_GB-southern_english_male-medium",
+    "piper-en_GB-vctk-medium",
+    "piper-en_US-amy-low",
+    "piper-en_US-amy-medium",
+    "piper-en_US-arctic-medium",
+    "piper-en_US-bryce-medium",
+    "piper-en_US-danny-low",
+    "piper-en_US-glados-high",
+    "piper-en_US-hfc_female-medium",
+    "piper-en_US-hfc_male-medium",
+    "piper-en_US-joe-medium",
+    "piper-en_US-john-medium",
+    "piper-en_US-kathleen-low",
+    "piper-en_US-kristin-medium",
+    "piper-en_US-kusal-medium",
+    "piper-en_US-l2arctic-medium",
+    "piper-en_US-lessac-high",
+    "piper-en_US-lessac-low",
+    "piper-en_US-lessac-medium",
+    "piper-en_US-libritts-high",
+    "piper-en_US-libritts_r-medium",
+    "piper-en_US-ljspeech-high",
+    "piper-en_US-ljspeech-medium",
+    "piper-en_US-miro-high",
+    "piper-en_US-norman-medium",
+    "piper-en_US-reza_ibrahim-medium",
+    "piper-en_US-ryan-high",
+    "piper-en_US-ryan-low",
+    "piper-en_US-ryan-medium",
+    "piper-en_US-sam-medium"
+   ]
+  },
+  "es": {
+   "default_voice": "piper-es_ES-davefx-medium",
+   "hear": true,
+   "name": "Spanish",
+   "voices": [
+    "piper-es_AR-daniela-high",
+    "piper-es_ES-carlfm-x_low",
+    "piper-es_ES-davefx-medium",
+    "piper-es_ES-glados-medium",
+    "piper-es_ES-miro-high",
+    "piper-es_ES-sharvard-medium",
+    "piper-es_MX-ald-medium",
+    "piper-es_MX-claude-high"
+   ]
+  },
+  "et": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Estonian",
+   "voices": []
+  },
+  "eu": {
+   "default_voice": "piper-eu_ES-antton-medium",
+   "hear": true,
+   "name": "Basque",
+   "voices": [
+    "piper-eu_ES-antton-medium",
+    "piper-eu_ES-maider-medium"
+   ]
+  },
+  "fa": {
+   "default_voice": "piper-fa_IR-amir-medium",
+   "hear": true,
+   "name": "Persian",
+   "voices": [
+    "piper-fa_IR-amir-medium",
+    "piper-fa_IR-ganji-medium",
+    "piper-fa_IR-ganji_adabi-medium",
+    "piper-fa_IR-gyro-medium",
+    "piper-fa_IR-reza_ibrahim-medium"
+   ]
+  },
+  "fi": {
+   "default_voice": "piper-fi_FI-harri-medium",
+   "hear": true,
+   "name": "Finnish",
+   "voices": [
+    "piper-fi_FI-harri-low",
+    "piper-fi_FI-harri-medium"
+   ]
+  },
+  "fo": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Faroese",
+   "voices": []
+  },
+  "fr": {
+   "default_voice": "piper-fr_FR-siwis-medium",
+   "hear": true,
+   "name": "French",
+   "voices": [
+    "piper-fr_FR-gilles-low",
+    "piper-fr_FR-miro-high",
+    "piper-fr_FR-siwis-low",
+    "piper-fr_FR-siwis-medium",
+    "piper-fr_FR-tom-medium",
+    "piper-fr_FR-upmc-medium"
+   ]
+  },
+  "gl": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Galician",
+   "voices": []
+  },
+  "gu": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Gujarati",
+   "voices": []
+  },
+  "ha": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Hausa",
+   "voices": []
+  },
+  "haw": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Hawaiian",
+   "voices": []
+  },
+  "he": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Hebrew",
+   "voices": []
+  },
+  "hi": {
+   "default_voice": "piper-hi_IN-pratham-medium",
+   "hear": true,
+   "name": "Hindi",
+   "voices": [
+    "piper-hi_IN-pratham-medium",
+    "piper-hi_IN-priyamvada-medium",
+    "piper-hi_IN-rohan-medium"
+   ]
+  },
+  "hr": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Croatian",
+   "voices": []
+  },
+  "ht": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Haitian Creole",
+   "voices": []
+  },
+  "hu": {
+   "default_voice": "piper-hu_HU-anna-medium",
+   "hear": true,
+   "name": "Hungarian",
+   "voices": [
+    "piper-hu_HU-anna-medium",
+    "piper-hu_HU-berta-medium",
+    "piper-hu_HU-imre-medium"
+   ]
+  },
+  "hy": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Armenian",
+   "voices": []
+  },
+  "id": {
+   "default_voice": "piper-id_ID-news_tts-medium",
+   "hear": true,
+   "name": "Indonesian",
+   "voices": [
+    "piper-id_ID-news_tts-medium"
+   ]
+  },
+  "is": {
+   "default_voice": "piper-is_IS-bui-medium",
+   "hear": true,
+   "name": "Icelandic",
+   "voices": [
+    "piper-is_IS-bui-medium",
+    "piper-is_IS-salka-medium",
+    "piper-is_IS-steinn-medium",
+    "piper-is_IS-ugla-medium"
+   ]
+  },
+  "it": {
+   "default_voice": "piper-it_IT-paola-medium",
+   "hear": true,
+   "name": "Italian",
+   "voices": [
+    "piper-it_IT-dii-high",
+    "piper-it_IT-miro-high",
+    "piper-it_IT-paola-medium",
+    "piper-it_IT-riccardo-x_low"
+   ]
+  },
+  "ja": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Japanese",
+   "voices": []
+  },
+  "jw": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Javanese",
+   "voices": []
+  },
+  "ka": {
+   "default_voice": "piper-ka_GE-natia-medium",
+   "hear": true,
+   "name": "Georgian",
+   "voices": [
+    "piper-ka_GE-natia-medium"
+   ]
+  },
+  "kk": {
+   "default_voice": "piper-kk_KZ-issai-high",
+   "hear": true,
+   "name": "Kazakh",
+   "voices": [
+    "piper-kk_KZ-iseke-x_low",
+    "piper-kk_KZ-issai-high",
+    "piper-kk_KZ-raya-x_low"
+   ]
+  },
+  "km": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Khmer",
+   "voices": []
+  },
+  "kn": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Kannada",
+   "voices": []
+  },
+  "ko": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Korean",
+   "voices": []
+  },
+  "ku": {
+   "default_voice": "piper-ku_TR-berfin_renas-medium",
+   "hear": false,
+   "name": "Kurdish",
+   "voices": [
+    "piper-ku_TR-berfin_renas-medium"
+   ]
+  },
+  "la": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Latin",
+   "voices": []
+  },
+  "lb": {
+   "default_voice": "piper-lb_LU-marylux-medium",
+   "hear": true,
+   "name": "Luxembourgish",
+   "voices": [
+    "piper-lb_LU-marylux-medium"
+   ]
+  },
+  "ln": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Lingala",
+   "voices": []
+  },
+  "lo": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Lao",
+   "voices": []
+  },
+  "lt": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Lithuanian",
+   "voices": []
+  },
+  "lv": {
+   "default_voice": "piper-lv_LV-aivars-medium",
+   "hear": true,
+   "name": "Latvian",
+   "voices": [
+    "piper-lv_LV-aivars-medium"
+   ]
+  },
+  "mg": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Malagasy",
+   "voices": []
+  },
+  "mi": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Maori",
+   "voices": []
+  },
+  "mk": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Macedonian",
+   "voices": []
+  },
+  "ml": {
+   "default_voice": "piper-ml_IN-arjun-medium",
+   "hear": true,
+   "name": "Malayalam",
+   "voices": [
+    "piper-ml_IN-arjun-medium",
+    "piper-ml_IN-meera-medium"
+   ]
+  },
+  "mn": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Mongolian",
+   "voices": []
+  },
+  "mr": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Marathi",
+   "voices": []
+  },
+  "ms": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Malay",
+   "voices": []
+  },
+  "mt": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Maltese",
+   "voices": []
+  },
+  "my": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Myanmar",
+   "voices": []
+  },
+  "ne": {
+   "default_voice": "piper-ne_NP-chitwan-medium",
+   "hear": true,
+   "name": "Nepali",
+   "voices": [
+    "piper-ne_NP-chitwan-medium",
+    "piper-ne_NP-google-medium",
+    "piper-ne_NP-google-x_low"
+   ]
+  },
+  "nl": {
+   "default_voice": "piper-nl_NL-alex-medium",
+   "hear": true,
+   "name": "Dutch",
+   "voices": [
+    "piper-nl_BE-nathalie-medium",
+    "piper-nl_BE-nathalie-x_low",
+    "piper-nl_NL-alex-medium",
+    "piper-nl_NL-dii-high",
+    "piper-nl_NL-miro-high",
+    "piper-nl_NL-pim-medium",
+    "piper-nl_NL-ronnie-medium"
+   ]
+  },
+  "nn": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Nynorsk",
+   "voices": []
+  },
+  "no": {
+   "default_voice": "piper-no_NO-talesyntese-medium",
+   "hear": true,
+   "name": "Norwegian",
+   "voices": [
+    "piper-no_NO-talesyntese-medium"
+   ]
+  },
+  "oc": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Occitan",
+   "voices": []
+  },
+  "pa": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Punjabi",
+   "voices": []
+  },
+  "pl": {
+   "default_voice": "piper-pl_PL-darkman-medium",
+   "hear": true,
+   "name": "Polish",
+   "voices": [
+    "piper-pl_PL-bass-high",
+    "piper-pl_PL-darkman-medium",
+    "piper-pl_PL-gosia-medium",
+    "piper-pl_PL-jarvis_wg_glos-medium",
+    "piper-pl_PL-justyna_wg_glos-medium",
+    "piper-pl_PL-mc_speech-medium",
+    "piper-pl_PL-meski_wg_glos-medium",
+    "piper-pl_PL-zenski_wg_glos-medium"
+   ]
+  },
+  "ps": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Pashto",
+   "voices": []
+  },
+  "pt": {
+   "default_voice": "piper-pt_BR-cadu-medium",
+   "hear": true,
+   "name": "Portuguese",
+   "voices": [
+    "piper-pt_BR-cadu-medium",
+    "piper-pt_BR-dii-high",
+    "piper-pt_BR-edresson-low",
+    "piper-pt_BR-faber-medium",
+    "piper-pt_BR-jeff-medium",
+    "piper-pt_BR-miro-high",
+    "piper-pt_PT-dii-high",
+    "piper-pt_PT-miro-high",
+    "piper-pt_PT-tugao-medium"
+   ]
+  },
+  "ro": {
+   "default_voice": "piper-ro_RO-mihai-medium",
+   "hear": true,
+   "name": "Romanian",
+   "voices": [
+    "piper-ro_RO-mihai-medium"
+   ]
+  },
+  "ru": {
+   "default_voice": "piper-ru_RU-irina-medium",
+   "hear": true,
+   "name": "Russian",
+   "voices": [
+    "piper-ru_RU-denis-medium",
+    "piper-ru_RU-dmitri-medium",
+    "piper-ru_RU-irina-medium",
+    "piper-ru_RU-ruslan-medium"
+   ]
+  },
+  "sa": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Sanskrit",
+   "voices": []
+  },
+  "sd": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Sindhi",
+   "voices": []
+  },
+  "si": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Sinhala",
+   "voices": []
+  },
+  "sk": {
+   "default_voice": "piper-sk_SK-lili-medium",
+   "hear": true,
+   "name": "Slovak",
+   "voices": [
+    "piper-sk_SK-lili-medium"
+   ]
+  },
+  "sl": {
+   "default_voice": "piper-sl_SI-artur-medium",
+   "hear": true,
+   "name": "Slovenian",
+   "voices": [
+    "piper-sl_SI-artur-medium"
+   ]
+  },
+  "sn": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Shona",
+   "voices": []
+  },
+  "so": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Somali",
+   "voices": []
+  },
+  "sq": {
+   "default_voice": "piper-sq_AL-edon-medium",
+   "hear": true,
+   "name": "Albanian",
+   "voices": [
+    "piper-sq_AL-edon-medium"
+   ]
+  },
+  "sr": {
+   "default_voice": "piper-sr_RS-serbski_institut-medium",
+   "hear": true,
+   "name": "Serbian",
+   "voices": [
+    "piper-sr_RS-serbski_institut-medium"
+   ]
+  },
+  "su": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Sundanese",
+   "voices": []
+  },
+  "sv": {
+   "default_voice": "piper-sv_SE-alma-medium",
+   "hear": true,
+   "name": "Swedish",
+   "voices": [
+    "piper-sv_SE-alma-medium",
+    "piper-sv_SE-lisa-medium",
+    "piper-sv_SE-nst-medium"
+   ]
+  },
+  "sw": {
+   "default_voice": "piper-sw_CD-lanfrica-medium",
+   "hear": true,
+   "name": "Swahili",
+   "voices": [
+    "piper-sw_CD-lanfrica-medium"
+   ]
+  },
+  "ta": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Tamil",
+   "voices": []
+  },
+  "te": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Telugu",
+   "voices": []
+  },
+  "tg": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Tajik",
+   "voices": []
+  },
+  "th": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Thai",
+   "voices": []
+  },
+  "tk": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Turkmen",
+   "voices": []
+  },
+  "tl": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Tagalog",
+   "voices": []
+  },
+  "tr": {
+   "default_voice": "piper-tr_TR-dfki-medium",
+   "hear": true,
+   "name": "Turkish",
+   "voices": [
+    "piper-tr_TR-dfki-medium",
+    "piper-tr_TR-fahrettin-medium",
+    "piper-tr_TR-fettah-medium"
+   ]
+  },
+  "tt": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Tatar",
+   "voices": []
+  },
+  "uk": {
+   "default_voice": "piper-uk_UA-lada-x_low",
+   "hear": true,
+   "name": "Ukrainian",
+   "voices": [
+    "coqui-uk-mai",
+    "mms-ukr",
+    "piper-uk_UA-lada-x_low"
+   ]
+  },
+  "ur": {
+   "default_voice": "piper-ur_PK-fasih-medium",
+   "hear": true,
+   "name": "Urdu",
+   "voices": [
+    "piper-ur_PK-fasih-medium"
+   ]
+  },
+  "uz": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Uzbek",
+   "voices": []
+  },
+  "vi": {
+   "default_voice": "piper-vi_VN-vais1000-medium",
+   "hear": true,
+   "name": "Vietnamese",
+   "voices": [
+    "piper-vi_VN-25hours_single-low",
+    "piper-vi_VN-vais1000-medium",
+    "piper-vi_VN-vivos-x_low"
+   ]
+  },
+  "yi": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Yiddish",
+   "voices": []
+  },
+  "yo": {
+   "default_voice": "",
+   "hear": true,
+   "name": "Yoruba",
+   "voices": []
+  },
+  "zh": {
+   "default_voice": "piper-zh_CN-chaowen-medium",
+   "hear": true,
+   "name": "Chinese",
+   "voices": [
+    "kokoro-multi-v1_0",
+    "piper-zh_CN-chaowen-medium",
+    "piper-zh_CN-xiao_ya-medium"
+   ]
+  }
+ },
+ "source": "https://github.com/k2-fsa/sherpa-onnx/releases",
+ "version": 1,
+ "voices": {
+  "coqui-uk-mai": {
+   "kind": "vits",
+   "langs": [
+    "uk"
+   ],
+   "locale": "",
+   "note": "Coqui TTS (M-AILABS data), female",
+   "quality": "medium",
+   "sha256": "210845fe8e977382afe449306a2327fcd46b3668f963a264b2ab4be6579e29eb",
+   "size": 67010113,
+   "speaker": "female",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-coqui-uk-mai.tar.bz2"
+  },
+  "kokoro-multi-v1_0": {
+   "kind": "kokoro",
+   "langs": [
+    "en",
+    "zh"
+   ],
+   "locale": "",
+   "note": "one speaker across English and Chinese; slower than Piper",
+   "quality": "high",
+   "sha256": "4c3052abaa60943a341f193888cf6abd68787dae6ab8ae5c925a706caa247e4e",
+   "size": 132303094,
+   "speaker": "53 voices (sid)",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-int8-multi-lang-v1_0.tar.bz2"
+  },
+  "mms-ukr": {
+   "kind": "vits",
+   "langs": [
+    "uk"
+   ],
+   "locale": "",
+   "note": "Meta MMS, male; license CC-BY-NC 4.0 (non-commercial use only)",
+   "quality": "medium",
+   "sha256": "d77d3000757ebf8a48582f5b61950cdfeee652edf1880b42de34e10af20a83b6",
+   "size": 107717953,
+   "speaker": "male",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mms-ukr.tar.bz2"
+  },
+  "piper-ar_JO-SA_dii-high": {
+   "kind": "vits",
+   "langs": [
+    "ar"
+   ],
+   "locale": "ar_JO",
+   "quality": "high",
+   "sha256": "02f6f990b31323b7f36c8c68c3a5dc7f7c9f3db555c632310693cf7d82b9540e",
+   "size": 21998588,
+   "speaker": "SA_dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-SA_dii-high-int8.tar.bz2"
+  },
+  "piper-ar_JO-SA_miro-high": {
+   "kind": "vits",
+   "langs": [
+    "ar"
+   ],
+   "locale": "ar_JO",
+   "quality": "high",
+   "sha256": "45b7992b8f8322e554cf0b4743547c9ea04b52e1060899c714f2be3e5b33442e",
+   "size": 22127234,
+   "speaker": "SA_miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-SA_miro-high-int8.tar.bz2"
+  },
+  "piper-ar_JO-SA_miro_V2-high": {
+   "kind": "vits",
+   "langs": [
+    "ar"
+   ],
+   "locale": "ar_JO",
+   "quality": "high",
+   "sha256": "20f4db99d450986716ea9149a4df068158f69c91bde3859ab28d537ddfc57ce6",
+   "size": 21875982,
+   "speaker": "SA_miro_V2",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-SA_miro_V2-high-int8.tar.bz2"
+  },
+  "piper-ar_JO-kareem-low": {
+   "kind": "vits",
+   "langs": [
+    "ar"
+   ],
+   "locale": "ar_JO",
+   "quality": "low",
+   "sha256": "315b7da69862313988d8aff46d457452b8a11a3ac4c5cd18e02d48fd0eb0395a",
+   "size": 21156438,
+   "speaker": "kareem",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-kareem-low-int8.tar.bz2"
+  },
+  "piper-ar_JO-kareem-medium": {
+   "kind": "vits",
+   "langs": [
+    "ar"
+   ],
+   "locale": "ar_JO",
+   "quality": "medium",
+   "sha256": "215910431bbe8236b77242b19d869a4eda6073e9cd424bec45b6d4a59a790d82",
+   "size": 20968771,
+   "speaker": "kareem",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ar_JO-kareem-medium-int8.tar.bz2"
+  },
+  "piper-ca_ES-upc_ona-medium": {
+   "kind": "vits",
+   "langs": [
+    "ca"
+   ],
+   "locale": "ca_ES",
+   "quality": "medium",
+   "sha256": "3df5cd549d74c9d38267dfbb68b7f919f63d4351d778733b99d4a21be5567cb4",
+   "size": 21037706,
+   "speaker": "upc_ona",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ca_ES-upc_ona-medium-int8.tar.bz2"
+  },
+  "piper-ca_ES-upc_ona-x_low": {
+   "kind": "vits",
+   "langs": [
+    "ca"
+   ],
+   "locale": "ca_ES",
+   "quality": "x_low",
+   "sha256": "5cc512338db2a4fb4036d2f1a4ba0b06ad15a0e2f0406799f29d9bee4f30c2eb",
+   "size": 13350896,
+   "speaker": "upc_ona",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ca_ES-upc_ona-x_low-int8.tar.bz2"
+  },
+  "piper-ca_ES-upc_pau-x_low": {
+   "kind": "vits",
+   "langs": [
+    "ca"
+   ],
+   "locale": "ca_ES",
+   "quality": "x_low",
+   "sha256": "ea9519a67a3766c80b622db061a610719c52e2b749b9c07a427fcc3864df6f59",
+   "size": 13336411,
+   "speaker": "upc_pau",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ca_ES-upc_pau-x_low-int8.tar.bz2"
+  },
+  "piper-cs_CZ-jirka-low": {
+   "kind": "vits",
+   "langs": [
+    "cs"
+   ],
+   "locale": "cs_CZ",
+   "quality": "low",
+   "sha256": "62eedaf3e1f546c90e00fab5a4228f203cb53e42d06023e84e4569b1e72f6de1",
+   "size": 21044385,
+   "speaker": "jirka",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-cs_CZ-jirka-low-int8.tar.bz2"
+  },
+  "piper-cs_CZ-jirka-medium": {
+   "kind": "vits",
+   "langs": [
+    "cs"
+   ],
+   "locale": "cs_CZ",
+   "quality": "medium",
+   "sha256": "45377b35ce823eaac5d76a5530b48fb5ad386a4e07db6ff36aa7c417d6bd0a6d",
+   "size": 21002417,
+   "speaker": "jirka",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-cs_CZ-jirka-medium-int8.tar.bz2"
+  },
+  "piper-cy_GB-bu_tts-medium": {
+   "kind": "vits",
+   "langs": [
+    "cy"
+   ],
+   "locale": "cy_GB",
+   "quality": "medium",
+   "sha256": "c16ea91af50c966b19bcd09ef4873c8320c0151a88e9b2180d9761c54f5d035c",
+   "size": 23280105,
+   "speaker": "bu_tts",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-cy_GB-bu_tts-medium-int8.tar.bz2"
+  },
+  "piper-cy_GB-gwryw_gogleddol-medium": {
+   "kind": "vits",
+   "langs": [
+    "cy"
+   ],
+   "locale": "cy_GB",
+   "quality": "medium",
+   "sha256": "ed2b9efc02a033c9be56572ee6cf4559ed752e6a608b98766f1b4ba0702ec8a0",
+   "size": 21121166,
+   "speaker": "gwryw_gogleddol",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-cy_GB-gwryw_gogleddol-medium-int8.tar.bz2"
+  },
+  "piper-da_DK-talesyntese-medium": {
+   "kind": "vits",
+   "langs": [
+    "da"
+   ],
+   "locale": "da_DK",
+   "quality": "medium",
+   "sha256": "83c5b433e97c86109d659d7adcfc865bdf5bc570baa1e1ce8357f4fbf7346a7e",
+   "size": 21025554,
+   "speaker": "talesyntese",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-da_DK-talesyntese-medium-int8.tar.bz2"
+  },
+  "piper-de_DE-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "high",
+   "sha256": "b0063594e9b5b210c08f4a3adf7a389f6ec6daa623604663708818591fa3ace3",
+   "size": 21030921,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-dii-high-int8.tar.bz2"
+  },
+  "piper-de_DE-eva_k-x_low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "x_low",
+   "sha256": "0501123c7e184571a40690e79943f4111a57b988632f7f60a9d2344fd061e2a2",
+   "size": 13321491,
+   "speaker": "eva_k",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-eva_k-x_low-int8.tar.bz2"
+  },
+  "piper-de_DE-glados-high": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "high",
+   "sha256": "949291e7cf1796122c98766bd2c7cca1f9e34a944697084b5a13e1975e59ebef",
+   "size": 35009386,
+   "speaker": "glados",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados-high-int8.tar.bz2"
+  },
+  "piper-de_DE-glados-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "6eda8de0bc728605fe960338331effcce3df64bee952d29e577ced85a5c3d6cd",
+   "size": 21035173,
+   "speaker": "glados",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados-low-int8.tar.bz2"
+  },
+  "piper-de_DE-glados-medium": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "medium",
+   "sha256": "9f38740cc743a68fb2f756f06cd4813892abc9b293ec7589e3d4d0d394ed6bc0",
+   "size": 20966453,
+   "speaker": "glados",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados-medium-int8.tar.bz2"
+  },
+  "piper-de_DE-glados_turret-high": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "high",
+   "sha256": "06cbb6d4575b3ba97e8dcf374b052553d5a67e7d70b399c3f926cf334e9e390d",
+   "size": 35034925,
+   "speaker": "glados_turret",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados_turret-high-int8.tar.bz2"
+  },
+  "piper-de_DE-glados_turret-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "9aa32dd6ab538c9d5be1925cb4360196efec7a2377e4fa79f2b7604674994bac",
+   "size": 21029949,
+   "speaker": "glados_turret",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados_turret-low-int8.tar.bz2"
+  },
+  "piper-de_DE-glados_turret-medium": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "medium",
+   "sha256": "2ffb416f2f09602889656d7733121fe88456c67b5a6b00ef2a15c6a59f255cd4",
+   "size": 20949149,
+   "speaker": "glados_turret",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-glados_turret-medium-int8.tar.bz2"
+  },
+  "piper-de_DE-karlsson-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "04f57738da5d7929d46fb445c09697f8e3e2a4d6562708c6a2ac5fbec63bbfdb",
+   "size": 21126670,
+   "speaker": "karlsson",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-karlsson-low-int8.tar.bz2"
+  },
+  "piper-de_DE-kerstin-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "bcd8039667940cf2efc939b844f4b33d0823096572fcc1a8caaa2faa77f3379c",
+   "size": 21174728,
+   "speaker": "kerstin",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-kerstin-low-int8.tar.bz2"
+  },
+  "piper-de_DE-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "high",
+   "sha256": "c77caeb70f821911a0f8adbfad15f2dbe2f591eeb3b309fab5146f277d7a68b5",
+   "size": 21280966,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-miro-high-int8.tar.bz2"
+  },
+  "piper-de_DE-pavoque-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "f6b6b9c20e3c885a0574bad194362a2605c7c25432c219e6ed2d0d17e9e5df49",
+   "size": 21218697,
+   "speaker": "pavoque",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-pavoque-low-int8.tar.bz2"
+  },
+  "piper-de_DE-ramona-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "e532ddcbb09c16a65f56441bbbbf301083d2ea5b18ce937775303942f2b7a8f4",
+   "size": 21199380,
+   "speaker": "ramona",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-ramona-low-int8.tar.bz2"
+  },
+  "piper-de_DE-thorsten-high": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "high",
+   "sha256": "cc6f0abde2b9d5811c9e692b0f625c3de2a0687383fd4a571f547e6dd0ca4823",
+   "size": 35066527,
+   "speaker": "thorsten",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-thorsten-high-int8.tar.bz2"
+  },
+  "piper-de_DE-thorsten-low": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "low",
+   "sha256": "1d845c838b08a99dd1f86e7169a6696da6dac61530ee4a81446a20e009948233",
+   "size": 21292232,
+   "speaker": "thorsten",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-thorsten-low-int8.tar.bz2"
+  },
+  "piper-de_DE-thorsten-medium": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "medium",
+   "sha256": "07e240b7b9c1fc9211d5a69512f8cbe11b3286c2ed79c15c076ac6ed427fdf13",
+   "size": 20949833,
+   "speaker": "thorsten",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-thorsten-medium-int8.tar.bz2"
+  },
+  "piper-de_DE-thorsten_emotional-medium": {
+   "kind": "vits",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "quality": "medium",
+   "sha256": "e522bea5bb42d8f572b85a39ccb2d7ec114d6c2838c198827aadaeea3d31822a",
+   "size": 23479221,
+   "speaker": "thorsten_emotional",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-de_DE-thorsten_emotional-medium-int8.tar.bz2"
+  },
+  "piper-el_GR-rapunzelina-low": {
+   "kind": "vits",
+   "langs": [
+    "el"
+   ],
+   "locale": "el_GR",
+   "quality": "low",
+   "sha256": "1fbab58d6380dda2a392ef531de89e8d1202d2dca804db7ebcff5be2b30c823a",
+   "size": 21090546,
+   "speaker": "rapunzelina",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-el_GR-rapunzelina-low-int8.tar.bz2"
+  },
+  "piper-en_GB-alan-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "low",
+   "sha256": "6a3d39a4e9698184a90e16f251d01b79236a302d50d0955bcf461705a836f1d2",
+   "size": 21289969,
+   "speaker": "alan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-alan-low-int8.tar.bz2"
+  },
+  "piper-en_GB-alan-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "f0b2526c9600657141ccbbe412f6159dceedab5bab4ba4e8857d9443acb50de4",
+   "size": 21103831,
+   "speaker": "alan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-alan-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-alba-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "f7581d123ae977f64f3032bb247d4deeac8440e881d918d36fdd36d8f1030fb7",
+   "size": 21104326,
+   "speaker": "alba",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-alba-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-aru-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "d13d6c73d0eaa4e63d48bc10d13100f17e0731c7f8095f5d24ce1b22b5786de0",
+   "size": 23125986,
+   "speaker": "aru",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-aru-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-cori-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "high",
+   "sha256": "115adb9000159c3a90076fff8ba75ae4d26ccbbc749a444a24dc277b0dad872b",
+   "size": 35038210,
+   "speaker": "cori",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-high-int8.tar.bz2"
+  },
+  "piper-en_GB-cori-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "169ca8aff3adb271f009a4924c99928a811dbf2b52eaca2dbb460e8c34478c93",
+   "size": 20768736,
+   "speaker": "cori",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-cori-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "high",
+   "sha256": "e62608c0be5764e298928060d7d881a0dbe9ce5911f289033265ef5a7e60931a",
+   "size": 21037620,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-dii-high-int8.tar.bz2"
+  },
+  "piper-en_GB-jenny_dioco-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "db7ed4edd3c1e28b1afdecd9a77f5cb44db326f687632ffd364be513ec6a11e6",
+   "size": 20950036,
+   "speaker": "jenny_dioco",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-jenny_dioco-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "high",
+   "sha256": "fbb0b15e41cf84c8f6e197ff26a52405b39fc9dc389de565e8a9f6e0e522e130",
+   "size": 21347062,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-miro-high-int8.tar.bz2"
+  },
+  "piper-en_GB-northern_english_male-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "9b2afdc8f35426f6b2739f255e67841679a52b56d19ece874a1eae208cb88ad1",
+   "size": 21100291,
+   "speaker": "northern_english_male",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-northern_english_male-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-semaine-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "576146dd0a08337f728552a264fe9f9094739fc27f9b2195527078842e1f2f0d",
+   "size": 23227810,
+   "speaker": "semaine",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-semaine-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-southern_english_female-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "low",
+   "sha256": "4f0fba9578f6aeeba7b0d0e642ea161a3754fce53079551c1b72f3de641d0e12",
+   "size": 21207615,
+   "speaker": "southern_english_female",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-southern_english_female-low-int8.tar.bz2"
+  },
+  "piper-en_GB-southern_english_female-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "aad8ee08e22d4867ce5098c7321bf0400231ffce6bad7635e0811cb18d790e1f",
+   "size": 23714066,
+   "speaker": "southern_english_female",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-southern_english_female-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-southern_english_male-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "d54091b468d935ed4f7b4e88dc6ea88565ab2ef8915b9ab95b50446428fd4508",
+   "size": 23601346,
+   "speaker": "southern_english_male",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-southern_english_male-medium-int8.tar.bz2"
+  },
+  "piper-en_GB-vctk-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_GB",
+   "quality": "medium",
+   "sha256": "a506a3798c69bd9116f07d6ee6d4a502dd9e35742349fd56bafa192acba93f95",
+   "size": 23366127,
+   "speaker": "vctk",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_GB-vctk-medium-int8.tar.bz2"
+  },
+  "piper-en_US-amy-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "low",
+   "sha256": "93070ac9fadf512e56c46bdd0c5d2ce96b424fdc4e683d560167410bd2c4df7d",
+   "size": 21099246,
+   "speaker": "amy",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-low-int8.tar.bz2"
+  },
+  "piper-en_US-amy-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "bd23c0aa629eb3719448582f45ede49e8fa6a679061fed5eab16a6a6fd8e7e82",
+   "size": 21028122,
+   "speaker": "amy",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-amy-medium-int8.tar.bz2"
+  },
+  "piper-en_US-arctic-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "d2bfd1f39ed7a16930e3331010608269049522d42bf671c7485ff6814561d3fc",
+   "size": 23320524,
+   "speaker": "arctic",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-arctic-medium-int8.tar.bz2"
+  },
+  "piper-en_US-bryce-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "89cd4f464c91579440565927bfca9d26555f577c4e37431167568c934fdb82f6",
+   "size": 20910568,
+   "speaker": "bryce",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-bryce-medium-int8.tar.bz2"
+  },
+  "piper-en_US-danny-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "low",
+   "sha256": "002a0079a1059a97b067927c4d79ad2ad14c33d7260eeb6d78fb5b7b32986a95",
+   "size": 21184916,
+   "speaker": "danny",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-danny-low-int8.tar.bz2"
+  },
+  "piper-en_US-glados-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "821ddc862c06993c5e5c9c3594ed59fc4690a887b43ca2d1bebcf069326316c7",
+   "size": 35125025,
+   "speaker": "glados",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-glados-high-int8.tar.bz2"
+  },
+  "piper-en_US-hfc_female-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "7c467d19054ddf84056a4887a8be75f5f3b2a5d426637b526953a5e488fec5ce",
+   "size": 21021379,
+   "speaker": "hfc_female",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-hfc_female-medium-int8.tar.bz2"
+  },
+  "piper-en_US-hfc_male-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "a12daed3ba978ffb403dec4afa245d6f114668b370157a022fcc47fa6ca073d8",
+   "size": 20984819,
+   "speaker": "hfc_male",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-hfc_male-medium-int8.tar.bz2"
+  },
+  "piper-en_US-joe-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "644527f29eca0ada5595d7b6e4daf6388f5ac0c4870b4d42996a6687fcefeb37",
+   "size": 21230019,
+   "speaker": "joe",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-joe-medium-int8.tar.bz2"
+  },
+  "piper-en_US-john-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "2ea2f6cf88bba033be71c941d00cd4d2af35d23655b5d68b7fe8239d519f17b4",
+   "size": 20800096,
+   "speaker": "john",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-john-medium-int8.tar.bz2"
+  },
+  "piper-en_US-kathleen-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "low",
+   "sha256": "08a1372ea3eed70b9477401c3aa378a73db1c609eece25fa10203c854cfe044a",
+   "size": 21289266,
+   "speaker": "kathleen",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-kathleen-low-int8.tar.bz2"
+  },
+  "piper-en_US-kristin-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "16289d7ee8e6b2311a0a0af6531a55f498f82499644a1bb6fddb991fe6fa950c",
+   "size": 20882061,
+   "speaker": "kristin",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-kristin-medium-int8.tar.bz2"
+  },
+  "piper-en_US-kusal-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "95228897703ea31acd3bba658ec3da4bbaf087fd54adfb30c90e965b3cf8d89c",
+   "size": 21044470,
+   "speaker": "kusal",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-kusal-medium-int8.tar.bz2"
+  },
+  "piper-en_US-l2arctic-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "c2b79e0dbda036169166132453d3bd0c9bea28994f0fccb52794981a5d55666c",
+   "size": 23273574,
+   "speaker": "l2arctic",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-l2arctic-medium-int8.tar.bz2"
+  },
+  "piper-en_US-lessac-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "f06e85ae07ca11adae6d3b8cedff4b600fa1181a354f1f86779866b86b2fdb33",
+   "size": 35022847,
+   "speaker": "lessac",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-high-int8.tar.bz2"
+  },
+  "piper-en_US-lessac-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "low",
+   "sha256": "af63fbe60d8bdcfccdee61ba057304a11dfc077145da383d4d351ec3c594d5e2",
+   "size": 21070568,
+   "speaker": "lessac",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-low-int8.tar.bz2"
+  },
+  "piper-en_US-lessac-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "f1c6d0295cf16087b05f80fdca5b44daca5cd78e2c425d419a42ba34929805f9",
+   "size": 20969179,
+   "speaker": "lessac",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium-int8.tar.bz2"
+  },
+  "piper-en_US-libritts-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "c35f249498fe9406c5ca3b6db1fc16749d7ee415ff2a09d5da9334206c2e0026",
+   "size": 36406088,
+   "speaker": "libritts",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-libritts-high-int8.tar.bz2"
+  },
+  "piper-en_US-libritts_r-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "7e4552e239988f4896872822b56e99e0e9e00958164e3f6bdf5ee14391fbe829",
+   "size": 23398348,
+   "speaker": "libritts_r",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-libritts_r-medium-int8.tar.bz2"
+  },
+  "piper-en_US-ljspeech-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "916b2526d4ea191f9710bd2753698ac97926ec38eade867408d3f5fd422ca285",
+   "size": 33886472,
+   "speaker": "ljspeech",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ljspeech-high-int8.tar.bz2"
+  },
+  "piper-en_US-ljspeech-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "24dc3bd77dd48c291e52c297878d3437c9492f245d823d7f6a06c4bbb67f4b6b",
+   "size": 21090429,
+   "speaker": "ljspeech",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ljspeech-medium-int8.tar.bz2"
+  },
+  "piper-en_US-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "93c60d0c906076114671061b5864b0f2c1049fd284e1ec0c1f283bbd02f109bf",
+   "size": 21336806,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-miro-high-int8.tar.bz2"
+  },
+  "piper-en_US-norman-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "cb481a514bc213ccf3899391c0f27fdcc4e4b814ec30496f28089a027b5aa01b",
+   "size": 20987233,
+   "speaker": "norman",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-norman-medium-int8.tar.bz2"
+  },
+  "piper-en_US-reza_ibrahim-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "e4bb314370a511d5fc508b3a68f64690e841519bf25d963a4f75a55a233a2ea9",
+   "size": 21139277,
+   "speaker": "reza_ibrahim",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-reza_ibrahim-medium-int8.tar.bz2"
+  },
+  "piper-en_US-ryan-high": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "high",
+   "sha256": "df13fc140db80fd586e98834cad703a8988c1004748daa068dd07a59e502013e",
+   "size": 34473341,
+   "speaker": "ryan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ryan-high-int8.tar.bz2"
+  },
+  "piper-en_US-ryan-low": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "low",
+   "sha256": "659a39069edef4f0a64fa16119fa1e36c9b9644839a61aed73872f16c2e7ecb2",
+   "size": 21212659,
+   "speaker": "ryan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ryan-low-int8.tar.bz2"
+  },
+  "piper-en_US-ryan-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "376eb489d42e98cb49f0e13a633e8d88580bd247ed8aacc298a733210404f771",
+   "size": 21083446,
+   "speaker": "ryan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ryan-medium-int8.tar.bz2"
+  },
+  "piper-en_US-sam-medium": {
+   "kind": "vits",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "quality": "medium",
+   "sha256": "e4c55b5a389ac0f586486ce23ff4ff38d89752fd3c55852ab3159f5eb02d41c0",
+   "size": 20874946,
+   "speaker": "sam",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-sam-medium-int8.tar.bz2"
+  },
+  "piper-es_AR-daniela-high": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_AR",
+   "quality": "high",
+   "sha256": "7218f0a119e4c16533ac187f71ab3019f2092f1594e43fef8392ae1f5b64abab",
+   "size": 35069782,
+   "speaker": "daniela",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_AR-daniela-high-int8.tar.bz2"
+  },
+  "piper-es_ES-carlfm-x_low": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "quality": "x_low",
+   "sha256": "fe5b74e55254e2a568a4e4d73fcfcc02580c7957fc337777adf46e5fdfe10218",
+   "size": 13356095,
+   "speaker": "carlfm",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_ES-carlfm-x_low-int8.tar.bz2"
+  },
+  "piper-es_ES-davefx-medium": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "quality": "medium",
+   "sha256": "8bb8ac1cefb727caec9bd9c6c3185c673c8b42c53bd29bb25d5a7715dac37125",
+   "size": 21171632,
+   "speaker": "davefx",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_ES-davefx-medium-int8.tar.bz2"
+  },
+  "piper-es_ES-glados-medium": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "quality": "medium",
+   "sha256": "e53ca3bcce7ed004428fd14dc5b5ff17b83d2da4ffa191e2b279435ba728f740",
+   "size": 21193827,
+   "speaker": "glados",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_ES-glados-medium-int8.tar.bz2"
+  },
+  "piper-es_ES-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "quality": "high",
+   "sha256": "412fffeb1e02ef6356c31d85f7f2639f66f1f82fe23117f225c374097a96e4c1",
+   "size": 21273088,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_ES-miro-high-int8.tar.bz2"
+  },
+  "piper-es_ES-sharvard-medium": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "quality": "medium",
+   "sha256": "bf5507cbdedea650365bd6175b3164a8ecca5847533ddf97afcba9d76ea599d1",
+   "size": 23477120,
+   "speaker": "sharvard",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_ES-sharvard-medium-int8.tar.bz2"
+  },
+  "piper-es_MX-ald-medium": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_MX",
+   "quality": "medium",
+   "sha256": "447e82d080719409db08e54a4b6eec2e4b6ba850b98dcaf09d3fc67bf30ff692",
+   "size": 21283187,
+   "speaker": "ald",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_MX-ald-medium-int8.tar.bz2"
+  },
+  "piper-es_MX-claude-high": {
+   "kind": "vits",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_MX",
+   "quality": "high",
+   "sha256": "0f9fc9c07d2e17bdc0f5f33a657addae92085da85704cb86a861e59d32f3bbfa",
+   "size": 21216685,
+   "speaker": "claude",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-es_MX-claude-high-int8.tar.bz2"
+  },
+  "piper-eu_ES-antton-medium": {
+   "kind": "vits",
+   "langs": [
+    "eu"
+   ],
+   "locale": "eu_ES",
+   "quality": "medium",
+   "sha256": "42def23d4a0c94180e02df9d2183595e8875d1b8ebd678aedd0b909a74e2c011",
+   "size": 20969706,
+   "speaker": "antton",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-eu_ES-antton-medium-int8.tar.bz2"
+  },
+  "piper-eu_ES-maider-medium": {
+   "kind": "vits",
+   "langs": [
+    "eu"
+   ],
+   "locale": "eu_ES",
+   "quality": "medium",
+   "sha256": "5fa7d803741467420c307593afc87de396aa2fb8b5a4996ab703ac4d396301f8",
+   "size": 20906023,
+   "speaker": "maider",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-eu_ES-maider-medium-int8.tar.bz2"
+  },
+  "piper-fa_IR-amir-medium": {
+   "kind": "vits",
+   "langs": [
+    "fa"
+   ],
+   "locale": "fa_IR",
+   "quality": "medium",
+   "sha256": "b79dbf0b6b9629a36fd541bfda83817ec12e2697557d87b918638445971eac46",
+   "size": 20666906,
+   "speaker": "amir",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fa_IR-amir-medium-int8.tar.bz2"
+  },
+  "piper-fa_IR-ganji-medium": {
+   "kind": "vits",
+   "langs": [
+    "fa"
+   ],
+   "locale": "fa_IR",
+   "quality": "medium",
+   "sha256": "2ae4658c3a69ef4f92e09d0014f4af31ca6c95e9ae417de3c34544b5e3a98120",
+   "size": 20645796,
+   "speaker": "ganji",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fa_IR-ganji-medium-int8.tar.bz2"
+  },
+  "piper-fa_IR-ganji_adabi-medium": {
+   "kind": "vits",
+   "langs": [
+    "fa"
+   ],
+   "locale": "fa_IR",
+   "quality": "medium",
+   "sha256": "42cc4a913e9e5a703a5a5d758267dd38ae6d86b47d4defad1e826be7885b050c",
+   "size": 20746706,
+   "speaker": "ganji_adabi",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fa_IR-ganji_adabi-medium-int8.tar.bz2"
+  },
+  "piper-fa_IR-gyro-medium": {
+   "kind": "vits",
+   "langs": [
+    "fa"
+   ],
+   "locale": "fa_IR",
+   "quality": "medium",
+   "sha256": "99bd3b912261c1a87a3f7930555622b36174b3e459e6bc153ba5fc743b931d9d",
+   "size": 20964438,
+   "speaker": "gyro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fa_IR-gyro-medium-int8.tar.bz2"
+  },
+  "piper-fa_IR-reza_ibrahim-medium": {
+   "kind": "vits",
+   "langs": [
+    "fa"
+   ],
+   "locale": "fa_IR",
+   "quality": "medium",
+   "sha256": "82d19a4011d6ca75a755057adff6480eb2e8bacf0c5edb7dad788cd3168234ca",
+   "size": 21052889,
+   "speaker": "reza_ibrahim",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fa_IR-reza_ibrahim-medium-int8.tar.bz2"
+  },
+  "piper-fi_FI-harri-low": {
+   "kind": "vits",
+   "langs": [
+    "fi"
+   ],
+   "locale": "fi_FI",
+   "quality": "low",
+   "sha256": "0e20a73b4ad043366844b3575a7a45953d38becdb403858fd3355dd2e549c262",
+   "size": 21175341,
+   "speaker": "harri",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fi_FI-harri-low-int8.tar.bz2"
+  },
+  "piper-fi_FI-harri-medium": {
+   "kind": "vits",
+   "langs": [
+    "fi"
+   ],
+   "locale": "fi_FI",
+   "quality": "medium",
+   "sha256": "b69b4c4465787dd4b9778d16b812ed7577a4051551cd87b88e0762309499c3c5",
+   "size": 20984753,
+   "speaker": "harri",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fi_FI-harri-medium-int8.tar.bz2"
+  },
+  "piper-fr_FR-gilles-low": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "low",
+   "sha256": "92d2bfd9b6b32b9787557c466b15620e453aecc10ec521762660e034941b3c43",
+   "size": 21248965,
+   "speaker": "gilles",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-gilles-low-int8.tar.bz2"
+  },
+  "piper-fr_FR-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "high",
+   "sha256": "301fc4b6a49f6feb466cb2e03e8f26e81060cc82675f7ef77b812fee36781911",
+   "size": 21268816,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-miro-high-int8.tar.bz2"
+  },
+  "piper-fr_FR-siwis-low": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "low",
+   "sha256": "c001d38068a316c93601a7d10d0b983c9e61adf2af0c4533595483c7f6cba614",
+   "size": 13317962,
+   "speaker": "siwis",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-siwis-low-int8.tar.bz2"
+  },
+  "piper-fr_FR-siwis-medium": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "medium",
+   "sha256": "3909cff9b3cfd4820c66aa13bf554315c82e34899c161f0b446ece372bc4b5ec",
+   "size": 20914888,
+   "speaker": "siwis",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-siwis-medium-int8.tar.bz2"
+  },
+  "piper-fr_FR-tom-medium": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "medium",
+   "sha256": "b158f884eb4231b8dddd372c3dc506949630c992a8e48ca692a90323e8bb4e09",
+   "size": 21019617,
+   "speaker": "tom",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-tom-medium-int8.tar.bz2"
+  },
+  "piper-fr_FR-upmc-medium": {
+   "kind": "vits",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "quality": "medium",
+   "sha256": "ec4930dd3778e19e6ea2bc0d16c5a50a82f428ba7ee43dceab1df7efbaf9f1d3",
+   "size": 22588190,
+   "speaker": "upmc",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-fr_FR-upmc-medium-int8.tar.bz2"
+  },
+  "piper-hi_IN-pratham-medium": {
+   "kind": "vits",
+   "langs": [
+    "hi"
+   ],
+   "locale": "hi_IN",
+   "quality": "medium",
+   "sha256": "20f568c56207c13b9a0d9478aec8b7d1449122e618aeebc7211f6abc942b58b7",
+   "size": 20987965,
+   "speaker": "pratham",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hi_IN-pratham-medium-int8.tar.bz2"
+  },
+  "piper-hi_IN-priyamvada-medium": {
+   "kind": "vits",
+   "langs": [
+    "hi"
+   ],
+   "locale": "hi_IN",
+   "quality": "medium",
+   "sha256": "2997c7bbc211e524af83dfdffe7712942f10bd76c079a526af2e09d1f36a92f2",
+   "size": 21097319,
+   "speaker": "priyamvada",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hi_IN-priyamvada-medium-int8.tar.bz2"
+  },
+  "piper-hi_IN-rohan-medium": {
+   "kind": "vits",
+   "langs": [
+    "hi"
+   ],
+   "locale": "hi_IN",
+   "quality": "medium",
+   "sha256": "b306822fe16516d3c882e070a7205d781524bd9e8f2d121c3da3e504afe20e05",
+   "size": 21064499,
+   "speaker": "rohan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hi_IN-rohan-medium-int8.tar.bz2"
+  },
+  "piper-hu_HU-anna-medium": {
+   "kind": "vits",
+   "langs": [
+    "hu"
+   ],
+   "locale": "hu_HU",
+   "quality": "medium",
+   "sha256": "23f9e9fd59ae28fe04796c84079ed1bcf474e1bd35b97c55447fcc3c4e5e42e1",
+   "size": 21113090,
+   "speaker": "anna",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hu_HU-anna-medium-int8.tar.bz2"
+  },
+  "piper-hu_HU-berta-medium": {
+   "kind": "vits",
+   "langs": [
+    "hu"
+   ],
+   "locale": "hu_HU",
+   "quality": "medium",
+   "sha256": "df8bae3e7906ba42498a87aff101d00bbfeb1a8983f6a468e8e82a6226c6659f",
+   "size": 21072384,
+   "speaker": "berta",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hu_HU-berta-medium-int8.tar.bz2"
+  },
+  "piper-hu_HU-imre-medium": {
+   "kind": "vits",
+   "langs": [
+    "hu"
+   ],
+   "locale": "hu_HU",
+   "quality": "medium",
+   "sha256": "33e0413cf8271162244c111c86c3482852b8cefa90a28908abe97e636be89ef7",
+   "size": 21202370,
+   "speaker": "imre",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hu_HU-imre-medium-int8.tar.bz2"
+  },
+  "piper-id_ID-news_tts-medium": {
+   "kind": "vits",
+   "langs": [
+    "id"
+   ],
+   "locale": "id_ID",
+   "quality": "medium",
+   "sha256": "d7315f6bf6b61e75cc4397a934b3372fd7a8223bccb96ed817f7283649eebd89",
+   "size": 21046435,
+   "speaker": "news_tts",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-id_ID-news_tts-medium-int8.tar.bz2"
+  },
+  "piper-is_IS-bui-medium": {
+   "kind": "vits",
+   "langs": [
+    "is"
+   ],
+   "locale": "is_IS",
+   "quality": "medium",
+   "sha256": "3310457efaf9efd8ddda97dee686614481cc2d84015f993289eae7b799f49eb3",
+   "size": 20595115,
+   "speaker": "bui",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-is_IS-bui-medium-int8.tar.bz2"
+  },
+  "piper-is_IS-salka-medium": {
+   "kind": "vits",
+   "langs": [
+    "is"
+   ],
+   "locale": "is_IS",
+   "quality": "medium",
+   "sha256": "01e1f9c3b4cab8ecd058a6f9fa56237d1c144e18afe149465ef2167195cbe493",
+   "size": 20189374,
+   "speaker": "salka",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-is_IS-salka-medium-int8.tar.bz2"
+  },
+  "piper-is_IS-steinn-medium": {
+   "kind": "vits",
+   "langs": [
+    "is"
+   ],
+   "locale": "is_IS",
+   "quality": "medium",
+   "sha256": "71b508abbb139e7a9fc91cd7d0494aca92b384b125e50bb1720b8fd23ec5ea87",
+   "size": 20053431,
+   "speaker": "steinn",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-is_IS-steinn-medium-int8.tar.bz2"
+  },
+  "piper-is_IS-ugla-medium": {
+   "kind": "vits",
+   "langs": [
+    "is"
+   ],
+   "locale": "is_IS",
+   "quality": "medium",
+   "sha256": "6b01568efa20cc4d35e78d787a970ca74ac35f3f9f541d998a98e58acb3542e6",
+   "size": 20389158,
+   "speaker": "ugla",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-is_IS-ugla-medium-int8.tar.bz2"
+  },
+  "piper-it_IT-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "it"
+   ],
+   "locale": "it_IT",
+   "quality": "high",
+   "sha256": "cb1f6596605091ddd21ef16739b2f0bfcdef0b539cee6c96becd14528203ab5d",
+   "size": 20998284,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-it_IT-dii-high-int8.tar.bz2"
+  },
+  "piper-it_IT-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "it"
+   ],
+   "locale": "it_IT",
+   "quality": "high",
+   "sha256": "c3c193381d9fadd3cc9ad03c230e04a29a7b893343b162d127fd59e03a4a74b1",
+   "size": 21238206,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-it_IT-miro-high-int8.tar.bz2"
+  },
+  "piper-it_IT-paola-medium": {
+   "kind": "vits",
+   "langs": [
+    "it"
+   ],
+   "locale": "it_IT",
+   "quality": "medium",
+   "sha256": "2b975ed305391c056944a4dde67ee754dd824099503a860295bb4c1d724662d8",
+   "size": 21143212,
+   "speaker": "paola",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-it_IT-paola-medium-int8.tar.bz2"
+  },
+  "piper-it_IT-riccardo-x_low": {
+   "kind": "vits",
+   "langs": [
+    "it"
+   ],
+   "locale": "it_IT",
+   "quality": "x_low",
+   "sha256": "afc2ea457fd45420dbdd87db4b3927b4fc97b00511964d474bb43e03092d37c1",
+   "size": 13329285,
+   "speaker": "riccardo",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-it_IT-riccardo-x_low-int8.tar.bz2"
+  },
+  "piper-ka_GE-natia-medium": {
+   "kind": "vits",
+   "langs": [
+    "ka"
+   ],
+   "locale": "ka_GE",
+   "quality": "medium",
+   "sha256": "b76f14656f2ced75c14bed6567665a789bac224bbdf4cf5564d1faf31667d7a1",
+   "size": 21099875,
+   "speaker": "natia",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ka_GE-natia-medium-int8.tar.bz2"
+  },
+  "piper-kk_KZ-iseke-x_low": {
+   "kind": "vits",
+   "langs": [
+    "kk"
+   ],
+   "locale": "kk_KZ",
+   "quality": "x_low",
+   "sha256": "d9df34e49fbcc05fb76476da8be030a1db908ce7886cf05960615cd30b6d142d",
+   "size": 13385789,
+   "speaker": "iseke",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-kk_KZ-iseke-x_low-int8.tar.bz2"
+  },
+  "piper-kk_KZ-issai-high": {
+   "kind": "vits",
+   "langs": [
+    "kk"
+   ],
+   "locale": "kk_KZ",
+   "quality": "high",
+   "sha256": "72b80fa2077d3371f42b957287bc89a70ad4abf1201aef9e01d0650a94aaa13e",
+   "size": 35999225,
+   "speaker": "issai",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-kk_KZ-issai-high-int8.tar.bz2"
+  },
+  "piper-kk_KZ-raya-x_low": {
+   "kind": "vits",
+   "langs": [
+    "kk"
+   ],
+   "locale": "kk_KZ",
+   "quality": "x_low",
+   "sha256": "8c0b252415b039a27cb38d75977fa069a63dc1de90f99d155e5c89628bd4dad2",
+   "size": 13315906,
+   "speaker": "raya",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-kk_KZ-raya-x_low-int8.tar.bz2"
+  },
+  "piper-ku_TR-berfin_renas-medium": {
+   "kind": "vits",
+   "langs": [
+    "ku"
+   ],
+   "locale": "ku_TR",
+   "quality": "medium",
+   "sha256": "e22c595b485c83ed44284fbe69ea439465650690c26d429e2243dfe23482bbec",
+   "size": 23642539,
+   "speaker": "berfin_renas",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ku_TR-berfin_renas-medium-int8.tar.bz2"
+  },
+  "piper-lb_LU-marylux-medium": {
+   "kind": "vits",
+   "langs": [
+    "lb"
+   ],
+   "locale": "lb_LU",
+   "quality": "medium",
+   "sha256": "1fcdaf57a35a00c6db3f60f16a9baf70873f50a628ddf527b45b1d95d480ce93",
+   "size": 21143108,
+   "speaker": "marylux",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-lb_LU-marylux-medium-int8.tar.bz2"
+  },
+  "piper-lv_LV-aivars-medium": {
+   "kind": "vits",
+   "langs": [
+    "lv"
+   ],
+   "locale": "lv_LV",
+   "quality": "medium",
+   "sha256": "33d6906f054406856d6ef0f89b01fdc2648f273322129a989b10ea7a04523f42",
+   "size": 20990634,
+   "speaker": "aivars",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-lv_LV-aivars-medium-int8.tar.bz2"
+  },
+  "piper-ml_IN-arjun-medium": {
+   "kind": "vits",
+   "langs": [
+    "ml"
+   ],
+   "locale": "ml_IN",
+   "quality": "medium",
+   "sha256": "4d0b2a58157604b589cddc54884ffd2618b097d15155b254c34bd21830659832",
+   "size": 20838242,
+   "speaker": "arjun",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ml_IN-arjun-medium-int8.tar.bz2"
+  },
+  "piper-ml_IN-meera-medium": {
+   "kind": "vits",
+   "langs": [
+    "ml"
+   ],
+   "locale": "ml_IN",
+   "quality": "medium",
+   "sha256": "e4e87086c39c477a538cf42e8a3337f6d6ebce8ef2b2e6dfa61bc28b129d341c",
+   "size": 21112290,
+   "speaker": "meera",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ml_IN-meera-medium-int8.tar.bz2"
+  },
+  "piper-ne_NP-chitwan-medium": {
+   "kind": "vits",
+   "langs": [
+    "ne"
+   ],
+   "locale": "ne_NP",
+   "quality": "medium",
+   "sha256": "deb1592efb99c02d38ba34443215ae94bf67ed77ecafd2e3320acffb27ae3204",
+   "size": 21165758,
+   "speaker": "chitwan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ne_NP-chitwan-medium-int8.tar.bz2"
+  },
+  "piper-ne_NP-google-medium": {
+   "kind": "vits",
+   "langs": [
+    "ne"
+   ],
+   "locale": "ne_NP",
+   "quality": "medium",
+   "sha256": "ca1a5a1d6ec542198709b7b30b30e42a7695eea210344675bf7d99e1fc41e7b5",
+   "size": 23618640,
+   "speaker": "google",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ne_NP-google-medium-int8.tar.bz2"
+  },
+  "piper-ne_NP-google-x_low": {
+   "kind": "vits",
+   "langs": [
+    "ne"
+   ],
+   "locale": "ne_NP",
+   "quality": "x_low",
+   "sha256": "4a092e639c36d3a6ce2316a936571a3c0aadb82b0ffd80cc01cfe009d39701aa",
+   "size": 14955184,
+   "speaker": "google",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ne_NP-google-x_low-int8.tar.bz2"
+  },
+  "piper-nl_BE-nathalie-medium": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_BE",
+   "quality": "medium",
+   "sha256": "f2cdeb555eacbdd053e5d63c4d0120464161a962f9fe3bf9aac47ecc57ac90ac",
+   "size": 21139955,
+   "speaker": "nathalie",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_BE-nathalie-medium-int8.tar.bz2"
+  },
+  "piper-nl_BE-nathalie-x_low": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_BE",
+   "quality": "x_low",
+   "sha256": "5cf6ae08ab9339455433f1718896b403622a1bdd9f911f1189421d0df34d83f3",
+   "size": 13392995,
+   "speaker": "nathalie",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_BE-nathalie-x_low-int8.tar.bz2"
+  },
+  "piper-nl_NL-alex-medium": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_NL",
+   "quality": "medium",
+   "sha256": "ea4f024bf5e113435d70d828586b9f7153100d8365eb8d93236ccaf069045bb9",
+   "size": 21188402,
+   "speaker": "alex",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_NL-alex-medium-int8.tar.bz2"
+  },
+  "piper-nl_NL-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_NL",
+   "quality": "high",
+   "sha256": "7989032e2f774e20c8b248d03132e4bac712df435752b0a558ea0fb586a4863b",
+   "size": 21124167,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_NL-dii-high-int8.tar.bz2"
+  },
+  "piper-nl_NL-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_NL",
+   "quality": "high",
+   "sha256": "9696b90fe37f789e399aed5317293682450d9695f801e8ba299a4159ae227ea3",
+   "size": 21359568,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_NL-miro-high-int8.tar.bz2"
+  },
+  "piper-nl_NL-pim-medium": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_NL",
+   "quality": "medium",
+   "sha256": "10433635e34020dced7067b84880c2c7b91c1b9b861e9be8b1a832ead891880e",
+   "size": 21127183,
+   "speaker": "pim",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_NL-pim-medium-int8.tar.bz2"
+  },
+  "piper-nl_NL-ronnie-medium": {
+   "kind": "vits",
+   "langs": [
+    "nl"
+   ],
+   "locale": "nl_NL",
+   "quality": "medium",
+   "sha256": "eb16022c9c8ee48b75dc833e8a8b04e08730929ea68cde9b67e2dc712f988978",
+   "size": 21158108,
+   "speaker": "ronnie",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-nl_NL-ronnie-medium-int8.tar.bz2"
+  },
+  "piper-no_NO-talesyntese-medium": {
+   "kind": "vits",
+   "langs": [
+    "no"
+   ],
+   "locale": "no_NO",
+   "quality": "medium",
+   "sha256": "de0fc89178fabf0636554af8ae131b4dfe034866458bb7daa7026ee0d0d8d2f7",
+   "size": 21072816,
+   "speaker": "talesyntese",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-no_NO-talesyntese-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-bass-high": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "high",
+   "sha256": "e6667ea284c15b90e5fd6350b8005a0a4d7c1ce1cc1ce647ee64d2650a57a12f",
+   "size": 35321483,
+   "speaker": "bass",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-bass-high-int8.tar.bz2"
+  },
+  "piper-pl_PL-darkman-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "0ec47b7d591e48913da887ea7e81287f4ef621d9c5aa1848700d2d736ed3f99c",
+   "size": 21078264,
+   "speaker": "darkman",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-darkman-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-gosia-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "72acac4c4b031725c41a61b3af0314a3d30e1ec2cd83ee410ea5f9e6d2d9d4fb",
+   "size": 21109262,
+   "speaker": "gosia",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-gosia-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-jarvis_wg_glos-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "7d01e13ffe5a6773a99c7005e926d67122937b4333cb771e6217820145889921",
+   "size": 21063665,
+   "speaker": "jarvis_wg_glos",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-jarvis_wg_glos-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-justyna_wg_glos-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "9051a597ff6b475ecec976ffcddcc411a06b96994f2c92cf74ff96499916dbc4",
+   "size": 21068261,
+   "speaker": "justyna_wg_glos",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-justyna_wg_glos-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-mc_speech-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "c67a1b152bced5cb0d8aaa97fa12700aab743feaa756e1ac903cc7e92174f171",
+   "size": 20938473,
+   "speaker": "mc_speech",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-mc_speech-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-meski_wg_glos-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "e611de2d9f4d99650d90a40e1587957ecf08e5e479e644c8a94e5f76cae91036",
+   "size": 21108038,
+   "speaker": "meski_wg_glos",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-meski_wg_glos-medium-int8.tar.bz2"
+  },
+  "piper-pl_PL-zenski_wg_glos-medium": {
+   "kind": "vits",
+   "langs": [
+    "pl"
+   ],
+   "locale": "pl_PL",
+   "quality": "medium",
+   "sha256": "b37ee12e4ee6369f73f735feb5fd34ef33ae2479b12baff9a62c717c43f02c6c",
+   "size": 21028352,
+   "speaker": "zenski_wg_glos",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pl_PL-zenski_wg_glos-medium-int8.tar.bz2"
+  },
+  "piper-pt_BR-cadu-medium": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "medium",
+   "sha256": "78f1caf0a74cc6cb8dedaff87affd232ee653d5b0394d4cf4d2e97ecbfa5ff3d",
+   "size": 21135464,
+   "speaker": "cadu",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-cadu-medium-int8.tar.bz2"
+  },
+  "piper-pt_BR-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "high",
+   "sha256": "8a5b0195eff80a0240f18a3f1d528d4bef08f1b702126cee858d700365fc4111",
+   "size": 21117576,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-dii-high-int8.tar.bz2"
+  },
+  "piper-pt_BR-edresson-low": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "low",
+   "sha256": "9ec0b016cfab3778263406970b3ee0e2e30860b05046fa1e5cb6460edb7f8251",
+   "size": 21198064,
+   "speaker": "edresson",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-edresson-low-int8.tar.bz2"
+  },
+  "piper-pt_BR-faber-medium": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "medium",
+   "sha256": "dbc8b1d7d729fd417ea78a350ed35696c928770ac93513d3f507bd4e88eee3fd",
+   "size": 21336772,
+   "speaker": "faber",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-faber-medium-int8.tar.bz2"
+  },
+  "piper-pt_BR-jeff-medium": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "medium",
+   "sha256": "21a8883f9662c784dd5653fd9d5cb9aaae2551c70e16854e81ff4a9c96470e6a",
+   "size": 21211448,
+   "speaker": "jeff",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-jeff-medium-int8.tar.bz2"
+  },
+  "piper-pt_BR-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "quality": "high",
+   "sha256": "d6bea7c3e4176feb2fd470958fa9c72cbc4b9ed5ff29d1f7b1c935733ce2c08b",
+   "size": 21341456,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-miro-high-int8.tar.bz2"
+  },
+  "piper-pt_PT-dii-high": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_PT",
+   "quality": "high",
+   "sha256": "7fc966c08bea9acd6b89f356e3070bf0217e0f8bcca81e40c70076cf2d5d7c66",
+   "size": 21076561,
+   "speaker": "dii",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_PT-dii-high-int8.tar.bz2"
+  },
+  "piper-pt_PT-miro-high": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_PT",
+   "quality": "high",
+   "sha256": "2f861fdd2986e7498c091633618e564dd5216affb5ea1f338ee3ff411fb2618c",
+   "size": 21342000,
+   "speaker": "miro",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_PT-miro-high-int8.tar.bz2"
+  },
+  "piper-pt_PT-tugao-medium": {
+   "kind": "vits",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_PT",
+   "quality": "medium",
+   "sha256": "8f4c5e4a5994d0d1a2c10fb3035631add0460ea5c776f5ea40d3d6051140dbc3",
+   "size": 21253211,
+   "speaker": "tugao",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_PT-tugao-medium-int8.tar.bz2"
+  },
+  "piper-ro_RO-mihai-medium": {
+   "kind": "vits",
+   "langs": [
+    "ro"
+   ],
+   "locale": "ro_RO",
+   "quality": "medium",
+   "sha256": "1f41b684fb4640d1b79f750f1581647f8737b24ff5daf8d7c5fd5ad6d1761499",
+   "size": 21081899,
+   "speaker": "mihai",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ro_RO-mihai-medium-int8.tar.bz2"
+  },
+  "piper-ru_RU-denis-medium": {
+   "kind": "vits",
+   "langs": [
+    "ru"
+   ],
+   "locale": "ru_RU",
+   "quality": "medium",
+   "sha256": "d710e29eb7854c42461d16d65d3cef753cc559639ca75806edc75ba71f23af66",
+   "size": 21058905,
+   "speaker": "denis",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-denis-medium-int8.tar.bz2"
+  },
+  "piper-ru_RU-dmitri-medium": {
+   "kind": "vits",
+   "langs": [
+    "ru"
+   ],
+   "locale": "ru_RU",
+   "quality": "medium",
+   "sha256": "7636793307f634ce54c6e65528a91a61683114f1a6635a08caf64ba6c54e6a63",
+   "size": 21129441,
+   "speaker": "dmitri",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-dmitri-medium-int8.tar.bz2"
+  },
+  "piper-ru_RU-irina-medium": {
+   "kind": "vits",
+   "langs": [
+    "ru"
+   ],
+   "locale": "ru_RU",
+   "quality": "medium",
+   "sha256": "b0000a509f7551a80742eed5c43b8eb03f469cb9f0a42f6feee96ce0da0ebab8",
+   "size": 21149417,
+   "speaker": "irina",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-irina-medium-int8.tar.bz2"
+  },
+  "piper-ru_RU-ruslan-medium": {
+   "kind": "vits",
+   "langs": [
+    "ru"
+   ],
+   "locale": "ru_RU",
+   "quality": "medium",
+   "sha256": "93b9f8c7b34c1420bdc253a0ce5ab1cb6b6be2e8fa26c1f3b36c6189233c3e7e",
+   "size": 21127907,
+   "speaker": "ruslan",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ru_RU-ruslan-medium-int8.tar.bz2"
+  },
+  "piper-sk_SK-lili-medium": {
+   "kind": "vits",
+   "langs": [
+    "sk"
+   ],
+   "locale": "sk_SK",
+   "quality": "medium",
+   "sha256": "5adc2ac5af88630cf305da68ba9cfd656e4b72e7f8c7d2deb2f641ef1d740096",
+   "size": 21281868,
+   "speaker": "lili",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sk_SK-lili-medium-int8.tar.bz2"
+  },
+  "piper-sl_SI-artur-medium": {
+   "kind": "vits",
+   "langs": [
+    "sl"
+   ],
+   "locale": "sl_SI",
+   "quality": "medium",
+   "sha256": "073e747f6d23db2c67b62230b2fe6fd5e72ca9f89651d5329a4bdd0b43c2bd05",
+   "size": 21404286,
+   "speaker": "artur",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sl_SI-artur-medium-int8.tar.bz2"
+  },
+  "piper-sq_AL-edon-medium": {
+   "kind": "vits",
+   "langs": [
+    "sq"
+   ],
+   "locale": "sq_AL",
+   "quality": "medium",
+   "sha256": "b951fc1866256dc0258abf9844fb0a3a8263615056e65ddbd6b766676816dd26",
+   "size": 21272475,
+   "speaker": "edon",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sq_AL-edon-medium-int8.tar.bz2"
+  },
+  "piper-sr_RS-serbski_institut-medium": {
+   "kind": "vits",
+   "langs": [
+    "sr"
+   ],
+   "locale": "sr_RS",
+   "quality": "medium",
+   "sha256": "f590fc90280f53feff86224d1d83883fa05f143c62d13618e0924b140a6a5ab5",
+   "size": 23447445,
+   "speaker": "serbski_institut",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sr_RS-serbski_institut-medium-int8.tar.bz2"
+  },
+  "piper-sv_SE-alma-medium": {
+   "kind": "vits",
+   "langs": [
+    "sv"
+   ],
+   "locale": "sv_SE",
+   "quality": "medium",
+   "sha256": "a1d0b72ffba2f49a5b02396ebf818cbccc7bb23a16d9978ff37dfb9a6321deaa",
+   "size": 21017826,
+   "speaker": "alma",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sv_SE-alma-medium-int8.tar.bz2"
+  },
+  "piper-sv_SE-lisa-medium": {
+   "kind": "vits",
+   "langs": [
+    "sv"
+   ],
+   "locale": "sv_SE",
+   "quality": "medium",
+   "sha256": "8197eb923bd25b7801e594733fe4945f4cc86d7148339e696a3eb8758fc7162a",
+   "size": 21122674,
+   "speaker": "lisa",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sv_SE-lisa-medium-int8.tar.bz2"
+  },
+  "piper-sv_SE-nst-medium": {
+   "kind": "vits",
+   "langs": [
+    "sv"
+   ],
+   "locale": "sv_SE",
+   "quality": "medium",
+   "sha256": "ac568458aac847d44b7945ba06f9b352122ae718b50b43af924a7ded8be1a933",
+   "size": 20972387,
+   "speaker": "nst",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sv_SE-nst-medium-int8.tar.bz2"
+  },
+  "piper-sw_CD-lanfrica-medium": {
+   "kind": "vits",
+   "langs": [
+    "sw"
+   ],
+   "locale": "sw_CD",
+   "quality": "medium",
+   "sha256": "eee0eda5a850e21169ebd79105a914d95d4aa34cccc49b417f071f05a0e2fa45",
+   "size": 21082704,
+   "speaker": "lanfrica",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-sw_CD-lanfrica-medium-int8.tar.bz2"
+  },
+  "piper-tr_TR-dfki-medium": {
+   "kind": "vits",
+   "langs": [
+    "tr"
+   ],
+   "locale": "tr_TR",
+   "quality": "medium",
+   "sha256": "6cda7bc029b7d5549a80439c51beb4c40c42df4b4614f01a8c61deb2fc859aa2",
+   "size": 21135582,
+   "speaker": "dfki",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-tr_TR-dfki-medium-int8.tar.bz2"
+  },
+  "piper-tr_TR-fahrettin-medium": {
+   "kind": "vits",
+   "langs": [
+    "tr"
+   ],
+   "locale": "tr_TR",
+   "quality": "medium",
+   "sha256": "9897e4da7f26be2bd03dc920d9c698634060832cbdb18b7d2908728db1465089",
+   "size": 21118817,
+   "speaker": "fahrettin",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-tr_TR-fahrettin-medium-int8.tar.bz2"
+  },
+  "piper-tr_TR-fettah-medium": {
+   "kind": "vits",
+   "langs": [
+    "tr"
+   ],
+   "locale": "tr_TR",
+   "quality": "medium",
+   "sha256": "4374bfdabb88ada0f3edf9bd46eacf1c5391a8a93bdce364196495891e5bc323",
+   "size": 21186168,
+   "speaker": "fettah",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-tr_TR-fettah-medium-int8.tar.bz2"
+  },
+  "piper-uk_UA-lada-x_low": {
+   "kind": "vits",
+   "langs": [
+    "uk"
+   ],
+   "locale": "uk_UA",
+   "quality": "x_low",
+   "sha256": "5ba331ec01c811d605951c30ad7f9f57dfe87aaaefb9295c83012867db14a91a",
+   "size": 13332976,
+   "speaker": "lada",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-uk_UA-lada-x_low-int8.tar.bz2"
+  },
+  "piper-ur_PK-fasih-medium": {
+   "kind": "vits",
+   "langs": [
+    "ur"
+   ],
+   "locale": "ur_PK",
+   "quality": "medium",
+   "sha256": "5b4481d8fd03b849f9c9b7b484a51b34014ca7308c2aabd7f0f2688ed8721234",
+   "size": 21167855,
+   "speaker": "fasih",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ur_PK-fasih-medium-int8.tar.bz2"
+  },
+  "piper-vi_VN-25hours_single-low": {
+   "kind": "vits",
+   "langs": [
+    "vi"
+   ],
+   "locale": "vi_VN",
+   "quality": "low",
+   "sha256": "88df4b7fdff4bd441f1f1fa9f4b4d0f03b8777d69fd0d423912e3f78bba57312",
+   "size": 21222102,
+   "speaker": "25hours_single",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-25hours_single-low-int8.tar.bz2"
+  },
+  "piper-vi_VN-vais1000-medium": {
+   "kind": "vits",
+   "langs": [
+    "vi"
+   ],
+   "locale": "vi_VN",
+   "quality": "medium",
+   "sha256": "60e8b82a27cfb9bfa527f5789f0879d02ec73a7397659973b937c823c326d5dd",
+   "size": 21574925,
+   "speaker": "vais1000",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-vais1000-medium-int8.tar.bz2"
+  },
+  "piper-vi_VN-vivos-x_low": {
+   "kind": "vits",
+   "langs": [
+    "vi"
+   ],
+   "locale": "vi_VN",
+   "quality": "x_low",
+   "sha256": "dcbae732d8f8b574f66e3fb147d9210cf4bbeadaec498308dcddb85e5bf0122f",
+   "size": 14683150,
+   "speaker": "vivos",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-vi_VN-vivos-x_low-int8.tar.bz2"
+  },
+  "piper-zh_CN-chaowen-medium": {
+   "kind": "vits",
+   "langs": [
+    "zh"
+   ],
+   "locale": "zh_CN",
+   "quality": "medium",
+   "sha256": "f5f7c8628427fbb259ea4b7ec1a9a822a0c04e3f267071f0abfa0610371d9e0c",
+   "size": 14011298,
+   "speaker": "chaowen",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-chaowen-medium-int8.tar.bz2"
+  },
+  "piper-zh_CN-xiao_ya-medium": {
+   "kind": "vits",
+   "langs": [
+    "zh"
+   ],
+   "locale": "zh_CN",
+   "quality": "medium",
+   "sha256": "eab027e194e70289233cf12308373611fa4e2e96ef2d97354ef433ab663d831f",
+   "size": 14016124,
+   "speaker": "xiao_ya",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-xiao_ya-medium-int8.tar.bz2"
+  }
+ }
+}

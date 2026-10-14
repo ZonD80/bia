@@ -1,0 +1,25 @@
+[package]
+name = "bia-mcp-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: password, OTP (TOTP/HOTP) and WebAuthn passkey store"
+
+[lib]
+name = "bia_mcp_secrets"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bia-mcp-secrets"
+path = "src/main.rs"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+base64 = "0.22"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+p256 = { version = "0.13", features = ["ecdsa"] }

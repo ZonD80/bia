@@ -1,0 +1,19 @@
+[Unit]
+Description=Grow the root filesystem over the whole stick and move in the flashed model
+After=local-fs.target
+Before=bia-update.service bia.service
+Conflicts=shutdown.target
+ConditionPathExists=/usr/local/sbin/bia-grow
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Moving a large model in takes minutes on a USB stick; bia-grow prints progress
+# on every console.
+ExecStart=/usr/local/sbin/bia-grow
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

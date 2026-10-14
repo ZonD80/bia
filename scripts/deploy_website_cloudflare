@@ -1,0 +1,77 @@
+# Cloudflare Pages — static website
+#
+# HTML for every route is prerendered (nuxt generate) so crawlers and agents
+# see real content, not an empty SPA shell.
+#
+# Auth: uses existing Wrangler login (wrangler login). Optional CLOUDFLARE_API_TOKEN
+# if you prefer a token instead of OAuth.
+# Optional:
+#   CF_PAGES_PROJECT       Pages project name (default: bia)
+#   CF_PAGES_BRANCH        Must match the project's production branch (default: production)
+#   NUXT_PUBLIC_SITE_URL   Public origin for sitemap/canonical (default: https://<project>.pages.dev)
+#
+# Usage:
+#   ./scripts/deploy_website_cloudflare
+#   make website-deploy
+#   CF_PAGES_PROJECT=my-bia ./scripts/deploy_website_cloudflare
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WEB="$ROOT/website"
+PROJECT="${CF_PAGES_PROJECT:-bia}"
+BRANCH="${CF_PAGES_BRANCH:-production}"
+SITE_URL="${NUXT_PUBLIC_SITE_URL:-https://${PROJECT}.pages.dev}"
+OUT="$WEB/.output/public"
+
+export NUXT_PUBLIC_SITE_URL="$SITE_URL"
+export SITE_URL
+
+cd "$WEB"
+
+if [[ ! -d node_modules ]]; then
+  echo "==> npm ci"
+  npm ci
+else
+  echo "==> npm install (deps present)"
+  npm install --no-audit --no-fund
+fi
+
+echo "==> nuxt generate (static HTML for crawlers)"
+npm run generate
+
+if [[ ! -f "$OUT/index.html" ]]; then
+  echo "error: missing $OUT/index.html after generate" >&2
+  exit 1
+fi
+
+# Spot-check prerendered routes (not client-only shells).
+for path in features features/messengers features/brain use-cases why-bia faq download; do
+  f="$OUT/${path}/index.html"
+  if [[ ! -f "$f" ]]; then
+    echo "error: prerender missing $f" >&2
+    exit 1
+  fi
+  if ! grep -q '<h1' "$f"; then
+    echo "error: $f has no <h1> — looks like an empty shell" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -f "$OUT/sitemap.xml" || ! -f "$OUT/robots.txt" || ! -f "$OUT/llms.txt" || ! -f "$OUT/_redirects" ]]; then
+  echo "error: sitemap.xml / robots.txt / llms.txt / _redirects missing from static output" >&2
+  exit 1
+fi
+
+echo "==> wrangler pages deploy → project=$PROJECT branch=$BRANCH (production)"
+npx --yes wrangler@4 pages deploy "$OUT" \
+  --project-name="$PROJECT" \
+  --branch="$BRANCH" \
+  --commit-dirty=true
+
+echo
+echo "Deployed static site."
+echo "  Project:  $PROJECT"
+echo "  Branch:   $BRANCH (must equal the Pages production branch)"
+echo "  Site URL: $SITE_URL"
+echo "  Indexing: sitemap.xml, robots.txt, llms.txt, prerendered HTML"

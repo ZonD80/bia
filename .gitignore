@@ -1,0 +1,76 @@
+# --- Rust ---------------------------------------------------------------
+/target/
+**/*.rs.bk
+*.pdb
+
+# --- Lockfiles ----------------------------------------------------------
+Cargo.lock
+package-lock.json
+
+# --- Host outputs & caches ----------------------------------------------
+/cache/**
+!/cache/.gitkeep
+/dist/**
+!/dist/.gitkeep
+/installers/dist/**
+!/installers/dist/**/.gitkeep
+/builders/*.log
+*.img
+*.fd
+*.iso
+*.qcow2
+
+# --- Flash stick payload (large / regenerable / machine-local) ----------
+source/flash/model/*.gguf
+source/flash/EFI/vmlinuz*
+source/flash/EFI/initramfs*
+source/flash/EFI/BOOT/
+source/flash/EFI/debian/
+source/flash/boot/
+source/flash/files/state/
+source/flash/files/inbox/
+source/flash/MCPs/*/bin/
+source/flash/MCPs/telegram/lib/
+source/flash/MCPs/chrome/runtime/
+source/flash/MCPs/chrome/devtools/
+source/flash/MCPs/chrome/extension.crx
+source/flash/MCPs/chrome/extension.packstamp
+
+# --- Secrets / local env ------------------------------------------------
+.env
+.env.*
+!.env.example
+*.key
+*.p12
+*.pfx
+# Chrome extension signing key is deliberately tracked (compiled into bia-mcp-chrome,
+# defines the fixed extension id; agents repack improved extensions with it). Every other *.pem stays local.
+*.pem
+!source/crates/bia-mcp-chrome/extension.pem
+!source/flash/MCPs/chrome/extension.pem
+id_rsa
+id_rsa.pub
+# FMM API keys for local flash/tests (copy from fmm.json.example). Never commit.
+/fmm.json
+/fmm.local.json
+source/flash/files/state/fmm.json
+**/files/state/fmm.json
+
+# --- OS / editors -------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+.claude/
+.cursor/
+
+# --- Python ------------------------------------------------------------
+__pycache__/
+*.pyc
+
+# --- Scratch ------------------------------------------------------------
+*.log
+*.tmp
+1password_sample.json

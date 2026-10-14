@@ -1,0 +1,3 @@
+# Keep every unpacked .deb in /home/bia/files/debs so carry folds can reinstall
+# exact packages during unfold (see /usr/local/sbin/bia-keep-debs).
+pre-invoke="/usr/local/sbin/bia-keep-debs"

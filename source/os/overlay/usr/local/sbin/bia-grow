@@ -1,0 +1,129 @@
+#!/bin/bash
+# Make the root ext4 fill its partition, moving in the model bia-flash left on
+# the partition tail.
+#
+# bia-flash writes root.img at the start of BIAROOT (it is only as large as the
+# OS needs) and streams the chosen GGUF raw onto the end of the same partition,
+# listed in /boot/EFI/bia/models.txt as
+#   <byte offset inside the partition> <size> <sha256 or -> <name>
+# ext4 must not grow over model bytes it has not copied yet, so the copy goes
+# in steps: copy what fits in the free space into /home/bia/model/<name>.part,
+# sync, grow the filesystem up to the first byte not yet copied, repeat. That
+# needs a few hundred MiB of headroom, not room for a second copy. An
+# interrupted run resumes from the .part file on the next boot.
+#
+#   bia-grow        (bia-grow.service, before bia-update and the agent)
+# BIA_GROW_ROOT / BIA_GROW_LIST point it at another mount for container tests.
+set -euo pipefail
+
+ROOTMNT=${BIA_GROW_ROOT:-/}
+LIST=${BIA_GROW_LIST:-/boot/EFI/bia/models.txt}
+MODEL=${ROOTMNT%/}/home/bia/model
+MARGIN=$((256 << 20))
+
+CONSOLES=()
+for c in $(cat /sys/class/tty/console/active 2>/dev/null); do
+  [ "$c" = tty0 ] && c=tty1
+  [ -w "/dev/$c" ] && CONSOLES+=("/dev/$c")
+done
+[ "${#CONSOLES[@]}" -gt 0 ] || CONSOLES=(/dev/console)
+
+say() {
+  local c
+  printf 'bia-grow: %s\n' "$*" >&2
+  for c in "${CONSOLES[@]}"; do
+    printf 'bia-grow: %s\r\n' "$*" >"$c" 2>/dev/null || true
+  done
+}
+
+dev=$(findmnt -no SOURCE "$ROOTMNT")
+[ -b "$dev" ] || { say "root $dev is not a block device; nothing to do"; exit 0; }
+case $(findmnt -no FSTYPE "$ROOTMNT") in ext4) ;; *) exit 0 ;; esac
+part=$(blockdev --getsize64 "$dev")
+bs=$(dumpe2fs -h "$dev" 2>/dev/null | awk -F': *' '/^Block size/ {print $2}')
+
+fs_bytes() {
+  dumpe2fs -h "$dev" 2>/dev/null | awk -F': *' '/^Block count/ {c=$2} END {print c * '"$bs"'}'
+}
+
+# Grow the mounted ext4 to `bytes` (rounded down to a block); never shrinks.
+grow_to() {
+  local want=$(( $1 / bs * bs ))
+  [ "$want" -gt "$part" ] && want=$(( part / bs * bs ))
+  [ "$want" -gt "$(fs_bytes)" ] || return 0
+  resize2fs "$dev" "$(( want / bs ))" >/dev/null 2>&1 \
+    || resize2fs "$dev" "$(( want / bs ))"
+}
+
+avail() { df -B1 --output=avail "$ROOTMNT" | tail -1 | tr -d ' '; }
+
+mib() { echo $(( $1 >> 20 )); }
+
+# Move one listed file in; returns 1 when it has to wait for another boot.
+# (Called from an || list, so set -e is off in here: check every step.)
+move_in() {
+  local off=$1 size=$2 sum=$3 name=$4
+  local dst=$MODEL/$name part_f=$MODEL/$name.part done_b fs n last=-1
+  done_b=$(stat -c%s "$part_f" 2>/dev/null || echo 0)
+  fs=$(fs_bytes)
+  # Bytes ext4 already owns past $off were copied and synced before it grew.
+  if [ "$fs" -gt "$off" ] && [ "$done_b" -lt $(( fs - off )) ]; then
+    say "$name: the copy on the stick was overwritten; flash the model again"
+    rm -f "$part_f"
+    return 0
+  fi
+  [ "$done_b" -gt 0 ] && say "$name: resuming at $(mib "$done_b") of $(mib "$size") MiB"
+  [ "$done_b" -eq 0 ] && say "moving model $name ($(mib "$size") MiB) into $MODEL"
+  while [ "$done_b" -lt "$size" ]; do
+    grow_to $(( off + done_b ))
+    n=$(( $(avail) - MARGIN ))
+    [ "$n" -gt $(( size - done_b )) ] && n=$(( size - done_b ))
+    if [ "$n" -le 0 ]; then
+      say "$name: no free space to move it in; trying again next boot"
+      return 1
+    fi
+    dd if="$dev" of="$part_f" bs=4M iflag=skip_bytes,count_bytes \
+      skip=$(( off + done_b )) count="$n" oflag=append conv=notrunc,fsync status=none \
+      || { say "$name: copy failed; trying again next boot"; return 1; }
+    done_b=$(stat -c%s "$part_f")
+    grow_to $(( off + done_b )) || say "resize2fs failed at $(mib $(( off + done_b ))) MiB"
+    pct=$(( done_b * 100 / size ))
+    if [ $(( pct / 10 )) -ne "$last" ]; then
+      last=$(( pct / 10 ))
+      say "$name: $pct% ($(mib "$done_b")/$(mib "$size") MiB)"
+    fi
+  done
+  if [ "$sum" != - ]; then
+    say "$name: checking sha256"
+    got=$(sha256sum "$part_f" | awk '{print $1}')
+    if [ "$got" != "$sum" ]; then
+      say "$name: sha256 mismatch ($got); the stick may be failing. Removed it; flash the model again"
+      rm -f "$part_f"
+      return 0
+    fi
+  fi
+  mv -f "$part_f" "$dst" || return 1
+  chown bia:bia "$dst" 2>/dev/null || true
+  say "$name: ready"
+}
+
+if [ -f "$LIST" ]; then
+  install -d -o bia -g bia "$MODEL" 2>/dev/null || mkdir -p "$MODEL"
+  pending=0
+  # Lowest offset first: each file's bytes start where ext4 would grow next.
+  while read -r off size sum name; do
+    case $off in ''|\#*) continue ;; esac
+    case $name in ''|*/*|.*) say "skipping bad entry '$name'"; continue ;; esac
+    [ -f "$MODEL/$name" ] && continue
+    move_in "$off" "$size" "$sum" "$name" || { pending=1; break; }
+  done < <(sort -n "$LIST")
+  # Keep the list (and the raw bytes behind it) until every file is in.
+  [ "$pending" = 1 ] && exit 0
+  rm -f "$LIST"
+  sync
+fi
+
+if [ "$(fs_bytes)" -lt $(( part / bs * bs )) ]; then
+  say "growing root to the whole partition ($(mib "$part") MiB)"
+  grow_to "$part"
+fi

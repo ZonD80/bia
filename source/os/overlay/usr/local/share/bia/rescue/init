@@ -1,0 +1,6 @@
+#!/bin/sh
+# rdinit of the bia rescue image. /bin/sh is the Debian initramfs shell (klibc);
+# everything else comes from /bia-rescue (rescue.cpio.gz layered on top).
+export PATH=/bia-rescue/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/systemd
+export LD_LIBRARY_PATH=/bia-rescue/lib
+exec /bia-rescue/bin/bash /bia-rescue/rescue

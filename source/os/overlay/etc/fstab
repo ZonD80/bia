@@ -1,0 +1,3 @@
+LABEL=BIAROOT  /      ext4  noatime 0 1
+LABEL=BIABOOT  /boot  vfat  noatime,nofail 0 2
+/swapfile      none  swap  sw,nofail 0 0

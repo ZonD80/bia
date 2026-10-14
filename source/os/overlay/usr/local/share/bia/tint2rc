@@ -1,0 +1,56 @@
+# Top switcher. It does not reserve space itself: Openbox keeps a matching
+# top margin, so normal and maximized windows start below this bar.
+panel_items = T
+panel_size = 100% 32
+panel_margin = 0 0
+panel_padding = 2 0 2
+panel_background_id = 1
+panel_position = top center horizontal
+panel_dock = 0
+panel_layer = top
+strut_policy = none
+panel_monitor = all
+wm_menu = 1
+font_shadow = 0
+
+taskbar_mode = single_desktop
+taskbar_padding = 0 0 0
+taskbar_background_id = 0
+taskbar_active_background_id = 0
+taskbar_name = 0
+taskbar_hide_inactive_tasks = 0
+taskbar_hide_different_monitor = 0
+taskbar_always_show_all_desktop_tasks = 0
+taskbar_sort_order = none
+taskbar_distribute_size = 0
+task_align = left
+task_text = 1
+task_icon = 1
+task_maximum_size = 140 28
+task_padding = 4 2 4
+task_font = DejaVu Sans 9
+task_font_color = #dddddd 100
+task_active_font_color = #ffffff 100
+task_icon_size = 16
+task_background_id = 2
+task_active_background_id = 3
+
+rounded = 0
+border_width = 0
+background_color = #000000 0
+border_color = #000000 0
+
+rounded = 0
+border_width = 0
+background_color = #1e1e1e 100
+border_color = #1e1e1e 100
+
+rounded = 2
+border_width = 0
+background_color = #333333 100
+border_color = #333333 100
+
+rounded = 2
+border_width = 0
+background_color = #3d6a99 100
+border_color = #3d6a99 100

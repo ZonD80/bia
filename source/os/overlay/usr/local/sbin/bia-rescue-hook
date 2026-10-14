@@ -1,0 +1,49 @@
+#!/bin/bash
+# Make an ESP able to boot the bia rescue image.
+#
+#   bia-rescue-hook <esp-root> [rescue.cpio.gz]
+#
+# For every bia grub.cfg on that ESP: put rescue.cpio.gz in bia-rescue/ next to
+# the kernel that cfg boots, and (re)append the one-shot GRUB hook at the end.
+# The hook boots the rescue entry only while bia-rescue/next.cfg exists; that
+# marker is written by bia-update and removed by the rescue image when it is done.
+#
+# The rescue entry is the ESP's own kernel + its own initramfs + rescue.cpio.gz
+# (rdinit=/bia-rescue/init), so its drivers always match that kernel.
+set -euo pipefail
+ESP=${1:?esp root}
+CPIO=${2:-/usr/local/share/bia/rescue.cpio.gz}
+MARK='# bia-rescue hook'
+
+n=0
+for cfg in "$ESP/boot/grub/grub.cfg" "$ESP/EFI/BOOT/grub.cfg" "$ESP/EFI/debian/grub.cfg" "$ESP/EFI/bia/grub.cfg"; do
+  [ -f "$cfg" ] || continue
+  # The first menuentry is the bia system; reuse its kernel and initramfs.
+  kpath=$(awk '$1 == "linux" { print $2; exit }' "$cfg")
+  ipath=$(awk '$1 == "initrd" { print $2; exit }' "$cfg")
+  [ -n "$kpath" ] && [ -n "$ipath" ] || continue
+  kdir=$(dirname "$kpath")
+  [ "$kdir" = / ] && kdir=
+  rdir=$kdir/bia-rescue
+  if [ -f "$CPIO" ]; then
+    mkdir -p "$ESP$rdir"
+    if ! cmp -s "$CPIO" "$ESP$rdir/rescue.cpio.gz" 2>/dev/null; then
+      cp -f "$CPIO" "$ESP$rdir/rescue.cpio.gz"
+    fi
+  fi
+  sed -i "/^$MARK/,\$d" "$cfg"
+  cat >> "$cfg" <<EOF
+$MARK: one-shot offline update/rescue; $rdir/next.cfg is written by bia-update
+if [ -f $rdir/next.cfg ]; then
+  source $rdir/next.cfg
+  menuentry "bia rescue (update in progress)" --id bia-rescue {
+    linux $kpath \$bia_rescue_cmdline
+    initrd $ipath $rdir/rescue.cpio.gz
+  }
+  set default=bia-rescue
+  set timeout=1
+fi
+EOF
+  n=$((n + 1))
+done
+[ "$n" -gt 0 ] || { echo "bia-rescue-hook: no bia grub.cfg under $ESP" >&2; exit 1; }

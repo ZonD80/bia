@@ -1,0 +1,10 @@
+[package]
+name = "bia-mcp-screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: real display, screenshots, mouse and keyboard"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+serde_json.workspace = true

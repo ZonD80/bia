@@ -1,0 +1,2 @@
+#!/bin/bash
+exec make -C "$(dirname "$0")/.." ARCH=x86_64 iso

@@ -1,0 +1,22 @@
+[Unit]
+Description=Apply a newer bia image or finish a morph
+# Do not wait for networking.service: with DHCP it stays silent after
+# "link is up" until a lease arrives, so the console would look stuck.
+# bia-update waits for a route itself.
+After=local-fs.target
+Before=bia.service
+Wants=network-online.target
+Conflicts=shutdown.target
+ConditionPathExists=/usr/local/sbin/bia-update
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# bia-update writes its own progress to every active console (screen + serial).
+ExecStart=/usr/local/sbin/bia-update boot
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

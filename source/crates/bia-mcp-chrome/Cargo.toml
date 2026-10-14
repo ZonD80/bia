@@ -1,0 +1,19 @@
+[package]
+name = "bia-mcp-chrome"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: Chrome lifecycle + passkeys; page tools via chrome-devtools-mcp"
+
+[[bin]]
+name = "bia-mcp-chrome"
+path = "src/main.rs"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+libc.workspace = true
+bia-mcp-secrets = { path = "../bia-mcp-secrets" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+rsa = { version = "0.9", features = ["sha2"] }

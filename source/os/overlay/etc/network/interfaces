@@ -1,0 +1,13 @@
+auto lo
+iface lo inet loopback
+
+# allow-hotplug (not auto): networking.service must not block boot on DHCP.
+# dhcpcd is quiet; if-pre-up.d/bia-announce prints to the console instead.
+allow-hotplug eth0
+iface eth0 inet dhcp
+
+allow-hotplug enp0s1
+iface enp0s1 inet dhcp
+
+allow-hotplug ens3
+iface ens3 inet dhcp

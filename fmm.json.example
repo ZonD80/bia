@@ -1,0 +1,8 @@
+{
+  "provider": "openrouter",
+  "api_key": "sk-or-v1-REPLACE_ME",
+  "model": "x-ai/grok-4.6",
+  "base_url": "",
+  "enabled": true,
+  "ctx": 131072
+}

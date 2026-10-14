@@ -1,0 +1,124 @@
+#!/bin/sh
+# One display, :0. A 32px switcher sits in a top margin. Windows, including
+# maximized ones, are placed in the area below that bar.
+# Falls back to the kernel console if X or kitty is missing.
+set -eu
+
+AGENT=/usr/local/sbin/bia-agent
+export DISPLAY=:0
+export XAUTHORITY=/run/bia/Xauthority
+export LANG=C.UTF-8
+
+if ! command -v Xorg >/dev/null 2>&1 || ! command -v kitty >/dev/null 2>&1; then
+  exec "$AGENT"
+fi
+
+if ! id bia >/dev/null 2>&1; then
+  adduser --disabled-password --gecos "" --home /home/bia --shell /bin/bash bia
+fi
+usermod -aG video,render,input bia 2>/dev/null || true
+install -d -o bia -g bia -m 755 /home/bia
+install -d -o bia -g bia -m 700 /home/bia/.config
+install -d -o bia -g bia -m 700 /home/bia/.config/google-chrome
+install -d -o bia -g bia -m 700 /home/bia/.local
+install -d -o bia -g bia -m 700 /home/bia/.local/share
+uid=$(id -u bia)
+install -d -o bia -g bia -m 700 "/run/user/$uid"
+install -d -m 755 /run/bia
+install -d -m 1777 /tmp/.X11-unix
+
+# Xorg started before the GPU driver (e.g. i915) has created a DRM node exits
+# with "no screens found". Wait up to 15s for /dev/dri/card*.
+i=0
+while [ "$i" -lt 150 ] && ! ls /dev/dri/card* >/dev/null 2>&1; do
+  sleep 0.1
+  i=$((i + 1))
+done
+
+start_x() {
+  cookie=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  rm -f "$XAUTHORITY"
+  xauth -f "$XAUTHORITY" add :0 . "$cookie"
+  chmod 600 "$XAUTHORITY"
+  Xorg :0 -nolisten tcp -noreset -auth "$XAUTHORITY" vt1 >>/var/log/Xorg.bia.log 2>&1 &
+  i=0
+  while [ "$i" -lt 50 ] && [ ! -S /tmp/.X11-unix/X0 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+}
+
+if [ ! -S /tmp/.X11-unix/X0 ]; then
+  : >/var/log/Xorg.bia.log
+  start_x
+  # one retry: the DRM node can appear before the driver is fully ready
+  if [ ! -S /tmp/.X11-unix/X0 ]; then
+    echo "bia-session: Xorg did not start, retrying in 5s" >&2
+    pkill -x Xorg 2>/dev/null || true
+    sleep 5
+    start_x
+  fi
+fi
+
+if [ ! -S /tmp/.X11-unix/X0 ]; then
+  echo "bia-session: display :0 did not come up, using the kernel console" >&2
+  exec "$AGENT"
+fi
+
+cp -f "$XAUTHORITY" /home/bia/.Xauthority
+chown bia:bia /home/bia/.Xauthority
+chmod 600 /home/bia/.Xauthority
+
+# Rules go first so they win over the stock rc. The top margin is the
+# switcher's height: maximized windows stop at that line, title bar included.
+install -d /root/.config/openbox
+if [ -f /etc/xdg/openbox/rc.xml ]; then
+  awk '
+    /<applications>/ && !done {
+      print
+      while ((getline line < "/usr/local/share/bia/openbox-apps.xml") > 0) print line
+      close("/usr/local/share/bia/openbox-apps.xml")
+      done = 1
+      next
+    }
+    { print }
+  ' /etc/xdg/openbox/rc.xml > /root/.config/openbox/rc.xml
+  sed -i \
+    -e 's/<keepBorder>no<\/keepBorder>/<keepBorder>yes<\/keepBorder>/' \
+    -e '/<margins>/,/<\/margins>/ s/<top>[0-9]*<\/top>/<top>32<\/top>/' \
+    /root/.config/openbox/rc.xml
+fi
+
+if ! pgrep -x openbox >/dev/null 2>&1; then
+  openbox >/var/log/openbox.bia.log 2>&1 &
+else
+  openbox --reconfigure >/dev/null 2>&1 || true
+fi
+i=0
+while [ "$i" -lt 50 ]; do
+  if xprop -root _NET_SUPPORTING_WM_CHECK >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+  i=$((i + 1))
+done
+
+if command -v tint2 >/dev/null 2>&1 && ! pgrep -x tint2 >/dev/null 2>&1; then
+  tint2 -c /usr/local/share/bia/tint2rc >/var/log/tint2.bia.log 2>&1 &
+fi
+if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
+  x11vnc -display :0 -auth "$XAUTHORITY" -rfbport 5900 -localhost -forever -shared -nopw \
+    -bg -o /var/log/x11vnc.bia.log
+fi
+
+export BIA_GUI=1
+export BIA_SYSTEM=1
+exec kitty --class bia-console --title console \
+  --override confirm_os_window_close=0 \
+  --override hide_window_decorations=no \
+  --override remember_window_size=no \
+  --override initial_window_width=100c \
+  --override initial_window_height=32c \
+  --override font_size=16 \
+  --override font_family="DejaVu Sans Mono" \
+  "$AGENT"

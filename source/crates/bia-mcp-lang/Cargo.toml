@@ -1,0 +1,19 @@
+[package]
+name = "bia-mcp-lang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: languages bia hears and speaks: catalog, install, voices, speech settings"
+
+[[bin]]
+name = "bia-mcp-lang"
+path = "src/main.rs"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+bia-speech = { path = "../bia-speech" }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }

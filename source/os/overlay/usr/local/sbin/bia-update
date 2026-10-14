@@ -1,0 +1,604 @@
+#!/bin/bash
+# Attended OS update between two bia roots (internal disk BIADISK and a flash
+# stick BIAROOT/BIAFLASH), done offline by the rescue image so neither system
+# is running while it is overwritten.
+#
+#   1. bia-update start  (carry_update / console /update) on the system to update:
+#      pick the other bia root as the source (newer release unless --force),
+#      fold this agent into /bia-update/, write the rescue marker
+#      bia-rescue/next.cfg on this ESP (src/dst/ESP UUIDs), BootNext = this
+#      device, reboot.
+#   2. GRUB sees the marker and boots the rescue image (this ESP's kernel +
+#      initramfs + rescue.cpio.gz). It rsyncs the source root onto this root
+#      (keeping fstab, swap, clock, /home/bia/files, /bia-update), verifies by
+#      checksum, refreshes this ESP's kernel/bootloader from the source ESP,
+#      sets /bia-update/pending, removes the marker and reboots here.
+#   3. bia-update boot (bia-update.service) sees pending and unfolds the agent,
+#      then reboots into the updated system.
+#
+#   bia-update rescue [/dev/…]  (carry_rescue) from the flash: same, but the
+#      destination is the internal disk: its agent is folded into the disk's
+#      /bia-update/, the marker goes on this (flash) ESP, and the rescue image
+#      boots the disk afterwards.
+#
+#   bia-update start [--force] [--from=/dev/…]
+#   bia-update rescue [/dev/…]
+#   bia-update boot
+#   bia-update status
+set -euo pipefail
+
+RELEASE=etc/bia-release
+UPDATE=/bia-update
+MNT=/run/bia-update-src
+DEST=/run/bia-update-dst
+ESP_MNT=/run/bia-update-esp
+OTHER_ESP_MNT=/run/bia-update-other-esp
+RESCUE_CPIO=/usr/local/share/bia/rescue.cpio.gz
+RESCUE_LEAD="this boot restored this machine after rescuing the internal disk from the flash"
+APPLY_LEAD="this boot restored this machine after updating its OS"
+
+# Every active kernel console (screen and serial), not only /dev/console,
+# which is just the last one (on arm64 SPCR serial is not /dev/console).
+CONSOLES=()
+for c in $(cat /sys/class/tty/console/active 2>/dev/null); do
+  [ "$c" = tty0 ] && c=tty1
+  [ -w "/dev/$c" ] && CONSOLES+=("/dev/$c")
+done
+[ "${#CONSOLES[@]}" -gt 0 ] || CONSOLES=(/dev/console)
+
+console_printf() {
+  local c
+  # Started by the agent (/update, carry_update): stderr is a pipe it already
+  # shows on every console.
+  [ -p /dev/stderr ] && return 0
+  for c in "${CONSOLES[@]}"; do
+    # shellcheck disable=SC2059
+    printf "$1" "$2" >"$c" 2>/dev/null || true
+  done
+}
+
+say() {
+  printf '%s\n' "$*" >&2
+  console_printf '%s\n' "$*"
+}
+
+# Debian-style result on the right of a finished step.
+result() {
+  local msg=$1 tag=$2 d
+  d=$((58 - ${#msg}))
+  [ "$d" -lt 2 ] && d=2
+  say "$(printf 'bia-update: %s %s [ %s ]' "$msg" "$(printf '%*s' "$d" '' | tr ' ' '.')" "$tag")"
+}
+ok() { result "$1" "OK"; }
+fail() { result "$1" "FAIL"; }
+
+# Fail the attended command: message on stdout is what the agent/tool sees.
+refuse() {
+  fail "${1}"
+  shift
+  say "bia-update: $*"
+  printf '%s\n' "$*"
+  exit 1
+}
+
+# DHCP (dhcpcd) is quiet on the console; print while we wait for a lease/route.
+wait_route() {
+  local i=0
+  say "bia-update: waiting for a default route (dhcp)"
+  while [ "$i" -lt 60 ]; do
+    if ip route show default 2>/dev/null | grep -q .; then
+      ok "default route is up"
+      return 0
+    fi
+    if [ $((i % 5)) -eq 0 ]; then
+      say "bia-update: still waiting for dhcp… ${i}s"
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  say "bia-update: no default route after 60s; continuing"
+}
+
+# Native architecture of a root (Architecture of the dpkg package).
+arch_of() {
+  local root=$1 arch=
+  if [ -f "$root/var/lib/dpkg/status" ]; then
+    arch=$(awk '
+      $1 == "Package:" { pkg = $2 }
+      $1 == "Architecture:" && pkg == "dpkg" { print $2; exit }
+    ' "$root/var/lib/dpkg/status")
+  fi
+  if [ -z "$arch" ] && [ -f "$root/var/lib/dpkg/arch-native" ]; then
+    arch=$(tr -cd '[:alnum:]-' < "$root/var/lib/dpkg/arch-native")
+  fi
+  if [ -z "$arch" ]; then
+    if [ -d "$root/lib/aarch64-linux-gnu" ] && [ ! -d "$root/lib/x86_64-linux-gnu" ]; then
+      arch=arm64
+    elif [ -d "$root/lib/x86_64-linux-gnu" ] && [ ! -d "$root/lib/aarch64-linux-gnu" ]; then
+      arch=amd64
+    fi
+  fi
+  [ -n "$arch" ] || return 1
+  printf '%s\n' "$arch"
+}
+
+rel_of() {
+  [ -f "$1/$RELEASE" ] || return 0
+  tr -cd '0-9' < "$1/$RELEASE"
+}
+
+label_of() { blkid -c /dev/null -o value -s LABEL "$1" 2>/dev/null || true; }
+uuid_of() { blkid -c /dev/null -o value -s UUID "$1" 2>/dev/null || true; }
+
+carry_bin() {
+  local arch
+  case $(uname -m) in
+    aarch64|arm64) arch=aarch64 ;;
+    x86_64) arch=x86_64 ;;
+    *) arch=$(uname -m) ;;
+  esac
+  echo "/home/bia/MCPs/carry/bin/$arch/bia-mcp-carry"
+}
+
+same_dev() {
+  [ "$(readlink -f "$1" 2>/dev/null || echo "$1")" = "$(readlink -f "$2" 2>/dev/null || echo "$2")" ]
+}
+
+live_root() { findmnt -n -o SOURCE / 2>/dev/null || true; }
+
+parent_disk_of() {
+  local dev=$1 base
+  base=$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1 || true)
+  if [ -n "$base" ]; then
+    echo "/dev/$base"
+    return 0
+  fi
+  return 1
+}
+
+# The ESP that boots a root: the vfat partition on the same disk that holds a
+# kernel (vmlinuz-lts at its root, or EFI/bia/ on a shared Windows ESP).
+esp_of_root() {
+  local root=$1 disk p tmp found=
+  disk=$(parent_disk_of "$root") || return 1
+  tmp=/run/bia-update-probe
+  mkdir -p "$tmp"
+  while read -r p fstype; do
+    [ "$fstype" = vfat ] || continue
+    if mnt=$(findmnt -n -o TARGET -S "$p" 2>/dev/null | head -1) && [ -n "$mnt" ]; then
+      if [ -f "$mnt/vmlinuz-lts" ] || [ -f "$mnt/EFI/bia/vmlinuz-lts" ]; then found=$p; break; fi
+      continue
+    fi
+    mount -o ro "$p" "$tmp" 2>/dev/null || continue
+    if [ -f "$tmp/vmlinuz-lts" ] || [ -f "$tmp/EFI/bia/vmlinuz-lts" ]; then found=$p; fi
+    umount "$tmp" 2>/dev/null || true
+    [ -n "$found" ] && break
+  done < <(lsblk -nrpo NAME,FSTYPE "$disk" 2>/dev/null)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+mount_ro() {
+  local dev=$1 mnt=$2 i=0 err
+  mkdir -p "$mnt"
+  if findmnt -n "$mnt" >/dev/null 2>&1; then
+    umount "$mnt" || return 1
+  fi
+  while [ "$i" -lt 40 ]; do
+    # noload: do not replay the other drive's journal; it is only read.
+    err=$(mount -o ro,noload "$dev" "$mnt" 2>&1) && return 0
+    sleep 0.25
+    i=$((i + 1))
+  done
+  say "bia-update: could not mount $dev${err:+ ($err)}"
+  return 1
+}
+
+mount_rw() {
+  local dev=$1 mnt=$2 tgt
+  mkdir -p "$mnt"
+  if findmnt -n "$mnt" >/dev/null 2>&1; then
+    umount "$mnt" || return 1
+  fi
+  while tgt=$(findmnt -nr -o TARGET -S "$dev" 2>/dev/null | tail -1) && [ -n "$tgt" ]; do
+    umount "$tgt" 2>/dev/null || umount -l "$tgt" 2>/dev/null || return 1
+  done
+  mount -o rw "$dev" "$mnt"
+}
+
+run_logged() {
+  if [ -p /dev/stderr ]; then
+    "$@"
+  else
+    "$@" 2> >(tee -a "${CONSOLES[@]}" >&2 2>/dev/null)
+  fi
+}
+
+# Every bia root that is not this boot: "<dev> <label> <release>" lines.
+other_roots() {
+  local root dev label r
+  root=$(live_root)
+  for label in BIADISK BIAFLASH BIAROOT; do
+    while IFS= read -r dev; do
+      [ -n "$dev" ] && [ -b "$dev" ] || continue
+      [ -n "$root" ] && same_dev "$dev" "$root" && continue
+      mount_ro "$dev" "$MNT" || continue
+      r=$(rel_of "$MNT")
+      umount "$MNT" || true
+      [ -n "$r" ] || continue
+      printf '%s %s %s\n' "$dev" "$label" "$r"
+    done < <(blkid -c /dev/null -o device -t LABEL="$label" 2>/dev/null || true)
+  done
+}
+
+# MCPs that exist only on the root being updated survive the update: the
+# source image's MCPs are used for every name it ships.
+stash_mcps() {
+  local src=$1 newer=$2 stash=$3 dir name n=0
+  rm -rf "$stash"
+  mkdir -p "$stash"
+  [ -d "$src" ] || return 0
+  for dir in "$src"/*; do
+    [ -d "$dir" ] || continue
+    name=${dir##*/}
+    if [ -d "$newer/$name" ]; then
+      continue
+    fi
+    say "bia-update: keeping MCP $name (not in the new image), including its binaries"
+    cp -a "$dir" "$stash/$name"
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || say "bia-update: every MCP here is also in the new image"
+}
+
+# Kernel command line for the rescue entry: this boot's console settings plus
+# the rescue arguments. Device specs are filesystem UUIDs.
+rescue_cmdline() {
+  local w out=
+  for w in $(cat /proc/cmdline); do
+    case $w in
+      BOOT_IMAGE=*|root=*|rootfstype=*|rootflags=*|rootwait|rw|ro|init=*|rdinit=*|quiet|splash|bia.*) ;;
+      *) out="$out $w" ;;
+    esac
+  done
+  printf 'rdinit=/bia-rescue/init%s %s\n' "$out" "$*"
+}
+
+# Marker directory on an ESP mount: next to the kernel the ESP boots.
+rescue_dir_on() {
+  local esp=$1
+  if [ ! -f "$esp/vmlinuz-lts" ] && [ -f "$esp/EFI/bia/vmlinuz-lts" ]; then
+    echo /EFI/bia/bia-rescue
+  else
+    echo /bia-rescue
+  fi
+}
+
+# Ensure the ESP mounted at $1 can boot the rescue image; write the marker.
+# Args: esp-mount src-dev dst-dev srcesp-dev dstesp-dev markesp-dev [rescue.cpio.gz]
+write_marker() {
+  local esp=$1 src=$2 dst=$3 srcesp=$4 dstesp=$5 markesp=$6 cpio=${7:-$RESCUE_CPIO} rdir u args
+  [ -f "$cpio" ] || refuse "rescue image" "no $cpio; $markesp cannot run an offline update"
+  if ! /usr/local/sbin/bia-rescue-hook "$esp" "$cpio" >&2; then
+    refuse "rescue image" "could not install the rescue boot entry on $markesp"
+  fi
+  rdir=$(rescue_dir_on "$esp")
+  [ -f "$esp$rdir/rescue.cpio.gz" ] || refuse "rescue image" "$markesp has no $rdir/rescue.cpio.gz"
+  args=
+  for u in "bia.src=$src" "bia.dst=$dst" "bia.srcesp=$srcesp" "bia.dstesp=$dstesp" "bia.markesp=$markesp"; do
+    local k=${u%%=*} dev=${u#*=} id
+    id=$(uuid_of "$dev")
+    [ -n "$id" ] || refuse "rescue marker" "$dev has no filesystem UUID"
+    args="$args $k=UUID=$id"
+  done
+  args="${args# } bia.mark=$rdir/next.cfg"
+  printf 'set bia_rescue_cmdline="%s"\n' "$(rescue_cmdline "$args")" > "$esp$rdir/next.cfg.new"
+  mv -f "$esp$rdir/next.cfg.new" "$esp$rdir/next.cfg"
+  sync
+  say "bia-update: rescue marker $markesp:$rdir/next.cfg"
+  say "bia-update:   $(cat "$esp$rdir/next.cfg")"
+}
+
+# Legacy BIOS has no BootNext: on reboot the firmware may start the other bia
+# drive (a stick plugged in for the update usually comes first). Put the same
+# marker on that drive's ESP too, with its own rescue image (it matches that
+# ESP's kernel), so the rescue runs whichever drive boots. The rescue removes
+# both markers. Args: other-esp-dev src-dev dst-dev srcesp-dev dstesp-dev
+mark_other_esp_for_bios() {
+  local other=$1 src=$2 dst=$3 srcesp=$4 dstesp=$5 cpio rdir
+  [ -d /sys/firmware/efi ] && return 0
+  mount_rw "$other" "$OTHER_ESP_MNT" || refuse "rescue marker" "cannot mount $other"
+  rdir=$(rescue_dir_on "$OTHER_ESP_MNT")
+  cpio=$OTHER_ESP_MNT$rdir/rescue.cpio.gz
+  [ -f "$cpio" ] || cpio=$RESCUE_CPIO
+  say "bia-update: legacy BIOS: the firmware picks the next drive, so $other gets the marker too"
+  write_marker "$OTHER_ESP_MNT" "$src" "$dst" "$srcesp" "$dstesp" "$other" "$cpio"
+  umount "$OTHER_ESP_MNT" || true
+}
+
+# One-shot BootNext to the entry this system booted from, so the firmware does
+# not pick another drive for the rescue boot.
+boot_next_current() {
+  local cur
+  command -v efibootmgr >/dev/null 2>&1 || return 0
+  [ -d /sys/firmware/efi ] || return 0
+  cur=$(efibootmgr 2>/dev/null | awk '/^BootCurrent:/ { print $2; exit }')
+  if [ -n "$cur" ] && efibootmgr -n "$cur" >/dev/null 2>&1; then
+    say "bia-update: next boot → Boot$cur (this drive)"
+  else
+    say "bia-update: could not set BootNext; the firmware boot order decides"
+  fi
+}
+
+# This root's ESP mounted somewhere; prints the mount point.
+live_esp_mount() {
+  local root esp mnt
+  root=$(live_root)
+  esp=$(esp_of_root "$root") || return 1
+  mnt=$(findmnt -n -o TARGET -S "$esp" 2>/dev/null | head -1 || true)
+  if [ -z "$mnt" ]; then
+    mount_rw "$esp" "$ESP_MNT" || return 1
+    mnt=$ESP_MNT
+  fi
+  mount -o remount,rw "$mnt" 2>/dev/null || true
+  printf '%s %s\n' "$esp" "$mnt"
+}
+
+reboot_into_rescue() {
+  ok "staged"
+  say "bia-update: rebooting into the rescue image"
+  sync
+  systemctl reboot || refuse "reboot" "systemctl reboot failed; reboot by hand to continue"
+  sleep infinity
+}
+
+describe() {
+  local root=$1 dev=$2
+  say "bia-update: $(label_of "$dev") ($dev) release $(rel_of "$root") arch $(arch_of "$root" || echo unreadable)"
+}
+
+# ---- start: update this system from the other bia root -------------------------
+start_main() {
+  local force=0 from= bin root here src src_rel here_arch src_arch line best best_rel
+  local esp_dev esp_mnt srcesp
+  for a in "$@"; do
+    case $a in
+      --force) force=1 ;;
+      --from=*) from=${a#--from=} ;;
+      *) refuse "arguments" "unknown argument $a" ;;
+    esac
+  done
+  bin=$(carry_bin)
+  [ -x "$bin" ] || refuse "update" "no carry binary at $bin"
+  [ ! -f "$UPDATE/pending" ] || refuse "update" "an unfold is pending; reboot to finish it first"
+  root=$(live_root)
+  here=$(rel_of /)
+  [ -n "$here" ] || refuse "update" "this system has no $RELEASE"
+  say "bia-update: this system is $(label_of "$root") ($root) release $here"
+
+  if [ -n "$from" ]; then
+    case $from in /dev/*) ;; *) from=/dev/$from ;; esac
+    [ -b "$from" ] || refuse "source" "$from is not a block device"
+    same_dev "$from" "$root" && refuse "source" "$from is this system"
+    mount_ro "$from" "$MNT" || refuse "source" "cannot mount $from"
+    src_rel=$(rel_of "$MNT")
+    umount "$MNT" || true
+    [ -n "$src_rel" ] || refuse "source" "$from is not a bia root (no $RELEASE)"
+    src=$from
+  else
+    best=
+    best_rel=0
+    while read -r line; do
+      set -- $line
+      say "bia-update: found $2 ($1) release $3"
+      if [ "$3" -gt "$best_rel" ]; then
+        best=$1
+        best_rel=$3
+      fi
+    done < <(other_roots)
+    [ -n "$best" ] || refuse "source" "no other bia system is attached (insert the flash stick, or the internal disk is missing)"
+    src=$best
+    src_rel=$best_rel
+  fi
+  if [ "$src_rel" -le "$here" ] && [ "$force" != 1 ]; then
+    refuse "source" "$(label_of "$src") ($src) has release $src_rel, not newer than this system's $here. Pass force=true to install it anyway."
+  fi
+
+  mount_ro "$src" "$MNT" || refuse "source" "cannot mount $src"
+  trap 'umount "$MNT" 2>/dev/null || true' EXIT
+  describe / "$root"
+  describe "$MNT" "$src"
+  here_arch=$(arch_of / || true)
+  src_arch=$(arch_of "$MNT" || true)
+  [ -n "$here_arch" ] && [ "$here_arch" = "$src_arch" ] \
+    || refuse "architecture" "this system is ${here_arch:-unknown}, $src is ${src_arch:-unknown}"
+  srcesp=$(esp_of_root "$src") || refuse "source" "no ESP with a kernel on the disk of $src"
+  read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
+  say "bia-update: source ESP $srcesp, this ESP $esp_dev ($esp_mnt)"
+
+  say "bia-update: folding this machine into $UPDATE"
+  mkdir -p "$UPDATE"
+  chmod 700 "$UPDATE"
+  rm -f "$UPDATE/fold.tar.gz" "$UPDATE/rescue-failed" "$UPDATE/rescue.log"
+  if ! run_logged "$bin" --fold-to "$UPDATE/fold.tar.gz" >&2; then
+    refuse "folding this machine" "the fold failed; nothing was changed"
+  fi
+  ok "folding this machine"
+  stash_mcps /home/bia/MCPs "$MNT/home/bia/MCPs" "$UPDATE/local-mcps"
+  printf '%s\n' "$APPLY_LEAD" > "$UPDATE/lead"
+  printf 'from %s %s release %s\n' "$(label_of "$src")" "$src" "$src_rel" > "$UPDATE/need-apply"
+  umount "$MNT" || true
+  trap - EXIT
+  sync
+
+  write_marker "$esp_mnt" "$src" "$root" "$srcesp" "$esp_dev" "$esp_dev"
+  mark_other_esp_for_bios "$srcesp" "$src" "$root" "$srcesp" "$esp_dev"
+  boot_next_current
+  printf 'staged: %s release %s will be copied onto this system (release %s) by the rescue image, then the agent is unfolded. Rebooting now.\n' \
+    "$(label_of "$src")" "$src_rel" "$here"
+  reboot_into_rescue
+}
+
+# ---- rescue: push this (flash) system onto the internal disk -------------------
+resolve_rescue_target() {
+  local raw=${1:-} root path name label dev base
+  root=$(live_root)
+  if [ -n "$raw" ]; then
+    case $raw in /dev/*) path=$raw ;; *) path=/dev/$raw ;; esac
+    [ -b "$path" ] || { say "bia-update: $raw is not a block device"; return 1; }
+    name=${path##*/}
+    if [ -f "/sys/class/block/$name/partition" ]; then
+      same_dev "$path" "$root" && { say "bia-update: $path is this boot's root"; return 1; }
+      printf '%s\n' "$path"
+      return 0
+    fi
+    for label in BIADISK BIAROOT BIAFLASH; do
+      while IFS= read -r dev; do
+        [ -n "$dev" ] || continue
+        base=$(lsblk -no PKNAME "$dev" 2>/dev/null | head -1 || true)
+        if [ "$base" = "$name" ] && ! same_dev "$dev" "$root"; then
+          printf '%s\n' "$dev"
+          return 0
+        fi
+      done < <(blkid -c /dev/null -o device -t LABEL="$label" 2>/dev/null || true)
+    done
+    say "bia-update: $raw has no BIADISK partition; pass the partition (e.g. /dev/sda2)"
+    return 1
+  fi
+  while IFS= read -r dev; do
+    [ -n "$dev" ] && [ -b "$dev" ] || continue
+    same_dev "$dev" "$root" && continue
+    printf '%s\n' "$dev"
+    return 0
+  done < <(blkid -c /dev/null -o device -t LABEL=BIADISK 2>/dev/null || true)
+  say "bia-update: no BIADISK partition found; pass disk=/dev/..."
+  return 1
+}
+
+rescue_main() {
+  local bin target root here dstesp esp_dev esp_mnt here_arch there_arch
+  bin=$(carry_bin)
+  [ -x "$bin" ] || refuse "rescue" "no carry binary at $bin"
+  target=$(resolve_rescue_target "${1:-}") || refuse "rescue" "no target disk"
+  root=$(live_root)
+  here=$(rel_of /)
+  [ -n "$here" ] || refuse "rescue" "this system has no $RELEASE"
+  dstesp=$(esp_of_root "$target") || refuse "rescue" "no ESP with a kernel on the disk of $target"
+  read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
+  say "bia-update: rescue — this system ($root, release $here) onto $target"
+  mount_rw "$target" "$DEST" || refuse "mount" "cannot mount $target"
+  trap 'umount "$DEST" 2>/dev/null || true' EXIT
+  describe "$DEST" "$target"
+  here_arch=$(arch_of / || true)
+  there_arch=$(arch_of "$DEST" || true)
+  if [ -n "$there_arch" ] && [ "$here_arch" != "$there_arch" ]; then
+    refuse "architecture" "this system is $here_arch, $target is $there_arch"
+  fi
+  mkdir -p "$DEST$UPDATE"
+  chmod 700 "$DEST$UPDATE"
+  rm -f "$DEST$UPDATE/fold.tar.gz" "$DEST$UPDATE/rescue-failed" "$DEST$UPDATE/pending"
+  say "bia-update: folding the agent on $target into its $UPDATE"
+  if ! run_logged "$bin" --fold-from "$DEST" "$DEST$UPDATE/fold.tar.gz" >&2; then
+    refuse "folding the disk agent" "the fold failed; nothing was changed"
+  fi
+  ok "folding the disk agent"
+  stash_mcps "$DEST/home/bia/MCPs" /home/bia/MCPs "$DEST$UPDATE/local-mcps"
+  printf '%s\n' "$RESCUE_LEAD" > "$DEST$UPDATE/lead"
+  printf 'rescue from %s %s release %s\n' "$(label_of "$root")" "$root" "$here" > "$DEST$UPDATE/need-apply"
+  sync
+  umount "$DEST" || true
+  trap - EXIT
+
+  write_marker "$esp_mnt" "$root" "$target" "$esp_dev" "$dstesp" "$esp_dev"
+  mark_other_esp_for_bios "$dstesp" "$root" "$target" "$esp_dev" "$dstesp"
+  boot_next_current
+  printf 'staged: the rescue image will copy this system onto %s, then boot it and unfold its agent. Rebooting now.\n' "$target"
+  reboot_into_rescue
+}
+
+# ---- boot: finish what the rescue image started --------------------------------
+notify_agent() {
+  printf '%s\n' "$*" > /run/bia-updated
+}
+
+clear_stale_marker() {
+  local esp_dev esp_mnt rdir
+  read -r esp_dev esp_mnt < <(live_esp_mount 2>/dev/null) || return 0
+  rdir=$(rescue_dir_on "$esp_mnt")
+  if [ -f "$esp_mnt$rdir/next.cfg" ]; then
+    say "bia-update: removing the rescue marker on $esp_dev (the rescue image did not run)"
+    rm -f "$esp_mnt$rdir/next.cfg"
+    sync
+  fi
+}
+
+boot_main() {
+  local bin
+  say "bia-update: boot"
+  bin=$(carry_bin)
+  if [ -f "$UPDATE/pending" ]; then
+    if [ ! -x "$bin" ]; then
+      fail "update"
+      say "bia-update: no carry binary at $bin; the folded agent stays in $UPDATE/fold.tar.gz"
+      notify_agent "the OS was updated but the agent could not be restored: $bin is missing. The fold is in $UPDATE/fold.tar.gz."
+      exit 0
+    fi
+    say "bia-update: $(head -n 1 "$UPDATE/lead" 2>/dev/null || echo 'restoring this machine onto the updated OS')"
+    wait_route
+    # The unfold reboots; come back to this drive (UEFI BootOrder may prefer the
+    # other one), so the final boot here can clear /bia-update.
+    boot_next_current
+    if run_logged "$bin" --finish-update "$UPDATE/fold.tar.gz" "$UPDATE/local-mcps"; then
+      ok "restoring this machine"
+      # --finish-update has started the reboot.
+      sleep infinity
+    fi
+    fail "restoring this machine"
+    notify_agent "the OS was updated but unfolding the agent failed; the fold is still in $UPDATE/fold.tar.gz (see journalctl -u bia-update)"
+    exit 0
+  fi
+  if [ -f "$UPDATE/copying" ]; then
+    # Only the rescue image writes this; booting here means it stopped mid-copy
+    # and the marker is gone. The system may be a mix of two releases.
+    fail "update"
+    notify_agent "an OS update stopped while copying ($(cat "$UPDATE/copying")). This system may be incomplete. The agent fold is in $UPDATE/fold.tar.gz; run carry_update again (force=true if needed)."
+    exit 0
+  fi
+  if [ -f "$UPDATE/need-apply" ]; then
+    # Staged, but GRUB booted the normal entry: the rescue image never ran.
+    fail "update"
+    clear_stale_marker
+    notify_agent "an OS update was staged but the rescue image did not start ($(cat "$UPDATE/need-apply")). Nothing was changed. $(cat "$UPDATE/rescue-failed" 2>/dev/null)"
+    rm -f "$UPDATE/need-apply"
+    exit 0
+  fi
+  clear_stale_marker
+  # Nothing left to finish (done, or a stage the rescue image never ran): the fold
+  # and logs are no longer needed. Failed states above exit before this point.
+  if [ -d "$UPDATE" ]; then
+    rm -rf "$UPDATE"
+    sync
+    say "bia-update: removed $UPDATE (no update in progress)"
+  fi
+  say "bia-update: idle (carry_update or /update starts an update)"
+}
+
+status_main() {
+  local line
+  say "bia-update: this system $(label_of "$(live_root)") ($(live_root)) release $(rel_of /)"
+  for f in need-apply copying pending rescue-failed; do
+    [ -f "$UPDATE/$f" ] && say "bia-update: $UPDATE/$f: $(head -n 1 "$UPDATE/$f")"
+  done
+  while read -r line; do
+    set -- $line
+    say "bia-update: other $2 ($1) release $3"
+  done < <(other_roots)
+}
+
+case ${1:-} in
+  start|--start|update) shift; start_main "$@" ;;
+  rescue|--rescue) shift; rescue_main "${1:-}" ;;
+  boot|"") boot_main ;;
+  status) status_main ;;
+  *) echo "usage: bia-update start [--force] [--from=/dev/…] | rescue [/dev/…] | boot | status" >&2; exit 2 ;;
+esac

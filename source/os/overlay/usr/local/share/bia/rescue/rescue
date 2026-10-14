@@ -1,0 +1,407 @@
+#!/bia-rescue/bin/bash
+# bia rescue image: copy one bia root onto another while neither is running.
+#
+# Booted once by the GRUB hook (bia-rescue/next.cfg on the ESP). bia-update
+# wrote that marker after folding the destination's agent into
+# <dst>/bia-update/. Kernel command line (filesystem specs, UUID= preferred):
+#
+#   bia.src=     root to copy from (mounted read-only)
+#   bia.dst=     root to copy onto (its /bia-update/fold.tar.gz must exist)
+#   bia.srcesp=  ESP that boots bia.src: kernel, initramfs, shim/GRUB come from it
+#   bia.dstesp=  ESP that boots bia.dst: refreshed from bia.srcesp
+#   bia.markesp= ESP holding the marker, bia.mark= its path on that ESP
+#
+# On success: <dst>/bia-update/pending is set, the marker is removed, BootNext
+# points at the destination and the machine reboots. The destination's
+# bia-update.service then unfolds the agent. On failure the marker stays, the
+# log is saved to <dst>/bia-update/rescue.log and a shell opens on the console.
+set -u
+set -o pipefail
+
+LOG=/run/bia-rescue.log
+SRC_MNT=/mnt/src
+DST_MNT=/mnt/dst
+SRCESP_MNT=/mnt/srcesp
+DSTESP_MNT=/mnt/dstesp
+MARKESP_MNT=/mnt/markesp
+dkdir=   # bia kernel dir on the destination ESP ("" or /EFI/bia)
+
+mkdir -p /proc /sys /dev /run /tmp /mnt
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs -o mode=0755 tmpfs /run 2>/dev/null
+# Process substitution needs /dev/fd; e2fsck wants /etc/mtab.
+[ -e /dev/fd ] || ln -s /proc/self/fd /dev/fd
+mkdir -p /etc
+[ -e /etc/mtab ] || ln -s /proc/mounts /etc/mtab
+echo 1 > /proc/sys/kernel/printk 2>/dev/null
+
+# Write to every active console (screen and serial), not only /dev/console.
+consoles=()
+for c in $(cat /sys/class/tty/console/active 2>/dev/null); do
+  [ -c "/dev/$c" ] && consoles+=("/dev/$c")
+done
+[ "${#consoles[@]}" -gt 0 ] || consoles=(/dev/console)
+exec > >(tee -a "$LOG" "${consoles[@]}" >/dev/null) 2>&1
+exec </dev/console
+
+say() { printf 'bia-rescue: %s\n' "$*"; }
+
+result() {
+  local msg=$1 tag=$2 d
+  d=$((58 - ${#msg}))
+  [ "$d" -lt 2 ] && d=2
+  printf 'bia-rescue: %s %s [ %s ]\n' "$msg" "$(printf '%*s' "$d" '' | tr ' ' '.')" "$tag"
+}
+ok() { result "$1" OK; }
+
+arg() {
+  local w
+  for w in $(cat /proc/cmdline); do
+    case $w in "$1="*) printf '%s\n' "${w#*=}"; return 0 ;; esac
+  done
+  return 1
+}
+
+save_log() {
+  if mountpoint -q "$DST_MNT" 2>/dev/null && [ -d "$DST_MNT/bia-update" ]; then
+    cp -f "$LOG" "$DST_MNT/bia-update/rescue.log" 2>/dev/null
+    sync
+  fi
+}
+
+umount_all() {
+  local m
+  for m in "$MARKESP_MNT" "$DSTESP_MNT" "$SRCESP_MNT" "$DST_MNT" "$SRC_MNT"; do
+    mountpoint -q "$m" 2>/dev/null && umount "$m" 2>/dev/null
+  done
+  sync
+}
+
+reboot_now() {
+  sync
+  say "rebooting"
+  sleep 2
+  reboot -f 2>/dev/null
+  echo b > /proc/sysrq-trigger
+  sleep 30
+}
+
+# Hand over to the destination. UEFI: BootNext is set (boot_destination). Legacy
+# BIOS has no BootNext and boots the drive it booted this rescue from again
+# (markesp); when that is not the destination, power off so the person can start
+# the right drive.
+next_boot() {
+  if [ ! -d /sys/firmware/efi ] && [ "$(readlink -f "$markesp_dev")" != "$(readlink -f "$dstesp_dev")" ]; then
+    case $(blkid -s LABEL -o value "$dst_dev" 2>/dev/null) in
+      BIADISK) say "legacy BIOS: the firmware would start the flash stick again. Powering off: remove the flash stick, then turn the computer on to finish on the disk." ;;
+      *) say "legacy BIOS: the firmware would start the disk again. Powering off: turn the computer on and pick the flash stick in the BIOS boot menu to finish on it." ;;
+    esac
+    sync
+    sleep 3
+    poweroff -f 2>/dev/null
+    echo o > /proc/sysrq-trigger
+    sleep 30
+  fi
+  reboot_now
+}
+
+die() {
+  result "$1" FAIL
+  shift
+  local l
+  for l in "$@"; do say "$l"; done
+  if mountpoint -q "$DST_MNT" 2>/dev/null && [ -d "$DST_MNT/bia-update" ]; then
+    printf '%s\n' "$*" > "$DST_MNT/bia-update/rescue-failed"
+  fi
+  save_log
+  umount_all
+  say "the update marker stays on the ESP: rebooting runs this rescue again"
+  say "the destination's agent is still folded in /bia-update/fold.tar.gz"
+  say "opening a shell; exit it to reboot and retry"
+  setsid -c bash -i </dev/console >/dev/console 2>&1 || bash -i
+  reboot_now
+}
+
+dev_of() {
+  local spec=$1 i=0 d
+  while [ "$i" -lt 120 ]; do
+    d=$(blkid -c /dev/null -o device -t "$spec" 2>/dev/null | head -1)
+    if [ -n "$d" ] && [ -b "$d" ]; then
+      printf '%s\n' "$d"
+      return 0
+    fi
+    [ "$i" -eq 10 ] && say "waiting for $spec"
+    sleep 0.5
+    i=$((i + 1))
+  done
+  return 1
+}
+
+parent_disk() {
+  local name pk
+  name=$(basename "$(readlink -f "$1")")
+  pk=$(lsblk -no PKNAME "/dev/$name" 2>/dev/null | head -1)
+  [ -n "$pk" ] && printf '/dev/%s\n' "$pk"
+}
+
+say "bia rescue image $(cat /bia-rescue/version 2>/dev/null) on $(uname -r)"
+
+SRC=$(arg bia.src) || die "arguments" "no bia.src= on the kernel command line"
+DST=$(arg bia.dst) || die "arguments" "no bia.dst= on the kernel command line"
+SRCESP=$(arg bia.srcesp) || die "arguments" "no bia.srcesp= on the kernel command line"
+DSTESP=$(arg bia.dstesp) || die "arguments" "no bia.dstesp= on the kernel command line"
+MARKESP=$(arg bia.markesp) || die "arguments" "no bia.markesp= on the kernel command line"
+MARK=$(arg bia.mark) || die "arguments" "no bia.mark= on the kernel command line"
+
+# ---- drivers -----------------------------------------------------------------
+say "starting udev"
+UDEVD=$(command -v systemd-udevd || command -v udevd || true)
+if [ -n "$UDEVD" ]; then
+  "$UDEVD" --daemon --resolve-names=never >/dev/null 2>&1
+  udevadm trigger --type=subsystems --action=add >/dev/null 2>&1
+  udevadm trigger --type=devices --action=add >/dev/null 2>&1
+  udevadm settle --timeout=30 >/dev/null 2>&1
+fi
+# Our own modules (built for this kernel), in dependency order; built-ins and
+# already loaded ones just fail quietly.
+if [ "$(cat /bia-rescue/version 2>/dev/null | awk '{ print $3 }')" = "$(uname -r)" ]; then
+  while read -r ko; do
+    [ -n "$ko" ] && insmod "/bia-rescue/mod/$ko" 2>/dev/null
+  done < /bia-rescue/mod/order
+else
+  say "warning: rescue modules are for $(awk '{ print $3 }' /bia-rescue/version), kernel is $(uname -r)"
+fi
+for m in ext4 vfat nls_cp437 nls_ascii nls_utf8 efivarfs; do
+  modprobe -q "$m" 2>/dev/null
+done
+if [ -d /sys/firmware/efi/efivars ]; then
+  mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null
+fi
+ok "drivers"
+
+src_dev=$(dev_of "$SRC") || die "source" "cannot find $SRC"
+dst_dev=$(dev_of "$DST") || die "destination" "cannot find $DST"
+srcesp_dev=$(dev_of "$SRCESP") || die "source ESP" "cannot find $SRCESP"
+dstesp_dev=$(dev_of "$DSTESP") || die "destination ESP" "cannot find $DSTESP"
+markesp_dev=$(dev_of "$MARKESP") || die "marker ESP" "cannot find $MARKESP"
+[ "$(readlink -f "$src_dev")" != "$(readlink -f "$dst_dev")" ] || die "arguments" "source and destination are the same device ($src_dev)"
+say "source      $src_dev ($(blkid -s LABEL -o value "$src_dev" 2>/dev/null)) ESP $srcesp_dev"
+say "destination $dst_dev ($(blkid -s LABEL -o value "$dst_dev" 2>/dev/null)) ESP $dstesp_dev"
+
+# Remove the GRUB marker (on the ESP the rescue was started from), then make
+# sure it is gone: a marker left behind would run this rescue on every boot.
+remove_marker() {
+  local m=$MARKESP_MNT d
+  for d in "$DSTESP_MNT" "$SRCESP_MNT"; do
+    if mountpoint -q "$d" && [ "$(readlink -f "$(findmnt -n -o SOURCE "$d")")" = "$(readlink -f "$markesp_dev")" ]; then
+      umount "$d" || return 1
+    fi
+  done
+  mount -o rw "$markesp_dev" "$m" || return 1
+  rm -f "$m$MARK"
+  sync
+  [ ! -e "$m$MARK" ] || return 1
+  umount "$m"
+  ok "update marker removed"
+  # Legacy BIOS updates mark both bia ESPs (bia-update: mark_other_esp_for_bios).
+  local e
+  for e in "$srcesp_dev" "$dstesp_dev"; do
+    [ "$(readlink -f "$e")" = "$(readlink -f "$markesp_dev")" ] && continue
+    for d in "$DSTESP_MNT" "$SRCESP_MNT"; do
+      if mountpoint -q "$d" && [ "$(readlink -f "$(findmnt -n -o SOURCE "$d")")" = "$(readlink -f "$e")" ]; then
+        umount "$d" || true
+      fi
+    done
+    mount -o rw "$e" "$m" 2>/dev/null || continue
+    if [ -f "$m/bia-rescue/next.cfg" ] || [ -f "$m/EFI/bia/bia-rescue/next.cfg" ]; then
+      rm -f "$m/bia-rescue/next.cfg" "$m/EFI/bia/bia-rescue/next.cfg"
+      say "removed the marker on $e too"
+    fi
+    sync
+    umount "$m"
+  done
+}
+
+boot_destination() {
+  # BootNext → the destination's ESP. When the rescue was started from that ESP
+  # (normal update) BootCurrent already is that device.
+  if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null 2>&1; then
+    next=
+    if [ "$(readlink -f "$markesp_dev")" = "$(readlink -f "$dstesp_dev")" ]; then
+      next=$(efibootmgr 2>/dev/null | awk '/^BootCurrent:/ { print $2; exit }')
+    fi
+    if [ -z "$next" ]; then
+      pu=$(blkid -s PARTUUID -o value "$dstesp_dev" 2>/dev/null | tr 'A-F' 'a-f')
+      if [ -n "$pu" ]; then
+        next=$(efibootmgr -v 2>/dev/null | tr 'A-F' 'a-f' | awk -v pu="$pu" '
+          /^boot[0-9a-f][0-9a-f][0-9a-f][0-9a-f]/ && index($0, pu) { print substr($1, 5, 4); exit }')
+      fi
+    fi
+    if [ -z "$next" ]; then
+      disk=$(parent_disk "$dstesp_dev")
+      pn=$(cat "/sys/class/block/$(basename "$(readlink -f "$dstesp_dev")")/partition" 2>/dev/null)
+      case $(uname -m) in aarch64) loader=BOOTAA64.EFI ;; *) loader=BOOTX64.EFI ;; esac
+      case $(blkid -s LABEL -o value "$dst_dev" 2>/dev/null) in
+        BIADISK) title="bia disk" ;; *) title="bia flash" ;;
+      esac
+      lpath="\\EFI\\BOOT\\$loader"
+      [ -n "$dkdir" ] && lpath="\\EFI\\bia\\$loader"
+      order=$(efibootmgr 2>/dev/null | awk '/^BootOrder:/ { print $2; exit }')
+      if [ -n "$disk" ] && [ -n "$pn" ] && efibootmgr -c -d "$disk" -p "$pn" -l "$lpath" -L "$title" >/dev/null 2>&1; then
+        next=$(efibootmgr 2>/dev/null | awk -v t="$title" '/^Boot[0-9A-Fa-f]{4}/ { l = $0; sub(/^Boot[0-9A-Fa-f]{4}\*? */, "", l); if (index(l, t) == 1) id = substr($1, 5, 4) } END { print id }')
+        # Creating an entry puts it first; keep the user's order, only BootNext changes.
+        [ -n "$order" ] && efibootmgr -o "$order" >/dev/null 2>&1
+      fi
+    fi
+    if [ -n "$next" ] && efibootmgr -n "$next" >/dev/null 2>&1; then
+      say "next boot: Boot$next"
+    else
+      say "could not set BootNext; the firmware boot order decides"
+    fi
+  fi
+}
+
+# ---- mount -------------------------------------------------------------------
+mkdir -p "$SRC_MNT" "$DST_MNT" "$SRCESP_MNT" "$DSTESP_MNT" "$MARKESP_MNT"
+say "checking the destination filesystem"
+e2fsck -p "$dst_dev"
+rc=$?
+[ "$rc" -lt 4 ] || die "fsck destination" "e2fsck -p $dst_dev exited $rc; repair it from the shell (e2fsck -f $dst_dev)"
+ok "fsck destination"
+# noload: never replay the source journal; it is only read.
+mount -o ro,noload "$src_dev" "$SRC_MNT" || die "mount source" "cannot mount $src_dev read-only"
+mount -o rw "$dst_dev" "$DST_MNT" || die "mount destination" "cannot mount $dst_dev"
+UPD=$DST_MNT/bia-update
+[ -f "$SRC_MNT/etc/bia-release" ] || die "source" "$src_dev has no etc/bia-release; not a bia root"
+src_rel=$(tr -cd 0-9 < "$SRC_MNT/etc/bia-release")
+dst_rel=$(tr -cd 0-9 < "$DST_MNT/etc/bia-release" 2>/dev/null)
+if [ ! -s "$UPD/fold.tar.gz" ]; then
+  # Marker still there but the work is done (the destination already unfolded
+  # onto the new release): clear it and boot on instead of failing forever.
+  if [ "$dst_rel" = "$src_rel" ] && [ ! -e "$UPD/copying" ]; then
+    say "the destination already runs release $src_rel and has no pending fold: nothing to do"
+    umount_all
+    remove_marker || die "update marker" "could not remove $MARK from $markesp_dev"
+    boot_destination
+    next_boot
+  fi
+  die "fold" "$dst_dev has no /bia-update/fold.tar.gz; refusing to overwrite an agent that was not folded"
+fi
+say "release ${dst_rel:-none} -> $src_rel"
+rm -f "$UPD/rescue-failed"
+printf 'copying from %s release %s\n' "$SRC" "$src_rel" > "$UPD/copying"
+sync
+
+# ---- copy --------------------------------------------------------------------
+# Kept on the destination (excluded paths are never deleted by --delete):
+# its fstab, swap file, machine identity, clock state, the agent's files and
+# /bia-update. Pseudo filesystems keep their directory but not their content.
+EXCLUDES=(
+  --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/*
+  --exclude=/tmp/* --exclude=/mnt/* --exclude=/media/* --exclude=/lost+found
+  --exclude=/swapfile --exclude=/bia-update
+  --exclude=/etc/fstab --exclude=/etc/machine-id --exclude=/var/lib/dbus/machine-id
+  --exclude=/var/lib/systemd/random-seed
+  --exclude=/etc/localtime --exclude=/etc/timezone --exclude=/etc/adjtime
+  --exclude=/etc/fake-hwclock.data --exclude=/etc/systemd/timesyncd.conf
+  --exclude=/etc/systemd/timesyncd.conf.d --exclude=/var/lib/systemd/timesync
+  --exclude=/var/lib/systemd/clock --exclude=/var/lib/fake-hwclock
+  --exclude=/home/bia/files
+)
+RSYNC=(rsync -aHAX --numeric-ids --delete --delete-delay --no-inc-recursive)
+say "copying $src_dev onto $dst_dev"
+# --checksum: a file with the same size and mtime but other content (e.g. a
+# release stamp) must still be copied; the quick check would skip it.
+"${RSYNC[@]}" --checksum --info=progress2,stats1 "${EXCLUDES[@]}" "$SRC_MNT/" "$DST_MNT/"
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 24 ] || die "copying" "rsync exited $rc (destination full? see above)"
+for d in proc sys dev run tmp mnt media; do mkdir -p "$DST_MNT/$d"; done
+chmod 1777 "$DST_MNT/tmp"
+ok "copying"
+
+# ---- verify ------------------------------------------------------------------
+say "verifying the copy against the source (checksums, from the disk)"
+sync
+echo 3 > /proc/sys/vm/drop_caches
+"${RSYNC[@]}" -n --checksum --out-format='%i %n' "${EXCLUDES[@]}" "$SRC_MNT/" "$DST_MNT/" > /run/verify.txt
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 24 ] || die "verifying" "rsync verify exited $rc"
+# A directory whose only difference is its mtime is not a defect.
+grep -v '^\.d\.\.t\.\.\.\.\.\. ' /run/verify.txt > /run/verify-bad.txt
+if [ -s /run/verify-bad.txt ]; then
+  die "verifying" "$(wc -l < /run/verify-bad.txt) paths differ after the copy:" "$(head -n 10 /run/verify-bad.txt | tr '\n' ' ')"
+fi
+[ "$(tr -cd 0-9 < "$DST_MNT/etc/bia-release")" = "$src_rel" ] || die "verifying" "release stamp did not land"
+ok "verifying"
+
+# ---- boot files --------------------------------------------------------------
+mount -o ro "$srcesp_dev" "$SRCESP_MNT" || die "mount source ESP" "cannot mount $srcesp_dev"
+mount -o rw "$dstesp_dev" "$DSTESP_MNT" || die "mount destination ESP" "cannot mount $dstesp_dev"
+skdir=
+for c in "" /EFI/bia; do
+  if [ -f "$SRCESP_MNT$c/vmlinuz-lts" ] && [ -f "$SRCESP_MNT$c/initramfs-lts" ]; then
+    skdir=$c
+    break
+  fi
+done
+[ -f "$SRCESP_MNT$skdir/vmlinuz-lts" ] || die "boot files" "source ESP has no vmlinuz-lts"
+# Shared (Windows) ESP keeps bia under EFI/bia; never touch its EFI/BOOT there.
+dkdir=
+if [ ! -f "$DSTESP_MNT/vmlinuz-lts" ] && [ -f "$DSTESP_MNT/EFI/bia/vmlinuz-lts" ]; then
+  dkdir=/EFI/bia
+fi
+put() {
+  local from=$1 to=$2 need free
+  cmp -s "$from" "$to" 2>/dev/null && return 0
+  need=$(( $(stat -c %s "$from") / 1024 + 64 ))
+  free=$(df -Pk "$(dirname "$to")" | awk 'NR == 2 { print $4 }')
+  if [ "${free:-0}" -gt "$need" ]; then
+    cp -f "$from" "$to.new" && mv -f "$to.new" "$to"
+  else
+    cp -f "$from" "$to"
+  fi
+}
+say "installing kernel and initramfs on $dstesp_dev$dkdir"
+put "$SRCESP_MNT$skdir/vmlinuz-lts" "$DSTESP_MNT$dkdir/vmlinuz-lts" || die "boot files" "cannot write vmlinuz-lts (ESP full?)"
+put "$SRCESP_MNT$skdir/initramfs-lts" "$DSTESP_MNT$dkdir/initramfs-lts" || die "boot files" "cannot write initramfs-lts (ESP full?)"
+if [ -z "$dkdir" ]; then
+  loader_dirs=(EFI/BOOT EFI/debian)
+else
+  loader_dirs=(EFI/bia)
+fi
+for d in "${loader_dirs[@]}"; do
+  [ -d "$DSTESP_MNT/$d" ] || continue
+  for f in "$DSTESP_MNT/$d"/*.EFI "$DSTESP_MNT/$d"/*.efi; do
+    [ -f "$f" ] || continue
+    b=$(basename "$f")
+    for s in "$SRCESP_MNT/EFI/BOOT/$b" "$SRCESP_MNT/EFI/debian/$b" "$SRCESP_MNT/EFI/bia/$b"; do
+      if [ -f "$s" ]; then
+        put "$s" "$f" || die "boot files" "cannot write $d/$b"
+        break
+      fi
+    done
+  done
+done
+# The new root's rescue image and GRUB hook, so the next update works too.
+cpio=$DST_MNT/usr/local/share/bia/rescue.cpio.gz
+[ -f "$cpio" ] || cpio=/nonexistent
+bash /bia-rescue/bia-rescue-hook "$DSTESP_MNT" "$cpio" || die "boot files" "cannot install the GRUB rescue hook on $dstesp_dev"
+sync
+ok "boot files"
+
+# ---- hand over to the destination --------------------------------------------
+printf 'pending\n' > "$UPD/pending"
+rm -f "$UPD/copying" "$UPD/need-apply"
+save_log
+sync
+
+remove_marker || die "update marker" "could not remove $MARK from $markesp_dev; GRUB would run this rescue again"
+umount_all
+
+boot_destination
+ok "update copied (release $src_rel)"
+next_boot

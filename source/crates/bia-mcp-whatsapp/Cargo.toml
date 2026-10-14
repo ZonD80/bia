@@ -1,0 +1,35 @@
+[package]
+name = "bia-mcp-whatsapp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: WhatsApp linked-device client via whatsapp-rust (+ voip calls)"
+
+[dependencies]
+# protobuf message fields of whatsapp-rust (location / contact messages)
+buffa = { version = "0.9", default-features = false }
+bia-mcp = { path = "../bia-mcp" }
+bia-speech = { path = "../bia-speech" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+tokio = { version = "1", features = ["full"] }
+# Same as the crate defaults (sqlite-storage, tokio transport/runtime, ureq HTTP,
+# signal) plus `voip` (MLOW + libopus call media plane), but WITHOUT the default
+# `simd` feature: it needs nightly `portable_simd` and does not build on stable.
+# Needs rustc >= 1.94 (edition 2024).
+whatsapp-rust = { version = "0.7", default-features = false, features = [
+    "sqlite-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+    "voip",
+] }
+# Terminal + PNG rendering of the pairing QR (unicode for fallback, PNG for the GUI window).
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+tracing = "0.1"
+log = "0.4"

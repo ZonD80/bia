@@ -1,0 +1,16 @@
+#!/bin/sh
+# Load a console font after fbcon is up (an earlier setfont is discarded when
+# the framebuffer attaches). The kernel console holds 512 glyphs, so a full
+# emoji font cannot be loaded. A dropped-in Unifont PSF is tried first; the
+# sun font is what actually covers Cyrillic.
+fonts="/usr/share/unifont/unifont.psf.gz /usr/share/unifont/unifont.psf latarcyrheb-sun16"
+for t in /dev/tty1 /dev/tty0 /dev/console; do
+  [ -c "$t" ] || continue
+  for font in $fonts; do
+    if setfont -C "$t" "$font" 2>/dev/null; then
+      break
+    fi
+  done
+  # ESC % G selects UTF-8 mode on this VT
+  printf '\033%%G' > "$t" 2>/dev/null || true
+done

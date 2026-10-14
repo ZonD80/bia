@@ -1,0 +1,42 @@
+{
+  "name": "carry",
+  "version": "1.0.0",
+  "description": "Move this computer's settings to a backup, another computer, or the other disk. carry_fold saves a gzip backup of /home/bia under /home/bia/files. It includes settings, chats, passwords, Chrome, Telegram, the model, and MCP binaries for aarch64 and x86_64. It also lists each manually installed package with its version, architecture, and apt origin. The file is named name.unfold-<bytes>.tar.gz, where <bytes> is the unpacked size. carry_fold refuses when the disk has less free space than /home/bia. Ask the user and call carry_fold again with force=true only after they confirm. carry_unfold reads that backup, puts it on this computer, and reboots. MCP binaries already on this machine are kept; the archive only fills missing ones. An older backup whose name has no .unfold-<bytes> still unfolds after the user confirms: call carry_unfold again with force=true only after they confirm. Do the same when free space is below <bytes>. Do not pass force before they confirm. carry_discover lists computers that are waiting to receive a backup. carry_land makes this computer wait. Both screens show the same 6-digit code. Call carry_confirm only after the user says the codes match. Then this computer reboots with the other computer's settings. carry_fly sends this computer's backup to a waiting computer. If you leave host empty and only one computer is waiting, it sends there. carry_morph(disk=) folds an agent from that block device, then reboots. carry_update starts an attended OS update (or console /update) — not automatic at boot. carry_rescue(disk=) from flash pushes this OS onto BIADISK for repair. carry_to_disk needs disk=/dev/sdX (or partition=); with Windows also pass partition or shrink_from+size_mib or size_mib. carry_to_flash needs disk= for the stick. Always choose devices with bash lsblk — there is no serial=internal/flash lookup. carry_to_disk then reboots into the disk (BootNext 'bia disk'); carry_to_flash then shut down. Do not expect boot to apply a newer flash by itself.",
+  "command": {
+    "aarch64": "bin/aarch64/bia-mcp-carry",
+    "x86_64": "bin/x86_64/bia-mcp-carry"
+  },
+  "args": [],
+  "keywords": [
+    "carry",
+    "fold",
+    "unfold",
+    "backup",
+    "archive",
+    "restore",
+    "land",
+    "fly",
+    "discover",
+    "confirm",
+    "morph",
+    "update",
+    "rescue",
+    "migrate",
+    "disk",
+    "flash",
+    "windows"
+  ],
+  "examples": [
+    "root|console|<issued>|<delivered>|update from the stick -> carry_update()",
+    "root|console|<issued>|<delivered>|back up this computer -> discover(path='mcp/carry', enable=true); carry_fold()",
+    "root|console|<issued>|<delivered>|restore the backup carry/backup.tar -> carry_unfold(path='carry/backup.tar')",
+    "root|console|<issued>|<delivered>|wait here for another computer to send its settings -> carry_land()",
+    "root|console|<issued>|<delivered>|send this computer to the one that is waiting -> carry_discover(); carry_fly()",
+    "root|console|<issued>|<delivered>|the code on both screens is 482193 -> carry_confirm(code='482193')",
+    "root|console|<issued>|<delivered>|this boot is the flash; become the agent on /dev/sda2 -> carry_morph(disk='/dev/sda2')",
+    "root|console|<issued>|<delivered>|this flash is newer; fix the internal disk from here -> bash lsblk -f; carry_rescue()",
+    "root|console|<issued>|<delivered>|install onto the Samsung disk beside Windows on sda5 -> bash lsblk; carry_to_disk(disk='/dev/sda', partition='/dev/sda5')",
+    "root|console|<issued>|<delivered>|wipe empty /dev/vda -> carry_to_disk(disk='/dev/vda')",
+    "root|console|<issued>|<delivered>|copy this computer onto the USB stick /dev/sdb -> carry_to_flash(disk='/dev/sdb')"
+  ]
+}
