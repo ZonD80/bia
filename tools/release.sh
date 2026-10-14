@@ -4,9 +4,13 @@
 #
 #   tools/release.sh [-n NOTES] [--only PKG,…] [--dry-run] [--build-only] [--allow-dirty] [--rebuild-os] [--force]
 #
+#   --only        packages and/or groups, comma-separated:
+#                   flashers = flash-macos,flash-linux,flash-windows   os = os-x86_64,os-arm64
+#                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
 #   --allow-dirty allow uncommitted/unpushed work (tests; never for a real release)
-#   --force       rebuild every package (or those in --only), OS included, and replace its assets
+#   --force       rebuild every selected package even if the release has it (the OS from
+#                 scratch, as --rebuild-os) and replace its assets; without --only: all of them
 #
 # Tag: v<workspace version> (Cargo.toml). Packages and their release assets:
 #   os-x86_64      bia-root-x86_64.NNN.zst (1 GiB raw parts) + bia-boot-x86_64.tar.zst
@@ -30,11 +34,11 @@ ALL=(os-x86_64 os-arm64 flash-macos flash-linux flash-windows)
 
 NOTES="" ONLY="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
-usage() { sed -n '2,23p' "$SELF" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$SELF"; }
 while [[ $# -gt 0 ]]; do
   case $1 in
     -n|--notes) [[ $# -ge 2 ]] || die "--notes needs a value"; NOTES=$2; shift 2 ;;
-    --only) ONLY=$2; shift 2 ;;
+    --only) [[ $# -ge 2 ]] || die "--only needs a value (see --help)"; ONLY=$2; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --build-only) BUILD_ONLY=1; shift ;;
     --allow-dirty) DIRTY=1; shift ;;
@@ -44,6 +48,26 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown option $1 (see --help)" ;;
   esac
 done
+
+# ---- what to release: --only packages and groups, in ALL's order, no duplicates ----
+PKGS=("${ALL[@]}")
+if [[ -n "$ONLY" ]]; then
+  want=" "
+  IFS=, read -r -a items <<<"$ONLY"
+  for i in "${items[@]}"; do
+    i=${i//[[:space:]]/}
+    case $i in
+      "") ;;
+      flashers|flash) want+="flash-macos flash-linux flash-windows " ;;
+      os) want+="os-x86_64 os-arm64 " ;;
+      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os)"
+         want+="$i " ;;
+    esac
+  done
+  PKGS=()
+  for p in "${ALL[@]}"; do [[ $want == *" $p "* ]] && PKGS+=("$p"); done
+  [[ ${#PKGS[@]} -gt 0 ]] || die "--only selects nothing"
+fi
 
 for c in gh git python3 zstd docker; do command -v "$c" >/dev/null || die "'$c' is required"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
@@ -85,8 +109,6 @@ complete() { # pkg
   esac
 }
 
-PKGS=("${ALL[@]}")
-[[ -n "$ONLY" ]] && IFS=, read -r -a PKGS <<<"$ONLY"
 TODO=()
 for p in "${PKGS[@]}"; do
   if [[ $FORCE -eq 1 ]]; then echo "   build $p (--force)"; TODO+=("$p")

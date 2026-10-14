@@ -20,6 +20,8 @@ fn main() -> eframe::Result<()> {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([620.0, 820.0])
+            // Content scrolls, so the window can shrink to fit any screen.
+            .with_min_inner_size([420.0, 320.0])
             .with_title("bia flash")
             .with_icon(
                 eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png"))
@@ -393,6 +395,53 @@ impl FlashApp {
         }
     }
 
+    /// "The stick is ready" over the whole window: a dimmed backdrop that swallows clicks and a
+    /// centered dialog, so the message cannot end up scrolled away or under the window edge.
+    fn done_dialog(&mut self, ctx: &egui::Context) {
+        let screen = ctx.screen_rect();
+        egui::Area::new(egui::Id::new("done-backdrop"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                ui.painter()
+                    .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(160));
+                ui.allocate_rect(screen, egui::Sense::click());
+            });
+        let mut close = false;
+        egui::Window::new("stick ready")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .max_width((screen.width() - 32.0).max(200.0))
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("The stick is ready")
+                            .size(24.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(40, 160, 70)),
+                    );
+                    ui.add_space(4.0);
+                    ui.label("You can remove it and boot a computer from it.");
+                    if !self.said.is_empty() {
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new(format!("bia:  {}", self.said)).italics());
+                    }
+                    ui.add_space(10.0);
+                    if ui.add_sized([160.0, 32.0], egui::Button::new("OK")).clicked() {
+                        close = true;
+                    }
+                    ui.add_space(4.0);
+                });
+            });
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            self.status = Status::Idle;
+        }
+    }
+
     /// A problem that stops the write: shown under the write button and in the log.
     fn fail(&mut self, msg: &str) {
         self.append_log(&format!("error: {msg}"));
@@ -688,428 +737,434 @@ impl eframe::App for FlashApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("bia flash");
-            ui.label("Write a bootable stick. Keys (if any) go on the FAT32 ESP as EFI/bia/fmm.json.");
-            ui.separator();
+            egui::ScrollArea::vertical()
+                .id_salt("page")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("bia flash");
+                    ui.label("Write a bootable stick. Keys (if any) go on the FAT32 ESP as EFI/bia/fmm.json.");
+                    ui.separator();
 
-            ui.horizontal(|ui| {
-                if ui
-                    .checkbox(&mut self.all_disks, "show all disks")
-                    .changed()
-                {
-                    self.refresh_disks();
-                }
-                if ui.button("Refresh").clicked() {
-                    self.refresh_disks();
-                }
-            });
-
-            egui::ComboBox::from_label("Target disk")
-                .selected_text(match self.selected {
-                    Some(i) => format!(
-                        "{} — {} ({} MiB)",
-                        self.disks[i].path.display(),
-                        self.disks[i].name,
-                        self.disks[i].size_bytes / (1024 * 1024)
-                    ),
-                    None => "(none)".into(),
-                })
-                .show_ui(ui, |ui| {
-                    for (i, d) in self.disks.iter().enumerate() {
-                        ui.selectable_value(
-                            &mut self.selected,
-                            Some(i),
-                            format!(
-                                "{} — {} ({} MiB)",
-                                d.path.display(),
-                                d.name,
-                                d.size_bytes / (1024 * 1024)
-                            ),
-                        );
-                    }
-                });
-
-            ui.horizontal(|ui| {
-                ui.label("The computer it will run on");
-                let label = |a: &str| match a {
-                    "x86_64" => "PC (Intel or AMD, 64-bit)".to_string(),
-                    "arm64" => "ARM (arm64)".to_string(),
-                    other => other.to_string(),
-                };
-                let arches: Vec<String> = match (&self.os, self.local_os, &self.local) {
-                    (_, true, Ok(l)) => vec![l.arch.clone()],
-                    (Some(m), false, _) => m.os.keys().cloned().collect(),
-                    _ => vec!["x86_64".into(), "arm64".into()],
-                };
-                egui::ComboBox::from_id_salt("arch")
-                    .selected_text(label(&self.arch))
-                    .show_ui(ui, |ui| {
-                        for a in &arches {
-                            ui.selectable_value(&mut self.arch, a.clone(), label(a));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .checkbox(&mut self.all_disks, "show all disks")
+                            .changed()
+                        {
+                            self.refresh_disks();
+                        }
+                        if ui.button("Refresh").clicked() {
+                            self.refresh_disks();
                         }
                     });
-            });
-            if !self.local_os {
-                let text = match &self.os {
-                    Some(m) => match m.os.get(&self.arch) {
-                        Some(e) => {
-                            let left = bia_flash::release::missing_bytes(m, &self.arch);
-                            format!(
-                                "System: {} — {:.1} GiB; {}",
-                                self.os_note,
-                                e.root.size as f64 / (1u64 << 30) as f64,
-                                if left == 0 {
-                                    "already downloaded".to_string()
-                                } else {
-                                    format!("{} MiB to download from GitHub", left >> 20)
+
+                    egui::ComboBox::from_label("Target disk")
+                        .selected_text(match self.selected {
+                            Some(i) => format!(
+                                "{} — {} ({} MiB)",
+                                self.disks[i].path.display(),
+                                self.disks[i].name,
+                                self.disks[i].size_bytes / (1024 * 1024)
+                            ),
+                            None => "(none)".into(),
+                        })
+                        .show_ui(ui, |ui| {
+                            for (i, d) in self.disks.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut self.selected,
+                                    Some(i),
+                                    format!(
+                                        "{} — {} ({} MiB)",
+                                        d.path.display(),
+                                        d.name,
+                                        d.size_bytes / (1024 * 1024)
+                                    ),
+                                );
+                            }
+                        });
+
+                    ui.horizontal(|ui| {
+                        ui.label("The computer it will run on");
+                        let label = |a: &str| match a {
+                            "x86_64" => "PC (Intel or AMD, 64-bit)".to_string(),
+                            "arm64" => "ARM (arm64)".to_string(),
+                            other => other.to_string(),
+                        };
+                        let arches: Vec<String> = match (&self.os, self.local_os, &self.local) {
+                            (_, true, Ok(l)) => vec![l.arch.clone()],
+                            (Some(m), false, _) => m.os.keys().cloned().collect(),
+                            _ => vec!["x86_64".into(), "arm64".into()],
+                        };
+                        egui::ComboBox::from_id_salt("arch")
+                            .selected_text(label(&self.arch))
+                            .show_ui(ui, |ui| {
+                                for a in &arches {
+                                    ui.selectable_value(&mut self.arch, a.clone(), label(a));
                                 }
-                            )
-                        }
-                        None => format!("System: {} has no {} build", self.os_note, self.arch),
-                    },
-                    None => format!("System: {}", self.os_note),
-                };
-                ui.label(text);
-            }
-            egui::CollapsingHeader::new("Advanced: local image files (developers)")
-                .default_open(false)
-                .show(ui, |ui| {
-                    if ui
-                        .checkbox(&mut self.local_os, "Write local files instead of the GitHub release")
-                        .changed()
-                    {
-                        self.load_local_files();
+                            });
+                    });
+                    if !self.local_os {
+                        let text = match &self.os {
+                            Some(m) => match m.os.get(&self.arch) {
+                                Some(e) => {
+                                    let left = bia_flash::release::missing_bytes(m, &self.arch);
+                                    format!(
+                                        "System: {} — {:.1} GiB; {}",
+                                        self.os_note,
+                                        e.root.size as f64 / (1u64 << 30) as f64,
+                                        if left == 0 {
+                                            "already downloaded".to_string()
+                                        } else {
+                                            format!("{} MiB to download from GitHub", left >> 20)
+                                        }
+                                    )
+                                }
+                                None => format!("System: {} has no {} build", self.os_note, self.arch),
+                            },
+                            None => format!("System: {}", self.os_note),
+                        };
+                        ui.label(text);
                     }
-                    ui.add_enabled_ui(self.local_os, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(LOCAL_FILES_NAME);
+                    egui::CollapsingHeader::new("Advanced: local image files (developers)")
+                        .default_open(false)
+                        .show(ui, |ui| {
                             if ui
-                                .text_edit_singleline(&mut self.local_path)
-                                .on_hover_text("Written by make build / make rootfs as dist/<arch>/local-files.json")
-                                .lost_focus()
+                                .checkbox(&mut self.local_os, "Write local files instead of the GitHub release")
+                                .changed()
                             {
                                 self.load_local_files();
                             }
-                            if ui.button("Choose…").clicked() {
-                                self.pick_local_files();
-                            }
-                        });
-                        match &self.local {
-                            Ok(l) => {
-                                let size = std::fs::metadata(&l.root).map_or(0, |m| m.len());
-                                let mut text = format!(
-                                    "{} build: {} ({} MiB)\nESP {}\nkernel {}",
-                                    l.arch,
-                                    l.root.display(),
-                                    size >> 20,
-                                    l.esp.display(),
-                                    l.kern.display(),
-                                );
-                                if !l.built.is_empty() {
-                                    text += &format!("\nbuilt {}", l.built);
+                            ui.add_enabled_ui(self.local_os, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(LOCAL_FILES_NAME);
+                                    if ui
+                                        .text_edit_singleline(&mut self.local_path)
+                                        .on_hover_text("Written by make build / make rootfs as dist/<arch>/local-files.json")
+                                        .lost_focus()
+                                    {
+                                        self.load_local_files();
+                                    }
+                                    if ui.button("Choose…").clicked() {
+                                        self.pick_local_files();
+                                    }
+                                });
+                                match &self.local {
+                                    Ok(l) => {
+                                        let size = std::fs::metadata(&l.root).map_or(0, |m| m.len());
+                                        let mut text = format!(
+                                            "{} build: {} ({} MiB)\nESP {}\nkernel {}",
+                                            l.arch,
+                                            l.root.display(),
+                                            size >> 20,
+                                            l.esp.display(),
+                                            l.kern.display(),
+                                        );
+                                        if !l.built.is_empty() {
+                                            text += &format!("\nbuilt {}", l.built);
+                                        }
+                                        ui.label(egui::RichText::new(text).small());
+                                    }
+                                    Err(e) if e.is_empty() => {
+                                        ui.label(
+                                            egui::RichText::new("Run make build (or make rootfs), then choose dist/<arch>/local-files.json.")
+                                                .small()
+                                                .weak(),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        ui.colored_label(ui.visuals().error_fg_color, e);
+                                    }
                                 }
-                                ui.label(egui::RichText::new(text).small());
+                            });
+                        });
+
+                    ui.separator();
+                    ui.checkbox(&mut self.use_fmm, "Use a cloud AI (needs an API key)");
+                    if self.use_fmm {
+                        // Sign in with ChatGPT first (no key needed), or paste an API key below.
+                        ui.label(egui::RichText::new("Use your ChatGPT plan").strong());
+                        match &self.chatgpt {
+                            Some(a) => {
+                                let email = a.email.clone();
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("Signed in to ChatGPT as {email}."));
+                                    if ui.button("Sign out").clicked() {
+                                        self.chatgpt_sign_out();
+                                    }
+                                });
                             }
-                            Err(e) if e.is_empty() => {
-                                ui.label(
-                                    egui::RichText::new("Run make build (or make rootfs), then choose dist/<arch>/local-files.json.")
-                                        .small()
-                                        .weak(),
-                                );
-                            }
-                            Err(e) => {
-                                ui.colored_label(ui.visuals().error_fg_color, e);
+                            None => {
+                                ui.horizontal(|ui| {
+                                    let button = egui::Button::new(
+                                        egui::RichText::new("Continue with ChatGPT").color(egui::Color32::WHITE),
+                                    )
+                                    .fill(egui::Color32::from_rgb(16, 16, 16))
+                                    .rounding(18.0)
+                                    .min_size(egui::vec2(220.0, 34.0));
+                                    if ui.add_enabled(!self.signing_in, button).clicked() {
+                                        self.chatgpt_sign_in();
+                                    }
+                                    if self.signing_in {
+                                        ui.spinner();
+                                        ui.label("finish signing in in your browser …");
+                                    }
+                                });
+                                if let Some(e) = &self.signin_error {
+                                    ui.colored_label(ui.visuals().error_fg_color, e);
+                                }
                             }
                         }
-                    });
-                });
-
-            ui.separator();
-            ui.checkbox(&mut self.use_fmm, "Use a cloud AI (needs an API key)");
-            if self.use_fmm {
-                // Sign in with ChatGPT first (no key needed), or paste an API key below.
-                ui.label(egui::RichText::new("Use your ChatGPT plan").strong());
-                match &self.chatgpt {
-                    Some(a) => {
-                        let email = a.email.clone();
-                        ui.horizontal(|ui| {
-                            ui.label(format!("Signed in to ChatGPT as {email}."));
-                            if ui.button("Sign out").clicked() {
-                                self.chatgpt_sign_out();
-                            }
-                        });
-                    }
-                    None => {
-                        ui.horizontal(|ui| {
-                            let button = egui::Button::new(
-                                egui::RichText::new("Continue with ChatGPT").color(egui::Color32::WHITE),
+                        ui.label(
+                            egui::RichText::new(
+                                "bia itself is free. With ChatGPT, bia's requests count toward your ChatGPT plan's limits; nothing is charged by bia.",
                             )
-                            .fill(egui::Color32::from_rgb(16, 16, 16))
-                            .rounding(18.0)
-                            .min_size(egui::vec2(220.0, 34.0));
-                            if ui.add_enabled(!self.signing_in, button).clicked() {
-                                self.chatgpt_sign_in();
-                            }
-                            if self.signing_in {
-                                ui.spinner();
-                                ui.label("finish signing in in your browser …");
-                            }
-                        });
-                        if let Some(e) = &self.signin_error {
-                            ui.colored_label(ui.visuals().error_fg_color, e);
-                        }
+                            .small()
+                            .weak(),
+                        );
                     }
-                }
-                ui.label(
-                    egui::RichText::new(
-                        "bia itself is free. With ChatGPT, bia's requests count toward your ChatGPT plan's limits; nothing is charged by bia.",
-                    )
-                    .small()
-                    .weak(),
-                );
-            }
-            if self.use_fmm && self.chatgpt.is_none() {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Or use an API key").strong());
-                key_help(ui, self.api_key.trim().is_empty());
-                ui.horizontal(|ui| {
-                    ui.label("fmm.json");
-                    ui.text_edit_singleline(&mut self.fmm_path);
-                    if ui.button("Load").clicked() {
-                        self.load_fmm_file();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("provider");
-                    let r = ui
-                        .text_edit_singleline(&mut self.provider)
-                        .on_hover_text("Filled in from the key: openrouter, openai, anthropic, xai, deepseek or qwen");
-                    if r.changed() && PROVIDERS.contains(&self.provider.trim()) {
-                        self.fetch_models();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("api key");
-                    if ui
-                        .add(egui::TextEdit::singleline(&mut self.api_key).password(true))
-                        .changed()
-                    {
-                        self.detect_provider();
-                    }
-                });
-            }
-            if self.use_fmm {
-                ui.horizontal(|ui| {
-                    ui.label("model");
-                    ui.text_edit_singleline(&mut self.model);
-                });
-                if !self.cloud_models.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.label("search");
-                        ui.text_edit_singleline(&mut self.model_query);
-                    });
-                    let hits = filter_models(&self.cloud_models, &self.model_query);
-                    let mut pick = None;
-                    egui::ScrollArea::vertical()
-                        .id_salt("cloud-models")
-                        .max_height(140.0)
-                        .show(ui, |ui| {
-                            for m in hits.iter().take(300) {
-                                let mut text = m.id.clone();
-                                if m.name != m.id {
-                                    text += &format!("  — {}", m.name);
-                                }
-                                if m.ctx > 0 {
-                                    text += &format!("  ({}k ctx)", m.ctx / 1000);
-                                }
-                                if ui.selectable_label(self.model == m.id, text).clicked() {
-                                    pick = Some((m.id.clone(), m.ctx));
-                                }
-                            }
-                            if hits.len() > 300 {
-                                ui.label(format!("… {} more; refine the search", hits.len() - 300));
+                    if self.use_fmm && self.chatgpt.is_none() {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Or use an API key").strong());
+                        key_help(ui, self.api_key.trim().is_empty());
+                        ui.horizontal(|ui| {
+                            ui.label("fmm.json");
+                            ui.text_edit_singleline(&mut self.fmm_path);
+                            if ui.button("Load").clicked() {
+                                self.load_fmm_file();
                             }
                         });
-                    if let Some((id, ctx)) = pick {
-                        self.model = id;
-                        if ctx > 0 {
-                            self.ctx = ctx.min(2_000_000).to_string();
-                        }
+                        ui.horizontal(|ui| {
+                            ui.label("provider");
+                            let r = ui
+                                .text_edit_singleline(&mut self.provider)
+                                .on_hover_text("Filled in from the key: openrouter, openai, anthropic, xai, deepseek or qwen");
+                            if r.changed() && PROVIDERS.contains(&self.provider.trim()) {
+                                self.fetch_models();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("api key");
+                            if ui
+                                .add(egui::TextEdit::singleline(&mut self.api_key).password(true))
+                                .changed()
+                            {
+                                self.detect_provider();
+                            }
+                        });
                     }
-                }
-                ui.horizontal(|ui| {
-                    ui.label("ctx");
-                    ui.text_edit_singleline(&mut self.ctx);
-                });
-            }
+                    if self.use_fmm {
+                        ui.horizontal(|ui| {
+                            ui.label("model");
+                            ui.text_edit_singleline(&mut self.model);
+                        });
+                        if !self.cloud_models.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label("search");
+                                ui.text_edit_singleline(&mut self.model_query);
+                            });
+                            let hits = filter_models(&self.cloud_models, &self.model_query);
+                            let mut pick = None;
+                            egui::ScrollArea::vertical()
+                                .id_salt("cloud-models")
+                                .max_height(140.0)
+                                .show(ui, |ui| {
+                                    for m in hits.iter().take(300) {
+                                        let mut text = m.id.clone();
+                                        if m.name != m.id {
+                                            text += &format!("  — {}", m.name);
+                                        }
+                                        if m.ctx > 0 {
+                                            text += &format!("  ({}k ctx)", m.ctx / 1000);
+                                        }
+                                        if ui.selectable_label(self.model == m.id, text).clicked() {
+                                            pick = Some((m.id.clone(), m.ctx));
+                                        }
+                                    }
+                                    if hits.len() > 300 {
+                                        ui.label(format!("… {} more; refine the search", hits.len() - 300));
+                                    }
+                                });
+                            if let Some((id, ctx)) = pick {
+                                self.model = id;
+                                if ctx > 0 {
+                                    self.ctx = ctx.min(2_000_000).to_string();
+                                }
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("ctx");
+                            ui.text_edit_singleline(&mut self.ctx);
+                        });
+                    }
 
-            ui.separator();
-            ui.checkbox(&mut self.use_model, "Local model from Hugging Face (GGUF)");
-            if self.use_model {
-                ui.horizontal(|ui| {
-                    ui.label("search");
-                    let r = ui.text_edit_singleline(&mut self.hf_query);
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.add_enabled(!self.hf_busy, egui::Button::new("Search")).clicked() || enter {
-                        self.hf_search();
-                    }
-                    if self.hf_busy {
-                        ui.spinner();
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("HF token");
-                    ui.add(egui::TextEdit::singleline(&mut self.hf_token).password(true))
-                        .on_hover_text("Only for gated or private repos. Not written to the stick.");
-                });
-                let mut pick_repo = None;
-                egui::ComboBox::from_label("Repo")
-                    .width(420.0)
-                    .selected_text(
-                        self.hf_repo
-                            .map(|i| self.hf_repos[i].id.clone())
-                            .unwrap_or_else(|| "(search first)".into()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for (i, r) in self.hf_repos.iter().enumerate() {
-                            let text = format!("{}  ({} downloads)", r.id, r.downloads);
-                            if ui.selectable_label(self.hf_repo == Some(i), text).clicked() {
-                                pick_repo = Some(i);
+                    ui.separator();
+                    ui.checkbox(&mut self.use_model, "Local model from Hugging Face (GGUF)");
+                    if self.use_model {
+                        ui.horizontal(|ui| {
+                            ui.label("search");
+                            let r = ui.text_edit_singleline(&mut self.hf_query);
+                            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if ui.add_enabled(!self.hf_busy, egui::Button::new("Search")).clicked() || enter {
+                                self.hf_search();
+                            }
+                            if self.hf_busy {
+                                ui.spinner();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("HF token");
+                            ui.add(egui::TextEdit::singleline(&mut self.hf_token).password(true))
+                                .on_hover_text("Only for gated or private repos. Not written to the stick.");
+                        });
+                        let mut pick_repo = None;
+                        egui::ComboBox::from_label("Repo")
+                            .width(420.0)
+                            .selected_text(
+                                self.hf_repo
+                                    .map(|i| self.hf_repos[i].id.clone())
+                                    .unwrap_or_else(|| "(search first)".into()),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (i, r) in self.hf_repos.iter().enumerate() {
+                                    let text = format!("{}  ({} downloads)", r.id, r.downloads);
+                                    if ui.selectable_label(self.hf_repo == Some(i), text).clicked() {
+                                        pick_repo = Some(i);
+                                    }
+                                }
+                            });
+                        if let Some(i) = pick_repo {
+                            if self.hf_repo != Some(i) {
+                                self.hf_repo = Some(i);
+                                self.hf_list(i);
                             }
                         }
-                    });
-                if let Some(i) = pick_repo {
-                    if self.hf_repo != Some(i) {
-                        self.hf_repo = Some(i);
-                        self.hf_list(i);
+                        egui::ComboBox::from_label("File")
+                            .width(420.0)
+                            .selected_text(
+                                self.hf_model
+                                    .map(|i| {
+                                        let m = &self.hf_models[i];
+                                        format!("{}  ({} MiB)", m.label(), m.size() >> 20)
+                                    })
+                                    .unwrap_or_else(|| "(pick a repo)".into()),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (i, m) in self.hf_models.iter().enumerate() {
+                                    let text = format!("{}  ({} MiB)", m.label(), m.size() >> 20);
+                                    ui.selectable_value(&mut self.hf_model, Some(i), text);
+                                }
+                            });
                     }
-                }
-                egui::ComboBox::from_label("File")
-                    .width(420.0)
-                    .selected_text(
-                        self.hf_model
-                            .map(|i| {
-                                let m = &self.hf_models[i];
-                                format!("{}  ({} MiB)", m.label(), m.size() >> 20)
-                            })
-                            .unwrap_or_else(|| "(pick a repo)".into()),
-                    )
-                    .show_ui(ui, |ui| {
-                        for (i, m) in self.hf_models.iter().enumerate() {
-                            let text = format!("{}  ({} MiB)", m.label(), m.size() >> 20);
-                            ui.selectable_value(&mut self.hf_model, Some(i), text);
-                        }
-                    });
-            }
-            if let Some(d) = self.selected.and_then(|i| self.disks.get(i)) {
-                let root = match (&self.os, self.local_os) {
-                    (Some(m), false) => m.os.get(&self.arch).map_or(0, |e| e.root.size),
-                    _ => self
-                        .local
-                        .as_ref()
-                        .ok()
-                        .and_then(|l| std::fs::metadata(&l.root).ok())
-                        .map_or(0, |m| m.len()),
-                };
-                let model = if self.use_model {
-                    self.hf_model.and_then(|i| self.hf_models.get(i)).map_or(0, |m| m.size())
-                } else {
-                    0
-                };
-                let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
-                let mut text = format!(
-                    "The system takes the whole {:.1} GiB stick (root grows on first boot).",
-                    gib(d.size_bytes)
-                );
-                if model > 0 {
-                    let need = root + model + bia_flash::MODEL_HEADROOM + (300 << 20);
-                    if need > d.size_bytes {
-                        text = format!(
-                            "Too small: needs {:.1} GiB for system + model, stick has {:.1} GiB.",
-                            gib(need),
+                    if let Some(d) = self.selected.and_then(|i| self.disks.get(i)) {
+                        let root = match (&self.os, self.local_os) {
+                            (Some(m), false) => m.os.get(&self.arch).map_or(0, |e| e.root.size),
+                            _ => self
+                                .local
+                                .as_ref()
+                                .ok()
+                                .and_then(|l| std::fs::metadata(&l.root).ok())
+                                .map_or(0, |m| m.len()),
+                        };
+                        let model = if self.use_model {
+                            self.hf_model.and_then(|i| self.hf_models.get(i)).map_or(0, |m| m.size())
+                        } else {
+                            0
+                        };
+                        let gib = |b: u64| b as f64 / (1u64 << 30) as f64;
+                        let mut text = format!(
+                            "The system takes the whole {:.1} GiB stick (root grows on first boot).",
                             gib(d.size_bytes)
                         );
-                    } else {
-                        text += &format!(" Model {:.1} GiB, {:.1} GiB left free.", gib(model), gib(d.size_bytes - need));
+                        if model > 0 {
+                            let need = root + model + bia_flash::MODEL_HEADROOM + (300 << 20);
+                            if need > d.size_bytes {
+                                text = format!(
+                                    "Too small: needs {:.1} GiB for system + model, stick has {:.1} GiB.",
+                                    gib(need),
+                                    gib(d.size_bytes)
+                                );
+                            } else {
+                                text += &format!(" Model {:.1} GiB, {:.1} GiB left free.", gib(model), gib(d.size_bytes - need));
+                            }
+                        }
+                        ui.label(text);
                     }
-                }
-                ui.label(text);
-            }
 
-            // bia talks: its hello once the model answered, its ready line after writing.
-            if self.waking {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(format!("waking bia on {} …", self.model.trim()));
-                });
-            } else if !self.said.is_empty() {
-                ui.add_space(6.0);
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(38, 92, 160))
-                    .rounding(14.0)
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("bia:  {}", self.said))
-                                .size(17.0)
-                                .color(egui::Color32::WHITE),
-                        );
-                    });
-            }
-
-            ui.separator();
-            ui.add_enabled_ui(!self.busy, |ui| {
-                if ui
-                    .add_sized([ui.available_width(), 36.0], egui::Button::new("Erase disk & write bia"))
-                    .clicked()
-                {
-                    self.start_write();
-                }
-            });
-            match &self.status {
-                Status::Idle => {}
-                // The "waking bia" line above already says what is happening.
-                Status::Working { .. } if self.waking => {}
-                Status::Working { step, fraction, detail } => {
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(egui::RichText::new(step).strong());
-                    });
-                    if let Some(f) = fraction {
-                        let text = format!("{:.0}%  {detail}", f * 100.0);
-                        ui.add(egui::ProgressBar::new(*f).text(text));
-                    }
-                }
-                Status::Done => {
-                    ui.add_space(4.0);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(40, 160, 70),
-                        egui::RichText::new("Done: the stick is ready. You can remove it.").strong(),
-                    );
-                }
-                Status::Failed(e) => {
-                    ui.add_space(4.0);
-                    let red = ui.visuals().error_fg_color;
-                    egui::Frame::none()
-                        .stroke(egui::Stroke::new(1.0, red))
-                        .rounding(6.0)
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.colored_label(red, egui::RichText::new("Could not write the stick").strong());
-                            ui.label(e);
+                    // bia talks: its hello once the model answered, its ready line after writing.
+                    if self.waking {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(format!("waking bia on {} …", self.model.trim()));
                         });
-                }
-            }
+                    } else if !self.said.is_empty() {
+                        ui.add_space(6.0);
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(38, 92, 160))
+                            .rounding(14.0)
+                            .inner_margin(egui::Margin::symmetric(14.0, 10.0))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("bia:  {}", self.said))
+                                        .size(17.0)
+                                        .color(egui::Color32::WHITE),
+                                );
+                            });
+                    }
 
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(180.0)
-                .show(ui, |ui| {
-                    ui.monospace(&self.log);
+                    ui.separator();
+                    ui.add_enabled_ui(!self.busy, |ui| {
+                        if ui
+                            .add_sized([ui.available_width(), 36.0], egui::Button::new("Erase disk & write bia"))
+                            .clicked()
+                        {
+                            self.start_write();
+                        }
+                    });
+                    match &self.status {
+                        Status::Idle => {}
+                        // The "waking bia" line above already says what is happening.
+                        Status::Working { .. } if self.waking => {}
+                        Status::Working { step, fraction, detail } => {
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(egui::RichText::new(step).strong());
+                            });
+                            if let Some(f) = fraction {
+                                let text = format!("{:.0}%  {detail}", f * 100.0);
+                                ui.add(egui::ProgressBar::new(*f).text(text));
+                            }
+                        }
+                        // Shown as a dialog over the whole window (below).
+                        Status::Done => {}
+                        Status::Failed(e) => {
+                            ui.add_space(4.0);
+                            let red = ui.visuals().error_fg_color;
+                            egui::Frame::none()
+                                .stroke(egui::Stroke::new(1.0, red))
+                                .rounding(6.0)
+                                .inner_margin(egui::Margin::same(10.0))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.colored_label(red, egui::RichText::new("Could not write the stick").strong());
+                                    ui.label(e);
+                                });
+                        }
+                    }
+
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt("log")
+                        .max_height(180.0)
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            ui.monospace(&self.log);
+                        });
                 });
         });
+
+        if matches!(self.status, Status::Done) {
+            self.done_dialog(ctx);
+        }
 
         if self.busy || self.hf_busy {
             ctx.request_repaint();
