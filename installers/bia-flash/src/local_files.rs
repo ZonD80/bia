@@ -1,5 +1,5 @@
-//! `local-files.json`: what a local build (`make build` / `make rootfs`) produced, with absolute
-//! paths on the build machine, so developers pick one file instead of three paths.
+//! `local-files.json`: the bia disk image a local build (`make build` / `make rootfs`)
+//! produced, with its absolute path on the build machine.
 //! Written by `tools/local-files.sh` as `dist/<arch>/local-files.json`.
 
 use anyhow::{bail, Context, Result};
@@ -12,12 +12,8 @@ pub const LOCAL_FILES_NAME: &str = "local-files.json";
 pub struct LocalFiles {
     /// `x86_64` or `arm64`.
     pub arch: String,
-    /// BIAROOT ext4 image.
-    pub root: PathBuf,
-    /// Tree with `EFI/` (usually `source/flash`).
-    pub esp: PathBuf,
-    /// Directory with `vmlinuz-lts` and `initramfs-lts` (and `rescue.cpio.gz`).
-    pub kern: PathBuf,
+    /// bia disk image (`dist/<arch>/bia-<arch>.img`, from `bia-flash image`).
+    pub image: PathBuf,
     /// When the build wrote the file (informational).
     #[serde(default)]
     pub built: String,
@@ -32,17 +28,8 @@ impl LocalFiles {
         if l.arch != "x86_64" && l.arch != "arm64" {
             bail!("{}: unknown arch {:?}", path.display(), l.arch);
         }
-        let need = [
-            (l.root.clone(), false),
-            (l.esp.join("EFI"), true),
-            (l.kern.join("vmlinuz-lts"), false),
-            (l.kern.join("initramfs-lts"), false),
-        ];
-        for (p, dir) in need {
-            let ok = if dir { p.is_dir() } else { p.is_file() };
-            if !ok {
-                bail!("{}: missing {} (rebuild?)", path.display(), p.display());
-            }
+        if !l.image.is_file() {
+            bail!("{}: missing {} (rebuild?)", path.display(), l.image.display());
         }
         Ok(l)
     }
@@ -65,27 +52,18 @@ mod tests {
     #[test]
     fn loads_and_checks_paths() {
         let d = std::env::temp_dir().join(format!("bia-local-files-{}", std::process::id()));
-        let kern = d.join("dist");
-        std::fs::create_dir_all(kern.join("x")).unwrap();
-        std::fs::create_dir_all(d.join("flash/EFI")).unwrap();
-        for f in ["root.img", "vmlinuz-lts", "initramfs-lts"] {
-            std::fs::write(kern.join(f), b"x").unwrap();
-        }
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("bia-x86_64.img"), b"x").unwrap();
         let json = d.join(LOCAL_FILES_NAME);
-        let write = |root: &Path| {
-            let v = serde_json::json!({
-                "arch": "x86_64",
-                "root": root,
-                "esp": d.join("flash"),
-                "kern": kern,
-            });
+        let write = |image: &Path| {
+            let v = serde_json::json!({ "arch": "x86_64", "image": image });
             std::fs::write(&json, v.to_string()).unwrap();
         };
-        write(&kern.join("root.img"));
+        write(&d.join("bia-x86_64.img"));
         let l = LocalFiles::load(&json).unwrap();
         assert_eq!(l.arch, "x86_64");
-        assert_eq!(l.kern, kern);
-        write(&kern.join("gone.img"));
+        assert_eq!(l.image, d.join("bia-x86_64.img"));
+        write(&d.join("gone.img"));
         assert!(format!("{:#}", LocalFiles::load(&json).unwrap_err()).contains("gone.img"));
         std::fs::remove_dir_all(&d).ok();
     }

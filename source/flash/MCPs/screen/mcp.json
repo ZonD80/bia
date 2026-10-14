@@ -1,6 +1,6 @@
 {
   "name": "screen",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "See the real desktop and move the mouse and keyboard. This is the whole screen, not a web page. Call screen_shot first. You can see that picture. x and y are pixels from the top-left. screen_click clicks there. screen_cursor_move_human moves the mouse along a curved path with pauses, like a person \u2014 use it before a captcha click or when a site watches the cursor. screen_type types text into the window that has focus. screen_key presses one key, such as Return or ctrl+c. Do not guess coordinates. Look at the picture first.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-screen",

@@ -1,7 +1,8 @@
 //! Cross-platform bia USB stick writer.
 //!
-//! Layout matches `tools/flash.sh` / `bia-mkimage`:
-//! ESP (FAT32 BIABOOT) + BIOS boot + one ext4 BIAROOT from `root.img`.
+//! Layout matches `bia-mkimage`: ESP (FAT32 BIABOOT) + BIOS boot + one ext4 BIAROOT.
+//! The system comes as a minimal disk image (`image.rs`, `bia-<arch>.img.xz` in releases);
+//! the writer lays its partitions over the whole stick.
 //! Optional FMM keys go on the ESP as `EFI/bia/fmm.json` for the agent to seed
 //! into `/home/bia/files/state/fmm.json` on first boot.
 //! An optional GGUF from Hugging Face is streamed raw onto the end of BIAROOT and listed in
@@ -14,6 +15,7 @@ mod check;
 mod disk;
 mod fmm;
 pub mod hf;
+pub mod image;
 mod local_files;
 pub mod release;
 mod write;
@@ -26,4 +28,5 @@ pub use fmm::{
     probe_key, provider_for_key, CloudModel, FmmInput, KeyGuide, ESP_FMM_REL, KEY_GUIDES, KEY_STEPS,
     LOCAL_FMM_CANDIDATES, PROVIDERS,
 };
+pub use image::{build_image, ImageSources};
 pub use write::{parse_progress, write_stick, FlashOptions, ProgressFn, ESP_MODELS_REL, MODEL_HEADROOM};

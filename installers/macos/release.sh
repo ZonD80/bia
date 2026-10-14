@@ -130,7 +130,7 @@ VERSION="$(
 if [[ -z "$VERSION" ]]; then
   VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/Cargo.toml" | head -1)"
 fi
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.0.1}"
 
 APP_BUNDLE_NAME="bia flash.app"
 APP_PATH="$DIST_DIR/$APP_BUNDLE_NAME"
@@ -312,7 +312,7 @@ GUI:
 
 CLI:
   ./bia-flash list
-  ./bia-flash write --disk /dev/rdiskN --root … --esp source/flash --yes
+  ./bia-flash write --disk /dev/rdiskN --arch x86_64 --yes   # downloads the bia image from GitHub
   Zip: ${CLI_ZIP_NAME}
 
 Signed with Developer ID. Notarization: $([[ "$NOTARIZE" -eq 1 ]] && echo yes || echo skipped).

@@ -72,7 +72,6 @@ enum Cmd {
         #[arg(long)]
         hf_token: Option<String>,
     },
-    /// Erase a disk (or create an image) and write bia.
     /// Download the bia OS for an architecture from GitHub releases (cached), or list them.
     Os {
         /// `latest` or a release tag such as `v1.0.0`.
@@ -82,32 +81,46 @@ enum Cmd {
         #[arg(long)]
         arch: Option<String>,
     },
-    Write {
-        /// Target whole disk (`/dev/rdiskN`, `/dev/sdb`, `\\.\PhysicalDriveN`) or image path.
+    /// Build the minimal bia disk image (what releases ship as `bia-<arch>.img.xz`) from a
+    /// local build: GPT, ESP, BIOS GRUB (x86_64) and BIAROOT, no keys and no model.
+    Image {
+        /// Root filesystem image, e.g. `dist/x86_64/root.img`.
         #[arg(long)]
-        disk: PathBuf,
-        /// Local root filesystem image (`root.img`, developers). Without it the OS is
-        /// downloaded from the GitHub release named by `--os`.
-        #[arg(long)]
-        root: Option<PathBuf>,
-        /// GitHub release to take the OS from when `--root` is not given: `latest` or a tag.
-        #[arg(long, default_value = "latest")]
-        os: String,
-        /// Tree with `EFI/` (and optional `boot/`) for a local `--root`, usually `./source/flash`.
+        root: PathBuf,
+        /// Tree with `EFI/` (and optional `boot/`).
         #[arg(long, default_value = "source/flash")]
         esp: PathBuf,
         /// Directory with `vmlinuz-lts` + `initramfs-lts` (defaults to root's parent).
         #[arg(long)]
         kern: Option<PathBuf>,
         /// Architecture: `x86_64` or `arm64`.
+        #[arg(long)]
+        arch: String,
+        /// Output image (replaced).
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Erase a disk (or create an image file) and write bia, with FMM keys and a model.
+    Write {
+        /// Target whole disk (`/dev/rdiskN`, `/dev/sdb`, `\\.\PhysicalDriveN`) or image path.
+        #[arg(long)]
+        disk: PathBuf,
+        /// Local bia disk image (`bia-<arch>.img` or `.img.xz`, from `bia-flash image` or a
+        /// release). Without it the image is downloaded from the GitHub release named by `--os`.
+        #[arg(long)]
+        os_image: Option<PathBuf>,
+        /// GitHub release to take the OS from when `--os-image` is not given: `latest` or a tag.
+        #[arg(long, default_value = "latest")]
+        os: String,
+        /// Architecture of the release image: `x86_64` or `arm64`.
         #[arg(long, default_value = "x86_64")]
         arch: String,
         /// Disk/image size in bytes (required for new image files; probed for block devices).
         #[arg(long, default_value = "0")]
         size: u64,
         /// Create `disk` as a sparse image file.
-        #[arg(long)]
-        image: bool,
+        #[arg(long = "image")]
+        image_file: bool,
         /// Skip confirmation prompt.
         #[arg(long)]
         yes: bool,
@@ -299,28 +312,32 @@ fn run() -> Result<()> {
             println!("bia {} (release {})", m.version, m.tag);
             for (a, e) in &m.os {
                 println!(
-                    "  {a}: system {} MiB in {} parts, boot files {} MiB; {} MiB still to download",
-                    e.root.size >> 20,
-                    e.root.parts.len(),
-                    e.boot.size >> 20,
+                    "  {a}: {} — {} MiB image, {} MiB download; {} MiB still to download",
+                    e.image.file,
+                    e.image.raw_size >> 20,
+                    e.image.size >> 20,
                     bia_flash::release::missing_bytes(&m, a) >> 20
                 );
             }
             if let Some(a) = arch {
                 let f = bia_flash::release::fetch(&m, &a, &mut |msg| eprintln!("== {msg}"))?;
-                println!("root.img {}\nboot     {}", f.root_img.display(), f.boot_dir.display());
+                println!("{}", f.path.display());
             }
+            Ok(())
+        }
+        Cmd::Image { root, esp, kern, arch, out } => {
+            let kern_dir = kern.unwrap_or_else(|| root.parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf()));
+            let src = bia_flash::ImageSources { root_img: root, esp_src: esp, kern_dir, arch };
+            bia_flash::build_image(&src, &out, &mut (Box::new(|m: &str| eprintln!("== {m}")) as bia_flash::ProgressFn))?;
             Ok(())
         }
         Cmd::Write {
             disk,
-            root,
+            os_image,
             os,
-            esp,
-            kern,
             arch,
             size,
-            image,
+            image_file,
             yes,
             fmm,
             no_fmm,
@@ -404,31 +421,22 @@ fn run() -> Result<()> {
                     bail!("aborted");
                 }
             }
-            let (root, esp, kern_dir) = match root {
-                Some(root) => {
-                    let kern_dir = kern.unwrap_or_else(|| {
-                        root.parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| PathBuf::from("."))
-                    });
-                    (root, esp, kern_dir)
-                }
+            let (image, image_sha256) = match os_image {
+                Some(p) => (p, None),
                 None => {
                     let m = bia_flash::release::manifest(&os)?;
                     eprintln!("== bia {} ({}) for {arch} from GitHub", m.version, m.tag);
                     let f = bia_flash::release::fetch(&m, &arch, &mut |msg| eprintln!("== {msg}"))?;
-                    (f.root_img, f.boot_dir.clone(), f.boot_dir)
+                    (f.path, Some(f.raw_sha256))
                 }
             };
             let opts = FlashOptions {
                 disk: disk.clone(),
-                root_img: root,
-                esp_src: esp,
-                kern_dir,
+                image,
+                image_sha256,
                 size_bytes: size,
-                arch,
                 fmm,
-                create_image: image,
+                create_image: image_file,
                 model,
                 hf_token,
             };

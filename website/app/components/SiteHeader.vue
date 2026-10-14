@@ -15,6 +15,7 @@
         <NuxtLink to="/how-it-works">How it works</NuxtLink>
         <NuxtLink to="/why-bia">Why bia</NuxtLink>
         <NuxtLink to="/faq">FAQ</NuxtLink>
+        <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
         <NuxtLink class="btn btn--primary top__cta" to="/download">Get bia</NuxtLink>
       </nav>
     </div>

@@ -59,7 +59,8 @@ CLI:
   bia-flash list
   # Keys from local gitignored fmm.json (or --fmm path):
   cp fmm.json.example fmm.json   # edit api_key
-  bia-flash write --disk /dev/… --root dist/<arch>/root.img --esp source/flash --arch x86_64 --yes
+  bia-flash write --disk /dev/… --arch x86_64 --yes      # bia image from the latest GitHub release
+  bia-flash write --disk /dev/… --os-image dist/<arch>/bia-<arch>.img --yes   # local build (tools/mkimg.sh)
   # Local model from Hugging Face (HF_TOKEN for gated repos):
   bia-flash search qwen3 4b instruct
   bia-flash files unsloth/Qwen3-4B-Instruct-2507-GGUF

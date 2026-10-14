@@ -64,13 +64,40 @@
         <h2 class="h2">3. Write the stick and start a computer</h2>
         <ol class="final list-check">
           <li>Plug in a USB stick of 8 GB or more. Everything on it will be replaced.</li>
-          <li>Open the writer, pick the stick, choose the brain, and press Write. The first time, it downloads the bia system (about 1 GB) and keeps it for the next stick.</li>
+          <li>Open the writer, pick the stick and the kind of computer it is for, choose the brain, and press Write. The first time, it downloads the bia system for that kind of computer (about 1 GB) and keeps it for the next stick.</li>
           <li>Plug the stick into the computer that will become bia and switch it on. If it starts its old system instead, open the computer’s start-up menu (often F12, F11, Esc or Option ⌥) and choose the USB stick.</li>
           <li>bia wakes up and greets you. Say hello!</li>
         </ol>
-        <p class="note-box tip">
-          One stick works on both ordinary PCs and ARM computers. It also works with Secure Boot switched on.
-        </p>
+        <div class="note-box tip kinds">
+          <p>
+            <strong>One stick, one kind of computer.</strong> Ordinary PCs and ARM computers need different
+            systems, so the writer asks which kind the stick is for. Have both? Make one stick for each.
+          </p>
+          <ul>
+            <li>
+              <strong>Ordinary PC:</strong> almost any Intel or AMD desktop or laptop, such as a ten-year-old office
+              PC, a gaming PC or a Windows laptop. It starts with Secure Boot switched on, and older machines
+              without the modern start-up (UEFI) start it the classic way (BIOS).
+            </li>
+            <li>
+              <strong>ARM computer:</strong> ARM mini-PCs and boards whose start-up menu works the standard
+              (UEFI) way. Whether Secure Boot can stay on depends on the machine: if the stick does not start,
+              switch Secure Boot off in its settings.
+            </li>
+            <li>
+              <strong>Not supported:</strong> Macs with Apple chips (M1 and newer) cannot start from a bia
+              stick. They can still run the writer.
+            </li>
+          </ul>
+          <p>
+            <strong>bia already lives on another kind of computer?</strong> Its mind can move across. For
+            example, bia runs on an old Intel laptop and you bought an ARM mini-PC: make an ARM stick, start the
+            mini-PC from it and tell the new bia to wait for the old one. Then ask the old bia to move over. Both
+            screens show the same code, and once you confirm, its chats, memories, accounts and passwords arrive
+            on the mini-PC. Keep the mini-PC online during the move, so bia can reinstall its extra programs in
+            their ARM versions. <NuxtLink to="/features/moving">How moving works</NuxtLink>
+          </p>
+        </div>
       </div>
     </section>
 
@@ -79,8 +106,9 @@
         <h2 class="h2">Other ways</h2>
         <div class="grid grid--2">
           <div class="card">
-            <h3>An installer disc image</h3>
-            <p>For computers you set up in bulk: start from the installer, connect to a network, and the computer installs bia on its disk and waits for its mind to “fly” over from another bia.</p>
+            <h3>Servers and virtual machines</h3>
+            <p>For servers, cloud machines and virtual machines, or computers you set up in bulk: start from the installer image, connect to a network, and the computer installs bia on its disk and waits for its mind to “fly” over from another bia.</p>
+            <p><NuxtLink to="/servers">Download the installer and read the guide</NuxtLink></p>
           </div>
           <div class="card">
             <h3>For developers</h3>
@@ -135,4 +163,7 @@ function buttonText(host: Host): string {
 .ico { color: var(--accent); margin-bottom: 0.6rem; }
 .final { margin-bottom: 1.5rem; }
 .tip { margin-top: 1rem; }
+.kinds p { margin: 0; }
+.kinds ul { margin: 0.75rem 0; padding-left: 1.2rem; }
+.kinds li + li { margin-top: 0.4rem; }
 </style>

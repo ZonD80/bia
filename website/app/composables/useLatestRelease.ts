@@ -6,6 +6,8 @@
 // check finishes (or if it fails) the buttons point at the releases page.
 
 const REPO = 'zond80/bia'
+/** Source code, issues and releases. */
+export const REPO_URL = `https://github.com/${REPO}`
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=20`
 const FALLBACK_RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`
 
@@ -17,9 +19,18 @@ export const FLASH_ASSETS: Record<FlashHost, string> = {
   linux: 'bia-flash-linux-x86_64.tar.gz',
 }
 
+export type LandArch = 'x86_64' | 'arm64'
+
+/** The land installer ISOs (xz-compressed: the raw ISO is over GitHub's 2 GiB file limit). */
+export const LAND_ASSETS: Record<LandArch, string> = {
+  x86_64: 'bia-land-x86_64.iso.xz',
+  arm64: 'bia-land-arm64.iso.xz',
+}
+
 type GitHubReleaseAsset = {
   name: string
   browser_download_url: string
+  size: number
 }
 
 type GitHubRelease = {
@@ -37,6 +48,8 @@ export type FlashDownload = {
   /** version of the release the asset comes from */
   version: string | null
   available: boolean
+  /** download size in bytes, when known */
+  size?: number
 }
 
 function versionParts(version: string): number[] {
@@ -57,16 +70,37 @@ function compareVersions(left: string, right: string): number {
 
 const tagVersion = (tag: string) => tag.replace(/^v/, '')
 
-function unchecked(): Record<FlashHost, FlashDownload> {
-  const out = {} as Record<FlashHost, FlashDownload>
-  for (const host of Object.keys(FLASH_ASSETS) as FlashHost[]) {
-    out[host] = { url: FALLBACK_RELEASE_PAGE, version: null, available: false }
+function unchecked<K extends string>(assets: Record<K, string>): Record<K, FlashDownload> {
+  const out = {} as Record<K, FlashDownload>
+  for (const key of Object.keys(assets) as K[]) {
+    out[key] = { url: FALLBACK_RELEASE_PAGE, version: null, available: false }
+  }
+  return out
+}
+
+/** Each asset from the newest release that has it. */
+function pick<K extends string>(assets: Record<K, string>, releases: GitHubRelease[]): Record<K, FlashDownload> {
+  const out = unchecked(assets)
+  for (const key of Object.keys(assets) as K[]) {
+    for (const r of releases) {
+      const asset = r.assets.find((a) => a.name === assets[key])
+      if (asset) {
+        out[key] = {
+          url: asset.browser_download_url,
+          version: tagVersion(r.tag_name),
+          available: true,
+          size: asset.size,
+        }
+        break
+      }
+    }
   }
   return out
 }
 
 export function useLatestRelease() {
-  const downloads = useState<Record<FlashHost, FlashDownload>>('bia-flash-downloads', unchecked)
+  const downloads = useState<Record<FlashHost, FlashDownload>>('bia-flash-downloads', () => unchecked(FLASH_ASSETS))
+  const landDownloads = useState<Record<LandArch, FlashDownload>>('bia-land-downloads', () => unchecked(LAND_ASSETS))
   // Newest release that has the OS manifest bia-flash writes the stick from.
   const version = useState<string | null>('bia-flash-version', () => null)
   const releaseUrl = useState<string>('bia-flash-release-url', () => FALLBACK_RELEASE_PAGE)
@@ -88,17 +122,9 @@ export function useLatestRelease() {
         .filter((r) => !r.draft && !r.prerelease)
         .sort((a, b) => compareVersions(tagVersion(b.tag_name), tagVersion(a.tag_name)))
 
-      const next = unchecked()
-      for (const host of Object.keys(FLASH_ASSETS) as FlashHost[]) {
-        for (const r of releases) {
-          const asset = r.assets.find((a) => a.name === FLASH_ASSETS[host])
-          if (asset) {
-            next[host] = { url: asset.browser_download_url, version: tagVersion(r.tag_name), available: true }
-            break
-          }
-        }
-      }
+      const next = pick(FLASH_ASSETS, releases)
       downloads.value = next
+      landDownloads.value = pick(LAND_ASSETS, releases)
 
       const os = releases.find((r) => r.assets.some((a) => a.name === 'bia-os.json'))
       version.value = os ? tagVersion(os.tag_name) : null
@@ -106,7 +132,8 @@ export function useLatestRelease() {
       if (!Object.values(next).some((d) => d.available)) error.value = 'No release has a writer download yet'
       else if (!os) error.value = 'No release has the bia system yet'
     } catch {
-      downloads.value = unchecked()
+      downloads.value = unchecked(FLASH_ASSETS)
+      landDownloads.value = unchecked(LAND_ASSETS)
       error.value = 'Could not load the latest release'
     } finally {
       fetched.value = true
@@ -127,6 +154,7 @@ export function useLatestRelease() {
 
   return {
     downloads,
+    landDownloads,
     version,
     releaseUrl,
     loading,

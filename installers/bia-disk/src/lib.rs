@@ -66,6 +66,12 @@ impl<D: Seek> Seek for KnownSize<D> {
     }
 }
 
+/// Length of BIAROOT that `write_gpt` lays out on a `size`-byte disk (0 if it does not fit).
+pub fn root_len(size: u64) -> u64 {
+    let root = size.saturating_sub(BOOT_SIZE + BIOS_SIZE + 6 * ALIGN);
+    root - root % ALIGN
+}
+
 /// Write a fresh GPT onto `dev` (file already `size` bytes, or a block device):
 /// ESP, BIOS boot, and one ext4 root partition filling the rest.
 pub fn write_gpt<D>(dev: D, size: u64) -> Result<Layout>
@@ -84,11 +90,10 @@ where
         .create_from_device(dev, None)
         .context("create GPT")?;
 
-    let reserved = BOOT_SIZE + BIOS_SIZE + 6 * ALIGN;
-    let root = size
-        .checked_sub(reserved)
-        .context("disk too small for ESP + BIOS + system")?;
-    let root = root - (root % ALIGN);
+    let root = root_len(size);
+    if root == 0 {
+        anyhow::bail!("disk too small for ESP + BIOS + system");
+    }
 
     disk.add_partition(
         BOOT_LABEL,

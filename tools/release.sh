@@ -6,6 +6,7 @@
 #
 #   --only        packages and/or groups, comma-separated:
 #                   flashers = flash-macos,flash-linux,flash-windows   os = os-x86_64,os-arm64
+#                   land = land-x86_64,land-arm64
 #                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
 #   --allow-dirty allow uncommitted/unpushed work (tests; never for a real release)
@@ -13,13 +14,18 @@
 #                 scratch, as --rebuild-os) and replace its assets; without --only: all of them
 #
 # Tag: v<workspace version> (Cargo.toml). Packages and their release assets:
-#   os-x86_64      bia-root-x86_64.NNN.zst (1 GiB raw parts) + bia-boot-x86_64.tar.zst
-#   os-arm64       bia-root-arm64.NNN.zst  + bia-boot-arm64.tar.zst
+#   os-x86_64      bia-x86_64.img.xz  minimal bia disk image (tools/os-bundle.py: GPT, ESP,
+#                  BIOS GRUB, BIAROOT; no keys, no model). Etcher/Rufus/dd write it as it is
+#                  (bia-grow fills the stick on first boot); bia-flash adds keys and a model
+#   os-arm64       bia-arm64.img.xz
 #                  (+ bia-os.json, the manifest bia-flash downloads the OS with)
 #   flash-macos    bia-flash-macos-universal.dmg + bia-flash-cli-macos-universal.zip
 #                  (Developer ID signed + notarized; credentials in .env)
 #   flash-linux    bia-flash-linux-x86_64.tar.gz  (built in bia-build:x86_64)
 #   flash-windows  bia-flash-windows-x86_64.zip   (cross-built with MinGW in bia-build:x86_64)
+#   land-x86_64    bia-land-x86_64.iso.xz  installer ISO that installs bia and waits to land
+#   land-arm64     bia-land-arm64.iso.xz   (xz: the raw ISO is over GitHub's 2 GiB file limit;
+#                  Etcher and Raspberry Pi Imager write .iso.xz directly)
 # Asset names carry no version, so https://github.com/zond80/bia/releases/latest/download/<name>
 # always points at the newest release (website download links, bia-flash).
 #
@@ -30,7 +36,7 @@ SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$SELF")/.."
 ROOT=$(pwd)
 REPO=zond80/bia
-ALL=(os-x86_64 os-arm64 flash-macos flash-linux flash-windows)
+ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-windows)
 
 NOTES="" ONLY="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -60,7 +66,8 @@ if [[ -n "$ONLY" ]]; then
       "") ;;
       flashers|flash) want+="flash-macos flash-linux flash-windows " ;;
       os) want+="os-x86_64 os-arm64 " ;;
-      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os)"
+      land) want+="land-x86_64 land-arm64 " ;;
+      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land)"
          want+="$i " ;;
     esac
   done
@@ -69,7 +76,7 @@ if [[ -n "$ONLY" ]]; then
   [[ ${#PKGS[@]} -gt 0 ]] || die "--only selects nothing"
 fi
 
-for c in gh git python3 zstd docker; do command -v "$c" >/dev/null || die "'$c' is required"; done
+for c in gh git python3 xz docker; do command -v "$c" >/dev/null || die "'$c' is required"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -97,14 +104,15 @@ has() { grep -qx "$1" <<<"$HAVE"; }
 manifest_has_arch() {
   has bia-os.json || return 1
   gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
-    | python3 -c "import json,sys; sys.exit(0 if '$1' in json.load(sys.stdin).get('os', {}) else 1)"
+    | python3 -c "import json,sys; sys.exit(0 if 'image' in json.load(sys.stdin).get('os', {}).get('$1', {}) else 1)"
 }
 complete() { # pkg
   case $1 in
-    os-*) local a=${1#os-}; has "bia-boot-$a.tar.zst" && has "bia-root-$a.000.zst" && manifest_has_arch "$a" ;;
+    os-*) local a=${1#os-}; has "bia-$a.img.xz" && manifest_has_arch "$a" ;;
     flash-macos) has bia-flash-macos-universal.dmg && has bia-flash-cli-macos-universal.zip ;;
     flash-linux) has bia-flash-linux-x86_64.tar.gz ;;
     flash-windows) has bia-flash-windows-x86_64.zip ;;
+    land-*) has "bia-land-${1#land-}.iso.xz" ;;
     *) die "unknown package $1" ;;
   esac
 }
@@ -167,18 +175,41 @@ scan() { # files…  (raw binaries, before they are packed)
 UPLOAD=()
 OS_BUILT=()
 
-build_os() { # arch
+SYSTEM_READY=" "
+system() { # arch — build dist/<arch> (root.img and binaries) at most once per run
   local a=$1
+  [[ $SYSTEM_READY == *" $a "* ]] && return 0
   if [[ $REBUILD_OS -eq 1 || ! -f "dist/$a/root.img" ]]; then
     echo "== building the $a OS (make ARCH=$a build)"
     make ARCH="$a" build
   else
     echo "== using dist/$a/root.img from $(date -r "dist/$a/root.img" '+%F %R') (--rebuild-os to rebuild)"
   fi
-  rm -f "$OUT"/bia-root-"$a".*.zst "$OUT/bia-boot-$a.tar.zst" "$OUT/os-$a.json"
+  SYSTEM_READY+="$a "
+}
+
+build_os() { # arch
+  local a=$1
+  system "$a"
+  rm -f "$OUT/bia-$a.img.xz" "$OUT/os-$a.json"
   python3 tools/os-bundle.py "$a" "$OUT" --secrets "$SECRETS"
-  UPLOAD+=("$OUT"/bia-root-"$a".*.zst "$OUT/bia-boot-$a.tar.zst")
+  UPLOAD+=("$OUT/bia-$a.img.xz")
   OS_BUILT+=("$a")
+}
+
+build_land() { # arch
+  local a=$1 iso="dist/$1/bia-land.iso" out="$OUT/bia-land-$1.iso.xz"
+  system "$a"
+  echo "== land installer ISO ($a)"
+  rm -f "$iso" "$out"
+  ARCH="$a" tools/mkiso.sh
+  scan "$iso"
+  echo "== compressing $(( $(stat -f%z "$iso" 2>/dev/null || stat -c%s "$iso") >> 20 )) MiB ISO with xz"
+  xz -T0 -6 -c "$iso" >"$out"
+  local size
+  size=$(stat -f%z "$out" 2>/dev/null || stat -c%s "$out")
+  (( size < 2 * 1024 * 1024 * 1024 )) || die "$out is $((size >> 20)) MiB, over GitHub's 2 GiB file limit"
+  UPLOAD+=("$out")
 }
 
 build_macos() {
@@ -239,6 +270,7 @@ build_windows() {
 for p in "${TODO[@]}"; do
   case $p in
     os-*) build_os "${p#os-}" ;;
+    land-*) build_land "${p#land-}" ;;
     flash-macos) build_macos ;;
     flash-linux) build_linux ;;
     flash-windows) build_windows ;;
@@ -256,6 +288,8 @@ out, version, tag, old, arches = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv
 m = json.load(open(old)) if os.path.isfile(old) else {}
 m.update({"version": version, "tag": tag})
 m.setdefault("os", {})
+# Entries from before the disk image (root parts + boot bundle) cannot be written any more.
+m["os"] = {a: e for a, e in m["os"].items() if "image" in e}
 for a in arches:
     m["os"][a] = json.load(open(f"{out}/os-{a}.json"))
 json.dump(m, open(f"{out}/bia-os.json", "w"), indent=2)
@@ -275,14 +309,13 @@ if [[ $EXISTS -eq 0 ]]; then
   gh release create "$TAG" -R "$REPO" --target "$SHA" --title "bia $VERSION" --notes "$NOTES"
 fi
 echo "== uploading ${#UPLOAD[@]} files"
-# --clobber: an OS rebuilt for a missing manifest entry replaces its old parts.
+# --clobber: an OS rebuilt for a missing manifest entry replaces its old image.
 gh release upload "$TAG" -R "$REPO" --clobber "${UPLOAD[@]}"
-# A rebuilt OS may have fewer root parts than the one it replaced: drop the leftovers.
+# Assets of the old OS packaging (zstd root parts + boot bundle) for a rebuilt arch.
 for a in ${OS_BUILT[@]+"${OS_BUILT[@]}"}; do
   while read -r name; do
-    [[ -f "$OUT/$name" ]] && continue
     echo "   removing stale $name"
     gh release delete-asset "$TAG" "$name" -R "$REPO" -y
-  done < <(grep -E "^bia-root-$a\.[0-9]+\.zst$" <<<"$HAVE" || true)
+  done < <(grep -E "^bia-(root-$a\.[0-9]+\.zst|boot-$a\.tar\.zst)$" <<<"$HAVE" || true)
 done
 echo "== done: $(gh release view "$TAG" -R "$REPO" --json url -q .url)"

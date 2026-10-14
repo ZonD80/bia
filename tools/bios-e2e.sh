@@ -2,7 +2,7 @@
 # End-to-end QEMU test of legacy BIOS (SeaBIOS, no UEFI): boot the flash image, let the
 # agent install onto the internal disk, then boot that disk with the stick removed.
 #
-#   tools/bios-e2e.sh images   flash.img written by bia-flash from dist/x86_64/root.img
+#   tools/bios-e2e.sh images   flash.img written by bia-flash from dist/x86_64/bia-x86_64.img
 #                              (./fmm.json; current dist binaries patched in) + a blank internal disk
 #   tools/bios-e2e.sh run      SeaBIOS boots the stick -> agent asked to install onto the
 #                              internal disk (carry_to_disk) -> powers off (BIOS cannot be
@@ -30,11 +30,10 @@ do_images() {
   pgrep -q qemu-system 2>/dev/null && { echo "QEMU is running; stop it first" >&2; exit 1; }
   # The stick is written the way users get one: bia-flash (native BIOS GRUB embed, FMM
   # keys on the ESP after the hello test, ext4 grown by bia-grow on first boot).
-  cargo build -q -p bia-flash
+  tools/mkimg.sh "$ARCH"
   rm -f "$BE/flash.img"
-  target/debug/bia-flash write --disk "$BE/flash.img" --image --size $(( ${STICK_GB:-16} << 30 )) \
-    --root "dist/$ARCH/root.img" --esp source/flash --kern "dist/$ARCH" --arch "$ARCH" \
-    --fmm fmm.json --yes
+  target/release/bia-flash write --disk "$BE/flash.img" --image --size $(( ${STICK_GB:-16} << 30 )) \
+    --os-image "dist/$ARCH/bia-$ARCH.img" --fmm fmm.json --yes
   rm -f "$BE/internal.img"
   qemu-img create -f raw "$BE/internal.img" "${INTERNAL_GB:-20}G" >/dev/null
   image_tool prep

@@ -474,13 +474,13 @@ impl FlashApp {
                 }
             }
         };
-        let (root, esp, kern) = if release.is_some() {
-            Default::default()
+        let image = if release.is_some() {
+            PathBuf::new()
         } else {
             // Re-read: the build may have run again since the file was chosen.
             self.load_local_files();
             match &self.local {
-                Ok(l) => (l.root.clone(), l.esp.clone(), l.kern.clone()),
+                Ok(l) => l.image.clone(),
                 Err(e) if e.is_empty() => {
                     self.fail(&format!("choose the {LOCAL_FILES_NAME} of a local build"));
                     return;
@@ -513,11 +513,9 @@ impl FlashApp {
         let arch = self.arch.clone();
         let opts = FlashOptions {
             disk: disk.clone(),
-            root_img: root,
-            esp_src: esp,
-            kern_dir: kern,
+            image,
+            image_sha256: None,
             size_bytes,
-            arch,
             fmm,
             create_image: false,
             model,
@@ -566,15 +564,14 @@ impl FlashApp {
                 }
             }
             if let Some(m) = release {
-                let _ = tx.send(format!("== bia {} for {}", m.tag, opts.arch));
-                let got = bia_flash::release::fetch(&m, &opts.arch.clone(), &mut |msg| {
+                let _ = tx.send(format!("== bia {} for {arch}", m.tag));
+                let got = bia_flash::release::fetch(&m, &arch, &mut |msg| {
                     let _ = tx.send(format!("== {msg}"));
                 });
                 match got {
                     Ok(f) => {
-                        opts.root_img = f.root_img;
-                        opts.esp_src = f.boot_dir.clone();
-                        opts.kern_dir = f.boot_dir;
+                        opts.image = f.path;
+                        opts.image_sha256 = Some(f.raw_sha256);
                     }
                     Err(e) => {
                         let _ = tx.send(format!("error: could not download the bia system, nothing was written: {e:#}"));
@@ -810,7 +807,7 @@ impl eframe::App for FlashApp {
                                     format!(
                                         "System: {} — {:.1} GiB; {}",
                                         self.os_note,
-                                        e.root.size as f64 / (1u64 << 30) as f64,
+                                        e.image.raw_size as f64 / (1u64 << 30) as f64,
                                         if left == 0 {
                                             "already downloaded".to_string()
                                         } else {
@@ -849,14 +846,12 @@ impl eframe::App for FlashApp {
                                 });
                                 match &self.local {
                                     Ok(l) => {
-                                        let size = std::fs::metadata(&l.root).map_or(0, |m| m.len());
+                                        let size = bia_flash::image::raw_size(&l.image).unwrap_or(0);
                                         let mut text = format!(
-                                            "{} build: {} ({} MiB)\nESP {}\nkernel {}",
+                                            "{} build: {} ({} MiB)",
                                             l.arch,
-                                            l.root.display(),
+                                            l.image.display(),
                                             size >> 20,
-                                            l.esp.display(),
-                                            l.kern.display(),
                                         );
                                         if !l.built.is_empty() {
                                             text += &format!("\nbuilt {}", l.built);
@@ -1056,13 +1051,13 @@ impl eframe::App for FlashApp {
                     }
                     if let Some(d) = self.selected.and_then(|i| self.disks.get(i)) {
                         let root = match (&self.os, self.local_os) {
-                            (Some(m), false) => m.os.get(&self.arch).map_or(0, |e| e.root.size),
+                            (Some(m), false) => m.os.get(&self.arch).map_or(0, |e| e.image.raw_size),
                             _ => self
                                 .local
                                 .as_ref()
                                 .ok()
-                                .and_then(|l| std::fs::metadata(&l.root).ok())
-                                .map_or(0, |m| m.len()),
+                                .and_then(|l| bia_flash::image::raw_size(&l.image).ok())
+                                .unwrap_or(0),
                         };
                         let model = if self.use_model {
                             self.hf_model.and_then(|i| self.hf_models.get(i)).map_or(0, |m| m.size())

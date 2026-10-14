@@ -111,7 +111,7 @@ where it left off.
 ├── scripts/                   one-word wrappers (build_and_run_from_flash, make_iso…)
 ├── website/                   Nuxt 4 static site, deployed to Cloudflare Pages
 ├── cache/                     downloads, cargo cache, build trees  (not in git)
-└── dist/                      build outputs: <arch>/root.img, bia.img, ISOs  (not in git)
+└── dist/                      build outputs: <arch>/root.img, <arch>/bia-<arch>.img, bia.img, ISOs  (not in git)
 ```
 
 ## Requirements
@@ -129,7 +129,8 @@ where it left off.
 
 ```bash
 make builder                 # once per ARCH: the Debian build container
-make build                   # agent + MCPs + Debian root  -> dist/arm64/root.img
+make build                   # agent + MCPs + Debian root  -> dist/arm64/root.img + bia-arm64.img
+make img                     # just the minimal disk image dist/<arch>/bia-<arch>.img (Etcher/dd-able)
 ARCH=x86_64 make builder build
 make image                   # dist/bia.img (16 GiB QEMU flash image) from dist/<arch>
 make run                     # boot it in QEMU (arm64 + hvf on Apple Silicon)
@@ -137,6 +138,7 @@ make run-serial              # same, headless, serial console in this terminal
 make flash                   # write a USB stick with bia-flash (x86_64 by default)
 MODEL=unsloth/Qwen3-4B-Instruct-2507-GGUF make flash   # … plus a GGUF from Hugging Face
 make iso                     # installer ISO without a model (x86_64 by default)
+MODE=dd make img-e2e         # QEMU test of the image (MODE=flash|dd, FIRMWARE=uefi|bios, ARCH)
 NOTARIZE=0 make flasher      # bia-flash CLI + GUI; on macOS also .app / DMG
 tools/make-icons.sh          # website favicon/icons + flasher .icns/.ico/window icon from brand/potato.svg (macOS, needs Chrome)
 tools/release.sh             # GitHub release v<version>: builds only what is missing (OS per arch, flashers), notarizes, uploads

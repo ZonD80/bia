@@ -1,5 +1,6 @@
 #!/bin/bash
 # Write a bootable bia stick: a small EFI partition and one ext4 root.
+# New sticks: dist/$ARCH/bia-$ARCH.img (tools/mkimg.sh) written by bia-flash.
 # The root image holds the OS, /home/bia (no model) and the swap file. BIAROOT
 # spans the whole stick; bia-grow fills it with the ext4 on first boot.
 # ERASE=1 wipes the stick. Without ERASE, a stick that already has BIAROOT is
@@ -197,12 +198,11 @@ if [ "$EXISTING" != 1 ]; then
   echo "== unmounting $DISK"
   diskutil unmountDisk force "$DISK" >/dev/null || true
   echo "== bia-flash write /dev/r$DISK"
+  echo "== bia disk image from $ROOTIMG"
+  KERNEL=0 OUT="$KERN_DIR/bia-$ARCH.img" tools/mkimg.sh "$ARCH"
   sudo --preserve-env=HF_TOKEN "$FLASH_BIN" write \
     --disk "/dev/r$DISK" \
-    --root "$ROOTIMG" \
-    --esp "$FLASHDIR" \
-    --kern "$KERN_DIR" \
-    --arch "$ARCH" \
+    --os-image "$KERN_DIR/bia-$ARCH.img" \
     --size "$BYTES" \
     --yes \
     "${fmm_args[@]+"${fmm_args[@]}"}" \

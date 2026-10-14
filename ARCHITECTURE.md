@@ -311,25 +311,52 @@ the rescue image above.
 
 ## Releases and the OS download
 
+The OS ships as one minimal disk image per architecture, `bia-<arch>.img.xz`
+(`tools/mkimg.sh` → `bia-flash image`): GPT, ESP (shim, GRUB, kernel,
+initramfs, rescue image), the BIOS boot partition with GRUB core.img and
+boot.img in the MBR (x86_64), and BIAROOT holding `root.img`, only as large as
+the system needs. No FMM keys and no model. One x86_64 image boots on both UEFI
+and legacy BIOS; arm64 is UEFI only.
+
+Any image writer (Etcher, Rufus, Raspberry Pi Imager, `dd`) can put it on a
+stick as it is. Then the GPT only covers the image: on first boot `bia-grow`
+moves the backup GPT to the end of the disk (`sfdisk --relocate`), grows
+BIAROOT over the rest (`sfdisk -N`, `partx -u`) and ext4 with it. It only does
+that to a partition named BIAROOT, never to an installed BIADISK. Keys go into
+`EFI/bia/fmm.json` on the ESP by hand; without keys or a model the agent does
+not start.
+
+`bia-flash write` reads the same image (`--os-image`, or downloaded) front to
+back, xz-decoded on the fly: it writes a GPT for the whole stick (same
+partition starts as the image's), keeps the image's MBR boot code, copies the
+BIOS boot partition and BIAROOT, streams a Hugging Face model onto the end of
+BIAROOT, checks the image's SHA-256, and writes the ESP last with `fmm.json` and
+`models.txt` added. A damaged download therefore leaves the stick unbootable,
+never half-written.
+
 `tools/release.sh` publishes `v<workspace version>` on GitHub (`zond80/bia`).
 It looks at what that release already has and builds only the missing
-packages: per architecture the OS (`tools/os-bundle.py`: `root.img` in 1 GiB
-raw parts, each zstd-compressed alone, plus a `tar.zst` of the ESP tree,
-kernel, initramfs and rescue image), the Mac flasher (universal, Developer ID
-signed and notarized by `installers/macos/release.sh --universal`), and the
-Linux and Windows flashers (built in `bia-build:x86_64`, Windows with MinGW).
-Every built file is scanned for FMM keys, the Apple app password, `HF_TOKEN`
-and the home path first. `bia-os.json` lists the parts with their offsets,
-sizes and raw and compressed SHA-256; the release must be a pushed, clean
-commit. Asset names carry no version, so `releases/latest/download/<name>`
-always works (website download buttons).
+packages: per architecture the image (`tools/os-bundle.py`: `xz -6 -T0`, which
+also decodes multi-threaded), the land ISOs, the Mac flasher (universal,
+Developer ID signed and notarized by `installers/macos/release.sh
+--universal`), and the Linux and Windows flashers (built in `bia-build:x86_64`,
+Windows with MinGW). Every built file, the raw image included, is scanned for
+FMM keys, the Apple app password, `HF_TOKEN` and the home path first.
+`bia-os.json` lists each image with its download and raw size and SHA-256; the
+release must be a pushed, clean commit. Asset names carry no version, so
+`releases/latest/download/<name>` always works (website download buttons).
 
 `bia-flash` (`src/release.rs`) reads `bia-os.json` from the latest release
-(or `--os <tag>`), downloads each part with resume, checks both hashes, and
-rebuilds `root.img` in its cache (`~/Library/Caches/bia-flash`,
-`%LOCALAPPDATA%\bia-flash\cache`, `~/.cache/bia-flash`) so the next stick
-needs no download. Local `--root` / the GUI's advanced fields stay for
-developers.
+(or `--os <tag>`), downloads the `.img.xz` with resume and checks it, and keeps
+it in its cache (`~/Library/Caches/bia-flash`, `%LOCALAPPDATA%\bia-flash\cache`,
+`~/.cache/bia-flash`) so the next stick needs no download. Local builds give
+`--os-image dist/<arch>/bia-<arch>.img` (the GUI's advanced field reads
+`dist/<arch>/local-files.json`, written by `make build`).
+
+`tools/img-e2e.sh` (`make img-e2e`) tests both paths in QEMU: `MODE=flash`
+serves a local release over HTTP and has `bia-flash` write it with keys and a
+real Hugging Face model; `MODE=dd` decodes the `.img.xz` onto a bigger disk
+and adds the keys by hand. `FIRMWARE=bios` boots x86_64 under SeaBIOS.
 
 ## Land mode and the ISO
 

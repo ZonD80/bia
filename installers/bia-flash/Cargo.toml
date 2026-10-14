@@ -3,7 +3,7 @@ name = "bia-flash"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cross-platform USB stick writer for bia (GPT + ESP + BIAROOT + optional FMM keys and Hugging Face GGUF)"
+description = "Cross-platform USB stick writer for bia (bia disk image + optional FMM keys and Hugging Face GGUF)"
 default-run = "bia-flash"
 
 [[bin]]
@@ -30,8 +30,8 @@ walkdir = "2"
 sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.2"
-ruzstd = "0.8"
-tar = { version = "0.4", default-features = false }
+# xz images (bundled liblzma, multi-threaded decoding)
+liblzma = { version = "0.4", default-features = false, features = ["static", "parallel"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 eframe = { version = "0.29", optional = true, default-features = true }
 egui = { version = "0.29", optional = true }

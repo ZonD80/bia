@@ -1,9 +1,11 @@
 use crate::blockio::BlockIo;
 use crate::fmm::{fmm_config_json, FmmInput, ESP_FMM_REL};
 use crate::hf::{self, HfModel};
+use crate::image::{self, ImageReader, HEAD};
 use anyhow::{bail, Context, Result};
-use fatfs::{format_volume, Dir, FileSystem, FormatVolumeOptions, FsOptions};
-use std::fs::{self, File, OpenOptions};
+use fatfs::{Dir, FileSystem, FsOptions};
+use sha2::{Digest, Sha256};
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -21,16 +23,12 @@ pub const MODEL_HEADROOM: u64 = 512 * 1024 * 1024;
 pub struct FlashOptions {
     /// Whole-disk path (`/dev/rdiskN`, `/dev/sdb`, `\\.\PhysicalDriveN`) or a raw image file.
     pub disk: PathBuf,
-    /// Prebuilt Debian root image (`dist/$ARCH/root.img`).
-    pub root_img: PathBuf,
-    /// Directory whose `EFI/` and optional `boot/` are copied onto the ESP (typically `flash/`).
-    pub esp_src: PathBuf,
-    /// Kernel + initramfs directory (often same as root_img's parent).
-    pub kern_dir: PathBuf,
+    /// bia disk image, raw or xz (`bia-<arch>.img[.xz]`: a release download or `bia-flash image`).
+    pub image: PathBuf,
+    /// sha256 of the raw image, checked before the ESP is written (release images).
+    pub image_sha256: Option<String>,
     /// Stick capacity in bytes. Required for image files; for block devices may be 0 to probe.
     pub size_bytes: u64,
-    /// Target arch for pruning the wrong EFI stubs (`x86_64` | `arm64`).
-    pub arch: String,
     /// Optional FMM keys written to `EFI/bia/fmm.json`.
     pub fmm: Option<FmmInput>,
     /// Create the target as a sparse image file when it does not exist.
@@ -51,40 +49,37 @@ fn model_span(model: Option<&HfModel>) -> u64 {
     })
 }
 
-/// Write a bootable bia stick (or image). Erases the target GPT.
+/// Write the bia image onto a stick (or image file) with its partitions over the whole
+/// disk, then the optional model and FMM keys. Erases the target.
+///
+/// The image is read once, front to back (it may be xz): its ESP is kept in memory, the
+/// BIOS boot partition and BIAROOT are copied, and the ESP — with `fmm.json` and
+/// `models.txt` added — is written last, so an interrupted write never boots.
 pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
-    if !opts.root_img.is_file() {
-        bail!("missing root image {}", opts.root_img.display());
-    }
-    let root_bytes = fs::metadata(&opts.root_img)?.len();
-    let esp_efi = opts.esp_src.join("EFI");
-    if !esp_efi.is_dir() {
-        bail!("missing ESP tree {}/EFI", opts.esp_src.display());
-    }
-    let kern_vmlinuz = opts.kern_dir.join("vmlinuz-lts");
-    let kern_initrd = opts.kern_dir.join("initramfs-lts");
-    if !kern_vmlinuz.is_file() || !kern_initrd.is_file() {
-        bail!(
-            "missing kernel files in {} (need vmlinuz-lts + initramfs-lts)",
-            opts.kern_dir.display()
-        );
-    }
+    let mut img = ImageReader::open(&opts.image)?;
+    let mut hash = opts.image_sha256.as_ref().map(|_| Sha256::new());
+    let mut seen = |b: &[u8]| {
+        if let Some(h) = hash.as_mut() {
+            h.update(b);
+        }
+    };
+    let mut head = vec![0u8; HEAD as usize];
+    img.read_exact_at_pos(&mut head)?;
+    seen(&head);
+    let il = image::parse_layout(&head).with_context(|| format!("read {}", opts.image.display()))?;
 
     let mut size = opts.size_bytes;
     if size == 0 {
         size = probe_size(&opts.disk).context("could not determine disk size; pass --size")?;
     }
     let span = model_span(opts.model.as_ref());
-    let need = root_bytes
-        + bia_disk::BOOT_SIZE
-        + bia_disk::BIOS_SIZE
-        + 8 * bia_disk::ALIGN
-        + if span > 0 { span + MODEL_HEADROOM } else { 0 };
-    if size < need {
+    let want_root = il.root_len + if span > 0 { span + MODEL_HEADROOM } else { 0 };
+    if bia_disk::root_len(size) < want_root {
+        let need = size - bia_disk::root_len(size).min(size) + want_root;
         bail!(
-            "target too small ({} MiB); need at least {} MiB for this root.img{}",
-            size / (1024 * 1024),
-            (need + 1024 * 1024 - 1) / (1024 * 1024),
+            "target too small ({} MiB); need at least {} MiB for this system{}",
+            size >> 20,
+            need.div_ceil(1 << 20),
             if span > 0 { " and model" } else { "" }
         );
     }
@@ -94,102 +89,77 @@ pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
 
     progress("writing GPT (ESP + BIOS + BIAROOT)");
     let layout = bia_disk::write_gpt(&mut file, size)?;
-    if root_bytes > layout.root_len {
-        bail!(
-            "root.img ({} bytes) larger than BIAROOT partition ({} bytes)",
-            root_bytes,
-            layout.root_len
-        );
+    if (layout.boot_start, layout.boot_len, layout.bios_start, layout.bios_len, layout.root_start)
+        != (il.boot_start, il.boot_len, il.bios_start, il.bios_len, il.root_start)
+    {
+        bail!("the image's partitions do not match this writer's layout (newer image? update bia-flash)");
     }
     progress(&format!(
         "BIAROOT spans {} MiB; ext4 grows to fill it on first boot",
         layout.root_len >> 20
     ));
+    // MBR boot code (GRUB boot.img on x86_64) comes from the image; the partition
+    // table part of the protective MBR is the one just written for this disk.
+    let mut mbr = [0u8; 512];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut mbr).context("read MBR")?;
+    mbr[..440].copy_from_slice(&head[..440]);
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(&mbr).context("write MBR")?;
     // The ESP is written last. Until then an old boot sector here must not boot.
     file.seek(SeekFrom::Start(layout.boot_start))?;
     file.write_all(&vec![0u8; bia_disk::ALIGN as usize])?;
 
-    // The ESP is built in memory and written in one sequential pass: FAT formatting and
-    // file copies make thousands of small scattered writes, which crawl on USB sticks.
-    progress("formatting ESP (FAT32 BIABOOT)");
-    let esp_len = usize::try_from(layout.boot_len).context("ESP size")?;
-    let mut esp = io::Cursor::new(vec![0u8; esp_len]);
-    {
-        let label = *b"BIABOOT    ";
-        format_volume(
-            &mut esp,
-            FormatVolumeOptions::new()
-                .fat_type(fatfs::FatType::Fat32)
-                .volume_label(label),
-        )
-        .context("format ESP")?;
-    }
+    progress("reading the ESP from the image");
+    img.skip_to(il.boot_start, &mut seen)?;
+    let mut esp = io::Cursor::new(vec![0u8; usize::try_from(il.boot_len).context("ESP size")?]);
+    img.read_exact_at_pos(esp.get_mut())?;
+    seen(esp.get_ref());
 
-    progress("copying boot files onto ESP");
+    img.skip_to(il.bios_start, &mut seen)?;
+    let mut bios = vec![0u8; il.bios_len as usize];
+    img.read_exact_at_pos(&mut bios)?;
+    seen(&bios);
+    file.seek(SeekFrom::Start(layout.bios_start))?;
+    file.write_all(&bios).context("write BIOS boot partition")?;
+
+    img.skip_to(il.root_start, &mut seen)?;
+    progress(&format!("writing BIAROOT ({} MiB)", il.root_len >> 20));
+    file.seek(SeekFrom::Start(layout.root_start))?;
     {
-        let fs = FileSystem::new(&mut esp, FsOptions::new()).context("open FAT")?;
-        let root = fs.root_dir();
-        let mut jobs = Vec::new();
-        esp_jobs(&esp_efi, Path::new("EFI"), &mut jobs);
-        let boot_src = opts.esp_src.join("boot");
-        if boot_src.is_dir() {
-            esp_jobs(&boot_src, Path::new("boot"), &mut jobs);
+        let mut meter = Meter::new("BIAROOT".into(), il.root_len, &mut progress);
+        let mut buf = vec![0u8; 8 << 20];
+        let mut left = il.root_len;
+        while left > 0 {
+            let n = buf.len().min(left as usize);
+            img.read_exact_at_pos(&mut buf[..n])?;
+            seen(&buf[..n]);
+            file.write_all(&buf[..n]).context("write BIAROOT")?;
+            left -= n as u64;
+            meter.add(n as u64);
         }
-        jobs.push((Some(kern_vmlinuz), PathBuf::from("vmlinuz-lts")));
-        jobs.push((Some(kern_initrd), PathBuf::from("initramfs-lts")));
-        let rescue = opts.kern_dir.join("rescue.cpio.gz");
-        if rescue.is_file() {
-            jobs.push((Some(rescue), PathBuf::from("bia-rescue/rescue.cpio.gz")));
-        }
-        let total = jobs
-            .iter()
-            .filter_map(|(src, _)| src.as_ref())
-            .map(|p| fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-            .sum();
-        let mut meter = Meter::new("ESP files".into(), total, &mut progress);
-        for (src, dest) in &jobs {
-            match src {
-                Some(src) => write_fat_file(&root, dest, src, &mut meter)?,
-                None => {
-                    ensure_fat_dir(&root, dest)?;
-                }
-            }
-        }
-        prune_wrong_arch(&root, &opts.arch)?;
-        if let Some(ref fmm) = opts.fmm {
-            let bytes = fmm_config_json(fmm)?;
-            let dir = ensure_fat_dir(&root, Path::new("EFI/bia"))?;
-            let mut f = dir.create_file("fmm.json").context("create fmm.json")?;
-            f.write_all(&bytes).context("write fmm.json")?;
-            progress(&format!(
-                "wrote ESP {ESP_FMM_REL} (provider={}, model={})",
-                fmm.provider, fmm.model
-            ));
-        }
-        // drop fs to flush
     }
-    progress(&format!(
-        "writing BIAROOT ({} MiB)",
-        root_bytes / (1024 * 1024)
-    ));
-    copy_at_offset(
-        &mut file,
-        &opts.root_img,
-        layout.root_start,
-        root_bytes,
-        &mut Meter::new("BIAROOT".into(), root_bytes, &mut progress),
-    )?;
+    img.drain(&mut seen)?;
     file.sync_all().ok();
+    if let (Some(h), Some(want)) = (hash, opts.image_sha256.as_ref()) {
+        let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if !got.eq_ignore_ascii_case(want) {
+            bail!("the bia image does not match its release checksum; the stick was not made bootable (download it again)");
+        }
+        progress("image checksum ok");
+    }
 
     if let Some(model) = &opts.model {
-        let list = write_model(&mut file, &layout, root_bytes, model, opts.hf_token.as_deref(), &mut progress)?;
-        esp.set_position(0);
-        let fs = FileSystem::new(&mut esp, FsOptions::new()).context("open FAT")?;
-        let dir = ensure_fat_dir(&fs.root_dir(), Path::new("EFI/bia"))?;
-        let mut f = dir.create_file("models.txt").context("create models.txt")?;
-        f.truncate()?;
-        f.write_all(list.as_bytes()).context("write models.txt")?;
+        let list = write_model(&mut file, &layout, il.root_len, model, opts.hf_token.as_deref(), &mut progress)?;
+        add_esp_file(&mut esp, ESP_MODELS_REL, list.as_bytes())?;
         progress(&format!("wrote ESP {ESP_MODELS_REL}"));
+    }
+    if let Some(ref fmm) = opts.fmm {
+        add_esp_file(&mut esp, ESP_FMM_REL, &fmm_config_json(fmm)?)?;
+        progress(&format!(
+            "wrote ESP {ESP_FMM_REL} (provider={}, model={})",
+            fmm.provider, fmm.model
+        ));
     }
 
     progress("writing ESP");
@@ -203,20 +173,23 @@ pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
         }
     }
     file.sync_all().ok();
-
-    if opts.arch == "x86_64" {
-        let i386 = opts.esp_src.join("boot/grub/i386-pc");
-        match (std::fs::read(i386.join("boot.img")), std::fs::read(i386.join("core.img"))) {
-            (Ok(boot), Ok(core)) => {
-                progress("embedding BIOS GRUB (legacy boot)");
-                bia_disk::embed_bios_grub(&mut file, &layout, &boot, &core).context("embed BIOS GRUB")?;
-                file.sync_all().ok();
-            }
-            _ => progress("no GRUB i386-pc images; this stick boots on UEFI only"),
-        }
-    }
-
     progress("done");
+    Ok(())
+}
+
+/// Create or replace `rel` (e.g. `EFI/bia/fmm.json`) in the in-memory ESP.
+fn add_esp_file(esp: &mut io::Cursor<Vec<u8>>, rel: &str, data: &[u8]) -> Result<()> {
+    esp.set_position(0);
+    let fs = FileSystem::new(&mut *esp, FsOptions::new()).context("open ESP")?;
+    let rel = Path::new(rel);
+    let dir = match rel.parent() {
+        Some(p) if !p.as_os_str().is_empty() => ensure_fat_dir(&fs.root_dir(), p)?,
+        _ => fs.root_dir(),
+    };
+    let name = rel.file_name().and_then(|s| s.to_str()).context("file name")?;
+    let mut f = dir.create_file(name).with_context(|| format!("create {}", rel.display()))?;
+    f.truncate()?;
+    f.write_all(data).with_context(|| format!("write {}", rel.display()))?;
     Ok(())
 }
 
@@ -393,7 +366,7 @@ fn probe_size(path: &Path) -> Result<u64> {
     {
         if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
             let sys = PathBuf::from(format!("/sys/block/{name}/size"));
-            if let Ok(s) = fs::read_to_string(&sys) {
+            if let Ok(s) = std::fs::read_to_string(&sys) {
                 if let Ok(sectors) = s.trim().parse::<u64>() {
                     return Ok(sectors * 512);
                 }
@@ -433,32 +406,7 @@ fn probe_size(path: &Path) -> Result<u64> {
     Ok(len)
 }
 
-fn copy_at_offset(
-    dst: &mut BlockIo,
-    src: &Path,
-    offset: u64,
-    len: u64,
-    meter: &mut Meter,
-) -> Result<()> {
-    let path = src.display().to_string();
-    let mut src = File::open(src).with_context(|| format!("open {path}"))?;
-    dst.seek(SeekFrom::Start(offset))?;
-    let mut buf = vec![0u8; 8 * 1024 * 1024];
-    let mut left = len;
-    while left > 0 {
-        let chunk = buf.len().min(left as usize);
-        let n = src.read(&mut buf[..chunk])?;
-        if n == 0 {
-            bail!("unexpected EOF reading {path}");
-        }
-        dst.write_all(&buf[..n])?;
-        left -= n as u64;
-        meter.add(n as u64);
-    }
-    Ok(())
-}
-
-fn ensure_fat_dir<'a, IO: fatfs::ReadWriteSeek + 'a>(
+pub(crate) fn ensure_fat_dir<'a, IO: fatfs::ReadWriteSeek + 'a>(
     root: &Dir<'a, IO>,
     rel: &Path,
 ) -> Result<Dir<'a, IO>> {
@@ -478,69 +426,8 @@ fn ensure_fat_dir<'a, IO: fatfs::ReadWriteSeek + 'a>(
     Ok(cur)
 }
 
-fn write_fat_file<IO: fatfs::ReadWriteSeek>(
-    root: &Dir<'_, IO>,
-    rel: &Path,
-    src: &Path,
-    meter: &mut Meter,
-) -> Result<()> {
-    if let Some(parent) = rel.parent().filter(|p| !p.as_os_str().is_empty()) {
-        let dir = ensure_fat_dir(root, parent)?;
-        let name = rel
-            .file_name()
-            .and_then(|s| s.to_str())
-            .context("file name")?;
-        return write_fat_file_in(&dir, name, src, meter);
-    }
-    let name = rel
-        .file_name()
-        .and_then(|s| s.to_str())
-        .context("file name")?;
-    write_fat_file_in(root, name, src, meter)
-}
-
-fn write_fat_file_in<IO: fatfs::ReadWriteSeek>(
-    dir: &Dir<'_, IO>,
-    name: &str,
-    src: &Path,
-    meter: &mut Meter,
-) -> Result<()> {
-    let data = fs::read(src).with_context(|| format!("read {}", src.display()))?;
-    let mut f = dir
-        .create_file(name)
-        .with_context(|| format!("create FAT file {name}"))?;
-    for chunk in data.chunks(4 * 1024 * 1024) {
-        f.write_all(chunk)
-            .with_context(|| format!("write FAT file {name}"))?;
-        meter.add(chunk.len() as u64);
-    }
-    Ok(())
-}
-
-/// Files (`Some(src)`) and directories (`None`) of `src_dir`, mapped under `dest_rel` on the ESP.
-fn esp_jobs(src_dir: &Path, dest_rel: &Path, jobs: &mut Vec<(Option<PathBuf>, PathBuf)>) {
-    for entry in walkdir::WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let rel = path.strip_prefix(src_dir).unwrap_or(path);
-        let name = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        // Skip per-arch kernel copies that would fill the ESP (same as flash.sh).
-        if name.starts_with("vmlinuz-lts-") || name.starts_with("initramfs-lts-") {
-            continue;
-        }
-        let dest = dest_rel.join(rel);
-        if entry.file_type().is_dir() {
-            jobs.push((None, dest));
-        } else if entry.file_type().is_file() {
-            jobs.push((Some(path.to_path_buf()), dest));
-        }
-    }
-}
-
 /// Reports `what: N% (done/total MiB, speed, ETA)` every 5% or every 3 seconds.
-struct Meter<'p> {
+pub(crate) struct Meter<'p> {
     what: String,
     total: u64,
     done: u64,
@@ -550,7 +437,7 @@ struct Meter<'p> {
 }
 
 impl<'p> Meter<'p> {
-    fn new(what: String, total: u64, progress: &'p mut ProgressFn) -> Self {
+    pub(crate) fn new(what: String, total: u64, progress: &'p mut ProgressFn) -> Self {
         let now = Instant::now();
         Self {
             what,
@@ -562,7 +449,7 @@ impl<'p> Meter<'p> {
         }
     }
 
-    fn add(&mut self, n: u64) {
+    pub(crate) fn add(&mut self, n: u64) {
         let step = |d: u64| d * 20 / self.total;
         let before = step(self.done);
         self.done = (self.done + n).min(self.total);
@@ -618,52 +505,155 @@ mod progress_tests {
     }
 }
 
-fn prune_wrong_arch<IO: fatfs::ReadWriteSeek>(root: &Dir<'_, IO>, arch: &str) -> Result<()> {
-    let remove: &[&str] = match arch {
-        "arm64" | "aarch64" => &[
-            "EFI/BOOT/BOOTX64.EFI",
-            "EFI/BOOT/grubx64.efi",
-            "EFI/BOOT/mmx64.efi",
-            "EFI/debian/BOOTX64.EFI",
-            "EFI/debian/grubx64.efi",
-        ],
-        "x86_64" | "amd64" => &[
-            "EFI/BOOT/BOOTAA64.EFI",
-            "EFI/BOOT/grubaa64.efi",
-            "EFI/BOOT/mmaa64.efi",
-            "EFI/debian/BOOTAA64.EFI",
-            "EFI/debian/grubaa64.efi",
-        ],
-        _ => return Ok(()),
-    };
-    for rel in remove {
-        let path = Path::new(rel);
-        let Some(parent) = path.parent() else {
-            continue;
-        };
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if let Ok(dir) = open_existing_dir(root, parent) {
-            let _ = dir.remove(name);
-        }
-    }
-    Ok(())
-}
+#[cfg(test)]
+pub(crate) mod image_tests {
+    use super::*;
+    use crate::image::{build_image, parse_layout, raw_size, ImageSources};
+    use std::fs;
 
-fn open_existing_dir<'a, IO: fatfs::ReadWriteSeek + 'a>(
-    root: &Dir<'a, IO>,
-    rel: &Path,
-) -> Result<Dir<'a, IO>> {
-    let mut cur = root.clone();
-    for comp in rel.components() {
-        let name = comp.as_os_str().to_string_lossy();
-        if name == "." || name.is_empty() {
-            continue;
+    /// A fake local build: root.img with a byte pattern, an ESP tree with both
+    /// architectures' stubs, BIOS GRUB images and kernel files.
+    pub(crate) fn fake_build(dir: &Path) -> ImageSources {
+        let flash = dir.join("flash");
+        for d in ["EFI/BOOT", "EFI/debian", "boot/grub/i386-pc"] {
+            fs::create_dir_all(flash.join(d)).unwrap();
         }
-        cur = cur
-            .open_dir(name.as_ref())
-            .with_context(|| format!("open {}", rel.display()))?;
+        for f in ["EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/BOOTAA64.EFI", "EFI/debian/grub.cfg", "EFI/vmlinuz-lts-x86_64"] {
+            fs::write(flash.join(f), f.as_bytes()).unwrap();
+        }
+        let mut boot = vec![0u8; 512];
+        boot[0] = 0xEB;
+        boot[0x66] = 0xEB;
+        boot[0x67] = 0x05;
+        boot[0x180..0x184].copy_from_slice(b"GRUB");
+        let mut core = vec![0x11u8; 3 * 512];
+        core[500..508].copy_from_slice(&2u64.to_le_bytes());
+        core[508..510].copy_from_slice(&2u16.to_le_bytes());
+        fs::write(flash.join("boot/grub/i386-pc/boot.img"), &boot).unwrap();
+        fs::write(flash.join("boot/grub/i386-pc/core.img"), &core).unwrap();
+        let dist = dir.join("dist");
+        fs::create_dir_all(&dist).unwrap();
+        fs::write(dist.join("vmlinuz-lts"), b"kernel").unwrap();
+        fs::write(dist.join("initramfs-lts"), b"initrd").unwrap();
+        fs::write(dist.join("rescue.cpio.gz"), b"rescue").unwrap();
+        let root: Vec<u8> = (0..(5u32 << 20) + 4096).map(|i| (i % 251) as u8).collect();
+        fs::write(dist.join("root.img"), &root).unwrap();
+        ImageSources { root_img: dist.join("root.img"), esp_src: flash, kern_dir: dist, arch: "x86_64".into() }
     }
-    Ok(cur)
+
+    pub(crate) fn xz(src: &Path, dst: &Path) {
+        let stream = liblzma::stream::MtStreamBuilder::new()
+            .threads(2)
+            .block_size(1 << 20) // several blocks, as `xz -T0` writes
+            .preset(1)
+            .encoder()
+            .unwrap();
+        let mut enc = liblzma::write::XzEncoder::new_stream(File::create(dst).unwrap(), stream);
+        io::copy(&mut File::open(src).unwrap(), &mut enc).unwrap();
+        enc.finish().unwrap();
+    }
+
+    fn sha(path: &Path) -> String {
+        Sha256::digest(fs::read(path).unwrap()).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn esp_file(disk: &[u8], l: &bia_disk::Layout, rel: &str) -> Option<Vec<u8>> {
+        let esp = disk[l.boot_start as usize..(l.boot_start + l.boot_len) as usize].to_vec();
+        let fs = FileSystem::new(io::Cursor::new(esp), FsOptions::new()).unwrap();
+        let mut f = fs.root_dir().open_file(rel).ok()?;
+        let mut out = Vec::new();
+        f.read_to_end(&mut out).unwrap();
+        Some(out)
+    }
+
+    #[test]
+    fn image_builds_and_writes_over_a_bigger_stick() {
+        let dir = std::env::temp_dir().join(format!("bia-image-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let src = fake_build(&dir);
+        let img = dir.join("bia-x86_64.img");
+        let size = build_image(&src, &img, &mut (Box::new(|_: &str| {}) as ProgressFn)).unwrap();
+        assert_eq!(fs::metadata(&img).unwrap().len(), size);
+        assert_eq!(size, crate::image::min_disk_size(fs::metadata(&src.root_img).unwrap().len()));
+
+        // The image itself: a whole small disk that boots as it is (dd / Etcher).
+        let raw = fs::read(&img).unwrap();
+        let il = parse_layout(&raw[..HEAD as usize]).unwrap();
+        assert_eq!(il.boot_start, HEAD);
+        assert!(il.root_start + il.root_len <= size);
+        assert_eq!(&raw[0x180..0x184], b"GRUB", "boot.img in the MBR");
+        assert_eq!(&raw[0x66..0x68], &[0x90, 0x90], "drive check patched out");
+        assert_eq!(raw[il.bios_start as usize + 512], 0x11, "core.img in the BIOS boot partition");
+        let root = fs::read(&src.root_img).unwrap();
+        assert_eq!(&raw[il.root_start as usize..il.root_start as usize + root.len()], &root[..]);
+        assert_eq!(esp_file(&raw, &il, "EFI/BOOT/BOOTX64.EFI").unwrap(), b"EFI/BOOT/BOOTX64.EFI");
+        assert!(esp_file(&raw, &il, "EFI/BOOT/BOOTAA64.EFI").is_none(), "arm64 stub pruned");
+        assert!(esp_file(&raw, &il, "EFI/vmlinuz-lts-x86_64").is_none(), "per-arch kernel copy skipped");
+        assert_eq!(esp_file(&raw, &il, "vmlinuz-lts").unwrap(), b"kernel");
+        assert_eq!(esp_file(&raw, &il, "bia-rescue/rescue.cpio.gz").unwrap(), b"rescue");
+        assert!(esp_file(&raw, &il, "boot/grub/i386-pc/core.img").is_some());
+        assert!(esp_file(&raw, &il, "EFI/bia/fmm.json").is_none(), "no keys in the image");
+
+        // xz, as released; the raw size comes from the xz index.
+        let img_xz = dir.join("bia-x86_64.img.xz");
+        xz(&img, &img_xz);
+        assert_eq!(raw_size(&img_xz).unwrap(), size);
+        assert_eq!(raw_size(&img).unwrap(), size);
+
+        // Written by bia-flash onto a 600 MiB "stick" with keys.
+        let stick = dir.join("stick.img");
+        let stick_size = 600u64 << 20;
+        let fmm: FmmInput = serde_json::from_value(serde_json::json!({
+            "provider": "openrouter", "api_key": "sk-or-v1-test", "model": "x-ai/grok-4.6"
+        }))
+        .unwrap();
+        let opts = |image: &Path, sha: Option<String>| FlashOptions {
+            disk: stick.clone(),
+            image: image.to_path_buf(),
+            image_sha256: sha,
+            size_bytes: stick_size,
+            fmm: Some(fmm.clone()),
+            create_image: true,
+            model: None,
+            hf_token: None,
+        };
+        write_stick(opts(&img_xz, Some(sha(&img))), Box::new(|_| {})).unwrap();
+        let d = fs::read(&stick).unwrap();
+        assert_eq!(d.len() as u64, stick_size);
+        let sl = parse_layout(&d[..HEAD as usize]).unwrap();
+        assert_eq!((sl.boot_start, sl.bios_start, sl.root_start), (il.boot_start, il.bios_start, il.root_start));
+        assert_eq!(sl.root_len, bia_disk::root_len(stick_size), "BIAROOT spans the whole stick");
+        assert!(sl.root_len > il.root_len);
+        // backup GPT header at the very end of the stick
+        assert_eq!(&d[d.len() - 512..d.len() - 504], b"EFI PART");
+        assert_eq!(&d[..440], &raw[..440], "MBR boot code from the image");
+        assert_eq!(&d[510..512], &[0x55, 0xAA]);
+        assert_eq!(&d[sl.bios_start as usize..(sl.bios_start + sl.bios_len) as usize],
+                   &raw[il.bios_start as usize..(il.bios_start + il.bios_len) as usize]);
+        assert_eq!(&d[sl.root_start as usize..(sl.root_start + il.root_len) as usize],
+                   &raw[il.root_start as usize..(il.root_start + il.root_len) as usize]);
+        let keys: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/fmm.json").unwrap()).unwrap();
+        assert_eq!(keys["api_key"], "sk-or-v1-test");
+        assert_eq!(keys["enabled"], true);
+        assert_eq!(esp_file(&d, &sl, "EFI/BOOT/BOOTX64.EFI").unwrap(), b"EFI/BOOT/BOOTX64.EFI");
+
+        // A raw .img works the same; a wrong checksum leaves the stick unbootable (no ESP).
+        let err = write_stick(opts(&img, Some("00".repeat(32))), Box::new(|_| {})).unwrap_err();
+        assert!(format!("{err:#}").contains("checksum"), "{err:#}");
+        let d = fs::read(&stick).unwrap();
+        assert!(d[sl.boot_start as usize..(sl.boot_start + bia_disk::ALIGN) as usize].iter().all(|&b| b == 0));
+
+        // Too small a stick is refused before anything is written.
+        let small = FlashOptions { size_bytes: size - (4 << 20), disk: dir.join("small.img"), ..opts(&img, None) };
+        assert!(format!("{:#}", write_stick(small, Box::new(|_| {})).unwrap_err()).contains("too small"));
+        assert!(!dir.join("small.img").exists());
+
+        // A truncated download is caught by the decoder.
+        let cut = dir.join("cut.img.xz");
+        let z = fs::read(&img_xz).unwrap();
+        fs::write(&cut, &z[..z.len() / 2]).unwrap();
+        assert!(write_stick(opts(&cut, None), Box::new(|_| {})).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
 }

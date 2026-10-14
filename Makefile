@@ -20,7 +20,7 @@ MODEL ?=
 # Optional path to local FMM JSON (default: ./fmm.json or source/flash/files/state/fmm.json). Never commit keys.
 FMM ?=
 
-.PHONY: builder build rust mcps rootfs local-files image flash flasher iso run persist-root run-serial clean patch-telegram patch-whatsapp patch-mcp website-deploy website-dev run-update-prep run-update run-update-disk run-update-status update-e2e land-e2e peer-e2e bios-e2e bios-update-e2e
+.PHONY: builder build rust mcps rootfs local-files img img-e2e image flash flasher iso run persist-root run-serial clean patch-telegram patch-whatsapp patch-mcp website-deploy website-dev run-update-prep run-update run-update-disk run-update-status update-e2e land-e2e peer-e2e bios-e2e bios-update-e2e
 
 website-deploy:     ## static Nuxt site → Cloudflare Pages (production branch)
 	./website/deploy.sh
@@ -45,8 +45,14 @@ rootfs:
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) rootfs
 	tools/local-files.sh $(ARCH)
 
-local-files:        ## dist/$(ARCH)/local-files.json for the bia-flash GUI (after a build)
+local-files:        ## dist/$(ARCH)/bia-$(ARCH).img + local-files.json for the bia-flash GUI (after a build)
 	tools/local-files.sh $(ARCH)
+
+img:                ## dist/$(ARCH)/bia-$(ARCH).img: minimal disk image (release bia-<arch>.img.xz; dd/Etcher-able)
+	tools/mkimg.sh $(ARCH)
+
+img-e2e:            ## image test: ARCH, FIRMWARE=uefi|bios, MODE=flash|dd (tools/img-e2e.sh all)
+	ARCH=$(ARCH) tools/img-e2e.sh all
 
 image:              ## dist/bia.img (QEMU flash image) from dist/$(ARCH)/root.img (macOS host)
 	ARCH=$(ARCH) IMAGE_MB=$(IMAGE_MB) ROOT_MB=$(ROOT_MB) tools/mkimage.sh

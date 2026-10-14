@@ -1,10 +1,9 @@
-//! The bia OS from GitHub releases: `bia-os.json` lists, per architecture, the root
-//! image as zstd parts (1 GiB of raw image each, compressed separately) and a boot
-//! bundle (ESP tree + kernel, initramfs, rescue image). The writer downloads them with
-//! resume, checks every hash, and rebuilds `root.img` in a cache so the next stick
-//! needs no download.
+//! The bia OS from GitHub releases: `bia-os.json` lists, per architecture, the bia disk
+//! image `bia-<arch>.img.xz` (see `image.rs`) with the sha256 of the download and of the
+//! raw image. The writer downloads it with resume into a cache and decodes it while it
+//! writes the stick, so the next stick needs no download.
 //!
-//! Cache: `<cache>/bia-flash/os/<tag>/<arch>/{root.img, boot/}` (`BIA_FLASH_CACHE`
+//! Cache: `<cache>/bia-flash/os/<tag>/<arch>/bia-<arch>.img.xz` (`BIA_FLASH_CACHE`
 //! overrides `<cache>/bia-flash`).
 
 use anyhow::{bail, Context, Result};
@@ -12,7 +11,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -28,43 +27,27 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OsEntry {
-    pub root: RootImage,
-    pub boot: Asset,
+    pub image: ImageAsset,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RootImage {
-    /// Raw image size in bytes.
-    pub size: u64,
-    pub parts: Vec<RootPart>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RootPart {
+pub struct ImageAsset {
+    /// Release asset name, e.g. `bia-x86_64.img.xz`.
     pub file: String,
-    /// Where this part's raw bytes go in root.img, and how many there are.
-    pub offset: u64,
-    pub size: u64,
-    /// sha256 of the raw bytes.
-    pub sha256: String,
-    /// Compressed (downloaded) size and sha256.
-    pub zsize: u64,
-    pub zsha256: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct Asset {
-    pub file: String,
+    /// Download (xz) size and sha256.
     pub size: u64,
     pub sha256: String,
+    /// Raw image size and sha256 (checked while the stick is written).
+    pub raw_size: u64,
+    pub raw_sha256: String,
 }
 
-/// What the writer needs: the root image and the tree for both `--esp` and `--kern`.
+/// A downloaded release image, ready for `write_stick`.
 #[derive(Debug, Clone)]
-pub struct OsFiles {
+pub struct OsImage {
     pub tag: String,
-    pub root_img: PathBuf,
-    pub boot_dir: PathBuf,
+    pub path: PathBuf,
+    pub raw_sha256: String,
 }
 
 fn agent() -> ureq::Agent {
@@ -118,107 +101,48 @@ pub fn cache_root() -> PathBuf {
     std::env::temp_dir().join("bia-flash")
 }
 
-/// Bytes still to download for `arch` of this release (0 = all cached).
-pub fn missing_bytes(m: &Manifest, arch: &str) -> u64 {
-    let Some(e) = m.os.get(arch) else { return 0 };
-    let dir = cache_root().join("os").join(&m.tag).join(arch);
-    if dir.join(".complete").is_file() {
-        return 0;
-    }
-    let parts: u64 = e
-        .root
-        .parts
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| !dir.join(format!(".part-{i}.ok")).is_file())
-        .map(|(_, p)| p.zsize)
-        .sum();
-    let boot = if dir.join(".boot.ok").is_file() { 0 } else { e.boot.size };
-    parts + boot
+fn cache_dir(m: &Manifest, arch: &str) -> PathBuf {
+    cache_root().join("os").join(&m.tag).join(arch)
 }
 
-/// Download (or reuse) the OS for `arch` from release `m`.
-pub fn fetch(m: &Manifest, arch: &str, progress: &mut dyn FnMut(&str)) -> Result<OsFiles> {
+/// Bytes still to download for `arch` of this release (0 = cached).
+pub fn missing_bytes(m: &Manifest, arch: &str) -> u64 {
+    let Some(e) = m.os.get(arch) else { return 0 };
+    let dir = cache_dir(m, arch);
+    if dir.join(".complete").is_file() && dir.join(&e.image.file).is_file() {
+        return 0;
+    }
+    let have = fs::metadata(dir.join(format!("{}.download", e.image.file))).map_or(0, |m| m.len());
+    e.image.size.saturating_sub(have)
+}
+
+/// Download (or reuse) the bia image for `arch` from release `m`.
+pub fn fetch(m: &Manifest, arch: &str, progress: &mut dyn FnMut(&str)) -> Result<OsImage> {
     let entry = m
         .os
         .get(arch)
         .with_context(|| format!("release {} has no {arch} OS (has: {})", m.tag, arches(m).join(", ")))?;
-    let dir = cache_root().join("os").join(&m.tag).join(arch);
+    let name = &entry.image.file;
+    if name.contains(['/', '\\']) || name.starts_with('.') {
+        bail!("{MANIFEST}: bad file name {name:?}");
+    }
+    let dir = cache_dir(m, arch);
     fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
-    let files = OsFiles { tag: m.tag.clone(), root_img: dir.join("root.img"), boot_dir: dir.join("boot") };
-    if dir.join(".complete").is_file() && files.root_img.is_file() && files.boot_dir.is_dir() {
+    let out = OsImage { tag: m.tag.clone(), path: dir.join(name), raw_sha256: entry.image.raw_sha256.clone() };
+    if dir.join(".complete").is_file() && out.path.is_file() {
         progress(&format!("bia OS {} ({arch}) is already downloaded", m.tag));
-        return Ok(files);
+        return Ok(out);
     }
-    let base = base_url(&m.tag);
-
-    // root.img: each part decompresses into its own range of the image.
-    let mut root = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&files.root_img)
-        .context("create root.img")?;
-    root.set_len(entry.root.size).context("size root.img")?;
-    let n = entry.root.parts.len();
-    for (i, part) in entry.root.parts.iter().enumerate() {
-        let ok = dir.join(format!(".part-{i}.ok"));
-        if ok.is_file() {
-            continue;
-        }
-        if part.offset + part.size > entry.root.size {
-            bail!("{}: part {i} lies outside the image", MANIFEST);
-        }
-        let what = format!("system part {}/{n}", i + 1);
-        let z = dir.join(format!("{}.download", part.file));
-        download(&format!("{base}/{}", part.file), &z, part.zsize, &part.zsha256, &what, progress)?;
-        progress(&format!("unpacking {what}"));
-        root.seek(SeekFrom::Start(part.offset))?;
-        let mut dec = ruzstd::decoding::StreamingDecoder::new(File::open(&z)?).context("zstd")?;
-        let mut hash = Sha256::new();
-        let mut buf = vec![0u8; 4 << 20];
-        let mut got = 0u64;
-        loop {
-            let k = dec.read(&mut buf).with_context(|| format!("decompress {}", part.file))?;
-            if k == 0 {
-                break;
-            }
-            if got + k as u64 > part.size {
-                bail!("{}: more data than the manifest says", part.file);
-            }
-            root.write_all(&buf[..k])?;
-            hash.update(&buf[..k]);
-            got += k as u64;
-        }
-        if got != part.size || !hex(&hash.finalize()).eq_ignore_ascii_case(&part.sha256) {
-            bail!("{}: unpacked data does not match the release (got {got} bytes)", part.file);
-        }
-        root.sync_all().ok();
-        File::create(&ok)?;
-        let _ = fs::remove_file(&z);
-    }
-    drop(root);
-
-    // boot bundle: ESP tree + kernel files.
-    if !dir.join(".boot.ok").is_file() || !files.boot_dir.is_dir() {
-        let z = dir.join(format!("{}.download", entry.boot.file));
-        download(&format!("{base}/{}", entry.boot.file), &z, entry.boot.size, &entry.boot.sha256, "boot files", progress)?;
-        let _ = fs::remove_dir_all(&files.boot_dir);
-        fs::create_dir_all(&files.boot_dir)?;
-        let dec = ruzstd::decoding::StreamingDecoder::new(File::open(&z)?).context("zstd")?;
-        // unpack() keeps every entry inside boot_dir (no absolute paths or "..").
-        tar::Archive::new(dec).unpack(&files.boot_dir).context("unpack boot files")?;
-        for need in ["EFI", "vmlinuz-lts", "initramfs-lts"] {
-            if !files.boot_dir.join(need).exists() {
-                bail!("boot files have no {need}");
-            }
-        }
-        File::create(dir.join(".boot.ok"))?;
-        let _ = fs::remove_file(&z);
-    }
+    // Older writers cached root.img and boot files here; they are not used any more.
+    let _ = fs::remove_file(dir.join("root.img"));
+    let _ = fs::remove_dir_all(dir.join("boot"));
+    let part = dir.join(format!("{name}.download"));
+    let url = format!("{}/{name}", base_url(&m.tag));
+    download(&url, &part, entry.image.size, &entry.image.sha256, &format!("bia {arch} image"), progress)?;
+    fs::rename(&part, &out.path)?;
     File::create(dir.join(".complete"))?;
     progress(&format!("bia OS {} ({arch}) ready in {}", m.tag, dir.display()));
-    Ok(files)
+    Ok(out)
 }
 
 /// Download `url` into `path`, resuming a partial file; check size and sha256.
@@ -301,4 +225,111 @@ fn download(url: &str, path: &Path, size: u64, sha256: &str, what: &str, progres
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+
+    /// Serves files from `dir` over HTTP with Range support; `cut` makes the first answer
+    /// for the image stop half way (a dropped connection) so the download must resume.
+    fn serve(dir: PathBuf, cut: bool) -> String {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut first = cut;
+            for s in l.incoming() {
+                let mut s = s.unwrap();
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut line = String::new();
+                r.read_line(&mut line).unwrap();
+                let path = line.split_whitespace().nth(1).unwrap_or("/").trim_start_matches('/').to_string();
+                let mut from = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if r.read_line(&mut h).unwrap() == 0 || h.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        from = v.trim().trim_end_matches('-').parse().unwrap();
+                    }
+                }
+                let Ok(data) = fs::read(dir.join(&path)) else {
+                    let _ = s.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    continue;
+                };
+                let body = &data[from..];
+                let status = if from > 0 { "206 Partial Content" } else { "200 OK" };
+                let _ = write!(s, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                if first && path.ends_with(".xz") {
+                    first = false;
+                    let _ = s.write_all(&body[..body.len() / 2]);
+                    continue; // drop the connection
+                }
+                let _ = s.write_all(body);
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn downloads_resumes_and_writes_a_release() {
+        let dir = std::env::temp_dir().join(format!("bia-release-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let rel = dir.join("release");
+        fs::create_dir_all(&rel).unwrap();
+        let src = crate::write::image_tests::fake_build(&dir);
+        let img = dir.join("bia-x86_64.img");
+        crate::image::build_image(&src, &img, &mut (Box::new(|_: &str| {}) as crate::ProgressFn)).unwrap();
+        crate::write::image_tests::xz(&img, &rel.join("bia-x86_64.img.xz"));
+        let sum = |p: &Path| hex(&Sha256::digest(fs::read(p).unwrap()));
+        let listing = serde_json::json!({
+            "version": "9.9.9", "tag": "v9.9.9",
+            "os": { "x86_64": { "image": {
+                "file": "bia-x86_64.img.xz",
+                "size": fs::metadata(rel.join("bia-x86_64.img.xz")).unwrap().len(),
+                "sha256": sum(&rel.join("bia-x86_64.img.xz")),
+                "raw_size": fs::metadata(&img).unwrap().len(),
+                "raw_sha256": sum(&img),
+            }}}
+        });
+        fs::write(rel.join(MANIFEST), listing.to_string()).unwrap();
+
+        // Only this test touches these variables.
+        std::env::set_var("BIA_RELEASE_URL", serve(rel.clone(), true));
+        std::env::set_var("BIA_FLASH_CACHE", dir.join("cache"));
+        let m = manifest("latest").unwrap();
+        assert_eq!(m.tag, "v9.9.9");
+        assert_eq!(missing_bytes(&m, "x86_64"), m.os["x86_64"].image.size);
+        let mut log = Vec::new();
+        let got = fetch(&m, "x86_64", &mut |s| log.push(s.to_string())).unwrap();
+        assert!(log.iter().any(|l| l.contains("retrying")), "the dropped connection was resumed: {log:?}");
+        assert_eq!(missing_bytes(&m, "x86_64"), 0);
+        assert_eq!(fs::read(&got.path).unwrap(), fs::read(rel.join("bia-x86_64.img.xz")).unwrap());
+        assert!(fetch(&m, "x86_64", &mut |_| {}).is_ok(), "cached");
+        assert!(fetch(&m, "arm64", &mut |_| {}).is_err());
+
+        let stick = dir.join("stick.img");
+        crate::write_stick(
+            crate::FlashOptions {
+                disk: stick.clone(),
+                image: got.path,
+                image_sha256: Some(got.raw_sha256),
+                size_bytes: 400 << 20,
+                fmm: None,
+                create_image: true,
+                model: None,
+                hf_token: None,
+            },
+            Box::new(|_| {}),
+        )
+        .unwrap();
+        let d = fs::read(&stick).unwrap();
+        assert_eq!(&d[512..520], b"EFI PART");
+        std::env::remove_var("BIA_RELEASE_URL");
+        std::env::remove_var("BIA_FLASH_CACHE");
+        fs::remove_dir_all(&dir).ok();
+    }
 }

@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
 """Package the bia OS of one architecture for a GitHub release (tools/release.sh).
 
-  tools/os-bundle.py <arch> <out-dir> [--secrets FILE]
+  tools/os-bundle.py <arch> <out-dir> [--secrets FILE] [--level N]
 
-Reads dist/<arch>/{root.img, vmlinuz-lts, initramfs-lts, rescue.cpio.gz} and the
-architecture's files from source/flash/{EFI,boot}. Writes into <out-dir>:
+Builds the minimal bia disk image dist/<arch>/bia-<arch>.img (tools/mkimg.sh: GPT, ESP,
+BIOS GRUB on x86_64, BIAROOT; no keys, no model) and writes into <out-dir>:
 
-  bia-root-<arch>.NNN.zst   root.img in 1 GiB raw parts, each zstd-compressed alone
-  bia-boot-<arch>.tar.zst   ESP tree + kernel, initramfs, rescue image
-  os-<arch>.json            this architecture's entry for bia-os.json
+  bia-<arch>.img.xz   the image, xz -T0 (Etcher, Rufus, Raspberry Pi Imager and dd write
+                      it as it is; bia-flash writes it over the whole stick with keys and
+                      a model)
+  os-<arch>.json      this architecture's entry for bia-os.json
 
 --secrets FILE: one byte string per line that must not appear in anything shipped
-(API keys, passwords, home paths); the raw files are scanned before compression.
-The writer (installers/bia-flash/src/release.rs) reverses this.
+(API keys, passwords, home paths); the raw image is scanned before compression.
+The writer (installers/bia-flash/src/release.rs) downloads and checks it.
 """
-import argparse, hashlib, io, json, os, subprocess, sys, tarfile
+import argparse, hashlib, json, os, subprocess, sys
 
-PART = 1 << 30
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def zstd(data: bytes) -> bytes:
-    r = subprocess.run(["zstd", "-q", "-19", "-T0", "-c"], input=data, capture_output=True)
-    if r.returncode:
-        sys.exit(f"zstd failed: {r.stderr.decode(errors='replace')}")
-    return r.stdout
+GITHUB_LIMIT = 2 << 30
 
 
 def scan(path, needles):
@@ -45,34 +39,12 @@ def scan(path, needles):
             tail = buf[-keep:]
 
 
-def boot_files(arch):
-    """(archive name, source path) for this arch's ESP tree and kernel files."""
-    flash, dist = f"{ROOT}/source/flash", f"{ROOT}/dist/{arch}"
-    other = ("aa64",) if arch == "x86_64" else ("x64",)
-    out = []
-    for top, dirs, files in os.walk(f"{flash}/EFI"):
-        dirs.sort()
-        for n in sorted(files):
-            rel = os.path.relpath(os.path.join(top, n), flash)
-            low = n.lower()
-            if rel.count("/") == 1 and (low.startswith("vmlinuz-lts") or low.startswith("initramfs-lts")):
-                continue  # per-arch kernel copies from the build; the ESP boots /vmlinuz-lts
-            if any(o in low for o in other):
-                continue
-            out.append((rel, os.path.join(top, n)))
-    for top, dirs, files in os.walk(f"{flash}/boot"):
-        dirs.sort()
-        if arch != "x86_64" and "i386-pc" in top.split(os.sep):
-            continue  # BIOS GRUB is x86 only
-        for n in sorted(files):
-            out.append((os.path.relpath(os.path.join(top, n), flash), os.path.join(top, n)))
-    for n in ("vmlinuz-lts", "initramfs-lts", "rescue.cpio.gz"):
-        p = f"{dist}/{n}"
-        if os.path.isfile(p):
-            out.append((n, p))
-        elif n != "rescue.cpio.gz":
-            sys.exit(f"missing {p} — make ARCH={arch} build first")
-    return out
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(16 << 20):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def main():
@@ -80,65 +52,36 @@ def main():
     ap.add_argument("arch", choices=["x86_64", "arm64"])
     ap.add_argument("out")
     ap.add_argument("--secrets")
+    ap.add_argument("--level", default="6", help="xz preset (default 6)")
     a = ap.parse_args()
     needles = []
     if a.secrets:
         needles = [l.strip().encode() for l in open(a.secrets) if len(l.strip()) >= 8]
     os.makedirs(a.out, exist_ok=True)
-    root_img = f"{ROOT}/dist/{a.arch}/root.img"
-    if not os.path.isfile(root_img):
-        sys.exit(f"missing {root_img} — make ARCH={a.arch} build first")
 
-    files = boot_files(a.arch)
-    print(f"== {a.arch}: scanning {len(files) + 1} files for secrets", flush=True)
-    scan(root_img, needles)
-    for _, p in files:
-        scan(p, needles)
+    img = f"{ROOT}/dist/{a.arch}/bia-{a.arch}.img"
+    subprocess.run([f"{ROOT}/tools/mkimg.sh", a.arch], check=True, env={**os.environ, "OUT": img})
+    print(f"== {a.arch}: scanning the image for secrets", flush=True)
+    scan(img, needles)
 
-    size = os.path.getsize(root_img)
-    parts = []
-    with open(root_img, "rb") as f:
-        i = 0
-        while True:
-            raw = f.read(PART)
-            if not raw:
-                break
-            name = f"bia-root-{a.arch}.{i:03d}.zst"
-            print(f"== {name}: compressing {len(raw) >> 20} MiB", flush=True)
-            z = zstd(raw)
-            with open(f"{a.out}/{name}", "wb") as o:
-                o.write(z)
-            parts.append({
-                "file": name, "offset": i * PART, "size": len(raw),
-                "sha256": hashlib.sha256(raw).hexdigest(),
-                "zsize": len(z), "zsha256": hashlib.sha256(z).hexdigest(),
-            })
-            print(f"   {len(z) >> 20} MiB", flush=True)
-            i += 1
+    name = f"bia-{a.arch}.img.xz"
+    xz = f"{a.out}/{name}"
+    raw_size = os.path.getsize(img)
+    print(f"== {name}: compressing {raw_size >> 20} MiB with xz -{a.level} -T0", flush=True)
+    with open(xz + ".tmp", "wb") as o:
+        subprocess.run(["xz", f"-{a.level}", "-T0", "-c", img], stdout=o, check=True)
+    os.replace(xz + ".tmp", xz)
+    size = os.path.getsize(xz)
+    if size >= GITHUB_LIMIT:
+        sys.exit(f"{xz} is {size >> 20} MiB, over GitHub's 2 GiB file limit")
+    print(f"   {size >> 20} MiB", flush=True)
 
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w", format=tarfile.PAX_FORMAT) as t:
-        for rel, p in files:
-            info = t.gettarinfo(p, arcname=rel)
-            info.uid = info.gid = 0
-            info.uname = info.gname = ""
-            info.mtime = 0
-            info.mode = 0o644
-            with open(p, "rb") as fh:
-                t.addfile(info, fh)
-    bz = zstd(buf.getvalue())
-    boot = f"bia-boot-{a.arch}.tar.zst"
-    with open(f"{a.out}/{boot}", "wb") as o:
-        o.write(bz)
-    print(f"== {boot}: {len(files)} files, {len(bz) >> 20} MiB", flush=True)
-
-    entry = {
-        "root": {"size": size, "parts": parts},
-        "boot": {"file": boot, "size": len(bz), "sha256": hashlib.sha256(bz).hexdigest()},
-    }
+    entry = {"image": {
+        "file": name, "size": size, "sha256": sha256(xz),
+        "raw_size": raw_size, "raw_sha256": sha256(img),
+    }}
     with open(f"{a.out}/os-{a.arch}.json", "w") as o:
         json.dump(entry, o, indent=2)
-    print(f"== {a.arch}: {len(parts)} parts, {sum(p['zsize'] for p in parts) >> 20} MiB to download", flush=True)
 
 
 if __name__ == "__main__":

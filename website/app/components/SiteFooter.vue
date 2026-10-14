@@ -31,10 +31,12 @@
         <NuxtLink to="/why-bia">Why bia</NuxtLink>
         <NuxtLink to="/faq">FAQ</NuxtLink>
         <NuxtLink to="/download">Get bia</NuxtLink>
+        <NuxtLink to="/servers">Servers and VMs</NuxtLink>
+        <a :href="REPO_URL" target="_blank" rel="noopener">Source code on GitHub</a>
       </nav>
     </div>
     <div class="container foot__base">
-      <span>bia is free software (GPL-3.0). Use it kindly: tell people when they are talking to an assistant.</span>
+      <span>bia is free software (GPL-3.0): <a :href="REPO_URL" target="_blank" rel="noopener">{{ REPO_URL.replace('https://', '') }}</a>. Use it kindly: tell people when they are talking to an assistant.</span>
     </div>
   </footer>
 </template>
@@ -98,6 +100,9 @@ const byGroup = (g: Feature['group']) => features.filter((f) => f.group === g)
   text-decoration: none;
 }
 .foot__col a:hover {
+  color: #fff;
+}
+.foot__base a {
   color: #fff;
 }
 .foot__base {

@@ -453,7 +453,7 @@ export const features: Feature[] = [
       'bia lives on a USB stick. Plug it into almost any PC or laptop, switch it on, and instead of the usual desktop you meet bia. Old laptops gathering dust, office PCs, tiny mini-computers — every “potato” can become smart.',
     points: [
       { title: 'From a stick, in minutes', text: 'Write bia onto a USB stick with a simple app for Mac, Windows or Linux. Boot a computer from it, and bia is alive.' },
-      { title: 'Old and new machines', text: 'Works on ordinary Intel and AMD PCs and on ARM computers, new and old, with modern or classic startup — and on computers with Secure Boot switched on.' },
+      { title: 'Old and new machines', text: 'Works on ordinary Intel and AMD PCs, new and old, with modern or classic start-up and with Secure Boot switched on — and on ARM computers that start the standard (UEFI) way. You make the stick for the kind of computer you have.' },
       { title: 'Next to Windows, or alone', text: 'Keep it on the stick, move it onto the computer’s own disk, or install it beside Windows and choose at startup.' },
       { title: 'No desktop needed', text: 'bia does not need a screen or keyboard once it runs — talk to it from your phone. A computer in a cupboard is enough.' },
     ],
@@ -494,9 +494,10 @@ export const features: Feature[] = [
       'Upgrade to a faster computer without setting anything up again.',
       'Keep a backup of bia on a drive in a drawer — a full “resurrection” if anything happens.',
       'Move a shop’s assistant from the old till PC to a new one over lunch.',
+      'Swap an old Intel laptop for a quiet ARM mini-PC: make an ARM stick for the mini-PC, start it, and bia flies over with everything it knows.',
     ],
     good_to_know:
-      'A backup contains private things (passwords, chats). Store it as carefully as you would store the computer itself.',
+      'A backup contains private things (passwords, chats). Store it as carefully as you would store the computer itself. When bia moves, the new computer needs the internet, so bia can reinstall its extra programs for that machine.',
     related: ['updates', 'any-computer', 'memory'],
   },
   {
@@ -592,7 +593,7 @@ export const features: Feature[] = [
     points: [
       { title: 'Your data at home', text: 'Conversations, memories, passwords, messenger accounts and the browser profile all live on bia’s own disk.' },
       { title: 'Locked doors', text: 'The private web app only opens for people and agents holding a key that bia itself issued — and you can withdraw a key at any time.' },
-      { title: 'Verified start', text: 'bia starts with the same signed components as mainstream Linux, so it works with Secure Boot switched on.' },
+      { title: 'Verified start', text: 'On ordinary PCs, bia starts with the same signed components as mainstream Linux, so it works with Secure Boot switched on.' },
       { title: 'Offline, if you need it', text: 'As an option, on a powerful computer (at least 64 GB of video memory), the brain on the stick lets bia think without any connection to the outside world at all.' },
     ],
     chat: [

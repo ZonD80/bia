@@ -16,6 +16,7 @@ const prerenderRoutes = [
   '/why-bia',
   '/faq',
   '/download',
+  '/servers',
 ]
 
 // Old addresses keep working.
