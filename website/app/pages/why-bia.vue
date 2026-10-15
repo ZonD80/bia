@@ -5,12 +5,13 @@
         <nav class="crumbs" aria-label="Breadcrumb">
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Why bia</span>
         </nav>
-        <span class="eyebrow">Not another chat box</span>
+        <span class="eyebrow">Not an app on your PC</span>
         <h1>Why bia is different from the AI you know</h1>
         <p class="section-lead">
-          Today’s AI assistants are clever, but they live in someone else’s website and vanish when you close the
-          tab. bia is built the other way around: a mind with its own computer, its own social life, and the
-          judgement to know when to ask.
+          Today’s AI assistants move into your computer: they read your files, act with your accounts, work inside
+          restrictions you cannot change — and whatever they can reach can one day leak. bia is built the other way
+          around: a separate mind, like a person, with its own computer, its own files and accounts, its own social
+          life and connections — and the judgement to know when to ask.
         </p>
       </div>
     </section>
@@ -79,11 +80,15 @@
 useSeoMeta({
   title: 'Why bia is different from typical AI assistants',
   description:
-    'How bia differs from chat-box AI: its own computer, a real social presence on WhatsApp and Telegram, memory that lasts, background work, moving between computers and self-repair.',
+    'How bia differs from AI assistants that live inside your PC: a separate mind with its own computer, files and accounts, a real social presence on WhatsApp and Telegram, memory that lasts, background work, moving between computers and self-repair.',
 })
 
 const compare = [
-  { topic: 'Where it lives', them: 'In a company’s website or app', bia: 'On a computer you own — even an old one' },
+  { topic: 'Where it lives', them: 'Inside your PC, or in a company’s app', bia: 'On its own computer, separate from yours — even an old one' },
+  { topic: 'Your files', them: 'Can read whatever your account can', bia: 'Never touches your PC — it has its own files, and gets only what you send it' },
+  { topic: 'Identity', them: 'Acts as you, with your logins', bia: 'Its own name, accounts, phone numbers, contacts and friends' },
+  { topic: 'Rules', them: 'Boxed in by a vendor’s sandbox and policies', bia: 'Owns its whole machine; the limits are the ones you set' },
+  { topic: 'If something leaks', them: 'Your files and accounts go with it', bia: 'Only what bia itself holds — your own PC was never in reach' },
   { topic: 'How people reach it', them: 'You go to its app', bia: 'It comes to WhatsApp, Telegram, calls — where people already are' },
   { topic: 'Memory', them: 'Forgets when the chat ends', bia: 'Keeps a diary and reflections across days, restarts and moves' },
   { topic: 'Doing things', them: 'Talks about what it would do', bia: 'Uses a real computer, browser and screen to actually do it' },

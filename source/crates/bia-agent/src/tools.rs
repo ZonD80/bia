@@ -717,6 +717,10 @@ pub struct Tools {
     pub buses: crate::buses::Buses,
     pub schedules: Arc<Mutex<crate::schedules::Store>>,
     pub jobs: Arc<Mutex<crate::jobs::Store>>,
+    /// telegram/whatsapp sends, edits, reactions and deletes (per-chat queues, local o<n> ids)
+    pub outbox: crate::outbox::Outbox,
+    /// sends cut short by the last shutdown; main delivers them as notices
+    pub outbox_lost: Vec<crate::console::Inbound>,
     /// set when a model-facing MCP call was fired this batch (REPL stops tool rounds)
     pub fired_job: std::cell::Cell<bool>,
     /// Last human inbound this turn: (identity, channel). `say` defaults to these.
@@ -814,6 +818,7 @@ impl Tools {
             &state.join("schedules.json"),
         )));
         crate::schedules::start(schedules.clone(), con.clone());
+        let (outbox, outbox_lost) = crate::outbox::Outbox::load(&state, con.clone());
         let mut t = Tools {
             specs: vec![],
             kinds: vec![],
@@ -834,6 +839,8 @@ impl Tools {
             buses: crate::buses::Buses::load(&state.join("buses.json")),
             schedules,
             jobs: Arc::new(Mutex::new(crate::jobs::Store::load(&state))),
+            outbox,
+            outbox_lost,
             fired_job: std::cell::Cell::new(false),
             reply_to: std::cell::RefCell::new(None),
             unanswered: crate::unanswered::Set::load(&state),
@@ -864,7 +871,7 @@ impl Tools {
                 "cwd": {"type": "string", "description": "working directory (default /home/bia)"},
                 "timeout_secs": {"type": "integer", "description": "kill after this many seconds (default 600, 0 = no limit)"}
             }), &["command"]));
-        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). Reply on the channel of the inbound envelope, copied exactly (web:<chat> is not web; physical screen → console, telegram:<id>, whatsapp:<phone>). Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
+        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (web:<chat> is not web; physical screen → console, telegram:<id>, whatsapp:<phone>). Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
             obj(json!({
                 "identity": {"type": "string", "description": "recipient identity, e.g. root; defaults to last human inbound"},
                 "channel": {"type": "string", "description": "channel, e.g. web, web:<chat> or console; defaults to last human inbound"},
@@ -873,6 +880,7 @@ impl Tools {
                 "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram or whatsapp; only when the user asks for a voice reply"},
                 "reply_to": {"type": "string", "description": "web: id of the message to quote"},
                 "edit": {"type": "string", "description": "id of a message you sent (from its say result): replace its text with message instead of sending a new one (web, telegram, whatsapp)"},
+                "cancel": {"type": "string", "description": "telegram/whatsapp: local id o<n> of a send that is still queued or uploading; stops it and sends nothing else"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"},
                 "files": {"type": "array", "items": {"type": "string"}, "description": "attachments: paths under /home/bia/files (web, telegram, whatsapp)"},
                 "buttons": {"type": "array", "description": "web: inline keyboard, rows of buttons; a button is a string or {text, data, url}", "items": {"type": "array", "items": {}}},
@@ -1872,6 +1880,12 @@ impl Tools {
             };
         }
         if name == "say" {
+            if let Some(id) = args.get("cancel").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()) {
+                return match self.outbox.cancel(id) {
+                    Ok(s) => (s, false),
+                    Err(e) => (format!("error: {e}"), true),
+                };
+            }
             let (_, channel) = self.target(args);
             let blank = |k: &str| match args.get(k) {
                 None | Some(Value::Null) => true,
@@ -2650,8 +2664,9 @@ impl Tools {
                 }
             }
             "list_jobs" => {
-                let st = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
-                Ok(st.format_list())
+                let list = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).format_list();
+                let sends = self.outbox.brief();
+                Ok(if sends.is_empty() { list } else { format!("{list}\nsends in flight (say cancel=<id> stops one):\n{sends}") })
             }
             "job_logs" => {
                 let id = s("id").unwrap_or_default();
@@ -2803,7 +2818,13 @@ impl Tools {
                     .map_err(|e| anyhow::anyhow!(e))?;
                 format!("voice message id {id}")
             } else if let Some((mcp, chat)) = channel.split_once(':').filter(|(b, _)| *b == "telegram" || *b == "whatsapp") {
-                self.bus_mcp(mcp, "send_voice", json!({"chat_id": chat, "text": message, "lang": lang}))?
+                let what = format!("voice message, {} chars", message.chars().count());
+                let out = self.outbox_submit(mcp, chat, crate::outbox::Op::Voice { text: message.clone(), lang }, 0, &what, crate::outbox::WAIT)?;
+                match out {
+                    crate::outbox::Outcome::Done(id, Ok(t)) => format!("id {id}; {t}"),
+                    crate::outbox::Outcome::Done(_, Err(e)) => bail!("{e}"),
+                    crate::outbox::Outcome::Pending(id, ahead) => pending_note(&id, &what, ahead),
+                }
             } else {
                 bail!("voice messages go to web, telegram or whatsapp chats, not {channel}");
             };
@@ -2861,7 +2882,9 @@ impl Tools {
         if crate::webchat::is_web(channel) {
             crate::webchat::agent_edit(identity, channel, id, message).map_err(|e| anyhow::anyhow!(e))?;
         } else if let Some((mcp, chat)) = channel.split_once(':').filter(|(b, _)| *b == "telegram" || *b == "whatsapp") {
-            self.bus_mcp(mcp, "edit", json!({"chat_id": chat, "message_id": id, "text": message}))?;
+            let r = self.outbox_action(mcp, chat, crate::outbox::Op::Edit { id: id.into(), text: message.into() })?;
+            self.con.write(&format!("\n{} {tag} ✎ {id}: {message}\n", self.con.c(BCYAN, "<-")));
+            return Ok(format!("edit of {id} on {identity}@{channel}: {r}"));
         } else {
             bail!("messages can be edited on web, telegram or whatsapp chats, not {channel}");
         }
@@ -2882,31 +2905,57 @@ impl Tools {
         );
     }
 
-    /// Run one function of a messaging MCP (telegram/whatsapp), loading it if needed.
-    fn bus_mcp(&mut self, mcp: &str, tool: &str, args: Value) -> Result<String> {
+    /// Queue an outgoing op on a telegram/whatsapp chat and wait up to `wait` (see outbox.rs).
+    fn outbox_submit(&mut self, mcp: &str, chat: &str, op: crate::outbox::Op, bytes: u64, what: &str, wait: std::time::Duration) -> Result<crate::outbox::Outcome> {
         let _ = self.load(mcp);
         let idx = self
             .server_index(mcp)
             .ok_or_else(|| anyhow::anyhow!("{mcp} MCP is not running"))?;
         self.loaded.insert(idx);
-        let (text, err) = self.mcp_invoke(idx, tool, args, &mut |_| {});
-        if err {
-            bail!("{text}");
-        }
-        Ok(text)
+        self.servers[idx].ensure_alive()?;
+        let link = self.servers[idx].link();
+        Ok(self.outbox.submit(&format!("{mcp}:{chat}"), chat, op, link, bytes, what, wait))
     }
 
-    /// Shared path for telegram:/whatsapp: channels: speak on active call if any, else text.
+    /// Edit/react/delete on a telegram/whatsapp chat, in order after earlier sends there.
+    fn outbox_action(&mut self, mcp: &str, chat: &str, op: crate::outbox::Op) -> Result<String> {
+        match self.outbox_submit(mcp, chat, op, 0, "", crate::outbox::WAIT)? {
+            crate::outbox::Outcome::Done(_, Ok(t)) => Ok(t),
+            crate::outbox::Outcome::Done(_, Err(e)) => bail!("{e}"),
+            crate::outbox::Outcome::Pending(_, ahead) => Ok(format!(
+                "queued behind {ahead} earlier send(s) on {mcp}:{chat}; it runs when they finish (a failure arrives as system|outbox)"
+            )),
+        }
+    }
+
+    /// Bytes and a short description of attachments (paths as the MCPs resolve them).
+    fn attachments(&self, message: &str, files: &[String]) -> (u64, String) {
+        let bytes: u64 = files
+            .iter()
+            .map(|f| {
+                let p = Path::new(f);
+                let p = if p.is_absolute() { p.to_path_buf() } else { self.files_dir.join(f.trim_start_matches('/')) };
+                std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+            })
+            .sum();
+        let mut what = vec![];
+        if !message.trim().is_empty() {
+            what.push(format!("text, {} chars", message.chars().count()));
+        }
+        if !files.is_empty() {
+            what.push(format!("{} file(s), {}", files.len(), human(bytes)));
+        }
+        (bytes, what.join(" + "))
+    }
+
+    /// Shared path for telegram:/whatsapp: channels: speak on active call if any, then send the text
+    /// through the outbox.
     fn send_on_mcp_bus(&mut self, mcp: &str, chat: &str, message: &str, files: &[String], lang: &str) -> Result<String> {
         let _ = self.load(mcp);
         let idx = self
             .server_index(mcp)
             .ok_or_else(|| anyhow::anyhow!("{mcp} MCP is not running"))?;
         self.loaded.insert(idx);
-        let mut send = json!({"chat_id": chat, "text": message});
-        if !files.is_empty() {
-            send["files"] = json!(files);
-        }
         // Speak it too when a call is active; "no active call" is the normal case.
         let not_spoken = if message.trim().is_empty() {
             Some(String::new())
@@ -2923,7 +2972,15 @@ impl Tools {
                 (true, false) => Some(said),
             }
         };
-        let (text, err) = self.mcp_invoke(idx, "send", send, &mut |_| {});
+        let (bytes, what) = self.attachments(message, files);
+        let wait = if bytes >= crate::outbox::BIG_BYTES { std::time::Duration::ZERO } else { crate::outbox::WAIT };
+        let op = crate::outbox::Op::Send { text: message.into(), files: files.to_vec() };
+        let (text, err) = match self.outbox_submit(mcp, chat, op, bytes, &what, wait) {
+            Ok(crate::outbox::Outcome::Done(id, Ok(t))) => (format!("id {id}; {t}"), false),
+            Ok(crate::outbox::Outcome::Done(_, Err(e))) => (e, true),
+            Ok(crate::outbox::Outcome::Pending(id, ahead)) => (pending_note(&id, &what, ahead), false),
+            Err(e) => (format!("{e:#}"), true),
+        };
         match not_spoken {
             None => {
                 if err {
@@ -2973,11 +3030,7 @@ impl Tools {
                     e(crate::webchat::agent_react(&identity, &channel, &id, &emoji)
                         .map(|_| format!("reacted {emoji} on {id}")))
                 } else if let Some((mcp, chat)) = bus {
-                    self.bus_mcp(
-                        mcp,
-                        "react",
-                        json!({"chat_id": chat, "message_id": id, "emoji": emoji}),
-                    )
+                    self.outbox_action(mcp, chat, crate::outbox::Op::React { id, emoji })
                 } else {
                     bail!("cannot react on {channel}")
                 }
@@ -2992,11 +3045,7 @@ impl Tools {
                         .map(|n| format!("deleted {n} message(s)")))
                 } else if let Some((mcp, chat)) = bus {
                     let revoke = args.get("revoke").and_then(|v| v.as_bool()).unwrap_or(false);
-                    self.bus_mcp(
-                        mcp,
-                        "delete_messages",
-                        json!({"chat_id": chat, "message_ids": ids, "revoke": revoke}),
-                    )
+                    self.outbox_action(mcp, chat, crate::outbox::Op::Delete { ids, revoke })
                 } else {
                     bail!("cannot delete messages on {channel}")
                 }
@@ -3048,6 +3097,15 @@ impl Tools {
             let _ = self.mcp_invoke(idx, "typing", json!({"chat_id": id, "on": on}), &mut |_| {});
         }
     }
+}
+
+/// say result for a send that is still queued or uploading.
+fn pending_note(id: &str, what: &str, ahead: usize) -> String {
+    let ahead = if ahead > 0 { format!(", after {ahead} earlier send(s) to this chat") } else { String::new() };
+    format!(
+        "queued as {id} ({what}{ahead}); NOT delivered yet: [sent {id} → …] with the platform ids or [send failed {id} …] follows. \
+         Use {id} as the message id for edit, react or delete_messages now — they wait for it. say(cancel=\"{id}\") stops it"
+    )
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {

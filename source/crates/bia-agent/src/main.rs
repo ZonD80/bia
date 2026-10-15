@@ -14,6 +14,7 @@ mod jobs;
 mod llama_srv;
 mod llm;
 mod mcp;
+mod outbox;
 mod memory;
 mod openapi;
 mod remote;
@@ -685,6 +686,13 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .fail_running_lost();
         if !lost.is_empty() {
             boot.note(&format!("{} job(s) lost on reboot", lost.len()));
+            repl.pending.extend(lost);
+        }
+    }
+    {
+        let lost = std::mem::take(&mut repl.tools.outbox_lost);
+        if !lost.is_empty() {
+            boot.note(&format!("{} telegram/whatsapp send(s) cut short on reboot", lost.len()));
             repl.pending.extend(lost);
         }
     }

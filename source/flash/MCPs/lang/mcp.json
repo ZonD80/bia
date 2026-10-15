@@ -1,6 +1,6 @@
 {
   "name": "lang",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Languages you hear and speak, on this machine (no cloud). Speech is transcribed with per-phrase language detection ([speech ru] \u2026 [en] \u2026); voices speak each language. lang_install(lang) learns a language: downloads its verified voice and enables it (do it without asking when [new language heard: \u2026] arrives or someone speaks or asks for a language; tell them you are learning it first). lang_list shows what is learned; lang_catalog(query) lists languages (~99 heard, ~42 spoken) and voices; lang_voice picks a voice; lang_preview makes a sample to send; lang_default sets the default language; lang_disable stops a language and its new-language notices; lang_remove deletes it (ask first). lang_transcribe(file) transcribes any recording; lang_synthesize(text, lang) makes an audio file. lang_settings: noise suppression, pause splitting, hallucination filter, discovery, echo filter, speaker check, and the Whisper model for calls and voice notes. lang_enroll saves a voice print for the opt-in speaker check.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-lang",

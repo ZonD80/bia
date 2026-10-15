@@ -213,7 +213,7 @@ fn main() {
                 if text.is_empty() && files.is_empty() {
                     return Err("text or files required".into());
                 }
-                Wa::global().send(chat, text, &files)
+                Wa::global().send_cancellable(chat, text, &files, &|| ctx.cancelled())
             },
         )
         .tool(

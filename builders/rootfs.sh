@@ -116,6 +116,8 @@ in_chroot apt-get install -y --no-install-recommends \
   xserver-xorg-core xserver-xorg-input-libinput xauth x11-xserver-utils x11-utils \
   xdotool scrot \
   openbox tint2 x11vnc novnc kitty fonts-dejavu-core fonts-noto-color-emoji fontconfig \
+  fonts-noto-cjk fonts-noto-core \
+  fcitx5 fcitx5-pinyin fcitx5-hangul dbus-daemon \
   libvulkan1 mesa-vulkan-drivers \
   libgomp1 libssl3 libstdc++6 libopus0 \
   ffmpeg

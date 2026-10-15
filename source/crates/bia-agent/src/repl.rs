@@ -1640,6 +1640,8 @@ impl Repl {
     /// Queued messages ride with tool/job results so the model sees them in the same turn.
     fn deliver_ready(&mut self, with_queued: bool) -> usize {
         self.collect_inbound();
+        // Not counted: a finished background send alone is no reason for another round.
+        self.record_outbox_notes();
         let jobs = std::mem::take(&mut self.job_ready);
         let n_jobs = jobs.len();
         for ib in &jobs {
@@ -1764,6 +1766,19 @@ impl Repl {
         self.push_history(Msg::user(env));
     }
 
+    /// Background sends that finished since the last look ([sent o17 → …]), as one quiet
+    /// `system|outbox` line. Failures come as normal inbound and wake the model instead.
+    fn record_outbox_notes(&mut self) {
+        let notes = self.tools.outbox.take_notes();
+        if notes.is_empty() {
+            return;
+        }
+        let text = notes.join("\n");
+        let env = envelope(ID_SYSTEM, crate::outbox::CH_OUTBOX, crate::clock::now(), &crate::console::mint_msg_id(), &text);
+        self.log("system", &text);
+        self.push_history(Msg::user(env));
+    }
+
     /// Queue a `system|console|…` message for the model (answered at the next turn).
     pub fn system_message(&mut self, text: &str) {
         let env = envelope(
@@ -1816,6 +1831,7 @@ impl Repl {
     }
 
     fn turn_inner(&mut self, messages: Vec<Inbound>) {
+        self.record_outbox_notes();
         for ib in &messages {
             self.record_inbound(ib);
         }

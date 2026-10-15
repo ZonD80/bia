@@ -101,10 +101,15 @@
       </div>
     </section>
 
-    <section class="section section--tint">
+    <section id="other-ways" class="section section--tint other-ways">
       <div class="container">
         <h2 class="h2">Other ways</h2>
-        <div class="grid grid--2">
+        <div class="grid grid--3">
+          <div class="card">
+            <h3>Try it on your Mac</h3>
+            <p>No stick needed: <a href="https://github.com/ZonD80/clawhome" target="_blank" rel="noopener">ClawHome</a> runs bia in a virtual machine on an Apple Silicon Mac (macOS 13 or later). Create a Linux home, sign in to a cloud AI or paste a key, and ClawHome fetches the latest bia for you.</p>
+            <p><a href="https://github.com/ZonD80/clawhome/releases" target="_blank" rel="noopener">Get ClawHome</a></p>
+          </div>
           <div class="card">
             <h3>Servers and virtual machines</h3>
             <p>For servers, cloud machines and virtual machines, or computers you set up in bulk: start from the installer image, connect to a network, and the computer installs bia on its disk and waits for its mind to “fly” over from another bia.</p>
@@ -166,4 +171,5 @@ function buttonText(host: Host): string {
 .kinds p { margin: 0; }
 .kinds ul { margin: 0.75rem 0; padding-left: 1.2rem; }
 .kinds li + li { margin-top: 0.4rem; }
+.other-ways { scroll-margin-top: 4.5rem; }
 </style>

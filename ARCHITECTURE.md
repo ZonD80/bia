@@ -77,6 +77,18 @@ run resumes from the `.part` file. Without a list it only grows the ext4.
    window running `bia-agent`. Without X or kitty it execs the agent on the
    text console directly.
 
+   Scripts in the kitty window come from DejaVu, Noto Color Emoji, Noto CJK
+   and Noto core, in that fontconfig fallback order. Typing goes through
+   fcitx5, which runs on a private session bus (`/run/bia/session-bus`) and
+   which kitty reaches over the IBus protocol. Ctrl+Space switches between
+   the keyboard, pinyin and hangul. Ctrl+Shift+U opens kitty's emoji picker.
+   The fcitx5 defaults are in `/usr/local/share/bia/fcitx5/`.
+
+   Three limits remain. The kernel text console (the fallback, and tty2) only
+   shows what its 512-glyph font holds, so there is no CJK there. kitty does
+   not shape Indic conjuncts. Right-to-left text is drawn without bidi
+   reordering.
+
 ## The agent (`source/crates/bia-agent`)
 
 One Rust binary, dynamically linked against glibc. Main modules:
@@ -91,6 +103,7 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `remote.rs` | FMM: streaming tool-calling client for chat completions (OpenRouter, OpenAI, xAI, DeepSeek, Qwen/DashScope), Anthropic Messages, and the Responses API for a ChatGPT plan (token refresh/rotation) |
 | `mcp.rs` | MCP client over stdio, discovery of `/home/bia/MCPs/*/mcp.json`, `boot_tool` |
 | `jobs.rs`, `bash.rs` | every MCP call and shell command is a job; results return as `system|job:<id>|…` envelopes; PTY shells as root or `bia` |
+| `outbox.rs` | telegram/whatsapp sends, edits, reactions and deletes: per-chat FIFO worker threads, local `o<n>` ids mapped to platform ids |
 | `memory.rs` | append-only journal + time-ranged categorized reflections (`/reflect`) |
 | `schedules.rs` | calendar of tasks/reminders, delivered as `system|schedule` with catch-up after boot |
 | `state.rs` | `files/state/conversation.json` (fsynced, `.bak` fallback) |
@@ -131,6 +144,19 @@ identity|channel|issued|delivered|id|message
 
 The model replies with tool calls; `say(identity, channel, message)` sends to a
 channel and returns at once. Plain text is the final answer for the console.
+
+On telegram and whatsapp, `say` goes through the outbox. Each send gets a
+local id `o<n>` (`files/state/outbox.json`) and joins its chat's queue, which
+one worker thread runs in order; different chats run in parallel. `say` waits
+up to 5 s (not at all for 8 MB or more of attachments). In time, it returns
+the platform message ids as before. Otherwise it returns `queued as o<n>`,
+and the agent goes on. The outcome comes later: `[sent o<n> → …]` is added
+quietly to the next turn, while `[send failed o<n> …]` arrives as
+`system|outbox` and starts a turn. Edits, reactions and deletes use the same
+queue, so they can name `o<n>` (or `o<n>.2` for the second message of a
+multi-file send) before it is delivered. `say(cancel=o<n>)` drops a queued
+send or abandons an upload. A send cut off by a restart is reported as
+`[send lost o<n> …]` at boot.
 
 ### Tools and discovery
 

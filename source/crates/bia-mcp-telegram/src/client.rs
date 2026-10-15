@@ -920,9 +920,14 @@ impl Tg {
     }
 
     pub fn send(&self, target: &str, text: &str, files: &[String]) -> Result<String, String> {
+        self.send_cancellable(target, text, files, &|| false)
+    }
+
+    /// `send` that stops (dropping an upload in progress) once `cancelled` turns true.
+    pub fn send_cancellable(&self, target: &str, text: &str, files: &[String], cancelled: &dyn Fn() -> bool) -> Result<String, String> {
         let client = self.require_ready()?;
         let (chat_id, title, username) = self.resolve_target(target)?;
-        self.block_on(async {
+        let work = async {
             if files.is_empty() {
                 let m = client
                     .send_message(chat_id, InputMessage::text(text))
@@ -967,6 +972,12 @@ impl Tg {
                 (v, f) => format!("{v} voice message(s) and {f} file(s)"),
             };
             Ok(format!("sent {what}{} → {}", id_note(&ids), Self::format_chat(chat_id, &title, &username)))
+        };
+        self.block_on(async {
+            tokio::select! {
+                r = work => r,
+                _ = until_cancelled(cancelled) => Err("cancelled; messages already sent stay".into()),
+            }
         })
     }
 
@@ -2291,6 +2302,13 @@ fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str) {
 }
 
 /// `, message id N` (or `ids N, M`) for a send result; empty when Telegram returned no id.
+/// Resolves once `cancelled` turns true (checked every 250 ms).
+pub(crate) async fn until_cancelled(cancelled: &dyn Fn() -> bool) {
+    while !cancelled() {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
 fn id_note(ids: &[i32]) -> String {
     let ids: Vec<String> = ids.iter().filter(|i| **i > 0).map(|i| i.to_string()).collect();
     if ids.is_empty() {

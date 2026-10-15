@@ -589,7 +589,7 @@ export const features: Feature[] = [
     icon: 'shield',
     tagline: 'Your chats, keys and memories live on your machine — locked, signed and yours.',
     lead:
-      'Most assistants keep your life on someone else’s servers. bia keeps it on a computer you own: in your home, your shop, your bag. Its private app is locked with keys only you hand out, and the system it runs on is verified from the very first moment it starts.',
+      'Most assistants live inside your own computer, or keep your life on someone else’s servers. bia lives on a separate computer of its own: in your home, your shop, your bag. Its private app is locked with keys only you hand out, and the system it runs on is verified from the very first moment it starts.',
     points: [
       { title: 'Your data at home', text: 'Conversations, memories, passwords, messenger accounts and the browser profile all live on bia’s own disk.' },
       { title: 'Locked doors', text: 'The private web app only opens for people and agents holding a key that bia itself issued — and you can withdraw a key at any time.' },

@@ -1662,10 +1662,24 @@ impl Wa {
     }
 
     pub fn send(&self, target: &str, text: &str, files: &[String]) -> Result<String, String> {
+        self.send_cancellable(target, text, files, &|| false)
+    }
+
+    /// `send` that stops (dropping an upload in progress) once `cancelled` turns true.
+    pub fn send_cancellable(&self, target: &str, text: &str, files: &[String], cancelled: &dyn Fn() -> bool) -> Result<String, String> {
         let client = self.require_ready()?;
         let t = self.resolve_target(target)?;
         self.note_chat(&t.key, &t.jid, None, now_secs());
-        self.block_on(self.send_async(&client, &t, text, files))
+        self.block_on(async {
+            tokio::select! {
+                r = self.send_async(&client, &t, text, files) => r,
+                _ = async {
+                    while !cancelled() {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                } => Err("cancelled; messages already sent stay".into()),
+            }
+        })
     }
 
     /// Send a map pin (with name/address it shows as a place).

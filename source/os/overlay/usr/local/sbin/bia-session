@@ -8,6 +8,9 @@ AGENT=/usr/local/sbin/bia-agent
 export DISPLAY=:0
 export XAUTHORITY=/run/bia/Xauthority
 export LANG=C.UTF-8
+# systemd sets no HOME for a root unit; fcitx5 aborts without one and kitty
+# finds the IBus address file under it.
+export HOME="${HOME:-/root}"
 
 if ! command -v Xorg >/dev/null 2>&1 || ! command -v kitty >/dev/null 2>&1; then
   exec "$AGENT"
@@ -111,6 +114,31 @@ if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
     -bg -o /var/log/x11vnc.bia.log
 fi
 
+# Input methods: fcitx5 (keyboard, pinyin, hangul; Ctrl+Space switches). kitty talks
+# to it over the IBus protocol, which fcitx5 serves on a session bus. Emoji: kitty's
+# Ctrl+Shift+U picker, or pinyin candidates.
+if command -v fcitx5 >/dev/null 2>&1 && command -v dbus-daemon >/dev/null 2>&1; then
+  bus=/run/bia/session-bus
+  if ! pgrep -f "dbus-daemon.*$bus" >/dev/null 2>&1; then
+    rm -f "$bus"
+    dbus-daemon --session --fork --address="unix:path=$bus" >/dev/null 2>&1 || true
+  fi
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$bus"
+  # Defaults only: a later change from fcitx5 itself is kept.
+  install -d -m 700 /root/.config/fcitx5
+  cp -Rn /usr/local/share/bia/fcitx5/. /root/.config/fcitx5/
+  if ! pgrep -x fcitx5 >/dev/null 2>&1; then
+    fcitx5 -d >/var/log/fcitx5.bia.log 2>&1 || true
+  fi
+  # kitty reads the IBus address once at start; fcitx5 writes it a moment after -d returns.
+  i=0
+  while [ "$i" -lt 50 ] && ! ls "$HOME"/.config/ibus/bus/*-unix-0 >/dev/null 2>&1; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  export GLFW_IM_MODULE=ibus XMODIFIERS=@im=fcitx GTK_IM_MODULE=fcitx QT_IM_MODULE=fcitx
+fi
+
 export BIA_GUI=1
 export BIA_SYSTEM=1
 exec kitty --class bia-console --title console \
@@ -121,4 +149,5 @@ exec kitty --class bia-console --title console \
   --override initial_window_height=32c \
   --override font_size=16 \
   --override font_family="DejaVu Sans Mono" \
+  --override 'map=ctrl+shift+u kitten unicode_input --tab emoticons' \
   "$AGENT"

@@ -184,6 +184,25 @@ fn winsize(fd: i32) -> (u16, u16) {
 }
 
 impl Console {
+    /// No outputs, no readers, no status thread: for unit tests.
+    #[cfg(test)]
+    pub fn for_test() -> Arc<Console> {
+        let (tx, rx) = channel::<Inbound>();
+        Arc::new(Console {
+            outs: Mutex::new(vec![]),
+            rx: Mutex::new(rx),
+            tx,
+            held: Mutex::new(VecDeque::new()),
+            journal: Mutex::new(None),
+            devices: vec![],
+            color: false,
+            status: Mutex::new(StatusData::default()),
+            last_drawn: Mutex::new(vec![]),
+            recent: Mutex::new(VecDeque::new()),
+            next_id: Mutex::new(0),
+        })
+    }
+
     pub fn open(init_mode: bool) -> Arc<Console> {
         let (tx, rx) = channel::<Inbound>();
         let mut outs: Vec<Out> = vec![];
@@ -208,6 +227,7 @@ impl Console {
                         web_identity: None,
                     });
                     if let Ok(r) = OpenOptions::new().read(true).open(&dev) {
+                        set_iutf8(r.as_raw_fd());
                         spawn_reader(r, tx.clone(), dev.clone());
                     }
                     devices.push(dev);
@@ -227,6 +247,9 @@ impl Console {
                 web: false,
                 web_identity: None,
             });
+            if tty {
+                set_iutf8(0);
+            }
             spawn_reader(std::io::stdin(), tx.clone(), "stdin".into());
             devices.push("stdio".into());
         }
@@ -864,16 +887,40 @@ fn cpu_frac() -> f32 {
     busy
 }
 
-fn fit(s: &str, cols: usize) -> String {
-    let n = s.chars().count();
-    if n > cols {
-        s.chars().take(cols.saturating_sub(1)).collect::<String>() + "…"
-    } else {
-        s.to_string()
+/// Cooked-mode line editing knows UTF-8: Backspace erases a whole character, not one byte.
+fn set_iutf8(fd: i32) {
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut t) == 0 && t.c_iflag & libc::IUTF8 == 0 {
+            t.c_iflag |= libc::IUTF8;
+            libc::tcsetattr(fd, libc::TCSANOW, &t);
+        }
     }
 }
 
-/// Pad/truncate a string containing ANSI sequences to `cols` visible characters.
+/// Terminal cells a character takes: 2 for CJK and emoji, 0 for combining marks.
+fn cells(c: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
+}
+
+fn fit(s: &str, cols: usize) -> String {
+    if s.chars().map(cells).sum::<usize>() <= cols {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = cells(c);
+        if used + w + 1 > cols {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    out + "…"
+}
+
+/// Pad/truncate a string containing ANSI sequences to `cols` terminal cells.
 fn fit_ansi(s: &str, cols: usize) -> String {
     let mut out = String::new();
     let mut visible = 0;
@@ -889,11 +936,12 @@ fn fit_ansi(s: &str, cols: usize) -> String {
             }
             continue;
         }
-        if visible >= cols {
+        let w = cells(c);
+        if visible + w > cols {
             break;
         }
         out.push(c);
-        visible += 1;
+        visible += w;
     }
     out.push_str(&" ".repeat(cols.saturating_sub(visible)));
     out
@@ -905,8 +953,10 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(r: R, tx: Sender<Inbound>, na
         .spawn(move || {
             let mut br = BufReader::new(r);
             loop {
-                let mut line = String::new();
-                match br.read_line(&mut line) {
+                // Bytes, not read_line: one invalid UTF-8 sequence (a half-erased character on a
+                // terminal without IUTF8, a Latin-1 serial client) must not drop the whole line.
+                let mut buf = Vec::new();
+                match br.read_until(b'\n', &mut buf) {
                     Ok(0) => {
                         if name == "stdin" {
                             let _ = tx.send(Inbound::console("/exit"));
@@ -915,6 +965,7 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(r: R, tx: Sender<Inbound>, na
                         std::thread::sleep(Duration::from_millis(500));
                     }
                     Ok(_) => {
+                        let line = String::from_utf8_lossy(&buf);
                         let l = line.trim_end_matches(['\n', '\r']).to_string();
                         if tx.send(Inbound::console(l)).is_err() {
                             return;
@@ -1054,5 +1105,27 @@ mod journal_tests {
         con2.journal_done("2");
         assert!(Console::open(false).open_journal(path).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    #[test]
+    fn fit_counts_terminal_cells() {
+        assert_eq!(fit("abc", 5), "abc");
+        // 中文 is 4 cells: fits in 4, not in 3
+        assert_eq!(fit("中文", 4), "中文");
+        assert_eq!(fit("中文", 3), "中…");
+        assert_eq!(fit("😀😀😀", 5), "😀😀…");
+    }
+
+    #[test]
+    fn fit_ansi_pads_wide_chars_to_cells() {
+        let s = fit_ansi("\x1b[1m中\x1b[0mx", 5);
+        assert_eq!(s, "\x1b[1m中\x1b[0mx  ");
+        // a wide char that would straddle the edge is dropped, the cell padded
+        assert_eq!(fit_ansi("ab中", 3), "ab ");
     }
 }

@@ -1,6 +1,6 @@
 {
   "name": "system",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Use a cloud model, get the web link, or ask the human for help. system_fmm_configure turns on a cloud model. Pass api_key; provider is detected from the key and model defaults to the provider's, so pass them only when the user names them. system_fmm_disable goes back to the local model. system_web_console returns the web address with a login code. system_share_file returns a download link for a file under /home/bia/files. Send that link with say. system_ask_human asks the person to finish a captcha or a login. system_pki_requests lists certificate requests from other agents; system_pki_approve / system_pki_deny decide one, only after root answers. Disks, network, and apt-get are bash, not tools here.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-system",

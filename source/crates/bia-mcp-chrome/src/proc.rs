@@ -149,6 +149,12 @@ fn spawn(bin: &Path) -> Result<u32, String> {
         .env("XAUTHORITY", home.join(".Xauthority"))
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("LANG", "C.UTF-8")
+        // root's session bus and fcitx5 settings from bia-session are not this user's
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("GLFW_IM_MODULE")
+        .env_remove("GTK_IM_MODULE")
+        .env_remove("QT_IM_MODULE")
+        .env_remove("XMODIFIERS")
         .stdin(Stdio::null());
     if let Ok(f) = fs::OpenOptions::new().create(true).append(true).open(&log) {
         if let Ok(err) = f.try_clone() {

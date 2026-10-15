@@ -7,7 +7,9 @@ use std::ffi::CString;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -110,14 +112,94 @@ struct Shared {
     con: Arc<Console>,
 }
 
+/// A handle other threads use to call the server (the outbox). Cheap to clone.
+#[derive(Clone)]
+pub struct McpLink {
+    stdin: Arc<Mutex<ChildStdin>>,
+    next_id: Arc<AtomicU64>,
+    shared: Arc<Shared>,
+}
+
+/// The current link of a server; respawn swaps the link inside, so queued work reaches the new process.
+pub type LinkSlot = Arc<Mutex<McpLink>>;
+
+impl McpLink {
+    fn send(&self, v: &Value) -> Result<()> {
+        let mut w = self.stdin.lock().unwrap_or_else(|e| e.into_inner());
+        writeln!(w, "{v}").context("mcp write")?;
+        w.flush().context("mcp flush")
+    }
+
+    /// Send tools/call. The response arrives on the receiver, which disconnects when the server exits.
+    pub fn start(&self, tool: &str, args: Value) -> Result<(u64, Receiver<Value>)> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = channel();
+        self.shared.pending.lock().unwrap().insert(id, Pending::Sync(tx));
+        if let Err(e) = self.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool, "arguments": args}})) {
+            self.shared.pending.lock().unwrap().remove(&id);
+            return Err(e);
+        }
+        Ok((id, rx))
+    }
+
+    /// Stop waiting for a call and ask the server to cancel it (a worker thread may wait
+    /// briefly for another write to finish).
+    pub fn abandon(&self, jsonrpc_id: u64) -> bool {
+        self.shared.pending.lock().unwrap().remove(&jsonrpc_id);
+        for _ in 0..20 {
+            if let Some(ok) = try_cancel_on(&self.stdin, jsonrpc_id) {
+                return ok;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
+    }
+}
+
+/// (text, is_error) of a tools/call response line.
+pub fn call_result(v: &Value) -> (String, bool) {
+    if let Some(e) = v.get("error") {
+        return (e.get("message").and_then(|m| m.as_str()).unwrap_or("error").to_string(), true);
+    }
+    parse_tool_result(v.get("result").unwrap_or(&Value::Null))
+}
+
+/// Ask the server to cancel a call without ever blocking: a stuck server that stopped
+/// reading stdin must not freeze the agent. The line is under PIPE_BUF, so it is
+/// written whole or not at all. None while another thread is writing: O_NONBLOCK on the
+/// shared fd must not leak into its write.
+fn try_cancel_on(stdin: &Mutex<ChildStdin>, jsonrpc_id: u64) -> Option<bool> {
+    let w = match stdin.try_lock() {
+        Ok(w) => w,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return None,
+    };
+    let fd = w.as_raw_fd();
+    let line = format!(
+        "{}\n",
+        json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": jsonrpc_id}})
+    );
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 {
+            return Some(false);
+        }
+        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        let n = libc::write(fd, line.as_ptr() as *const libc::c_void, line.len());
+        libc::fcntl(fd, libc::F_SETFL, flags);
+        Some(n == line.len() as isize)
+    }
+}
+
 pub struct McpServer {
     pub name: String,
     pub version: String,
     pub dir: PathBuf,
     child: Child,
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     shared: Arc<Shared>,
-    next_id: u64,
+    next_id: Arc<AtomicU64>,
+    slot: LinkSlot,
     spec: SpawnSpec,
     started: SystemTime,
 }
@@ -194,6 +276,8 @@ impl McpServer {
                     };
                     dispatch(&sh, v);
                 }
+                // Server gone: waiters see a disconnect instead of waiting out their timeout.
+                sh.pending.lock().unwrap().retain(|_, p| !matches!(p, Pending::Sync(_)));
             })?;
         let spec = SpawnSpec {
             dir: dir.into(),
@@ -204,6 +288,13 @@ impl McpServer {
             con: con.clone(),
             jobs,
         };
+        let stdin = Arc::new(Mutex::new(stdin));
+        let next_id = Arc::new(AtomicU64::new(1));
+        let slot = Arc::new(Mutex::new(McpLink {
+            stdin: stdin.clone(),
+            next_id: next_id.clone(),
+            shared: shared.clone(),
+        }));
         let mut s = McpServer {
             name: m.name.clone(),
             version: m.version.clone(),
@@ -211,7 +302,8 @@ impl McpServer {
             child,
             stdin,
             shared,
-            next_id: 1,
+            next_id,
+            slot,
             spec,
             started: SystemTime::now(),
         };
@@ -240,8 +332,14 @@ impl McpServer {
     }
 
     fn send(&mut self, v: &Value) -> Result<()> {
-        writeln!(self.stdin, "{v}").context("mcp write")?;
-        self.stdin.flush().context("mcp flush")
+        let mut w = self.stdin.lock().unwrap_or_else(|e| e.into_inner());
+        writeln!(w, "{v}").context("mcp write")?;
+        w.flush().context("mcp flush")
+    }
+
+    /// Link for calls made from other threads; stays valid across respawn.
+    pub fn link(&self) -> LinkSlot {
+        self.slot.clone()
     }
 
     fn notify(&mut self, method: &str, params: Value) -> Result<()> {
@@ -249,8 +347,7 @@ impl McpServer {
     }
 
     fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = channel();
         self.shared
             .pending
@@ -319,8 +416,7 @@ impl McpServer {
 
     /// Fire tools/call without waiting. Result completes the job on the stdout thread.
     pub fn fire(&mut self, tool: &str, args: Value, job_id: &str) -> Result<u64> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         self.shared
             .pending
             .lock()
@@ -330,26 +426,9 @@ impl McpServer {
         Ok(id)
     }
 
-    /// Ask the server to cancel a call without ever blocking: a stuck server that stopped
-    /// reading stdin must not freeze the agent. The line is under PIPE_BUF, so it is
-    /// written whole or not at all.
+    /// Ask the server to cancel a call without blocking (see try_cancel_fd).
     pub fn try_cancel(&mut self, jsonrpc_id: u64) -> bool {
-        use std::os::unix::io::AsRawFd;
-        let line = format!(
-            "{}\n",
-            json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": jsonrpc_id}})
-        );
-        let fd = self.stdin.as_raw_fd();
-        unsafe {
-            let flags = libc::fcntl(fd, libc::F_GETFL);
-            if flags < 0 {
-                return false;
-            }
-            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-            let n = libc::write(fd, line.as_ptr() as *const libc::c_void, line.len());
-            libc::fcntl(fd, libc::F_SETFL, flags);
-            n == line.len() as isize
-        }
+        try_cancel_on(&self.stdin, jsonrpc_id).unwrap_or(false)
     }
 
     pub fn alive(&mut self) -> bool {
@@ -388,6 +467,10 @@ impl McpServer {
         if let Some(bt) = spec.manifest.boot_tool.clone() {
             let _ = new.call(&bt, json!({}), &mut |_| {});
         }
+        // Keep the slot others hold; point it at the new process.
+        let fresh = new.slot.lock().unwrap().clone();
+        *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = fresh;
+        new.slot = self.slot.clone();
         *self = new;
         Ok(())
     }

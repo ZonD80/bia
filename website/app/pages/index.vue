@@ -7,7 +7,7 @@
           <span class="eyebrow">Boot into agent</span>
           <h1>Turn anything into <em>someone</em>.</h1>
           <p class="hero__lead">
-            bia is a computer that wakes up as a helpful mind. It answers your family on WhatsApp,
+            bia is a separate mind with a computer of its own. It answers your family on WhatsApp,
             understands about a hundred languages on calls, remembers what matters, uses the web and its own
             computer — and when it is time, it moves to a new machine as the same personality.
           </p>
@@ -31,11 +31,13 @@
     <section class="section">
       <div class="container">
         <span class="eyebrow">What is bia?</span>
-        <h2 class="section-title">Not an app you open. A presence that stays.</h2>
+        <h2 class="section-title">Not a program on your PC. A separate someone.</h2>
         <p class="section-lead">
-          Most AI assistants live inside a website and forget you when the tab closes. bia lives on its own
-          computer, in your home or office. It has its own accounts, its own memory and its own sense of time —
-          so it keeps working, keeps its promises, and keeps showing up for the people around you.
+          Most AI assistants move into your computer. They read your files, act with your accounts, work inside
+          limits someone else set — and whatever they can reach, they can one day leak. bia is the opposite: a
+          separate mind, like a person you work with. It has its own computer, its own files, its own accounts and
+          contacts, its own social life. You share what you choose, the way you would with a colleague — and your
+          own PC stays yours.
         </p>
         <div class="grid grid--3 what">
           <div class="card">
@@ -50,8 +52,8 @@
           </div>
           <div class="card">
             <AppIcon name="move" size="2rem" class="what__ico" />
-            <h3>It belongs to you</h3>
-            <p>Your chats and memories live on your machine. It moves with you to new computers and updates itself without forgetting a thing.</p>
+            <h3>It has a life of its own</h3>
+            <p>Its own machine, files, memories and connections — never the keys to yours. It moves to new computers and updates itself without forgetting a thing.</p>
           </div>
         </div>
       </div>
@@ -193,7 +195,7 @@ import { useCaseGroups } from '~/data/usecases'
 useSeoMeta({
   title: 'bia — turn anything into someone',
   description:
-    'bia turns any computer into a helpful mind that lives on WhatsApp and Telegram, answers calls in 100 languages, remembers, keeps time, uses the web — and moves between computers as the same personality.',
+    'bia is a separate mind with its own computer, files and accounts — not an assistant inside your PC. It lives on WhatsApp and Telegram, answers calls in 100 languages, remembers, keeps time, uses the web — and moves between computers as the same personality.',
 })
 
 const byGroup = (g: string) => features.filter((f) => f.group === (g as Feature['group']))
@@ -203,7 +205,7 @@ const totalCases = useCaseGroups.reduce((n, g) => n + g.cases.length, 0)
 const day = [
   { time: '07:00', what: 'bia checks the weather and tells the family group to take umbrellas.', feature: 'calendar' },
   { time: '07:40', what: 'A guest from Brazil sends a voice message in Portuguese. bia has never heard Portuguese — it learns it on the spot and answers in her language.', feature: 'languages' },
-  { time: '09:15', what: 'Lena’s mother calls bia on WhatsApp to ask whether she took her pill. bia gently reminds her.', feature: 'voice' },
+  { time: '09:15', what: 'Last week Lena asked bia to look after her mother’s pills. Right on time, bia calls Grandma on WhatsApp: “Good morning! Did you take your pills?” — and lets Lena know she did.', feature: 'calendar' },
   { time: '11:30', what: 'bia signs in to the booking website with its saved password and confirms tomorrow’s arrivals.', feature: 'browser' },
   { time: '14:00', what: 'A guest asks for a late checkout. That’s Lena’s call — bia sends her two buttons: “Yes, until 2 pm” · “Sorry, not possible”.', feature: 'ask-human' },
   { time: '17:20', what: 'The internet goes down for an hour. When the line is back, bia catches up on every message that arrived meanwhile and answers each guest in turn — nobody is left waiting.', feature: 'presence' },
