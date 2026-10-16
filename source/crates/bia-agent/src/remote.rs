@@ -73,7 +73,14 @@ fn new_host_id() -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("urn:uuid:{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "urn:uuid:{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn form_enc(s: &str) -> String {
@@ -135,11 +142,13 @@ pub fn chatgpt_token(store: &Path, force: bool) -> Result<String> {
                 | "refresh_token_invalidated"
                 | "refresh_token_reused"
         ) {
-            bail!("the ChatGPT sign-in has ended ({code}); sign in again with bia flash, or set an API key");
+            bail!("the ChatGPT sign-in has ended ({code}); sign in again with system_fmm_chatgpt (Login with ChatGPT), or set an API key");
         }
         bail!("ChatGPT token refresh failed (HTTP {status} {code})");
     }
-    let access = v["access_token"].as_str().context("ChatGPT token refresh: no access_token")?;
+    let access = v["access_token"]
+        .as_str()
+        .context("ChatGPT token refresh: no access_token")?;
     auth.access_token = access.to_string();
     if let Some(r) = v["refresh_token"].as_str() {
         auth.refresh_token = r.to_string();
@@ -203,6 +212,13 @@ pub fn fmm_ctx(n: u32) -> u32 {
 /// Flasher / host-editable provisioning file on the FAT32 ESP.
 pub const ESP_FMM_REL: &str = "EFI/bia/fmm.json";
 
+/// QEMU fw_cfg item (`-fw_cfg name=opt/bia/fmm.json,file=...` in tools/run-qemu.sh).
+/// User items must start with `opt/`. The flash image is not modified.
+pub const QEMU_FMM_ITEM: &str = "opt/bia/fmm.json";
+
+/// Guest sysfs file for `QEMU_FMM_ITEM` once the `qemu_fw_cfg` module is loaded.
+pub const QEMU_FMM_FW_CFG: &str = "/sys/firmware/qemu_fw_cfg/by_name/opt/bia/fmm.json/raw";
+
 impl FmmConfig {
     pub fn load(path: &Path) -> Option<FmmConfig> {
         let data = std::fs::read(path).ok()?;
@@ -245,24 +261,47 @@ impl FmmConfig {
     /// If `state_path` is missing and the ESP has `EFI/bia/fmm.json`, copy it into state and
     /// delete the ESP file so a later local `/fmm` change is not overwritten on reboot.
     pub fn seed_from_esp(boot: &Path, state_path: &Path) -> Option<String> {
-        if state_path.is_file() {
+        Self::seed_from(
+            &boot.join(ESP_FMM_REL),
+            state_path,
+            "ESP",
+            ESP_FMM_REL,
+            true,
+        )
+    }
+
+    /// If `state_path` is missing and QEMU passed `opt/bia/fmm.json`, copy it into state.
+    /// The fw_cfg node is read-only and comes back on the next launch, so it is not removed;
+    /// an existing state file (including a rotated ChatGPT token) is left as it is.
+    pub fn seed_from_qemu(state_path: &Path) -> Option<String> {
+        ensure_qemu_fw_cfg_sysfs();
+        Self::seed_from(
+            Path::new(QEMU_FMM_FW_CFG),
+            state_path,
+            "QEMU fw_cfg",
+            QEMU_FMM_ITEM,
+            false,
+        )
+    }
+
+    fn seed_from(
+        src: &Path,
+        state_path: &Path,
+        origin: &str,
+        name: &str,
+        remove_src: bool,
+    ) -> Option<String> {
+        if state_path.is_file() || !src.is_file() {
             return None;
         }
-        let esp = boot.join(ESP_FMM_REL);
-        if !esp.is_file() {
-            return None;
-        }
-        let mut cfg = match Self::load(&esp) {
+        let mut cfg = match Self::load(src) {
             Some(c) if !c.api_key.trim().is_empty() && !c.provider.trim().is_empty() => c,
             Some(_) => {
                 return Some(format!(
-                    "ESP {}: incomplete FMM config (need provider + api_key); ignored",
-                    ESP_FMM_REL
+                    "{origin} {name}: incomplete FMM config (need provider + api_key); ignored"
                 ));
             }
-            None => {
-                return Some(format!("ESP {}: invalid JSON; ignored", ESP_FMM_REL));
-            }
+            None => return Some(format!("{origin} {name}: invalid JSON; ignored")),
         };
         // This machine authorizes with its own host ID from now on, not the flasher's.
         if let Some(a) = cfg.chatgpt.as_mut() {
@@ -270,16 +309,16 @@ impl FmmConfig {
         }
         if let Err(e) = cfg.save(state_path) {
             return Some(format!(
-                "ESP {}: could not seed {}: {e:#}",
-                ESP_FMM_REL,
+                "{origin} {name}: could not seed {}: {e:#}",
                 state_path.display()
             ));
         }
-        let _ = std::fs::remove_file(&esp);
-        unsafe { libc::sync() };
+        if remove_src {
+            let _ = std::fs::remove_file(src);
+            unsafe { libc::sync() };
+        }
         Some(format!(
-            "FMM seeded from ESP {}: {} model {} key {}",
-            ESP_FMM_REL,
+            "FMM seeded from {origin} {name}: {} model {} key {}",
             cfg.provider,
             if cfg.model.is_empty() {
                 "(default)"
@@ -289,6 +328,53 @@ impl FmmConfig {
             cfg.masked_key()
         ))
     }
+}
+
+/// Load Debian's `qemu_fw_cfg` module when this machine is QEMU and sysfs is not up yet.
+fn ensure_qemu_fw_cfg_sysfs() {
+    if Path::new(QEMU_FMM_FW_CFG).is_file() || !qemu_fw_cfg_device() {
+        return;
+    }
+    let _ = std::process::Command::new("modprobe")
+        .arg("qemu_fw_cfg")
+        .status();
+}
+
+fn qemu_fw_cfg_device() -> bool {
+    dt_has(Path::new("/proc/device-tree"), b"qemu,fw-cfg-mmio") || acpi_has_qemu_fw_cfg()
+}
+
+fn acpi_has_qemu_fw_cfg() -> bool {
+    let Ok(rd) = std::fs::read_dir("/sys/bus/acpi/devices") else {
+        return false;
+    };
+    rd.flatten()
+        .any(|e| e.file_name().to_string_lossy().starts_with("QEMU0002"))
+}
+
+fn dt_has(root: &Path, needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if ent.file_name() == "compatible" {
+                if let Ok(b) = std::fs::read(&p) {
+                    if b.windows(needle.len()).any(|w| w == needle) {
+                        return true;
+                    }
+                }
+            } else if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -325,6 +411,52 @@ mod seed_tests {
         let loaded = FmmConfig::load(&state).unwrap();
         assert_eq!(loaded.api_key, "sk-test-abcdefgh");
         assert!(FmmConfig::seed_from_esp(&boot, &state).is_none());
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn seeds_from_qemu_file_and_leaves_the_source() {
+        let tmp = std::env::temp_dir().join(format!("bia-fmm-qemu-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let src = tmp.join("fmm.json");
+        let state = tmp.join("files/state/fmm.json");
+        fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let cfg = FmmConfig {
+            provider: "openrouter".into(),
+            base_url: String::new(),
+            api_key: "sk-test-abcdefgh".into(),
+            model: "x-ai/grok-4.6".into(),
+            enabled: true,
+            ctx: 131072,
+            chatgpt: None,
+        };
+        fs::write(&src, serde_json::to_vec_pretty(&cfg).unwrap()).unwrap();
+        let msg = FmmConfig::seed_from(&src, &state, "QEMU fw_cfg", QEMU_FMM_ITEM, false)
+            .expect("seed msg");
+        assert!(msg.contains("seeded"), "{msg}");
+        assert!(msg.contains(QEMU_FMM_ITEM), "{msg}");
+        assert!(src.is_file(), "fw_cfg source stays");
+        assert_eq!(FmmConfig::load(&state).unwrap().api_key, "sk-test-abcdefgh");
+        fs::write(
+            &src,
+            b"{\"provider\":\"openrouter\",\"api_key\":\"sk-other-zzzzzzzz\"}",
+        )
+        .unwrap();
+        assert!(FmmConfig::seed_from(&src, &state, "QEMU fw_cfg", QEMU_FMM_ITEM, false).is_none());
+        assert_eq!(FmmConfig::load(&state).unwrap().api_key, "sk-test-abcdefgh");
+        assert!(QEMU_FMM_FW_CFG.contains(QEMU_FMM_ITEM));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn dt_compatible_finds_fw_cfg() {
+        let tmp = std::env::temp_dir().join(format!("bia-fmm-dt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let node = tmp.join("fw-cfg@9020000");
+        fs::create_dir_all(&node).unwrap();
+        fs::write(node.join("compatible"), b"qemu,fw-cfg-mmio\0").unwrap();
+        assert!(dt_has(&tmp, b"qemu,fw-cfg-mmio"));
+        assert!(!dt_has(&tmp, b"qemu,fw-cfg-acpi"));
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -366,7 +498,11 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"outpu
         let mut a = Msg::user("x".into());
         a.role = Role::Assistant;
         a.content = String::new();
-        a.tool_calls = vec![ToolCall { id: "c1".into(), name: "bash".into(), args: json!({"cmd": "ls"}) }];
+        a.tool_calls = vec![ToolCall {
+            id: "c1".into(),
+            name: "bash".into(),
+            args: json!({"cmd": "ls"}),
+        }];
         let mut t = Msg::user("out".into());
         t.role = Role::Tool;
         t.call_id = "c1".into();
@@ -740,7 +876,9 @@ impl Remote {
         let mut items = vec![];
         for (i, m) in history.iter().enumerate() {
             match m.role {
-                Role::User => items.push(json!({"role": "user", "content": [{"type": "input_text", "text": m.content}]})),
+                Role::User => items.push(
+                    json!({"role": "user", "content": [{"type": "input_text", "text": m.content}]}),
+                ),
                 Role::Assistant => {
                     if !m.content.is_empty() {
                         items.push(json!({"role": "assistant", "content": [{"type": "output_text", "text": m.content}]}));
@@ -821,13 +959,19 @@ impl Remote {
                     forced = true;
                     continue;
                 }
-                if status == 400 && namespaced && (msg.contains("namespace") || code.contains("unsupported")) {
+                if status == 400
+                    && namespaced
+                    && (msg.contains("namespace") || code.contains("unsupported"))
+                {
                     RESPONSES_FLAT_TOOLS.store(true, Ordering::Relaxed);
                     continue;
                 }
                 bail!("HTTP {status}: {}", chatgpt_plan_error(&code, &msg, &text));
             }
-            return Self::read_responses_stream(BufReader::new(resp.into_body().into_reader()), on_piece);
+            return Self::read_responses_stream(
+                BufReader::new(resp.into_body().into_reader()),
+                on_piece,
+            );
         }
     }
 
@@ -893,7 +1037,11 @@ impl Remote {
                     break;
                 }
                 "response.failed" | "error" => {
-                    let e = if v["response"]["error"].is_null() { &v } else { &v["response"]["error"] };
+                    let e = if v["response"]["error"].is_null() {
+                        &v
+                    } else {
+                        &v["response"]["error"]
+                    };
                     let code = e["code"].as_str().unwrap_or("");
                     let msg = e["message"].as_str().unwrap_or("request failed");
                     bail!("provider error: {}", chatgpt_plan_error(code, msg, msg));

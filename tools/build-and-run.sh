@@ -4,6 +4,7 @@
 # Cleanup of flash rebuilds bia.img (files, model and conversation start fresh).
 # Cleanup of disk replaces the internal disk image with an empty GPT.
 # No cleanup rewrites BIAROOT in the existing image (make persist-root) and keeps the internal disk.
+# ./fmm.json (or FMM=path) is passed to QEMU as fw_cfg; the flash image is not edited for keys.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 from=${1:-}

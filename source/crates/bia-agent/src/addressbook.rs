@@ -35,7 +35,6 @@ pub fn local_channel(channel: &str) -> bool {
     channel == "console" || channel == "web" || channel.starts_with("web:")
 }
 
-
 fn normal_trust() -> String {
     "normal".into()
 }
@@ -87,7 +86,9 @@ impl AddressBook {
 
     /// files/speech/contacts.json: {"channels": {channel: lang}, "identities": {id: lang}}.
     fn export_langs(&self) {
-        let Some(files) = self.path.parent().and_then(|p| p.parent()) else { return };
+        let Some(files) = self.path.parent().and_then(|p| p.parent()) else {
+            return;
+        };
         let mut channels = serde_json::Map::new();
         let mut identities = serde_json::Map::new();
         for c in self.contacts.iter().filter(|c| !c.lang.is_empty()) {
@@ -111,13 +112,20 @@ impl AddressBook {
         if local_channel(channel) {
             return self.contacts.iter().find(|c| c.id == identity);
         }
-        self.contacts.iter().find(|c| c.channels.iter().any(|ch| ch == channel))
+        self.contacts
+            .iter()
+            .find(|c| c.channels.iter().any(|ch| ch == channel))
     }
 
     /// Speech in `code` was heard from this person. The first language heard is
     /// adopted; a different one replaces it when heard twice in a row. An explicitly
     /// set language is kept. Returns the new language when it changed.
-    pub fn observe_lang(&mut self, identity: &str, channel: &str, code: &str) -> Result<Option<String>> {
+    pub fn observe_lang(
+        &mut self,
+        identity: &str,
+        channel: &str,
+        code: &str,
+    ) -> Result<Option<String>> {
         let code = code.trim().trim_end_matches('?');
         if code.is_empty() {
             return Ok(None);
@@ -130,7 +138,11 @@ impl AddressBook {
                         id: identity.to_string(),
                         name: identity.to_string(),
                         identifier: String::new(),
-                        trust: if identity == crate::tools::ID_ROOT { "root".into() } else { "normal".into() },
+                        trust: if identity == crate::tools::ID_ROOT {
+                            "root".into()
+                        } else {
+                            "normal".into()
+                        },
                         channels: vec![],
                         notes: String::new(),
                         lang: String::new(),
@@ -141,7 +153,11 @@ impl AddressBook {
                 }
             }
         } else {
-            match self.contacts.iter().position(|c| c.channels.iter().any(|ch| ch == channel)) {
+            match self
+                .contacts
+                .iter()
+                .position(|c| c.channels.iter().any(|ch| ch == channel))
+            {
                 Some(i) => i,
                 None => return Ok(None),
             }
@@ -180,13 +196,18 @@ impl AddressBook {
                     carried = c.lang.clone();
                 }
                 // auto-created for this channel (no notes, nothing set by hand)
-                if c.channels.is_empty() && c.notes.is_empty() && !c.lang_set && c.trust == "normal" {
+                if c.channels.is_empty() && c.notes.is_empty() && !c.lang_set && c.trust == "normal"
+                {
                     emptied.push(c.id.clone());
                 }
             }
         }
         self.contacts.retain(|c| !emptied.contains(&c.id));
-        let c = self.contacts.iter_mut().find(|c| c.id == id).expect("checked");
+        let c = self
+            .contacts
+            .iter_mut()
+            .find(|c| c.id == id)
+            .expect("checked");
         if !c.channels.iter().any(|ch| ch == channel) {
             c.channels.push(channel.to_string());
         }
@@ -336,7 +357,11 @@ mod tests {
     use super::*;
 
     fn book() -> (AddressBook, PathBuf) {
-        let dir = std::env::temp_dir().join(format!("bia-ab-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let dir = std::env::temp_dir().join(format!(
+            "bia-ab-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("state/addressbook.json");
         (AddressBook::load(&path), dir)
@@ -345,20 +370,47 @@ mod tests {
     #[test]
     fn language_is_learned_and_explicit_wins() {
         let (mut b, dir) = book();
-        b.remember_channel("telegram:5", "user:5", "user:5").unwrap();
-        assert_eq!(b.observe_lang("user:5", "telegram:5", "ru").unwrap(), Some("ru".into()), "first heard is adopted");
-        assert_eq!(b.observe_lang("user:5", "telegram:5", "en?").unwrap(), None, "one other utterance is not enough");
-        assert_eq!(b.observe_lang("user:5", "telegram:5", "ru").unwrap(), None, "back to ru resets");
+        b.remember_channel("telegram:5", "user:5", "user:5")
+            .unwrap();
+        assert_eq!(
+            b.observe_lang("user:5", "telegram:5", "ru").unwrap(),
+            Some("ru".into()),
+            "first heard is adopted"
+        );
+        assert_eq!(
+            b.observe_lang("user:5", "telegram:5", "en?").unwrap(),
+            None,
+            "one other utterance is not enough"
+        );
+        assert_eq!(
+            b.observe_lang("user:5", "telegram:5", "ru").unwrap(),
+            None,
+            "back to ru resets"
+        );
         assert_eq!(b.observe_lang("user:5", "telegram:5", "en").unwrap(), None);
-        assert_eq!(b.observe_lang("user:5", "telegram:5", "en").unwrap(), Some("en".into()), "twice in a row switches");
+        assert_eq!(
+            b.observe_lang("user:5", "telegram:5", "en").unwrap(),
+            Some("en".into()),
+            "twice in a row switches"
+        );
         let id = b.find_for("x", "telegram:5").unwrap().id.clone();
-        b.upsert(&id, None, None, None, None, None, Some("de")).unwrap();
+        b.upsert(&id, None, None, None, None, None, Some("de"))
+            .unwrap();
         assert_eq!(b.observe_lang("user:5", "telegram:5", "fr").unwrap(), None);
-        assert_eq!(b.observe_lang("user:5", "telegram:5", "fr").unwrap(), None, "explicit language is kept");
+        assert_eq!(
+            b.observe_lang("user:5", "telegram:5", "fr").unwrap(),
+            None,
+            "explicit language is kept"
+        );
         // web chats belong to the identity's contact
-        assert_eq!(b.observe_lang("root", "web:c1", "ru").unwrap(), Some("ru".into()));
+        assert_eq!(
+            b.observe_lang("root", "web:c1", "ru").unwrap(),
+            Some("ru".into())
+        );
         assert_eq!(b.find_for("root", "web").unwrap().lang, "ru");
-        let m: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("speech/contacts.json")).unwrap()).unwrap();
+        let m: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("speech/contacts.json")).unwrap())
+                .unwrap();
         assert_eq!(m["channels"]["telegram:5"], "de");
         assert_eq!(m["identities"]["root"], "ru");
         let _ = std::fs::remove_dir_all(&dir);
@@ -367,15 +419,21 @@ mod tests {
     #[test]
     fn link_moves_channel_and_merges_stub() {
         let (mut b, dir) = book();
-        b.remember_channel("telegram:31362240", "user:31362240", "user:31362240").unwrap();
-        b.observe_lang("user:31362240", "telegram:31362240", "ru").unwrap();
-        b.upsert("root", Some("ZonD"), None, Some("root"), None, None, None).unwrap();
+        b.remember_channel("telegram:31362240", "user:31362240", "user:31362240")
+            .unwrap();
+        b.observe_lang("user:31362240", "telegram:31362240", "ru")
+            .unwrap();
+        b.upsert("root", Some("ZonD"), None, Some("root"), None, None, None)
+            .unwrap();
         let c = b.link("root", "telegram:31362240").unwrap();
         assert_eq!(c.channels, ["telegram:31362240"]);
         assert_eq!(c.lang, "ru", "language carried from the stub");
         assert_eq!(b.list().len(), 1, "the auto-created stub is merged away");
         assert!(b.link("nobody", "telegram:1").is_err());
-        assert!(b.link("root", "web:x").is_err(), "web chats are linked by identity");
+        assert!(
+            b.link("root", "web:x").is_err(),
+            "web chats are linked by identity"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -179,6 +179,26 @@ pub fn open_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     o.open(path)
 }
 
+/// The request target of one HTTP request, after its headers (closing with unread bytes
+/// resets the connection and the browser can lose the reply). `None` when the connection
+/// sends nothing: such a socket is closed without an answer.
+fn read_target(sock: &std::net::TcpStream) -> Option<String> {
+    let _ = sock.set_read_timeout(Some(Duration::from_secs(600)));
+    let mut r = BufReader::new(sock);
+    let mut line = String::new();
+    r.read_line(&mut line).ok()?;
+    let target = line.split_whitespace().nth(1)?.to_string();
+    loop {
+        let mut h = String::new();
+        match r.read_line(&mut h) {
+            Ok(0) | Err(_) => break,
+            Ok(_) if h.trim().is_empty() => break,
+            Ok(_) => {}
+        }
+    }
+    Some(target)
+}
+
 fn open_browser(url: &str) -> Result<()> {
     let status = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()
@@ -365,18 +385,48 @@ fn sign_in_once(
         on_status(&format!("open this address in your browser: {url}"));
     }
 
-    // Wait for the redirect (5 minutes), ignoring stray requests such as /favicon.ico.
-    listener.set_nonblocking(false)?;
+    // Wait for the redirect (5 minutes), ignoring stray requests such as /favicon.ico. Each
+    // connection is read on its own thread: browsers open connections before they have a
+    // request for them (Chrome preconnects to an address it has seen, so a second sign-in)
+    // and send the callback on one much later. Answering such a connection early with a 404
+    // would make that 404 the reply to the callback.
+    let (tx, rx) = std::sync::mpsc::channel::<(String, std::net::TcpStream)>();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                let Ok(sock) = conn else { continue };
+                let tx = tx.clone();
+                std::thread::spawn(move || {
+                    if let Some(target) = read_target(&sock) {
+                        let _ = tx.send((target, sock));
+                    }
+                });
+            }
+        });
+    }
+    // Free the port when this sign-in ends, however it ends.
+    struct Stop(std::sync::Arc<std::sync::atomic::AtomicBool>, u16);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = std::net::TcpStream::connect(("127.0.0.1", self.1));
+        }
+    }
+    let _stop = Stop(stop, port);
     let deadline = std::time::Instant::now() + Duration::from_secs(300);
     let query = loop {
-        if std::time::Instant::now() > deadline {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
             bail!("ChatGPT sign-in timed out");
         }
-        let (mut sock, _) = listener.accept()?;
-        sock.set_read_timeout(Some(Duration::from_secs(10))).ok();
-        let mut line = String::new();
-        BufReader::new(&sock).read_line(&mut line).ok();
-        let target = line.split_whitespace().nth(1).unwrap_or("").to_string();
+        let Ok((target, mut sock)) = rx.recv_timeout(left) else {
+            bail!("ChatGPT sign-in timed out");
+        };
         let Some(q) = target.strip_prefix(CALLBACK_PATH).and_then(|r| r.strip_prefix('?')) else {
             let _ = sock.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             continue;
@@ -497,6 +547,18 @@ pub fn ensure_fresh(auth: &mut ChatGptAuth) -> Result<bool> {
     Ok(true)
 }
 
+/// The ChatGPT model bia suggests: the id containing this, shortest first (`gpt-6.1-sol`
+/// before a longer variant). bia's own sign-in (`bia-mcp-system` chatgpt.rs) uses the same.
+pub const DEFAULT_MODEL: &str = "6.1-sol";
+
+/// The default model among those the account may use, if it is there.
+pub fn default_model(models: &[crate::fmm::CloudModel]) -> Option<&crate::fmm::CloudModel> {
+    models
+        .iter()
+        .filter(|m| m.id.contains(DEFAULT_MODEL))
+        .min_by_key(|m| m.id.len())
+}
+
 /// Models this ChatGPT account may use (`visibility == "list"`).
 pub fn list_models(access_token: &str) -> Result<Vec<crate::fmm::CloudModel>> {
     let resp = http()
@@ -544,5 +606,9 @@ mod tests {
         assert!(u.starts_with("urn:uuid:") && u.len() == 45, "{u}");
         let jwt = format!("x.{}.y", URL_SAFE_NO_PAD.encode(br#"{"aud":"c1","nonce":"n"}"#));
         assert_eq!(jwt_claims(&jwt).unwrap()["aud"], "c1");
+        let m = |id: &str| crate::fmm::CloudModel { id: id.into(), name: id.into(), ctx: 0 };
+        let list = vec![m("gpt-5"), m("gpt-6.1-sol-mini"), m("gpt-6.1-sol")];
+        assert_eq!(default_model(&list).unwrap().id, "gpt-6.1-sol");
+        assert!(default_model(&list[..1]).is_none());
     }
 }

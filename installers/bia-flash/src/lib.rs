@@ -4,7 +4,8 @@
 //! The system comes as a minimal disk image (`image.rs`, `bia-<arch>.img.xz` in releases);
 //! the writer lays its partitions over the whole stick.
 //! Optional FMM keys go on the ESP as `EFI/bia/fmm.json` for the agent to seed
-//! into `/home/bia/files/state/fmm.json` on first boot.
+//! into `/home/bia/files/state/fmm.json` on first boot; the owner's language goes there
+//! as `EFI/bia/lang.json`.
 //! An optional GGUF from Hugging Face is streamed raw onto the end of BIAROOT and listed in
 //! `EFI/bia/models.txt`; on first boot `bia-grow` moves it into `/home/bia/model` and grows
 //! the ext4 over the whole stick.
@@ -15,6 +16,7 @@ mod check;
 mod disk;
 mod fmm;
 pub mod hf;
+pub mod lang;
 pub mod image;
 mod local_files;
 pub mod release;

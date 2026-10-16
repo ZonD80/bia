@@ -101,6 +101,8 @@ pub struct Registry {
     /// whatsapp:<phone>) → embedding.
     pub speakers: BTreeMap<String, Vec<f32>>,
     pub settings: Settings,
+    /// Language → fcitx5 input that overrides the default (`crate::input`); "" = none.
+    pub input: BTreeMap<String, String>,
 }
 
 impl Default for Registry {
@@ -152,6 +154,7 @@ impl Default for Registry {
             extras,
             speakers: BTreeMap::new(),
             settings: Settings::default(),
+            input: BTreeMap::new(),
         }
     }
 }
@@ -251,12 +254,16 @@ fn lock() -> Result<Lock, String> {
 }
 
 /// Read-modify-write the registry under a file lock (the lang, telegram and whatsapp
-/// MCPs and the agent may all change it).
+/// MCPs and the agent may all change it). The console's input methods follow.
 pub fn update<T>(f: impl FnOnce(&mut Registry) -> Result<T, String>) -> Result<T, String> {
     let _l = lock()?;
     let mut r = Registry::load();
+    let old = r.clone();
     let out = f(&mut r)?;
     r.save()?;
+    if crate::input::affects(&old, &r) {
+        crate::input::sync(Some(&old), &r);
+    }
     Ok(out)
 }
 

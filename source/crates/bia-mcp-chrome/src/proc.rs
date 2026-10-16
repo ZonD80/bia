@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-pub const MISSING: &str = "Google Chrome is not installed. Install it with apt-get install -y google-chrome-stable before enabling mcp/chrome.";
+/// Chrome is not in Debian's sources: Google's .deb (amd64 and arm64) installs it and adds
+/// Google's apt source, so later apt-get upgrades keep it current.
+pub const MISSING: &str = "Google Chrome is not installed. It is not in Debian's sources: install the official package from Google with bash: curl -fLo /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_$(dpkg --print-architecture).deb && apt-get install -y /tmp/chrome.deb && rm /tmp/chrome.deb (it also adds Google's apt source for updates). Then call chrome_install again.";
 
 const BINS: &[&str] = &[
     "/usr/bin/google-chrome-stable",

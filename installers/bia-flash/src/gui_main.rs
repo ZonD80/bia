@@ -72,6 +72,9 @@ struct FlashApp {
     /// What `local_path` names, or why it could not be used.
     local: Result<LocalFiles, String>,
     arch: String,
+    /// The owner's language (catalog code) and the choices.
+    lang: String,
+    languages: Vec<bia_flash::lang::Language>,
     fmm_path: String,
     provider: String,
     api_key: String,
@@ -128,6 +131,8 @@ impl FlashApp {
                 .unwrap_or_default(),
             local: Err(String::new()),
             arch: "x86_64".into(),
+            lang: bia_flash::lang::host_default(),
+            languages: bia_flash::lang::languages(),
             fmm_path: default_fmm,
             provider: "openrouter".into(),
             api_key: String::new(),
@@ -520,6 +525,7 @@ impl FlashApp {
             create_image: false,
             model,
             hf_token: self.token(),
+            lang: Some(self.lang.clone()),
         };
         self.busy = true;
         self.status = Status::Working {
@@ -635,6 +641,14 @@ impl eframe::App for FlashApp {
                 }
                 NetMsg::Cloud(key, Ok(models)) if key == self.api_key.trim() => {
                     self.append_log(&format!("{}: {} models", self.provider, models.len()));
+                    if self.provider == "chatgpt" && self.model.trim().is_empty() {
+                        if let Some(d) = chatgpt::default_model(&models) {
+                            self.model = d.id.clone();
+                            if d.ctx > 0 {
+                                self.ctx = d.ctx.min(2_000_000).to_string();
+                            }
+                        }
+                    }
                     self.cloud_models = models;
                 }
                 NetMsg::Cloud(key, Err(e)) if key == self.api_key.trim() => {
@@ -799,6 +813,28 @@ impl eframe::App for FlashApp {
                                 }
                             });
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Language");
+                        let name = |l: &bia_flash::lang::Language| {
+                            if l.voice { l.name.clone() } else { format!("{} (text only)", l.name) }
+                        };
+                        let current = self.languages.iter().find(|l| l.code == self.lang).map(name).unwrap_or_else(|| self.lang.clone());
+                        egui::ComboBox::from_id_salt("lang")
+                            .selected_text(current)
+                            .height(400.0)
+                            .show_ui(ui, |ui| {
+                                for l in &self.languages {
+                                    ui.selectable_value(&mut self.lang, l.code.clone(), name(l));
+                                }
+                            });
+                    });
+                    ui.label(
+                        egui::RichText::new(
+                            "bia talks in it from the first boot, with its keyboard; its voice downloads on the first boot. Text only: no voice exists, so bia speaks English aloud.",
+                        )
+                        .small()
+                        .weak(),
+                    );
                     if !self.local_os {
                         let text = match &self.os {
                             Some(m) => match m.os.get(&self.arch) {

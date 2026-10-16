@@ -27,14 +27,16 @@ pub fn split_path(path: &str) -> Option<(String, String)> {
     Some((id.to_string(), extra.to_string()))
 }
 
-pub fn api_finish_id(path: &str) -> Option<&str> {
+/// `POST /v1/hitl/<id>/<action>`: the id and the action.
+pub fn api_action(path: &str) -> Option<(&str, &str)> {
     let rest = path.strip_prefix("/v1/hitl/")?;
-    let (id, extra) = rest.split_once('/')?;
-    if extra == "finish" {
-        safe_id(id)
-    } else {
-        None
-    }
+    let (id, action) = rest.split_once('/')?;
+    Some((safe_id(id)?, action))
+}
+
+/// Tasks that change the machine (the cloud brain) are for root only.
+pub fn root_only(files: &Path, id: &str) -> bool {
+    get(files, id).is_some_and(|t| t["kind"] == "chatgpt")
 }
 
 pub fn list(files: &Path) -> Value {
@@ -77,13 +79,14 @@ pub fn get(files: &Path, id: &str) -> Option<Value> {
     Some(v)
 }
 
-pub fn finish(files: &Path, id: &str, ok: bool, note: &str) -> Result<(), String> {
+/// `model`: the choice on a Login with ChatGPT task.
+pub fn finish(files: &Path, id: &str, ok: bool, note: &str, model: &str) -> Result<(), String> {
     let id = safe_id(id).ok_or_else(|| "bad id".to_string())?;
     if get(files, id).is_none() {
         return Err("no such task".into());
     }
     let p = dir(files).join(format!("{id}.result"));
-    let body = json!({"status": if ok { "done" } else { "failed" }, "note": note});
+    let body = json!({"status": if ok { "done" } else { "failed" }, "note": note, "model": model});
     std::fs::write(
         &p,
         serde_json::to_vec_pretty(&body).map_err(|e| e.to_string())?,

@@ -59,10 +59,7 @@ pub(crate) fn open_pty() -> Result<(RawFd, RawFd), String> {
         {
             let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
             if master < 0 {
-                return Err(format!(
-                    "posix_openpt: {}",
-                    std::io::Error::last_os_error()
-                ));
+                return Err(format!("posix_openpt: {}", std::io::Error::last_os_error()));
             }
             if libc::grantpt(master) != 0 {
                 let e = std::io::Error::last_os_error();
@@ -307,7 +304,10 @@ pub fn kill_tree(pid: u32) {
         };
         // fields after "(comm)": state ppid pgrp session …
         let rest = stat.rsplit_once(')').map(|(_, r)| r).unwrap_or("");
-        let session = rest.split_whitespace().nth(3).and_then(|s| s.parse::<u32>().ok());
+        let session = rest
+            .split_whitespace()
+            .nth(3)
+            .and_then(|s| s.parse::<u32>().ok());
         if session == Some(pid) {
             let _ = unsafe { libc::kill(p, libc::SIGKILL) };
         }
@@ -339,10 +339,7 @@ pub fn job_input(id: &str, text: &str) -> Result<String, String> {
     let _ = f.flush();
     // Allow another stale notice if the job goes quiet again after this input.
     slot.stale_sent.store(false, Ordering::Relaxed);
-    Ok(format!(
-        "ok: wrote {} byte(s) to job:{id} PTY",
-        text.len()
-    ))
+    Ok(format!("ok: wrote {} byte(s) to job:{id} PTY", text.len()))
 }
 
 fn register_pty(id: &str, slot: PtySlot) {
@@ -496,9 +493,7 @@ pub fn start(
         let _ = std::thread::Builder::new()
             .name(format!("bash-stale-{jid_t}"))
             .spawn(move || {
-                watch_stale(
-                    jid_t, pid, jobs_t, con_t, last_out, stale_sent, alive_t,
-                );
+                watch_stale(jid_t, pid, jobs_t, con_t, last_out, stale_sent, alive_t);
             });
     }
 

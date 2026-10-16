@@ -32,7 +32,7 @@
 
     body {
       display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
     }
 
     #bar {
@@ -123,6 +123,51 @@
       color: #fff;
     }
 
+    #gpt {
+      padding: 12px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+
+    #gpt .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    #gpt input,
+    #gpt select {
+      flex: 1;
+      min-width: 0;
+      background: #0f131a;
+      color: var(--txt);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px;
+      font: inherit;
+    }
+
+    #gpt button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-weight: 600;
+      background: var(--acc);
+      color: #fff;
+    }
+
+    #gerr {
+      color: var(--err);
+    }
+
+    #gerr:empty {
+      display: none;
+    }
+
     #st {
       font-size: 12px;
       color: var(--dim);
@@ -138,6 +183,10 @@
     <a href="/gui" target="_blank" rel="noopener">machine display /gui</a>
   </div>
   <div id="msg"></div>
+  <div id="gpt" hidden>
+    <div id="gbody"></div>
+    <div id="gerr"></div>
+  </div>
   <div id="view">
     <div class="hint" id="hint">loading…</div>
   </div>
@@ -154,13 +203,17 @@
 
     function status(s) { $('st').textContent = s || ''; }
 
-    async function finish(ok) {
-      const note = $('note').value;
-      const r = await fetch('/v1/hitl/' + id + '/finish', {
+    async function post(action, body) {
+      return fetch('/v1/hitl/' + id + '/' + action, {
         method: 'POST', credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ok, note })
+        body: JSON.stringify(body)
       });
+    }
+
+    async function finish(ok, model) {
+      const note = $('note').value;
+      const r = await post('finish', { ok, note, model: model || '' });
       if (!r.ok) { status(await r.text()); return; }
       status(ok ? 'reported to bia' : 'reported as failed');
       $('done').disabled = $('fail').disabled = true;
@@ -168,6 +221,63 @@
 
     $('done').onclick = () => finish(true);
     $('fail').onclick = () => finish(false);
+
+    // ---- Login with ChatGPT (system_fmm_chatgpt) ----
+    let gptShown = '', gptPicked = false;
+    const el = (tag, props, ...kids) => {
+      const e = Object.assign(document.createElement(tag), props || {});
+      kids.forEach(k => e.append(k));
+      return e;
+    };
+
+    function gptRender(t) {
+      $('gpt').hidden = false;
+      $('done').hidden = true;
+      $('note').hidden = true;
+      $('fail').textContent = 'Cancel';
+      $('gerr').textContent = t.error || '';
+      const sig = [t.stage, t.auth_url, (t.models || []).length].join('|');
+      if (sig === gptShown) return;
+      gptShown = sig;
+      const box = $('gbody');
+      box.textContent = '';
+      if (t.stage === 'model') {
+        const sel = el('select');
+        for (const m of t.models || []) {
+          let label = m.id + (m.name && m.name !== m.id ? ' — ' + m.name : '');
+          if (m.ctx) label += ' (' + Math.round(m.ctx / 1000) + 'k context)';
+          sel.append(el('option', { value: m.id, textContent: label, selected: m.id === t.model }));
+        }
+        const use = el('button', { textContent: 'Continue' });
+        use.onclick = async () => {
+          use.disabled = true;
+          gptPicked = true;
+          await finish(true, sel.value);
+          status('bia is switching to ' + sel.value + '…');
+        };
+        box.append(el('div', { textContent: 'Signed in to ChatGPT' + (t.email ? ' as ' + t.email : '') + '. Which model should bia think with?' }),
+          el('div', { className: 'row' }, sel, use));
+        return;
+      }
+      if (t.stage === 'signing') {
+        box.append(el('div', { textContent: 'Finishing the sign-in…' }));
+        return;
+      }
+      box.append(el('div', { textContent: 'In Chrome on bia\'s screen below, press Login with ChatGPT and sign in. Then pick the model here or there.' }));
+    }
+
+    async function poll() {
+      const r = await fetch('/v1/hitl/' + id, cred).catch(() => null);
+      if (r && r.status === 404) {
+        $('gerr').textContent = '';
+        $('gbody').textContent = gptPicked ? 'Done. bia switched its brain to your ChatGPT plan; you can close this page.' : 'This task is closed.';
+        $('done').disabled = $('fail').disabled = true;
+        status('');
+        return;
+      }
+      if (r && r.ok) gptRender(await r.json());
+      setTimeout(poll, 1500);
+    }
 
     function showFrame(src) {
       $('hint').remove();
@@ -191,6 +301,12 @@
         $('ext').hidden = false;
         $('ext').href = url;
         $('ext').textContent = 'open URL';
+      }
+      if (t.kind === 'chatgpt') {
+        gptRender(t);
+        setTimeout(poll, 1500);
+        showFrame('/gui');
+        return;
       }
       showFrame('/gui');
       status('machine display. Do the action in the view, then Done.');

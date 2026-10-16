@@ -1,7 +1,7 @@
 {
   "name": "system",
-  "version": "1.0.2",
-  "description": "Use a cloud model, get the web link, or ask the human for help. system_fmm_configure turns on a cloud model. Pass api_key; provider is detected from the key and model defaults to the provider's, so pass them only when the user names them. system_fmm_disable goes back to the local model. system_web_console returns the web address with a login code. system_share_file returns a download link for a file under /home/bia/files. Send that link with say. system_ask_human asks the person to finish a captcha or a login. system_pki_requests lists certificate requests from other agents; system_pki_approve / system_pki_deny decide one, only after root answers. Disks, network, and apt-get are bash, not tools here.",
+  "version": "1.1.0",
+  "description": "Use a cloud model, get the web link, or ask the human for help. system_fmm_configure turns on a cloud model. Pass api_key; provider is detected from the key and model defaults to the provider's, so pass them only when the user names them. system_fmm_chatgpt is for a ChatGPT subscription (no key): it serves a Login with ChatGPT page on bia; open that page with chrome_new_page and tell the person to switch to Chrome, sign in, pick the model and press Continue. If it says Chrome is missing, enable mcp/chrome and follow chrome_install first. system_fmm_disable goes back to the local model. system_web_console returns the web address with a login code. system_share_file returns a download link for a file under /home/bia/files. Send that link with say. system_ask_human asks the person to finish a captcha or a login. system_pki_requests lists certificate requests from other agents; system_pki_approve / system_pki_deny decide one, only after root answers. Disks, network, and apt-get are bash, not tools here.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-system",
     "x86_64": "bin/x86_64/bia-mcp-system"
@@ -12,6 +12,12 @@
     "frontier",
     "openrouter",
     "openai",
+    "chatgpt",
+    "subscription",
+    "plan",
+    "plus",
+    "pro",
+    "sign",
     "anthropic",
     "claude",
     "gpt",
@@ -45,6 +51,8 @@
   "examples": [
     "root|console|<issued>|<delivered>|use grok via openrouter with key sk-or-... -> system_fmm_configure(provider='openrouter', api_key='sk-or-...', model='x-ai/grok-4.6')",
     "root|console|<issued>|<delivered>|here is my deepseek key sk-... -> system_fmm_configure(api_key='sk-...')",
+    "root|console|<issued>|<delivered>|use my chatgpt plus subscription -> system_fmm_chatgpt()",
+    "root|console|<issued>|<delivered>|log in to chatgpt, I want gpt-5 -> system_fmm_chatgpt(model='gpt-5'); on system|fmm: chrome_new_page(url='http://127.0.0.1:1455/'); say: switch to Chrome and press Login with ChatGPT",
     "root|console|<issued>|<delivered>|switch back to the local model -> system_fmm_disable()",
     "root|console|<issued>|<delivered>|what is the web console url -> system_web_console()",
     "root|console|<issued>|<delivered>|the browser is stuck on a captcha -> system_ask_human(title='solve captcha', message='finish it on the screen, then press Done')",

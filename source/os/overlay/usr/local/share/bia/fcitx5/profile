@@ -1,22 +1,17 @@
+# The plain US keyboard only: bia adds a layout or input method for each language it
+# learns (bia_speech::input) and keeps items added by hand.
 [Groups/0]
 # Group Name
 Name=Default
 # Layout
 Default Layout=us
 # Default Input Method
-DefaultIM=pinyin
+DefaultIM=keyboard-us
 
 [Groups/0/Items/0]
 Name=keyboard-us
 Layout=
 
-[Groups/0/Items/1]
-Name=pinyin
-Layout=
-
-[Groups/0/Items/2]
-Name=hangul
-Layout=
-
 [GroupOrder]
 0=Default
+

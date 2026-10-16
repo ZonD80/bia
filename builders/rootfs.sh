@@ -117,7 +117,7 @@ in_chroot apt-get install -y --no-install-recommends \
   xdotool scrot \
   openbox tint2 x11vnc novnc kitty fonts-dejavu-core fonts-noto-color-emoji fontconfig \
   fonts-noto-cjk fonts-noto-core \
-  fcitx5 fcitx5-pinyin fcitx5-hangul dbus-daemon \
+  fcitx5 fcitx5-pinyin fcitx5-hangul fcitx5-anthy fcitx5-unikey dbus-daemon \
   libvulkan1 mesa-vulkan-drivers \
   libgomp1 libssl3 libstdc++6 libopus0 \
   ffmpeg

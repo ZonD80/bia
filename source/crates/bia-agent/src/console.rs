@@ -49,14 +49,18 @@ fn journal_pending(path: &std::path::Path) -> Vec<Inbound> {
     let mut ins: Vec<Inbound> = Vec::new();
     let mut done = std::collections::HashSet::new();
     for line in text.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
         match v.get("op").and_then(|x| x.as_str()) {
             Some("in") => ins.push(Inbound {
                 identity: s("identity"),
                 channel: s("channel"),
                 issued: std::time::UNIX_EPOCH
-                    + std::time::Duration::from_secs(v.get("issued").and_then(|x| x.as_u64()).unwrap_or(0)),
+                    + std::time::Duration::from_secs(
+                        v.get("issued").and_then(|x| x.as_u64()).unwrap_or(0),
+                    ),
                 id: s("id"),
                 text: s("text"),
             }),
@@ -67,7 +71,9 @@ fn journal_pending(path: &std::path::Path) -> Vec<Inbound> {
         }
     }
     let mut seen = std::collections::HashSet::new();
-    ins.into_iter().filter(|ib| !done.contains(&ib.id) && seen.insert(ib.id.clone())).collect()
+    ins.into_iter()
+        .filter(|ib| !done.contains(&ib.id) && seen.insert(ib.id.clone()))
+        .collect()
 }
 
 impl Inbound {
@@ -227,8 +233,11 @@ impl Console {
                         web_identity: None,
                     });
                     if let Ok(r) = OpenOptions::new().read(true).open(&dev) {
-                        set_iutf8(r.as_raw_fd());
-                        spawn_reader(r, tx.clone(), dev.clone());
+                        let fd = r.as_raw_fd();
+                        match OpenOptions::new().write(true).open(&dev) {
+                            Ok(echo) => spawn_tty_reader(r, fd, echo, tx.clone(), dev.clone()),
+                            Err(_) => spawn_reader(r, tx.clone(), dev.clone()),
+                        }
                     }
                     devices.push(dev);
                 }
@@ -247,10 +256,13 @@ impl Console {
                 web: false,
                 web_identity: None,
             });
-            if tty {
-                set_iutf8(0);
-            }
-            spawn_reader(std::io::stdin(), tx.clone(), "stdin".into());
+            spawn_tty_reader(
+                std::io::stdin(),
+                0,
+                std::io::stdout(),
+                tx.clone(),
+                "stdin".into(),
+            );
             devices.push("stdio".into());
         }
         let color = outs.iter().any(|o| o.tty);
@@ -328,7 +340,10 @@ impl Console {
     pub fn has_web(&self, identity: &str) -> bool {
         self.outs
             .lock()
-            .map(|o| o.iter().any(|o| o.web && o.web_identity.as_deref() == Some(identity)))
+            .map(|o| {
+                o.iter()
+                    .any(|o| o.web && o.web_identity.as_deref() == Some(identity))
+            })
             .unwrap_or(false)
     }
 
@@ -532,7 +547,10 @@ impl Console {
         // keep the file small: compact once it grows
         let path = self.journal.lock().unwrap().clone();
         if let Some(p) = path {
-            if std::fs::metadata(&p).map(|m| m.len() > 1_000_000).unwrap_or(false) {
+            if std::fs::metadata(&p)
+                .map(|m| m.len() > 1_000_000)
+                .unwrap_or(false)
+            {
                 let _ = self.open_journal(p);
             }
         }
@@ -542,7 +560,11 @@ impl Console {
         use std::io::Write;
         let g = self.journal.lock().unwrap();
         let Some(p) = g.as_ref() else { return };
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+        {
             let _ = writeln!(f, "{v}");
         }
     }
@@ -887,17 +909,6 @@ fn cpu_frac() -> f32 {
     busy
 }
 
-/// Cooked-mode line editing knows UTF-8: Backspace erases a whole character, not one byte.
-fn set_iutf8(fd: i32) {
-    unsafe {
-        let mut t: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut t) == 0 && t.c_iflag & libc::IUTF8 == 0 {
-            t.c_iflag |= libc::IUTF8;
-            libc::tcsetattr(fd, libc::TCSANOW, &t);
-        }
-    }
-}
-
 /// Terminal cells a character takes: 2 for CJK and emoji, 0 for combining marks.
 fn cells(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)
@@ -953,8 +964,8 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(r: R, tx: Sender<Inbound>, na
         .spawn(move || {
             let mut br = BufReader::new(r);
             loop {
-                // Bytes, not read_line: one invalid UTF-8 sequence (a half-erased character on a
-                // terminal without IUTF8, a Latin-1 serial client) must not drop the whole line.
+                // Bytes, not read_line: one invalid UTF-8 sequence (a Latin-1 serial client)
+                // must not drop the whole line.
                 let mut buf = Vec::new();
                 match br.read_until(b'\n', &mut buf) {
                     Ok(0) => {
@@ -976,6 +987,218 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(r: R, tx: Sender<Inbound>, na
             }
         })
         .expect("spawn console reader");
+}
+
+/// Terminal modes to put back at exit, for the ttys `raw_input` changed.
+static SAVED_TERMIOS: Mutex<Vec<(i32, libc::termios)>> = Mutex::new(vec![]);
+
+extern "C" fn restore_termios() {
+    if let Ok(v) = SAVED_TERMIOS.lock() {
+        for (fd, t) in v.iter() {
+            unsafe { libc::tcsetattr(*fd, libc::TCSANOW, t) };
+        }
+    }
+}
+
+/// Turn off the kernel's line editing and echo on a tty (signals and output processing stay).
+/// The kernel erases one column per Backspace whatever the character's width, so a CJK
+/// character or emoji left half of itself on screen; `LineEd` erases by display width.
+fn raw_input(fd: i32) -> bool {
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::isatty(fd) != 1 || libc::tcgetattr(fd, &mut t) != 0 {
+            return false;
+        }
+        let saved = t;
+        t.c_iflag |= libc::IUTF8 | libc::ICRNL;
+        t.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ECHOE | libc::ECHOK | libc::ECHONL);
+        t.c_cc[libc::VMIN] = 1;
+        t.c_cc[libc::VTIME] = 0;
+        if libc::tcsetattr(fd, libc::TCSANOW, &t) != 0 {
+            return false;
+        }
+        let mut v = SAVED_TERMIOS.lock().unwrap_or_else(|e| e.into_inner());
+        if v.is_empty() {
+            libc::atexit(restore_termios);
+        }
+        v.push((fd, saved));
+        true
+    }
+}
+
+/// Read a tty in raw mode, edit the line with `LineEd` and echo to `echo`.
+/// Falls back to plain line reading when `fd` is not a tty (a pipe, a file).
+fn spawn_tty_reader<R, W>(r: R, fd: i32, mut echo: W, tx: Sender<Inbound>, name: String)
+where
+    R: std::io::Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    if !raw_input(fd) {
+        return spawn_reader(r, tx, name);
+    }
+    std::thread::Builder::new()
+        .name(format!("console-{name}"))
+        .spawn(move || {
+            let mut r = r;
+            let mut ed = LineEd::default();
+            let mut buf = [0u8; 256];
+            loop {
+                let n = match r.read(&mut buf) {
+                    Ok(0) | Err(_) => {
+                        std::thread::sleep(Duration::from_millis(500));
+                        continue;
+                    }
+                    Ok(n) => n,
+                };
+                let mut out = Vec::new();
+                for &b in &buf[..n] {
+                    let line = match ed.feed(b, &mut out) {
+                        Some(Edit::Line(l)) => l,
+                        Some(Edit::Eof) if name == "stdin" => "/exit".to_string(),
+                        Some(Edit::Eof) | None => continue,
+                    };
+                    let _ = echo.write_all(&out);
+                    let _ = echo.flush();
+                    out.clear();
+                    if tx.send(Inbound::console(line)).is_err() {
+                        return;
+                    }
+                }
+                let _ = echo.write_all(&out);
+                let _ = echo.flush();
+            }
+        })
+        .expect("spawn console reader");
+}
+
+#[derive(Debug, PartialEq)]
+enum Edit {
+    Line(String),
+    /// Ctrl+D on an empty line
+    Eof,
+}
+
+/// Line editor for a raw tty: appends typed text and erases by display width, so
+/// Backspace takes a whole CJK character or emoji (two cells) and a letter with its
+/// combining marks. Ctrl+U clears the line, Ctrl+W the last word. Arrow and function
+/// keys are ignored rather than typed as escape sequences.
+#[derive(Default)]
+struct LineEd {
+    /// what was typed, one entry per erasable unit, with the cells it was echoed as
+    units: Vec<(String, usize)>,
+    /// bytes of a UTF-8 character still being read
+    pending: Vec<u8>,
+    esc: Esc,
+}
+
+#[derive(Default, PartialEq)]
+enum Esc {
+    #[default]
+    None,
+    Start,
+    /// inside `ESC [` or `ESC O`, until the final byte
+    Seq,
+}
+
+impl LineEd {
+    fn feed(&mut self, b: u8, echo: &mut Vec<u8>) -> Option<Edit> {
+        match self.esc {
+            Esc::Start => {
+                self.esc = if b == b'[' || b == b'O' {
+                    Esc::Seq
+                } else {
+                    Esc::None
+                };
+                return None;
+            }
+            Esc::Seq => {
+                if (0x40..=0x7e).contains(&b) {
+                    self.esc = Esc::None;
+                }
+                return None;
+            }
+            Esc::None => {}
+        }
+        if b >= 0x80 || !self.pending.is_empty() {
+            if b < 0x80 {
+                self.pending.clear(); // a broken sequence; take this byte on its own
+            } else {
+                self.pending.push(b);
+                match std::str::from_utf8(&self.pending) {
+                    Ok(s) => {
+                        let c = s.chars().next().unwrap_or('\u{fffd}');
+                        self.pending.clear();
+                        self.push(c, echo);
+                    }
+                    Err(e) if e.error_len().is_some() => self.pending.clear(),
+                    Err(_) => {}
+                }
+                return None;
+            }
+        }
+        match b {
+            b'\r' | b'\n' => {
+                echo.push(b'\n'); // the tty's ONLCR makes it \r\n, as for all console output
+                let line: String = self.units.drain(..).map(|(s, _)| s).collect();
+                return Some(Edit::Line(line));
+            }
+            0x7f | 0x08 => self.erase(1, echo),
+            0x15 => self.erase(self.units.len(), echo),
+            0x17 => {
+                let blanks = self
+                    .units
+                    .iter()
+                    .rev()
+                    .take_while(|(s, _)| s.trim().is_empty())
+                    .count();
+                let word = self.units[..self.units.len() - blanks]
+                    .iter()
+                    .rev()
+                    .take_while(|(s, _)| !s.trim().is_empty())
+                    .count();
+                self.erase(blanks + word, echo);
+            }
+            0x04 if self.units.is_empty() => return Some(Edit::Eof),
+            0x1b => self.esc = Esc::Start,
+            b'\t' => self.push(' ', echo),
+            0x20..=0x7e => self.push(b as char, echo),
+            _ => {}
+        }
+        None
+    }
+
+    fn push(&mut self, c: char, echo: &mut Vec<u8>) {
+        let mut tmp = [0u8; 4];
+        let joins = cells(c) == 0
+            || self
+                .units
+                .last()
+                .is_some_and(|(s, _)| s.ends_with('\u{200d}'));
+        match self.units.last_mut() {
+            // A combining mark, variation selector or the second half of a ZWJ emoji
+            // belongs to the unit before it; its width is that of the whole cluster.
+            Some((s, w)) if joins => {
+                s.push(c);
+                let now = unicode_width::UnicodeWidthStr::width(s.as_str());
+                if now > *w {
+                    *w = now;
+                }
+            }
+            _ => self.units.push((c.to_string(), cells(c))),
+        }
+        echo.extend_from_slice(c.encode_utf8(&mut tmp).as_bytes());
+    }
+
+    fn erase(&mut self, n: usize, echo: &mut Vec<u8>) {
+        for _ in 0..n {
+            let Some((_, w)) = self.units.pop() else {
+                break;
+            };
+            for _ in 0..w {
+                echo.extend_from_slice(b"\x08 \x08");
+            }
+        }
+    }
 }
 
 /// Devices behind the kernel consoles listed in /proc/consoles.
@@ -1100,7 +1323,10 @@ mod journal_tests {
         // a restart: only 2 is left (system and console are not journaled)
         let con2 = Console::open(false);
         let left = con2.open_journal(path.clone());
-        assert_eq!(left.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["2"]);
+        assert_eq!(
+            left.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+            ["2"]
+        );
         assert_eq!(left[0].channel, "web:c1");
         con2.journal_done("2");
         assert!(Console::open(false).open_journal(path).is_empty());
@@ -1127,5 +1353,82 @@ mod width_tests {
         assert_eq!(s, "\x1b[1m中\x1b[0mx  ");
         // a wide char that would straddle the edge is dropped, the cell padded
         assert_eq!(fit_ansi("ab中", 3), "ab ");
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    fn typed(input: impl AsRef<[u8]>) -> (Vec<Edit>, String) {
+        let mut ed = LineEd::default();
+        let mut echo = Vec::new();
+        let edits = input
+            .as_ref()
+            .iter()
+            .copied()
+            .filter_map(|b| ed.feed(b, &mut echo))
+            .collect();
+        (edits, String::from_utf8_lossy(&echo).into_owned())
+    }
+
+    #[test]
+    fn backspace_erases_by_width() {
+        // 3 characters, 2 Backspaces: one left, and 2 cells erased for each CJK character
+        let (e, echo) = typed("中文字\x7f\x7f\r");
+        assert_eq!(e, [Edit::Line("中".into())]);
+        assert!(echo.ends_with("字\x08 \x08\x08 \x08\x08 \x08\x08 \x08\n"));
+        let (e, _) = typed("привет\x7f!\r");
+        assert_eq!(e, [Edit::Line("приве!".into())]);
+        // e + combining acute is one unit
+        let (e, echo) = typed("cafe\u{301}\x7f\r");
+        assert_eq!(e, [Edit::Line("caf".into())]);
+        assert_eq!(echo.matches('\x08').count(), 2);
+        // emoji with a variation selector and a ZWJ family: one Backspace each
+        let (e, _) = typed("a❤\u{fe0f}👨\u{200d}👩\x7f\x7f\r");
+        assert_eq!(e, [Edit::Line("a".into())]);
+    }
+
+    #[test]
+    fn line_keys() {
+        let (e, _) = typed("one two  \x17three\r");
+        assert_eq!(e, [Edit::Line("one three".into())]);
+        let (e, _) = typed("junk\x15ok\r");
+        assert_eq!(e, [Edit::Line("ok".into())]);
+        // arrows and F5 are not typed; a broken UTF-8 byte is dropped
+        let (e, echo) = typed(b"a\x1b[A\x1b[15~b\xffc\r\x04");
+        assert_eq!(e, [Edit::Line("abc".into()), Edit::Eof]);
+        assert!(!echo.contains('\x1b'));
+        let (e, _) = typed("x\x04\x7f\x7f\r");
+        assert_eq!(e, [Edit::Line("".into())]);
+    }
+
+    #[test]
+    fn edits_on_a_real_pty() {
+        use std::io::Read;
+        use std::os::unix::io::FromRawFd;
+        let (mut m, mut sl) = (0, 0);
+        let ok = unsafe {
+            libc::openpty(
+                &mut m,
+                &mut sl,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert_eq!(ok, 0);
+        let mut master = unsafe { std::fs::File::from_raw_fd(m) };
+        let slave = unsafe { std::fs::File::from_raw_fd(sl) };
+        let echo = slave.try_clone().unwrap();
+        let (tx, rx) = channel();
+        spawn_tty_reader(slave, sl, echo, tx, "pty".into());
+        master.write_all("中文\x7fok\r".as_bytes()).unwrap();
+        let ib = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(ib.text, "中ok");
+        let mut buf = [0u8; 64];
+        let n = master.read(&mut buf).unwrap();
+        // no kernel echo: only ours, two cells erased for 文
+        assert_eq!(&buf[..n], "中文\x08 \x08\x08 \x08ok\r\n".as_bytes());
     }
 }

@@ -322,6 +322,7 @@ mod tests {
                 create_image: true,
                 model: None,
                 hf_token: None,
+                lang: None,
             },
             Box::new(|_| {}),
         )

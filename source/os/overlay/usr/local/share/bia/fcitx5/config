@@ -1,0 +1,6 @@
+# Ctrl+Space switches between the keyboard and the last input method. macOS
+# (and so a VM on a Mac) keeps Ctrl+Space for itself, so Ctrl+Shift+Space does
+# the same. Clicking the language in the top bar always works.
+[Hotkey/TriggerKeys]
+0=Control+space
+1=Control+Shift+space

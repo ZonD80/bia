@@ -177,6 +177,7 @@ context meters, tokens/s, what the agent is doing). Your input is green after
 -> /help                               list console commands
 -> which disks are here?               bash: lsblk
 -> use openrouter with key sk-or-…     system_fmm_configure
+-> use my ChatGPT Plus subscription     system_fmm_chatgpt (Login with ChatGPT page)
 -> log into my telegram, +34…          telegram_login → telegram_submit_code
 -> every morning at 8 send me the news schedule_create
 -> /update                             OS update through the rescue image

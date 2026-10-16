@@ -2,6 +2,10 @@
 # Boot dist/bia.img in QEMU via UEFI. MODE=gui (window + serial here) | serial (headless) | socket (serial on a unix socket)
 # NET=bridge (default): vmnet-bridged onto this Mac's Wi-Fi so the guest DHCP's a LAN address.
 # NET=user: SLIRP NAT + hostfwd 127.0.0.1:8080 -> guest :80
+# FMM keys: ./fmm.json, source/flash/files/state/fmm.json, or FMM=path. Passed as fw_cfg
+# opt/bia/fmm.json (guest: /sys/firmware/qemu_fw_cfg/by_name/opt/bia/fmm.json/raw).
+# The flash image is not edited. The agent copies the file into files/state/fmm.json
+# on boot when that state file is still missing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -174,6 +178,7 @@ if [ "$NET" = bridge ] && [ "$(id -u)" -ne 0 ]; then
     USB="$USB" SOCK="$SOCK" MON="$MON" WEBPORT="$WEBPORT" \
     BOOT="${BOOT:-flash}" \
     INTERNAL="$INTERNAL" INTERNAL_GB="$INTERNAL_GB" INTERNAL_IMG="$INTERNAL_IMG" \
+    FMM="${FMM:-}" \
     -- "$ROOT/tools/run-qemu.sh"
 fi
 
@@ -238,6 +243,24 @@ else
   if [ -n "${INTERNAL_IMG:-}" ] && [ -f "$INTERNAL_IMG" ]; then
     QEMU+=(-drive if=none,id=d1,format=raw,file="$INTERNAL_IMG" -device virtio-blk-pci,drive=d1,serial=internal)
   fi
+fi
+# Same lookup as tools/flash.sh. The item name matches QEMU_FMM_ITEM in bia-agent.
+fmm_file=""
+if [ -n "${FMM:-}" ]; then
+  fmm_file=$FMM
+elif [ -f "$ROOT/fmm.json" ]; then
+  fmm_file=$ROOT/fmm.json
+elif [ -f "$ROOT/source/flash/files/state/fmm.json" ]; then
+  fmm_file=$ROOT/source/flash/files/state/fmm.json
+fi
+if [ -n "$fmm_file" ]; then
+  [ -f "$fmm_file" ] || { echo "FMM file not found: $fmm_file"; exit 1; }
+  case $fmm_file in
+    /*) ;;
+    *) fmm_file="$ROOT/$fmm_file" ;;
+  esac
+  echo "== FMM keys from $fmm_file (QEMU fw_cfg; flash image unchanged)"
+  QEMU+=(-fw_cfg "name=opt/bia/fmm.json,file=$fmm_file")
 fi
 case $MODE in
   gui) QEMU+=(-device virtio-gpu-pci -device qemu-xhci -device usb-kbd -device usb-tablet -display cocoa -serial mon:stdio) ;;

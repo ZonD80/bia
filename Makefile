@@ -17,6 +17,8 @@ ERASE ?=
 # Local model for the stick from Hugging Face: MODEL=repo or MODEL=repo:file.gguf
 # (gated repos: export HF_TOKEN). The image itself never contains a model.
 MODEL ?=
+# The owner's language on the stick: BIA_LANG=ru (code or English name; default: host locale).
+BIA_LANG ?=
 # Optional path to local FMM JSON (default: ./fmm.json or source/flash/files/state/fmm.json). Never commit keys.
 FMM ?=
 
@@ -58,7 +60,7 @@ image:              ## dist/bia.img (QEMU flash image) from dist/$(ARCH)/root.im
 	ARCH=$(ARCH) IMAGE_MB=$(IMAGE_MB) ROOT_MB=$(ROOT_MB) tools/mkimage.sh
 
 flash:              ## write a USB stick (x86_64 unless ARCH= is set); uses bia-flash for new sticks
-	ARCH=$(if $(filter command line,$(origin ARCH)),$(ARCH),x86_64) ROOT_MB=$(ROOT_MB) DISK=$(DISK) YES=$(YES) ERASE=$(ERASE) MODEL="$(MODEL)" FMM=$(FMM) tools/flash.sh
+	ARCH=$(if $(filter command line,$(origin ARCH)),$(ARCH),x86_64) ROOT_MB=$(ROOT_MB) DISK=$(DISK) YES=$(YES) ERASE=$(ERASE) MODEL="$(MODEL)" BIA_LANG="$(BIA_LANG)" FMM=$(FMM) tools/flash.sh
 
 # NOTARIZE=0 make flasher  — codesign only (macOS). Default notarizes when .env has Apple creds.
 NOTARIZE ?= 1

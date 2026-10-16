@@ -26,6 +26,8 @@ FLASH=${FLASH:-source/flash}
 ROOT_MB=${ROOT_MB:-3072}
 ROOTIMG=${ROOTIMG:-dist/$ARCH/root.img}
 MODEL=${MODEL:-}
+# The owner's language for bia-flash --lang (a code like ru, or a name; default: host locale).
+BIA_LANG=${BIA_LANG:-}
 if [ "$(id -u)" -eq 0 ]; then
   echo "run as yourself; the script sudo's only for disk writes"
   exit 1
@@ -195,6 +197,7 @@ if [ "$EXISTING" != 1 ]; then
   fi
   model_args=()
   [ -n "$MODEL" ] && model_args=(--model "$MODEL")
+  [ -n "$BIA_LANG" ] && model_args+=(--lang "$BIA_LANG")
   echo "== unmounting $DISK"
   diskutil unmountDisk force "$DISK" >/dev/null || true
   echo "== bia-flash write /dev/r$DISK"

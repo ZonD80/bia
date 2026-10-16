@@ -11,6 +11,7 @@ pub mod catalog;
 pub mod contacts;
 pub mod diag;
 pub mod filter;
+pub mod input;
 pub mod langs;
 pub mod learn;
 pub mod listen;

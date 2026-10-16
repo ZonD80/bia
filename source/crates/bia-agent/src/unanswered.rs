@@ -132,11 +132,7 @@ impl Set {
     pub fn muted_len(&self) -> usize {
         self.open
             .iter()
-            .filter(|e| {
-                self.chans
-                    .iter()
-                    .any(|c| c.channel == e.channel && c.muted)
-            })
+            .filter(|e| self.chans.iter().any(|c| c.channel == e.channel && c.muted))
             .count()
     }
 
@@ -298,9 +294,7 @@ impl Set {
             .map(|e| {
                 let c = self.chans.iter().find(|c| c.channel == e.channel);
                 let muted = c.map(|c| c.muted).unwrap_or(false);
-                let next = c
-                    .map(|c| c.next_due.saturating_sub(now))
-                    .unwrap_or(0);
+                let next = c.map(|c| c.next_due.saturating_sub(now)).unwrap_or(0);
                 format!(
                     "{} #{} {}, open {}{}",
                     e.channel,
@@ -352,7 +346,10 @@ pub fn notice(due: &Due, jobs: &str, now: u64) -> String {
             ago(now.saturating_sub(e.received))
         ));
     }
-    s.push_str(&format!("running jobs: {}\n", if jobs.is_empty() { "none" } else { jobs }));
+    s.push_str(&format!(
+        "running jobs: {}\n",
+        if jobs.is_empty() { "none" } else { jobs }
+    ));
     s.push_str("Use each channel exactly as listed. Not answered yet: reply with say. Still working: post a short status. Already answered and done: close it with say(channel, answered=[id]) and no message, which sends nothing. Do not repeat an answer.");
     s
 }
@@ -495,7 +492,11 @@ mod tests {
         let before = s.open_elsewhere("web:c26");
         s.on_reply("web:c26", &["b7".into()], 6);
         assert!(before.is_empty(), "web:c26 had its own open message");
-        assert_eq!(s.open_elsewhere("web:c26"), ["web"], "what the old order wrongly reported");
+        assert_eq!(
+            s.open_elsewhere("web:c26"),
+            ["web"],
+            "what the old order wrongly reported"
+        );
         assert!(s.has_open("web") && !s.has_open("web:c26"));
     }
 

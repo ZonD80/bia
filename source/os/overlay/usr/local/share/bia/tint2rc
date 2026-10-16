@@ -1,6 +1,6 @@
 # Top switcher. It does not reserve space itself: Openbox keeps a matching
 # top margin, so normal and maximized windows start below this bar.
-panel_items = T
+panel_items = TE
 panel_size = 100% 32
 panel_margin = 0 0
 panel_padding = 2 0 2
@@ -34,6 +34,20 @@ task_active_font_color = #ffffff 100
 task_icon_size = 16
 task_background_id = 2
 task_active_background_id = 3
+
+# Current input method, right end. A click switches to the next one.
+execp = new
+execp_command = /usr/local/sbin/bia-im
+execp_interval = 1
+execp_continuous = 0
+execp_has_icon = 0
+execp_centered = 1
+execp_font = DejaVu Sans Bold 10
+execp_font_color = #ffffff 100
+execp_padding = 10 0
+execp_background_id = 2
+execp_lclick_command = /usr/local/sbin/bia-im next
+execp_tooltip = Input method: click or Ctrl+Space to switch
 
 rounded = 0
 border_width = 0

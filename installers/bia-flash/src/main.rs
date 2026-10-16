@@ -26,10 +26,13 @@ enum Cmd {
     },
     /// How and where to get an API key for each provider.
     Keys,
+    /// Languages bia can be flashed with (`write --lang`).
+    Langs,
     /// Continue with ChatGPT: sign in in the browser so your ChatGPT plan pays for bia.
     /// Writes an FMM file for `write --fmm`; one sign-in is for one stick.
     Chatgpt {
-        /// Model id (see the list printed after sign-in). Without it the list is shown and
+        /// Model id (see the list printed after sign-in). Without it the default (the id
+        /// containing `6.1-sol`) is used; if the account has none, the list is shown and
         /// nothing is saved.
         #[arg(long)]
         model: Option<String>,
@@ -141,6 +144,10 @@ enum Cmd {
         /// Hugging Face token for gated or private repos (default: $HF_TOKEN).
         #[arg(long)]
         hf_token: Option<String>,
+        /// The owner's language (code or English name, see `langs`): bia speaks it from the
+        /// first boot, with its voice and keyboard. Default: the host's locale, else English.
+        #[arg(long)]
+        lang: Option<String>,
     },
 }
 
@@ -220,6 +227,11 @@ fn run() -> Result<()> {
             let auth = chatgpt::sign_in(email.as_deref(), &mut |s| eprintln!("== {s}"))?;
             eprintln!("== signed in as {}", auth.email);
             let models = chatgpt::list_models(&auth.access_token)?;
+            let model = model.or_else(|| {
+                let d = chatgpt::default_model(&models)?;
+                eprintln!("== model {} (default; --model picks another)", d.id);
+                Some(d.id.clone())
+            });
             let Some(model) = model else {
                 for m in &models {
                     println!("{}\t{}", m.id, if m.name != m.id { m.name.as_str() } else { "" });
@@ -234,6 +246,12 @@ fn run() -> Result<()> {
             let mut f = chatgpt::open_private(&out).with_context(|| format!("create {}", out.display()))?;
             f.write_all(&bia_flash::fmm_config_json(&cfg)?)?;
             eprintln!("== saved {} (provider=chatgpt, model={model}); now: bia-flash write … --fmm {}", out.display(), out.display());
+            Ok(())
+        }
+        Cmd::Langs => {
+            for l in bia_flash::lang::languages() {
+                println!("{:<4} {}{}", l.code, l.name, if l.voice { "" } else { "  (no voice: text only)" });
+            }
             Ok(())
         }
         Cmd::Keys => {
@@ -344,7 +362,19 @@ fn run() -> Result<()> {
             no_test,
             model,
             hf_token,
+            lang,
         } => {
+            let lang = match lang {
+                Some(l) => bia_flash::lang::find(&l)
+                    .with_context(|| format!("unknown language {l:?} (see bia-flash langs)"))?,
+                None => bia_flash::lang::find(&bia_flash::lang::host_default()).context("no English in the catalog")?,
+            };
+            eprintln!(
+                "note: language {} ({}){}",
+                lang.name,
+                lang.code,
+                if lang.voice { "" } else { " — no voice exists for it: bia reads and writes it, and speaks English" }
+            );
             let hf_token = token(hf_token);
             let model = match model {
                 Some(spec) => {
@@ -439,6 +469,7 @@ fn run() -> Result<()> {
                 create_image: image_file,
                 model,
                 hf_token,
+                lang: Some(lang.code),
             };
             write_stick(
                 opts,

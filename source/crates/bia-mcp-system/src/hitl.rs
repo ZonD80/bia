@@ -9,7 +9,7 @@ fn files_dir() -> PathBuf {
     PathBuf::from(std::env::var("BIA_FILES").unwrap_or_else(|_| "/home/bia/files".into()))
 }
 
-fn hitl_dir() -> PathBuf {
+pub(crate) fn hitl_dir() -> PathBuf {
     files_dir().join("state").join("hitl")
 }
 
@@ -17,7 +17,7 @@ fn dl_dir() -> PathBuf {
     files_dir().join("state").join("dl")
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     let mut b = [0u8; 4];
     if let Ok(mut f) = fs::File::open("/dev/urandom") {
         use std::io::Read;
@@ -216,6 +216,18 @@ pub fn share(ctx: &Ctx, args: Value) -> Result<String, String> {
     ))
 }
 
+/// Web console links to the page of human task `id`.
+pub(crate) fn task_links(id: &str) -> Vec<String> {
+    let u = console_urls();
+    if u.is_empty() {
+        vec![format!("/hitl/{id} (web console, mTLS)")]
+    } else {
+        u.into_iter()
+            .map(|u| with_path(&u, &format!("/hitl/{id}")))
+            .collect()
+    }
+}
+
 pub fn ask(ctx: &Ctx, args: Value) -> Result<String, String> {
     let title = bia_mcp::arg_str(&args, "title")?.trim().to_string();
     if title.is_empty() {
@@ -244,17 +256,7 @@ pub fn ask(ctx: &Ctx, args: Value) -> Result<String, String> {
     .map_err(|e| e.to_string())?;
     unsafe { libc::sync() };
     ctx.log(format!("human task {id}: {title}"));
-    let hitl_urls: Vec<String> = {
-        let u = console_urls();
-        if u.is_empty() {
-            vec![format!("/hitl/{id} (web console, mTLS)")]
-        } else {
-            u.into_iter()
-                .map(|u| with_path(&u, &format!("/hitl/{id}")))
-                .collect()
-        }
-    };
-    for u in &hitl_urls {
+    for u in &task_links(&id) {
         ctx.log(format!(
             "open {u} — the page shows the machine display; do the work there, then Done"
         ));

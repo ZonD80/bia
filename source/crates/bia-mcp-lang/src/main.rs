@@ -51,6 +51,15 @@ fn main() {
             |_, a| ops::disable(arg_str(&a, "lang")?),
         )
         .tool(
+            "input",
+            "How a language is typed on the console (fcitx5; the top bar shows the current one, a click or Ctrl+Space switches). Learning a language adds its keyboard on its own when a US keyboard cannot type its script (ru → keyboard-ru, zh → pinyin, ja → anthy, ko → hangul, vi → unikey, hi → keyboard-in …). Set it when the user wants another: a native Latin layout (de → keyboard-de, fr → keyboard-fr, es → keyboard-es, or keyboard-us-intl for accents), a variant (keyboard-ru-phonetic), \"\" for none, \"auto\" for the default.",
+            json!({"type": "object", "required": ["lang", "input"], "properties": {
+                "lang": {"type": "string"},
+                "input": {"type": "string", "description": "keyboard-<xkb layout>[-<variant>], an input method (pinyin, anthy, hangul, unikey), \"\" or \"auto\""}
+            }}),
+            |_, a| ops::set_input(arg_str(&a, "lang")?, arg_str(&a, "input")?),
+        )
+        .tool(
             "voice",
             "Choose the voice a language is spoken with (downloads it if needed). Voice ids come from lang_catalog(query=lang).",
             json!({"type": "object", "required": ["lang", "voice"], "properties": {

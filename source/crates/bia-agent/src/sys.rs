@@ -329,8 +329,7 @@ pub fn has_nameserver() -> bool {
     };
     s.lines().any(|l| {
         let t = l.trim_start();
-        t.starts_with("nameserver")
-            && t.split_whitespace().nth(1).is_some_and(|a| !a.is_empty())
+        t.starts_with("nameserver") && t.split_whitespace().nth(1).is_some_and(|a| !a.is_empty())
     })
 }
 
@@ -341,7 +340,10 @@ pub fn dns_resolves(host: &str) -> bool {
     if host.is_empty() {
         return false;
     }
-    (host, 443).to_socket_addrs().map(|mut i| i.next().is_some()).unwrap_or(false)
+    (host, 443)
+        .to_socket_addrs()
+        .map(|mut i| i.next().is_some())
+        .unwrap_or(false)
 }
 
 /// Hostname to probe for FMM DNS readiness (from base URL or provider default).
@@ -380,11 +382,7 @@ pub fn fmm_dns_host(provider: &str, base_url: &str) -> String {
 
 /// Wait until a default route, DNS config, and (optionally) hostname resolution are ready.
 /// Returns true if ready within `timeout`. Calls `tick` about once a second with a status line.
-pub fn wait_network(
-    timeout: Duration,
-    dns_host: Option<&str>,
-    mut tick: impl FnMut(&str),
-) -> bool {
+pub fn wait_network(timeout: Duration, dns_host: Option<&str>, mut tick: impl FnMut(&str)) -> bool {
     let start = std::time::Instant::now();
     let mut last = String::new();
     loop {

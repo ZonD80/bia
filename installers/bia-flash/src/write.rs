@@ -37,6 +37,8 @@ pub struct FlashOptions {
     pub model: Option<HfModel>,
     /// Hugging Face token for gated/private repos (never written to the stick).
     pub hf_token: Option<String>,
+    /// The owner's language (catalog code), written to `EFI/bia/lang.json`.
+    pub lang: Option<String>,
 }
 
 /// Bytes the model takes at the end of BIAROOT (each file starts on a 1 MiB boundary).
@@ -160,6 +162,11 @@ pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
             "wrote ESP {ESP_FMM_REL} (provider={}, model={})",
             fmm.provider, fmm.model
         ));
+    }
+
+    if let Some(code) = &opts.lang {
+        add_esp_file(&mut esp, crate::lang::ESP_LANG_REL, &crate::lang::lang_json(code))?;
+        progress(&format!("wrote ESP {} ({code})", crate::lang::ESP_LANG_REL));
     }
 
     progress("writing ESP");
@@ -617,6 +624,7 @@ pub(crate) mod image_tests {
             create_image: true,
             model: None,
             hf_token: None,
+            lang: Some("ru".into()),
         };
         write_stick(opts(&img_xz, Some(sha(&img))), Box::new(|_| {})).unwrap();
         let d = fs::read(&stick).unwrap();
@@ -636,6 +644,8 @@ pub(crate) mod image_tests {
         let keys: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/fmm.json").unwrap()).unwrap();
         assert_eq!(keys["api_key"], "sk-or-v1-test");
         assert_eq!(keys["enabled"], true);
+        let lang: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/lang.json").unwrap()).unwrap();
+        assert_eq!(lang["lang"], "ru");
         assert_eq!(esp_file(&d, &sl, "EFI/BOOT/BOOTX64.EFI").unwrap(), b"EFI/BOOT/BOOTX64.EFI");
 
         // A raw .img works the same; a wrong checksum leaves the stick unbootable (no ESP).

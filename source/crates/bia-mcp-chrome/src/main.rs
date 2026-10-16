@@ -62,7 +62,7 @@ fn main() {
     let mut server = Server::new("chrome", env!("CARGO_PKG_VERSION"))
         .tool(
             "install",
-            "Install the passkey Chrome add-on and restart Chrome with remote debugging on the bia profile. Page tools come from chrome-devtools-mcp. If this fails because Chrome is not installed, run apt-get install -y google-chrome-stable and call install again.",
+            "Install the passkey Chrome add-on and restart Chrome with remote debugging on the bia profile. Page tools come from chrome-devtools-mcp. If Chrome is not installed, it fails and says how to install the official Google Chrome; do that, then call install again.",
             json!({"type": "object", "properties": {}}),
             {
                 let dt = dt.clone();

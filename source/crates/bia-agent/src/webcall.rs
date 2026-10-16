@@ -80,7 +80,8 @@ impl Call {
     fn echo_ref(&self) -> Option<String> {
         let g = self.spoken.lock().ok()?;
         let (text, at) = g.as_ref()?;
-        (self.speaking.load(Ordering::SeqCst) || at.elapsed().as_secs() < ECHO_SECS).then(|| text.clone())
+        (self.speaking.load(Ordering::SeqCst) || at.elapsed().as_secs() < ECHO_SECS)
+            .then(|| text.clone())
     }
 }
 
@@ -157,7 +158,10 @@ pub fn serve(
         c.insert(k.clone(), call.clone());
     }
     bia_speech::warm();
-    let mut listener = match bia_speech::Listener::with_lang(16_000, bia_speech::contacts::lang_for_identity(identity)) {
+    let mut listener = match bia_speech::Listener::with_lang(
+        16_000,
+        bia_speech::contacts::lang_for_identity(identity),
+    ) {
         Ok(l) => l,
         Err(e) => {
             call.send_json(json!({"t": "end", "reason": format!("speech unavailable: {e}")}));
@@ -168,8 +172,15 @@ pub fn serve(
     };
     call.send_json(json!({"t": "ready"}));
     crate::webchat::emit_event(identity, json!({"t": "call", "chat": chat, "on": true}));
-    call.system(if answered { "[call started] (they answered your call)" } else { "[call started] (they called you)" });
-    bia_speech::diag::log("webcall", format!("call started {identity}@{}", call.channel()));
+    call.system(if answered {
+        "[call started] (they answered your call)"
+    } else {
+        "[call started] (they called you)"
+    });
+    bia_speech::diag::log(
+        "webcall",
+        format!("call started {identity}@{}", call.channel()),
+    );
     let mut barge = 0u32;
     loop {
         match recv() {
@@ -185,7 +196,9 @@ pub fn serve(
                     if barge >= BARGE_FRAMES {
                         barge = 0;
                         if call.stop_speaking() {
-                            call.system("[interrupted: they started talking while you were speaking]");
+                            call.system(
+                                "[interrupted: they started talking while you were speaking]",
+                            );
                         }
                     }
                 } else {
@@ -196,11 +209,15 @@ pub fn serve(
                 }
             }
             Ok((1, payload)) => {
-                let Ok(v) = serde_json::from_slice::<Value>(&payload) else { continue };
+                let Ok(v) = serde_json::from_slice::<Value>(&payload) else {
+                    continue;
+                };
                 match v.get("t").and_then(|t| t.as_str()).unwrap_or("") {
                     "played" => {
                         let gen = v.get("gen").and_then(|g| g.as_u64()).unwrap_or(0);
-                        if gen == call.gen.load(Ordering::SeqCst) && call.speaking.swap(false, Ordering::SeqCst) {
+                        if gen == call.gen.load(Ordering::SeqCst)
+                            && call.speaking.swap(false, Ordering::SeqCst)
+                        {
                             if call.hangup_after.load(Ordering::SeqCst) {
                                 hang_up(&call, "bia hung up");
                             } else {
@@ -208,7 +225,10 @@ pub fn serve(
                             }
                         }
                     }
-                    "mute" => call.muted.store(v.get("on").and_then(|x| x.as_bool()).unwrap_or(false), Ordering::Relaxed),
+                    "mute" => call.muted.store(
+                        v.get("on").and_then(|x| x.as_bool()).unwrap_or(false),
+                        Ordering::Relaxed,
+                    ),
                     "hangup" => break,
                     "ping" => call.send_json(json!({"t": "pong"})),
                     _ => {}
@@ -263,7 +283,11 @@ pub fn speak(identity: &str, channel: &str, text: &str, lang: &str) -> Result<St
     }
     // no lang given: the person's preferred language (addressbook)
     let preferred = bia_speech::contacts::lang_for_identity(identity).unwrap_or_default();
-    let lang = if lang.trim().is_empty() { preferred.as_str() } else { lang };
+    let lang = if lang.trim().is_empty() {
+        preferred.as_str()
+    } else {
+        lang
+    };
     bia_speech::tts::plan(&bia_speech::registry::current(), &text, lang)?;
     if call.stop_speaking() {
         call.system("[voice cancelled]");
@@ -279,12 +303,16 @@ pub fn speak(identity: &str, channel: &str, text: &str, lang: &str) -> Result<St
     call.send_json(json!({"t": "say", "gen": gen, "text": text}));
     let lang = lang.to_string();
     std::thread::spawn(move || {
-        let live = |c: &Call| c.gen.load(Ordering::SeqCst) == gen && !c.ended.load(Ordering::SeqCst);
+        let live =
+            |c: &Call| c.gen.load(Ordering::SeqCst) == gen && !c.ended.load(Ordering::SeqCst);
         let r = bia_speech::tts::speak(&text, &lang, &mut |chunk, rate| {
             if !live(&call) {
                 return false;
             }
-            let pcm: Vec<i16> = chunk.iter().map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16).collect();
+            let pcm: Vec<i16> = chunk
+                .iter()
+                .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
+                .collect();
             call.send_audio(gen, rate, &pcm)
         });
         if !live(&call) {
@@ -313,7 +341,9 @@ pub fn cancel_ring(identity: &str, channel: &str) -> Result<String, String> {
     let k = key(identity, channel).ok_or_else(|| format!("{channel} is not a web chat"))?;
     if rings().lock().ok().and_then(|mut r| r.remove(&k)).is_some() {
         crate::webchat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
-        return Ok(format!("call to {channel} cancelled before it was answered"));
+        return Ok(format!(
+            "call to {channel} cancelled before it was answered"
+        ));
     }
     if find(identity, channel).is_some() {
         return Err("the call was already answered; end it with web_call_hangup".into());
@@ -340,7 +370,9 @@ pub fn hangup(identity: &str, channel: &str) -> Result<String, String> {
                 hang_up(&c, "bia hung up");
             }
         });
-        return Ok(format!("hanging up {channel} as soon as what you are saying has played"));
+        return Ok(format!(
+            "hanging up {channel} as soon as what you are saying has played"
+        ));
     }
     hang_up(&call, "bia hung up");
     Ok(format!("hung up {channel}"))
@@ -363,10 +395,16 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
         return;
     }
     let dur = fmt_dur(call.started.elapsed());
-    crate::webchat::emit_event(&call.identity, json!({"t": "call", "chat": call.chat, "on": false}));
+    crate::webchat::emit_event(
+        &call.identity,
+        json!({"t": "call", "chat": call.chat, "on": false}),
+    );
     let why = reason.map(|r| format!(", {r}")).unwrap_or_default();
     call.system(&format!("[call ended] ({dur}{why})"));
-    bia_speech::diag::log("webcall", format!("call ended {}@{} {dur}", call.identity, call.channel()));
+    bia_speech::diag::log(
+        "webcall",
+        format!("call ended {}@{} {dur}", call.identity, call.channel()),
+    );
     let lines = call.lines.lock().map(|l| l.clone()).unwrap_or_default();
     let mut summary = format!("📞 Call · {dur}");
     if lines.is_empty() {
@@ -384,7 +422,9 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
 pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
     let k = key(identity, channel).ok_or_else(|| format!("{channel} is not a web chat"))?;
     if !crate::webchat::has_client(identity) {
-        return Err(format!("no web console is open for {identity}; send a message instead"));
+        return Err(format!(
+            "no web console is open for {identity}; send a message instead"
+        ));
     }
     if find(identity, channel).is_some() {
         return Err("already in a call on this channel".into());
@@ -392,7 +432,13 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
     crate::webchat::ensure_chat(identity, channel)?;
     let id = crate::console::mint_msg_id();
     if let Ok(mut r) = rings().lock() {
-        r.insert(k.clone(), Ring { id: id.clone(), started: Instant::now() });
+        r.insert(
+            k.clone(),
+            Ring {
+                id: id.clone(),
+                started: Instant::now(),
+            },
+        );
     }
     crate::webchat::emit_event(identity, json!({"t": "ring", "chat": k.1, "id": id}));
     let (ident, chat, rid) = (identity.to_string(), k.1.clone(), id);
@@ -403,7 +449,9 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
             .lock()
             .ok()
             .and_then(|mut r| match r.get(&k) {
-                Some(x) if x.id == rid && x.started.elapsed().as_secs() >= RING_SECS => r.remove(&k),
+                Some(x) if x.id == rid && x.started.elapsed().as_secs() >= RING_SECS => {
+                    r.remove(&k)
+                }
                 _ => None,
             })
             .is_some();
@@ -468,7 +516,10 @@ mod tests {
 
     fn next_web(con: &Console) -> crate::console::Inbound {
         loop {
-            let ib = con.read_inbound_timeout(Duration::from_secs(60)).unwrap().expect("inbound");
+            let ib = con
+                .read_inbound_timeout(Duration::from_secs(60))
+                .unwrap()
+                .expect("inbound");
             if crate::webchat::is_web(&ib.channel) {
                 return ib;
             }
@@ -492,24 +543,40 @@ mod tests {
         let out = sink.clone();
         let server = std::thread::spawn(move || {
             let mut recv = || rx.recv().map_err(|_| std::io::Error::other("closed"));
-            serve(Box::new(out), Box::new(|| {}), &mut recv, "root", "test", "");
+            serve(
+                Box::new(out),
+                Box::new(|| {}),
+                &mut recv,
+                "root",
+                "test",
+                "",
+            );
         });
         let ib = next_web(&con);
         assert!(ib.text.starts_with("[call started]"), "{}", ib.text);
 
         // the caller speaks (synthesized), then is quiet
-        let (x, rate) = bia_speech::tts::synthesize("Hello bia. What time is it in Madrid right now?", "en").unwrap();
+        let (x, rate) =
+            bia_speech::tts::synthesize("Hello bia. What time is it in Madrid right now?", "en")
+                .unwrap();
         let x16 = bia_speech::audio::resample(&x, rate, 16_000);
         let pcm: Vec<i16> = x16.iter().map(|s| (s * 32767.0) as i16).collect();
-        for f in pcm.chunks(320).chain(std::iter::repeat([0i16; 320].as_slice()).take(75)) {
-            tx.send((2, f.iter().flat_map(|s| s.to_le_bytes()).collect())).unwrap();
+        for f in pcm
+            .chunks(320)
+            .chain(std::iter::repeat([0i16; 320].as_slice()).take(75))
+        {
+            tx.send((2, f.iter().flat_map(|s| s.to_le_bytes()).collect()))
+                .unwrap();
         }
         // one or two utterances, depending on how long the pause after "Hello bia." is
         let mut heard = String::new();
         for _ in 0..3 {
             let ib = next_web(&con);
             eprintln!("model got {}@{}: {}", ib.identity, ib.channel, ib.text);
-            assert_eq!((ib.identity.as_str(), ib.channel.as_str()), ("root", "web:test"));
+            assert_eq!(
+                (ib.identity.as_str(), ib.channel.as_str()),
+                ("root", "web:test")
+            );
             assert!(ib.text.starts_with("[speech en]"), "{}", ib.text);
             heard.push_str(&ib.text);
             if heard.to_lowercase().contains("madrid") {
@@ -519,18 +586,31 @@ mod tests {
         assert!(heard.to_lowercase().contains("madrid"), "{heard}");
 
         // bia answers: audio streams to the browser, then say_end
-        assert!(speak("root", "web:test", "It is nine in the evening.", "").is_err(), "lang required");
+        assert!(
+            speak("root", "web:test", "It is nine in the evening.", "").is_err(),
+            "lang required"
+        );
         speak("root", "web:test", "It is nine in the evening.", "en").unwrap();
         let t = Instant::now();
         let gen = loop {
             let fr = frames(&sink.0.lock().unwrap());
             let end = fr.iter().find_map(|(op, p)| {
-                let v: Value = (*op == 1).then(|| serde_json::from_slice(p).ok()).flatten()?;
+                let v: Value = (*op == 1)
+                    .then(|| serde_json::from_slice(p).ok())
+                    .flatten()?;
                 (v["t"] == "say_end").then(|| v["gen"].as_u64().unwrap())
             });
             if let Some(g) = end {
-                let audio: usize = fr.iter().filter(|(op, _)| *op == 2).map(|(_, p)| (p.len() - 8) / 2).sum();
-                let caps: Vec<String> = fr.iter().filter(|(op, _)| *op == 1).map(|(_, p)| String::from_utf8_lossy(p).into_owned()).collect();
+                let audio: usize = fr
+                    .iter()
+                    .filter(|(op, _)| *op == 2)
+                    .map(|(_, p)| (p.len() - 8) / 2)
+                    .sum();
+                let caps: Vec<String> = fr
+                    .iter()
+                    .filter(|(op, _)| *op == 1)
+                    .map(|(_, p)| String::from_utf8_lossy(p).into_owned())
+                    .collect();
                 eprintln!("browser got {audio} samples of speech; events {caps:?}");
                 assert!(audio > 8000, "audio streamed");
                 break g;
@@ -538,9 +618,17 @@ mod tests {
             assert!(t.elapsed().as_secs() < 30, "no say_end");
             std::thread::sleep(Duration::from_millis(100));
         };
-        tx.send((1, json!({"t": "played", "gen": gen}).to_string().into_bytes())).unwrap();
+        tx.send((
+            1,
+            json!({"t": "played", "gen": gen}).to_string().into_bytes(),
+        ))
+        .unwrap();
         let ib = next_web(&con);
-        assert!(ib.text.starts_with("[you finished speaking]"), "{}", ib.text);
+        assert!(
+            ib.text.starts_with("[you finished speaking]"),
+            "{}",
+            ib.text
+        );
 
         // bia hangs up: the model hears it ended, the chat gets the transcript
         hangup("root", "web:test").unwrap();
@@ -550,7 +638,11 @@ mod tests {
         assert!(ib.text.starts_with("[call ended]"), "{}", ib.text);
         let h = crate::webchat::chat_text("root", "test");
         eprintln!("chat:\n{h}");
-        assert!(h.contains("📞 Call") && h.to_lowercase().contains("madrid") && h.contains("nine in the evening"));
+        assert!(
+            h.contains("📞 Call")
+                && h.to_lowercase().contains("madrid")
+                && h.contains("nine in the evening")
+        );
         assert!(!active("root", "web:test"));
         let _ = std::fs::remove_dir_all(&dir);
     }

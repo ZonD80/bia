@@ -14,9 +14,9 @@ mod jobs;
 mod llama_srv;
 mod llm;
 mod mcp;
-mod outbox;
 mod memory;
 mod openapi;
+mod outbox;
 mod remote;
 mod repl;
 mod schedules;
@@ -221,8 +221,23 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         None
     };
     let fmm_path = paths.files.join("state").join("fmm.json");
+    // QEMU tests pass the repo fmm.json via fw_cfg. A real stick still seeds from the ESP.
+    // Either one runs only while files/state/fmm.json is missing.
+    if let Some(msg) = remote::FmmConfig::seed_from_qemu(&fmm_path) {
+        boot.note(&msg);
+    }
     if let Some(msg) = remote::FmmConfig::seed_from_esp(&paths.boot, &fmm_path) {
         boot.note(&msg);
+    }
+    if let Some(msg) = seed_language(&paths.boot) {
+        boot.note(&msg);
+    }
+    if system_mode {
+        // fcitx5 started before us; a new image or a change while it was down catches up.
+        bia_speech::input::sync(None, &bia_speech::registry::current());
+        if let Some(msg) = bia_speech::learn::resume() {
+            boot.note(&msg);
+        }
     }
     remote::chatgpt_keepalive(fmm_path.clone());
     let skip_local = remote::FmmConfig::load(&fmm_path)
@@ -255,19 +270,24 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
         boot.note(&plan.summary);
     }
-    let mut local_spec = model_path.as_ref().zip(plan.as_ref()).map(|(path, plan)| {
-        llm::LocalSpec {
-            path: path.clone(),
-            cfg: model_cfg.clone(),
-            sampling: cfg.sampling.clone(),
-            plan: plan.clone(),
-        }
-    });
+    let mut local_spec =
+        model_path
+            .as_ref()
+            .zip(plan.as_ref())
+            .map(|(path, plan)| llm::LocalSpec {
+                path: path.clone(),
+                cfg: model_cfg.clone(),
+                sampling: cfg.sampling.clone(),
+                plan: plan.clone(),
+            });
     let llm = if skip_local {
         boot.step(
             80,
             &match model_path.as_ref().and_then(|p| p.file_name()) {
-                Some(n) => format!("FMM is configured; not loading local model {}", n.to_string_lossy()),
+                Some(n) => format!(
+                    "FMM is configured; not loading local model {}",
+                    n.to_string_lossy()
+                ),
                 None => "FMM is configured; no local model on disk".into(),
             },
         );
@@ -536,7 +556,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .join("sessions")
             .join(format!("session-{}.md", clock::stamp_now())),
     );
-    let system = cfg.agent.system_prompt.clone();
+    let system = with_home_language(cfg.agent.system_prompt.clone());
     let mut repl = repl::Repl {
         con: con.clone(),
         llm,
@@ -588,7 +608,9 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .map(|c| (c.provider, c.base_url))
             .unwrap_or_else(|| ("openrouter".into(), String::new()));
         let host = sys::fmm_dns_host(&provider, &base);
-        boot.note(&format!("FMM: waiting for network before enabling ({host})"));
+        boot.note(&format!(
+            "FMM: waiting for network before enabling ({host})"
+        ));
         let ready = sys::wait_network(Duration::from_secs(90), Some(&host), |msg| {
             boot.note(msg);
         });
@@ -596,9 +618,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         // Brief retries: route/DNS can be up a moment before the API path works.
         if ready && line.contains("unreachable") {
             for attempt in 2..=6 {
-                boot.note(&format!(
-                    "FMM: still unreachable; retry {attempt}/6 in 5s"
-                ));
+                boot.note(&format!("FMM: still unreachable; retry {attempt}/6 in 5s"));
                 std::thread::sleep(Duration::from_secs(5));
                 line = repl.reload_fmm(true);
                 if !line.contains("unreachable") {
@@ -623,6 +643,18 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let _ = std::fs::remove_file(paths.files.join("state").join("boot_notice"));
+    // The very first start of this machine: nothing to resume, no earlier exit, not an update
+    // or a landing. The marker keeps the welcome to once (an upgraded machine gets it set on
+    // its first boot with this version, without the welcome).
+    let welcomed = paths.files.join("state").join("welcomed");
+    let first_launch = !welcomed.exists()
+        && migrated.is_none()
+        && updated.is_none()
+        && last_exit.is_none()
+        && !resumed;
+    if !welcomed.exists() {
+        let _ = std::fs::write(&welcomed, format!("bia {VERSION}\n"));
+    }
     let how = if let Some(msg) = migrated {
         if resumed {
             format!(
@@ -667,11 +699,13 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
                 if how.contains("Repair these yourself")
                     || how.contains("Propose fixes to the user and wait for approval")
                 {
-                    "Tell the user this sentence, then repair it yourself without waiting: for each package that did not install, search the internet, download the .deb for the version and architecture named here and install it; copy binaries that were not copied into place. Ask the user first only before a destructive step (removing or overwriting existing files, packages or binaries, up- or downgrading installed packages, disk or partition changes, reboot or poweroff). When done, tell the user what you fixed and what still fails."
+                    String::from("Tell the user this sentence, then repair it yourself without waiting: for each package that did not install, search the internet, download the .deb for the version and architecture named here and install it; copy binaries that were not copied into place. Ask the user first only before a destructive step (removing or overwriting existing files, packages or binaries, up- or downgrading installed packages, disk or partition changes, reboot or poweroff). When done, tell the user what you fixed and what still fails.")
                 } else if how.contains("this boot landed") || how.contains("this boot restored") {
-                    "Say that sentence to the user, then say you are ready for commands. Do not call tools."
+                    "Say that sentence to the user, then say you are ready for commands. Do not call tools.".into()
+                } else if first_launch {
+                    welcome(web.as_ref().map(|w| w.info_line()), repl.remote.is_some())
                 } else {
-                    "Reply that you are ready for commands. Do not call tools."
+                    "Reply that you are ready for commands. Do not call tools.".into()
                 }
             ),
         }
@@ -692,12 +726,18 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     {
         let lost = std::mem::take(&mut repl.tools.outbox_lost);
         if !lost.is_empty() {
-            boot.note(&format!("{} telegram/whatsapp send(s) cut short on reboot", lost.len()));
+            boot.note(&format!(
+                "{} telegram/whatsapp send(s) cut short on reboot",
+                lost.len()
+            ));
             repl.pending.extend(lost);
         }
     }
     if !replay.is_empty() {
-        boot.note(&format!("{} message(s) received before the restart, not yet answered", replay.len()));
+        boot.note(&format!(
+            "{} message(s) received before the restart, not yet answered",
+            replay.len()
+        ));
     }
     let mut fresh = Vec::new();
     while let Some(ib) = con.try_read_inbound() {
@@ -731,11 +771,89 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     Ok(repl.run())
 }
 
+/// Where the flasher leaves the owner's language: `{"lang": "ru"}`.
+const ESP_LANG_REL: &str = "EFI/bia/lang.json";
+
+/// Adopt the language chosen in the flasher once, then delete the ESP file so a later
+/// lang_default is not undone on reboot.
+fn seed_language(boot: &std::path::Path) -> Option<String> {
+    let esp = boot.join(ESP_LANG_REL);
+    let text = std::fs::read_to_string(&esp).ok()?;
+    let lang = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v["lang"].as_str().map(str::to_string));
+    let msg = match lang {
+        Some(l) => match bia_speech::learn::adopt_home(&l) {
+            Ok(m) => format!("ESP {ESP_LANG_REL}: {m}"),
+            Err(e) => format!("ESP {ESP_LANG_REL}: {e}"),
+        },
+        None => format!("ESP {ESP_LANG_REL}: no \"lang\"; ignored"),
+    };
+    let _ = std::fs::remove_file(&esp);
+    unsafe { libc::sync() };
+    Some(msg)
+}
+
+/// What the model says the very first time this machine starts: a short tour that ends with
+/// questions, in the owner's language (the system prompt names it).
+fn welcome(web: Option<String>, cloud: bool) -> String {
+    let code = bia_speech::registry::current().default_lang.clone();
+    let lang = if code.is_empty() || code == "en" {
+        "English".to_string()
+    } else {
+        bia_speech::langs::name(&code)
+    };
+    let web = match web {
+        Some(w) if !w.contains("no network") => format!("the web console ({w}): from a phone or computer on the same network, the first visit lets them take the root certificate, then they get chats, files, the screen and voice there"),
+        _ => "the web console: once you are on a network its address shows at the top of the screen; the first visit lets them take the root certificate, then they get chats, files, the screen and voice there".into(),
+    };
+    let brain = if cloud {
+        String::new()
+    } else {
+        "\n- you think with a small local model now; for a stronger one they can give you an API key (OpenRouter, OpenAI, Anthropic, …) or sign in with their ChatGPT plan.".into()
+    };
+    format!(
+        "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: bia, an assistant that lives on this computer. Then tell them, briefly, one line each:\n\
+- ask them what your name should be; remember it and use it from then on.\n\
+- {web}.\n\
+- you can log in to their Telegram and WhatsApp, so they can write and call you there and you can message for them; ask whether they want that.\n\
+- you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
+- you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
+End by asking what your name should be and what they would like to start with. Do not call tools now."
+    )
+}
+
+/// A home language other than English goes into the system prompt, so bia speaks it
+/// from the first boot reply on.
+fn with_home_language(mut prompt: String) -> String {
+    let code = bia_speech::registry::current().default_lang.clone();
+    if !code.is_empty() && code != "en" {
+        let name = bia_speech::langs::name(&code);
+        prompt.push_str(&format!(
+            "\nYour owner's language is {name} ({code}): write to root, on console and web, and in boot replies in {name}; answer anyone else in the language they write in."
+        ));
+    }
+    prompt
+}
+
 fn first_chars(s: &str, n: usize) -> String {
     let t: String = s.chars().take(n).collect();
     if s.chars().count() > n {
         format!("{t}...")
     } else {
         t
+    }
+}
+
+#[cfg(test)]
+mod welcome_tests {
+    #[test]
+    fn welcome_names_the_topics() {
+        let w = super::welcome(Some("web console: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca".into()), false);
+        for want in ["very first start", "Write in English", "https://10.0.0.5/", "Telegram and WhatsApp", "own accounts", "ChatGPT plan", "what your name should be", "Do not call tools"] {
+            assert!(w.contains(want), "missing {want:?} in {w}");
+        }
+        let w = super::welcome(Some("web console: (no network yet)  CA at /v1/pki/ca".into()), true);
+        assert!(w.contains("once you are on a network") && !w.contains("ChatGPT plan"));
     }
 }

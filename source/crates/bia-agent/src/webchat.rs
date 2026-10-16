@@ -413,10 +413,19 @@ impl User {
         let v = self.msgs.get(&c.id);
         let last = v.and_then(|v| v.last());
         let unread = v
-            .map(|v| v.iter().filter(|m| m.from == BIA && !m.read && !m.service).count())
+            .map(|v| {
+                v.iter()
+                    .filter(|m| m.from == BIA && !m.read && !m.service)
+                    .count()
+            })
             .unwrap_or(0);
         let pinned: Vec<&str> = v
-            .map(|v| v.iter().filter(|m| m.pinned).map(|m| m.id.as_str()).collect())
+            .map(|v| {
+                v.iter()
+                    .filter(|m| m.pinned)
+                    .map(|m| m.id.as_str())
+                    .collect()
+            })
             .unwrap_or_default();
         json!({
             "id": c.id,
@@ -458,10 +467,7 @@ impl Hub {
 
     fn emit_chat(&self, identity: &str, chat: &str) {
         let s = self.with_user(identity, |u| {
-            u.chats
-                .iter()
-                .find(|c| c.id == chat)
-                .map(|c| u.summary(c))
+            u.chats.iter().find(|c| c.id == chat).map(|c| u.summary(c))
         });
         if let Some(s) = s {
             self.emit(identity, json!({"t": "chat", "c": s}));
@@ -594,7 +600,10 @@ fn parse_buttons(v: Option<&Value>) -> Vec<Vec<Btn>> {
                         .and_then(|x| x.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    url: if url.starts_with("https://") || url.starts_with("http://") || url.starts_with('/') {
+                    url: if url.starts_with("https://")
+                        || url.starts_with("http://")
+                        || url.starts_with('/')
+                    {
                         url
                     } else {
                         String::new()
@@ -754,7 +763,12 @@ pub fn search(identity: &str, chat: Option<&str>, q: &str) -> Result<Value, Stri
 }
 
 /// Resolve an attachment the identity may download: `(abs path, display name, mime)`.
-pub fn attachment(identity: &str, chat: &str, id: &str, i: usize) -> Option<(PathBuf, String, String)> {
+pub fn attachment(
+    identity: &str,
+    chat: &str,
+    id: &str,
+    i: usize,
+) -> Option<(PathBuf, String, String)> {
     let h = hub().ok()?;
     let a = h.with_user(identity, |u| {
         u.find(chat, id).and_then(|m| m.files.get(i)).cloned()
@@ -796,7 +810,16 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
             let reply = Some(s("reply_to")).filter(|x| !x.is_empty());
             let kind = Some(s("kind")).filter(|x| !x.is_empty());
             let files = ids("files");
-            let m = user_send(h, identity, root, &chat, &text, reply, &files, kind.as_deref())?;
+            let m = user_send(
+                h,
+                identity,
+                root,
+                &chat,
+                &text,
+                reply,
+                &files,
+                kind.as_deref(),
+            )?;
             Ok(json!({"id": m.id, "m": m}))
         }
         "edit" => {
@@ -830,10 +853,7 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
                 let v = u.chat_mut(&chat)?;
                 let before: Vec<String> = v.iter().map(|m| m.id.clone()).collect();
                 v.retain(|m| !list.contains(&m.id));
-                let gone: Vec<String> = before
-                    .into_iter()
-                    .filter(|id| list.contains(id))
-                    .collect();
+                let gone: Vec<String> = before.into_iter().filter(|id| list.contains(id)).collect();
                 u.save_chat(&chat);
                 Ok(gone)
             })?;
@@ -949,7 +969,12 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
             let picks: Vec<usize> = v
                 .get("options")
                 .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_u64())
+                        .map(|x| x as usize)
+                        .collect()
+                })
                 .unwrap_or_default();
             let (m, note) = h.with_user(identity, |u| -> Result<(Msg, String), String> {
                 let m = u
@@ -977,7 +1002,11 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
                 let note = if chosen.is_empty() {
                     format!("[vote] retracted in poll {id} \"{}\"", p.question)
                 } else {
-                    format!("[vote] {} in poll {id} \"{}\"", chosen.join(", "), p.question)
+                    format!(
+                        "[vote] {} in poll {id} \"{}\"",
+                        chosen.join(", "),
+                        p.question
+                    )
                 };
                 let m = m.clone();
                 u.save_chat(&chat);
@@ -994,7 +1023,10 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
             let src: Vec<Msg> = h.with_user(identity, |u| -> Result<Vec<Msg>, String> {
                 u.chat(&to)?;
                 let v = u.chat(&chat)?;
-                Ok(v.iter().filter(|m| list.contains(&m.id) && !m.service).cloned().collect())
+                Ok(v.iter()
+                    .filter(|m| list.contains(&m.id) && !m.service)
+                    .cloned()
+                    .collect())
             })?;
             let mut out = vec![];
             for o in src {
@@ -1227,7 +1259,10 @@ fn deliver(d: Delivery) {
     if !d.voice.is_empty() {
         let (mut heads, mut tails) = (Vec::new(), Vec::new());
         for (rel, abs) in &d.voice {
-            match bia_speech::transcribe_note_from(abs, bia_speech::contacts::lang_for_identity(&d.identity).as_deref()) {
+            match bia_speech::transcribe_note_from(
+                abs,
+                bia_speech::contacts::lang_for_identity(&d.identity).as_deref(),
+            ) {
                 Ok(heard) => {
                     let t = heard.text();
                     if t.is_empty() {
@@ -1345,9 +1380,10 @@ pub fn say(
         atts.push(make_att(&h.files, p, None)?);
     }
     let poll = match poll {
-        Some(p) if !p.is_null() => Some(parse_poll(Some(p)).ok_or(
-            "poll needs {question, options: [at least 2 strings], multi?}",
-        )?),
+        Some(p) if !p.is_null() => Some(
+            parse_poll(Some(p))
+                .ok_or("poll needs {question, options: [at least 2 strings], multi?}")?,
+        ),
         _ => None,
     };
     let text = clip_text(text);
@@ -1426,7 +1462,18 @@ pub fn agent_speech(identity: &str, chat: &str, text: &str) {
 #[cfg(test)]
 pub fn chat_text(identity: &str, chat: &str) -> String {
     hub()
-        .map(|h| h.with_user(identity, |u| u.chat(chat).map(|c| c.iter().map(|m| m.text.clone()).collect::<Vec<_>>().join("\n")).unwrap_or_default()))
+        .map(|h| {
+            h.with_user(identity, |u| {
+                u.chat(chat)
+                    .map(|c| {
+                        c.iter()
+                            .map(|m| m.text.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    })
+                    .unwrap_or_default()
+            })
+        })
         .unwrap_or_default()
 }
 
@@ -1436,14 +1483,22 @@ pub fn post_bia(identity: &str, chat: &str, text: &str) -> Result<String, String
 }
 
 /// Speak `text` (in `lang`) and post it as a voice message from bia.
-pub fn say_voice(identity: &str, channel: &str, text: &str, lang: &str, reply_to: Option<&str>) -> Result<String, String> {
+pub fn say_voice(
+    identity: &str,
+    channel: &str,
+    text: &str,
+    lang: &str,
+    reply_to: Option<&str>,
+) -> Result<String, String> {
     let h = hub()?;
     let chat = chat_for(h, identity, channel)?;
     let text = text.trim();
     if text.is_empty() {
         return Err("message is the text to speak".into());
     }
-    let reply_to = reply_to.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let reply_to = reply_to
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     if let Some(r) = &reply_to {
         if !h.with_user(identity, |u| u.find(&chat, r).is_some()) {
             return Err(format!("reply_to {r}: no such message in {channel}"));
@@ -1453,7 +1508,11 @@ pub fn say_voice(identity: &str, channel: &str, text: &str, lang: &str, reply_to
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let out = dir.join(format!("voice-{}.ogg", bia_speech::paths::stamp()));
     let preferred = bia_speech::contacts::lang_for_identity(identity).unwrap_or_default();
-    let lang = if lang.trim().is_empty() { preferred.as_str() } else { lang };
+    let lang = if lang.trim().is_empty() {
+        preferred.as_str()
+    } else {
+        lang
+    };
     bia_speech::tts::voice_note(text, lang, &out)?;
     let mut att = make_att(&h.files, &out.to_string_lossy(), Some("voice"))?;
     att.transcript = text.to_string();
@@ -1687,12 +1746,17 @@ mod voice_tests {
 
         // bia answers with a voice message in a custom chat
         let said = "Good morning. I will call you back at eight tonight.";
-        assert!(say_voice("root", "web:test", said, "", None).unwrap_err().contains("lang is required"));
+        assert!(say_voice("root", "web:test", said, "", None)
+            .unwrap_err()
+            .contains("lang is required"));
         let id = say_voice("root", "web:test", said, "en", None).unwrap();
         let att = h
             .with_user("root", |u| u.find("test", &id).map(|m| m.files[0].clone()))
             .unwrap();
-        assert_eq!((att.kind.as_str(), att.transcript.as_str()), ("voice", said));
+        assert_eq!(
+            (att.kind.as_str(), att.transcript.as_str()),
+            ("voice", said)
+        );
         let abs = att_abs(&dir, &att.path).unwrap();
         assert!(std::fs::metadata(&abs).unwrap().len() > 1000, "ogg written");
 
@@ -1700,21 +1764,49 @@ mod voice_tests {
         let rel = format!("{}/voice-test.ogg", inbox_rel("root"));
         std::fs::create_dir_all(dir.join(&rel).parent().unwrap()).unwrap();
         std::fs::copy(&abs, dir.join(&rel)).unwrap();
-        let m = user_send(h, "root", true, "test", "", None, &[rel.clone()], Some("voice")).unwrap();
+        let m = user_send(
+            h,
+            "root",
+            true,
+            "test",
+            "",
+            None,
+            &[rel.clone()],
+            Some("voice"),
+        )
+        .unwrap();
         // (skip what the stdin reader of a test console may push)
         let ib = loop {
-            let ib = con.read_inbound_timeout(Duration::from_secs(60)).unwrap().expect("delivered to the model");
+            let ib = con
+                .read_inbound_timeout(Duration::from_secs(60))
+                .unwrap()
+                .expect("delivered to the model");
             if is_web(&ib.channel) {
                 break ib;
             }
         };
         eprintln!("model sees on {}:\n{}", ib.channel, ib.text);
         assert_eq!(ib.channel, "web:test");
-        assert!(ib.text.starts_with("[voice message] [speech en]"), "{}", ib.text);
-        assert!(ib.text.to_lowercase().contains("call you back"), "{}", ib.text);
+        assert!(
+            ib.text.starts_with("[voice message] [speech en]"),
+            "{}",
+            ib.text
+        );
+        assert!(
+            ib.text.to_lowercase().contains("call you back"),
+            "{}",
+            ib.text
+        );
         assert!(ib.text.contains("(voice message)"));
-        let stored = h.with_user("root", |u| u.find("test", &m.id).map(|m| m.files[0].transcript.clone())).unwrap();
-        assert!(stored.to_lowercase().contains("call you back") && !stored.contains("[speech"), "transcript under the bubble: {stored}");
+        let stored = h
+            .with_user("root", |u| {
+                u.find("test", &m.id).map(|m| m.files[0].transcript.clone())
+            })
+            .unwrap();
+        assert!(
+            stored.to_lowercase().contains("call you back") && !stored.contains("[speech"),
+            "transcript under the bubble: {stored}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

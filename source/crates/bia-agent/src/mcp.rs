@@ -5,9 +5,9 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -134,7 +134,11 @@ impl McpLink {
     pub fn start(&self, tool: &str, args: Value) -> Result<(u64, Receiver<Value>)> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = channel();
-        self.shared.pending.lock().unwrap().insert(id, Pending::Sync(tx));
+        self.shared
+            .pending
+            .lock()
+            .unwrap()
+            .insert(id, Pending::Sync(tx));
         if let Err(e) = self.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": tool, "arguments": args}})) {
             self.shared.pending.lock().unwrap().remove(&id);
             return Err(e);
@@ -159,7 +163,13 @@ impl McpLink {
 /// (text, is_error) of a tools/call response line.
 pub fn call_result(v: &Value) -> (String, bool) {
     if let Some(e) = v.get("error") {
-        return (e.get("message").and_then(|m| m.as_str()).unwrap_or("error").to_string(), true);
+        return (
+            e.get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("error")
+                .to_string(),
+            true,
+        );
     }
     parse_tool_result(v.get("result").unwrap_or(&Value::Null))
 }
@@ -277,7 +287,10 @@ impl McpServer {
                     dispatch(&sh, v);
                 }
                 // Server gone: waiters see a disconnect instead of waiting out their timeout.
-                sh.pending.lock().unwrap().retain(|_, p| !matches!(p, Pending::Sync(_)));
+                sh.pending
+                    .lock()
+                    .unwrap()
+                    .retain(|_, p| !matches!(p, Pending::Sync(_)));
             })?;
         let spec = SpawnSpec {
             dir: dir.into(),

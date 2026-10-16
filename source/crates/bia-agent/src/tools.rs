@@ -989,8 +989,12 @@ impl Tools {
                 "id": {"type": "string", "description": "contact id"},
                 "channel": {"type": "string"}
             }), &["id", "channel"]));
-        t.add_grouped("talk", "addressbook_unlink", "Remove a channel from its contact.",
-            obj(json!({"channel": {"type": "string"}}), &["channel"]));
+        t.add_grouped(
+            "talk",
+            "addressbook_unlink",
+            "Remove a channel from its contact.",
+            obj(json!({"channel": {"type": "string"}}), &["channel"]),
+        );
         t.add_grouped("talk", "addressbook_upsert", "Create or update a contact. trust is normal or root. channels is a list of channel ids (e.g. telegram:123, whatsapp:15551234567). lang is their preferred language (en, ru, …): calls and voice messages with them start in it, and it is what speech uses when you leave lang out; it is also learned from their speech unless set here (empty clears).",
             obj(json!({
                 "id": {"type": "string"},
@@ -1880,7 +1884,12 @@ impl Tools {
             };
         }
         if name == "say" {
-            if let Some(id) = args.get("cancel").and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()) {
+            if let Some(id) = args
+                .get("cancel")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
                 return match self.outbox.cancel(id) {
                     Ok(s) => (s, false),
                     Err(e) => (format!("error: {e}"), true),
@@ -1893,8 +1902,15 @@ impl Tools {
                 Some(Value::Array(a)) => a.is_empty(),
                 Some(_) => false,
             };
-            if blank("message") && blank("files") && blank("poll") && !str_list(args, "answered").is_empty() {
-                return (self.note_reply(&channel, args, "nothing sent".into()), false);
+            if blank("message")
+                && blank("files")
+                && blank("poll")
+                && !str_list(args, "answered").is_empty()
+            {
+                return (
+                    self.note_reply(&channel, args, "nothing sent".into()),
+                    false,
+                );
             }
             return match self.say(args) {
                 Ok(s) => (self.note_reply(&channel, args, s), false),
@@ -2327,7 +2343,10 @@ impl Tools {
         if job.pid != 0 {
             // bash: the wait thread reports the result once sh is gone (at most ~2s later).
             crate::bash::kill_tree(job.pid);
-            return Ok(format!("killed job:{}; the result arrives as system|job:{} with killed", job.id, job.id));
+            return Ok(format!(
+                "killed job:{}; the result arrives as system|job:{} with killed",
+                job.id, job.id
+            ));
         }
         // MCP job: the server keeps running (other jobs, sessions); stop waiting for this call.
         let asked = match self.servers.iter().position(|s| s.name == job.mcp) {
@@ -2337,7 +2356,11 @@ impl Tools {
         let body = format!(
             "killed (job_kill)\n{} call abandoned{}; a late result is dropped",
             job.tool,
-            if asked { ", the MCP was asked to cancel" } else { "" }
+            if asked {
+                ", the MCP was asked to cancel"
+            } else {
+                ""
+            }
         );
         let finished = {
             let mut st = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
@@ -2350,7 +2373,10 @@ impl Tools {
         if finished {
             self.con.push_inbound(crate::jobs::inbound(&job.id, &body));
         }
-        Ok(format!("killed job:{} ({} call abandoned)", job.id, job.tool))
+        Ok(format!(
+            "killed job:{} ({} call abandoned)",
+            job.id, job.tool
+        ))
     }
 
     /// Re-read mcp.json under /home/bia/MCPs. Does not start any server.
@@ -2489,8 +2515,9 @@ impl Tools {
                 Ok("ok: reflecting the current live window after this turn".into())
             }
             "say" => unreachable!("handled in call()"),
-            "react" | "delete_messages" | "pin_message" | "close_poll"
-            | "chat_history" => self.chat_action(name, args),
+            "react" | "delete_messages" | "pin_message" | "close_poll" | "chat_history" => {
+                self.chat_action(name, args)
+            }
             "web_call_start" | "web_call_hangup" | "web_call_cancel" => {
                 let (identity, channel) = self.target(args);
                 if !crate::webchat::is_web(&channel) {
@@ -2512,9 +2539,13 @@ impl Tools {
                     .map(|c| {
                         // the contact this channel is hard-linked to (web/console: by identity)
                         let who = match self.addressbook.find_for("", &c.id) {
-                            Some(p) if !p.lang.is_empty() => format!("  contact={} lang={}", p.id, p.lang),
+                            Some(p) if !p.lang.is_empty() => {
+                                format!("  contact={} lang={}", p.id, p.lang)
+                            }
                             Some(p) => format!("  contact={}", p.id),
-                            None if crate::addressbook::local_channel(&c.id) => "  contact=<client identity>".into(),
+                            None if crate::addressbook::local_channel(&c.id) => {
+                                "  contact=<client identity>".into()
+                            }
                             None => "  contact=(none)".into(),
                         };
                         format!("{}  bus={}  {}{who}", c.id, c.bus, c.title)
@@ -2582,18 +2613,31 @@ impl Tools {
                     c.id,
                     c.name,
                     c.channels.join(","),
-                    if c.lang.is_empty() { String::new() } else { format!(" lang={}", c.lang) }
+                    if c.lang.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" lang={}", c.lang)
+                    }
                 ))
             }
             "addressbook_link" => {
                 let id = s("id").unwrap_or_default();
                 let channel = s("channel").unwrap_or_default();
                 let c = self.addressbook.link(&id, &channel)?;
-                Ok(format!("ok: {channel} → {} ({}) channels=[{}]", c.id, c.name, c.channels.join(",")))
+                Ok(format!(
+                    "ok: {channel} → {} ({}) channels=[{}]",
+                    c.id,
+                    c.name,
+                    c.channels.join(",")
+                ))
             }
             "addressbook_unlink" => {
                 let channel = s("channel").unwrap_or_default();
-                Ok(if self.addressbook.unlink(&channel)? { format!("unlinked {channel}") } else { format!("{channel} was not linked") })
+                Ok(if self.addressbook.unlink(&channel)? {
+                    format!("unlinked {channel}")
+                } else {
+                    format!("{channel} was not linked")
+                })
             }
             "addressbook_remove" => {
                 let id = s("id").unwrap_or_default();
@@ -2664,9 +2708,17 @@ impl Tools {
                 }
             }
             "list_jobs" => {
-                let list = self.jobs.lock().unwrap_or_else(|e| e.into_inner()).format_list();
+                let list = self
+                    .jobs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .format_list();
                 let sends = self.outbox.brief();
-                Ok(if sends.is_empty() { list } else { format!("{list}\nsends in flight (say cancel=<id> stops one):\n{sends}") })
+                Ok(if sends.is_empty() {
+                    list
+                } else {
+                    format!("{list}\nsends in flight (say cancel=<id> stops one):\n{sends}")
+                })
             }
             "job_logs" => {
                 let id = s("id").unwrap_or_default();
@@ -2683,8 +2735,7 @@ impl Tools {
                 if text.is_empty() {
                     bail!("text required");
                 }
-                let out =
-                    crate::bash::job_input(&id, &text).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let out = crate::bash::job_input(&id, &text).map_err(|e| anyhow::anyhow!("{e}"))?;
                 {
                     let st = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
                     let id = id.trim().trim_start_matches(crate::jobs::PREFIX);
@@ -2736,7 +2787,10 @@ impl Tools {
             .borrow()
             .clone()
             .unwrap_or_else(|| (ID_ROOT.into(), CH_CONSOLE.into()));
-        (s("identity").unwrap_or(def_id), s("channel").unwrap_or(def_ch))
+        (
+            s("identity").unwrap_or(def_id),
+            s("channel").unwrap_or(def_ch),
+        )
     }
 
     /// A say/react went out on `channel`: record it and close `answered` ids.
@@ -2746,9 +2800,9 @@ impl Tools {
         // meant for another chat. Checked after closing, a correct answer that
         // closed its own message looked misplaced and the model replied twice.
         let elsewhere_before = self.unanswered.open_elsewhere(channel);
-        let closed = self
-            .unanswered
-            .on_reply(channel, &answered, crate::clock::unix(crate::clock::now()));
+        let closed =
+            self.unanswered
+                .on_reply(channel, &answered, crate::clock::unix(crate::clock::now()));
         let missing: Vec<&String> = answered
             .iter()
             .filter(|a| !a.trim().is_empty() && !closed.iter().any(|c| c == a.trim()))
@@ -2808,18 +2862,40 @@ impl Tools {
                 RESET
             ));
         };
-        if let Some(id) = s("edit").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
+        if let Some(id) = s("edit")
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        {
             return self.edit_sent(&identity, &channel, &id, &message, args, &tag);
         }
         if args.get("voice").and_then(|v| v.as_bool()).unwrap_or(false) {
             let lang = s("lang").unwrap_or_default();
             let detail = if crate::webchat::is_web(&channel) {
-                let id = crate::webchat::say_voice(&identity, &channel, &message, &lang, s("reply_to").as_deref())
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                let id = crate::webchat::say_voice(
+                    &identity,
+                    &channel,
+                    &message,
+                    &lang,
+                    s("reply_to").as_deref(),
+                )
+                .map_err(|e| anyhow::anyhow!(e))?;
                 format!("voice message id {id}")
-            } else if let Some((mcp, chat)) = channel.split_once(':').filter(|(b, _)| *b == "telegram" || *b == "whatsapp") {
+            } else if let Some((mcp, chat)) = channel
+                .split_once(':')
+                .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
+            {
                 let what = format!("voice message, {} chars", message.chars().count());
-                let out = self.outbox_submit(mcp, chat, crate::outbox::Op::Voice { text: message.clone(), lang }, 0, &what, crate::outbox::WAIT)?;
+                let out = self.outbox_submit(
+                    mcp,
+                    chat,
+                    crate::outbox::Op::Voice {
+                        text: message.clone(),
+                        lang,
+                    },
+                    0,
+                    &what,
+                    crate::outbox::WAIT,
+                )?;
                 match out {
                     crate::outbox::Outcome::Done(id, Ok(t)) => format!("id {id}; {t}"),
                     crate::outbox::Outcome::Done(_, Err(e)) => bail!("{e}"),
@@ -2828,8 +2904,15 @@ impl Tools {
             } else {
                 bail!("voice messages go to web, telegram or whatsapp chats, not {channel}");
             };
-            let tag = if self.con.color { format!("{GRAY}[{identity}@{channel}]{RESET}") } else { format!("[{identity}@{channel}]") };
-            self.con.write(&format!("\n{} {tag} 🎤 {message}\n", self.con.c(BCYAN, "<-")));
+            let tag = if self.con.color {
+                format!("{GRAY}[{identity}@{channel}]{RESET}")
+            } else {
+                format!("[{identity}@{channel}]")
+            };
+            self.con.write(&format!(
+                "\n{} {tag} 🎤 {message}\n",
+                self.con.c(BCYAN, "<-")
+            ));
             return Ok(format!("sent to {identity}@{channel} ({detail})"));
         }
         if channel == CH_CONSOLE {
@@ -2860,13 +2943,26 @@ impl Tools {
             }
             return Ok(format!("sent to {identity}@{channel} (message id {id})"));
         }
-        let detail = self.send_on_channel(&channel, &message, &files, s("lang").as_deref().unwrap_or(""))?;
+        let detail = self.send_on_channel(
+            &channel,
+            &message,
+            &files,
+            s("lang").as_deref().unwrap_or(""),
+        )?;
         echo(&self.con);
         Ok(format!("sent to {identity}@{channel} ({detail})"))
     }
 
     /// say with edit=<id>: replace the text of a message bia sent, on web, telegram or whatsapp.
-    fn edit_sent(&mut self, identity: &str, channel: &str, id: &str, message: &str, args: &Value, tag: &str) -> Result<String> {
+    fn edit_sent(
+        &mut self,
+        identity: &str,
+        channel: &str,
+        id: &str,
+        message: &str,
+        args: &Value,
+        tag: &str,
+    ) -> Result<String> {
         if message.trim().is_empty() {
             bail!("edit needs the new text in message");
         }
@@ -2880,19 +2976,42 @@ impl Tools {
             bail!("edit replaces text only; {k} cannot be combined with edit (send a new message instead)");
         }
         if crate::webchat::is_web(channel) {
-            crate::webchat::agent_edit(identity, channel, id, message).map_err(|e| anyhow::anyhow!(e))?;
-        } else if let Some((mcp, chat)) = channel.split_once(':').filter(|(b, _)| *b == "telegram" || *b == "whatsapp") {
-            let r = self.outbox_action(mcp, chat, crate::outbox::Op::Edit { id: id.into(), text: message.into() })?;
-            self.con.write(&format!("\n{} {tag} ✎ {id}: {message}\n", self.con.c(BCYAN, "<-")));
+            crate::webchat::agent_edit(identity, channel, id, message)
+                .map_err(|e| anyhow::anyhow!(e))?;
+        } else if let Some((mcp, chat)) = channel
+            .split_once(':')
+            .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
+        {
+            let r = self.outbox_action(
+                mcp,
+                chat,
+                crate::outbox::Op::Edit {
+                    id: id.into(),
+                    text: message.into(),
+                },
+            )?;
+            self.con.write(&format!(
+                "\n{} {tag} ✎ {id}: {message}\n",
+                self.con.c(BCYAN, "<-")
+            ));
             return Ok(format!("edit of {id} on {identity}@{channel}: {r}"));
         } else {
             bail!("messages can be edited on web, telegram or whatsapp chats, not {channel}");
         }
-        self.con.write(&format!("\n{} {tag} ✎ {id}: {message}\n", self.con.c(BCYAN, "<-")));
+        self.con.write(&format!(
+            "\n{} {tag} ✎ {id}: {message}\n",
+            self.con.c(BCYAN, "<-")
+        ));
         Ok(format!("edited message {id} on {identity}@{channel}"))
     }
 
-    fn send_on_channel(&mut self, channel: &str, message: &str, files: &[String], lang: &str) -> Result<String> {
+    fn send_on_channel(
+        &mut self,
+        channel: &str,
+        message: &str,
+        files: &[String],
+        lang: &str,
+    ) -> Result<String> {
         if let Some(chat) = channel.strip_prefix("telegram:") {
             return self.send_on_mcp_bus("telegram", chat, message, files, lang);
         }
@@ -2906,7 +3025,15 @@ impl Tools {
     }
 
     /// Queue an outgoing op on a telegram/whatsapp chat and wait up to `wait` (see outbox.rs).
-    fn outbox_submit(&mut self, mcp: &str, chat: &str, op: crate::outbox::Op, bytes: u64, what: &str, wait: std::time::Duration) -> Result<crate::outbox::Outcome> {
+    fn outbox_submit(
+        &mut self,
+        mcp: &str,
+        chat: &str,
+        op: crate::outbox::Op,
+        bytes: u64,
+        what: &str,
+        wait: std::time::Duration,
+    ) -> Result<crate::outbox::Outcome> {
         let _ = self.load(mcp);
         let idx = self
             .server_index(mcp)
@@ -2914,7 +3041,9 @@ impl Tools {
         self.loaded.insert(idx);
         self.servers[idx].ensure_alive()?;
         let link = self.servers[idx].link();
-        Ok(self.outbox.submit(&format!("{mcp}:{chat}"), chat, op, link, bytes, what, wait))
+        Ok(self
+            .outbox
+            .submit(&format!("{mcp}:{chat}"), chat, op, link, bytes, what, wait))
     }
 
     /// Edit/react/delete on a telegram/whatsapp chat, in order after earlier sends there.
@@ -2934,7 +3063,11 @@ impl Tools {
             .iter()
             .map(|f| {
                 let p = Path::new(f);
-                let p = if p.is_absolute() { p.to_path_buf() } else { self.files_dir.join(f.trim_start_matches('/')) };
+                let p = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    self.files_dir.join(f.trim_start_matches('/'))
+                };
                 std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
             })
             .sum();
@@ -2950,7 +3083,14 @@ impl Tools {
 
     /// Shared path for telegram:/whatsapp: channels: speak on active call if any, then send the text
     /// through the outbox.
-    fn send_on_mcp_bus(&mut self, mcp: &str, chat: &str, message: &str, files: &[String], lang: &str) -> Result<String> {
+    fn send_on_mcp_bus(
+        &mut self,
+        mcp: &str,
+        chat: &str,
+        message: &str,
+        files: &[String],
+        lang: &str,
+    ) -> Result<String> {
         let _ = self.load(mcp);
         let idx = self
             .server_index(mcp)
@@ -2973,12 +3113,21 @@ impl Tools {
             }
         };
         let (bytes, what) = self.attachments(message, files);
-        let wait = if bytes >= crate::outbox::BIG_BYTES { std::time::Duration::ZERO } else { crate::outbox::WAIT };
-        let op = crate::outbox::Op::Send { text: message.into(), files: files.to_vec() };
+        let wait = if bytes >= crate::outbox::BIG_BYTES {
+            std::time::Duration::ZERO
+        } else {
+            crate::outbox::WAIT
+        };
+        let op = crate::outbox::Op::Send {
+            text: message.into(),
+            files: files.to_vec(),
+        };
         let (text, err) = match self.outbox_submit(mcp, chat, op, bytes, &what, wait) {
             Ok(crate::outbox::Outcome::Done(id, Ok(t))) => (format!("id {id}; {t}"), false),
             Ok(crate::outbox::Outcome::Done(_, Err(e))) => (e, true),
-            Ok(crate::outbox::Outcome::Pending(id, ahead)) => (pending_note(&id, &what, ahead), false),
+            Ok(crate::outbox::Outcome::Pending(id, ahead)) => {
+                (pending_note(&id, &what, ahead), false)
+            }
             Err(e) => (format!("{e:#}"), true),
         };
         match not_spoken {
@@ -3027,8 +3176,10 @@ impl Tools {
                 let id = s("message_id");
                 let emoji = s("emoji");
                 if web {
-                    e(crate::webchat::agent_react(&identity, &channel, &id, &emoji)
-                        .map(|_| format!("reacted {emoji} on {id}")))
+                    e(
+                        crate::webchat::agent_react(&identity, &channel, &id, &emoji)
+                            .map(|_| format!("reacted {emoji} on {id}")),
+                    )
                 } else if let Some((mcp, chat)) = bus {
                     self.outbox_action(mcp, chat, crate::outbox::Op::React { id, emoji })
                 } else {
@@ -3044,7 +3195,10 @@ impl Tools {
                     e(crate::webchat::agent_delete(&identity, &channel, &ids)
                         .map(|n| format!("deleted {n} message(s)")))
                 } else if let Some((mcp, chat)) = bus {
-                    let revoke = args.get("revoke").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let revoke = args
+                        .get("revoke")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
                     self.outbox_action(mcp, chat, crate::outbox::Op::Delete { ids, revoke })
                 } else {
                     bail!("cannot delete messages on {channel}")
@@ -3101,7 +3255,11 @@ impl Tools {
 
 /// say result for a send that is still queued or uploading.
 fn pending_note(id: &str, what: &str, ahead: usize) -> String {
-    let ahead = if ahead > 0 { format!(", after {ahead} earlier send(s) to this chat") } else { String::new() };
+    let ahead = if ahead > 0 {
+        format!(", after {ahead} earlier send(s) to this chat")
+    } else {
+        String::new()
+    };
     format!(
         "queued as {id} ({what}{ahead}); NOT delivered yet: [sent {id} → …] with the platform ids or [send failed {id} …] follows. \
          Use {id} as the message id for edit, react or delete_messages now — they wait for it. say(cancel=\"{id}\") stops it"
@@ -3158,7 +3316,11 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
         }
     }
     if modelish {
-        if v.contains('/') || ["grok", "claude", "gpt", "deepseek", "qwen"].iter().any(|m| v.contains(m)) {
+        if v.contains('/')
+            || ["grok", "claude", "gpt", "deepseek", "qwen"]
+                .iter()
+                .any(|m| v.contains(m))
+        {
             s += 8;
         }
         if v.starts_with("sk-") {
@@ -3166,7 +3328,10 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
         }
     }
     if providerish {
-        if matches!(v, "openrouter" | "openai" | "anthropic" | "xai" | "deepseek" | "qwen" | "chatgpt") {
+        if matches!(
+            v,
+            "openrouter" | "openai" | "anthropic" | "xai" | "deepseek" | "qwen" | "chatgpt"
+        ) {
             s += 10;
         } else {
             s -= 3;

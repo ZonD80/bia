@@ -135,7 +135,36 @@ pub fn set_default(lang: &str) -> Result<String, String> {
         r.default_lang = code.clone();
         Ok(())
     })?;
-    Ok(format!("default language: {}", label(&l.code)))
+    Ok(format!(
+        "default language: {} — speak it to root from now on (it is written into your instructions at the next start)",
+        label(&l.code)
+    ))
+}
+
+/// How a language is typed on the console: an fcitx5 layout or input method, "" for
+/// none (the US keyboard), "auto" for bia's choice.
+pub fn set_input(lang: &str, input: &str) -> Result<String, String> {
+    let l = parse_lang(lang)?;
+    let code = l.code.clone();
+    let input = input.trim();
+    if !input.is_empty() && input != "auto" {
+        bia_speech::input::check(input)?;
+    }
+    let r = update(|r| {
+        match input {
+            "auto" => r.input.remove(&code),
+            i => r.input.insert(code.clone(), i.to_string()),
+        };
+        Ok(r.clone())
+    })?;
+    let now = bia_speech::input::for_lang(&r, &code);
+    let learned = r.enabled.contains(&code) || r.voice.contains_key(&code) || r.default_lang == code;
+    Ok(format!(
+        "{} types with {}{}",
+        label(&code),
+        now.as_deref().unwrap_or("the US keyboard"),
+        if learned { "; the console's input list is updated (top bar, Ctrl+Space)" } else { " once it is learned" }
+    ))
 }
 
 pub fn preview(ctx: &Ctx, lang: &str, voice: Option<&str>, text: Option<&str>) -> Result<String, String> {
@@ -328,7 +357,8 @@ pub fn list() -> String {
     let mut out = format!("default language: {}\nlearned (heard and spoken):\n", label(&r.default_lang));
     for l in &r.enabled {
         let v = r.voice.get(l).map(String::as_str).unwrap_or("no voice: hear only");
-        out.push_str(&format!("  {} — voice {v}\n", label(l)));
+        let typed = bia_speech::input::for_lang(&r, l).map(|i| format!(", typed with {i}")).unwrap_or_default();
+        out.push_str(&format!("  {} — voice {v}{typed}\n", label(l)));
     }
     let speak_only: Vec<String> = r.voice.keys().filter(|l| !r.enabled.contains(l)).map(|l| label(l)).collect();
     if !speak_only.is_empty() {

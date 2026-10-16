@@ -114,9 +114,9 @@ if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
     -bg -o /var/log/x11vnc.bia.log
 fi
 
-# Input methods: fcitx5 (keyboard, pinyin, hangul; Ctrl+Space switches). kitty talks
-# to it over the IBus protocol, which fcitx5 serves on a session bus. Emoji: kitty's
-# Ctrl+Shift+U picker, or pinyin candidates.
+# Input methods: fcitx5 (keyboard, pinyin, hangul). Ctrl+Space, Ctrl+Shift+Space or the
+# top-bar label (bia-im) switches. kitty talks to it over the IBus protocol, which
+# fcitx5 serves on a session bus. Emoji: kitty's Ctrl+Shift+U picker, or pinyin candidates.
 if command -v fcitx5 >/dev/null 2>&1 && command -v dbus-daemon >/dev/null 2>&1; then
   bus=/run/bia/session-bus
   if ! pgrep -f "dbus-daemon.*$bus" >/dev/null 2>&1; then

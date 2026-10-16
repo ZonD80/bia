@@ -1,0 +1,55 @@
+#!/bin/sh
+# Input method for the top bar. No argument: print the current one (EN, RU, 中, 한),
+# from the labels the agent writes next to the profile (bia_speech::input).
+# "next": switch to the next one in fcitx5's profile, wrapping to the first
+# (the plain keyboard). A layout or input method added there joins the cycle.
+# fcitx5 runs on bia-session's private bus; tint2 starts before it is exported.
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/bia/session-bus}"
+conf="${HOME:-/root}/.config/fcitx5"
+profile="$conf/profile"
+command -v fcitx5-remote >/dev/null 2>&1 || exit 0
+
+# Items of the first group, in order.
+items() {
+  awk -F= '
+    /^\[Groups\/0\/Items\/[0-9]+\]$/ { item = 1; next }
+    /^\[/ { item = 0 }
+    item && $1 == "Name" { print $2 }
+  ' "$profile" 2>/dev/null
+}
+
+current() {
+  if [ "$(fcitx5-remote 2>/dev/null)" = 2 ]; then
+    fcitx5-remote -n 2>/dev/null
+  else
+    items | head -n 1
+  fi
+}
+
+case "${1:-}" in
+  next)
+    now=$(current)
+    next=$(items | awk -v now="$now" 'found { print; exit } $0 == now { found = 1 }')
+    if [ -z "$next" ]; then
+      fcitx5-remote -c
+    else
+      fcitx5-remote -s "$next"
+    fi
+    ;;
+  *)
+    now=$(current)
+    label=$(awk -v now="$now" '$1 == now { print $2; exit }' "$conf/bia-labels" 2>/dev/null)
+    if [ -n "$label" ]; then
+      echo "$label"
+      exit 0
+    fi
+    case "$now" in
+      ""|keyboard-us) echo EN ;;
+      keyboard-*) echo "$now" | sed 's/^keyboard-//; s/-.*//' | tr a-z A-Z ;;
+      pinyin) echo 中 ;;
+      hangul) echo 한 ;;
+      mozc|anthy) echo あ ;;
+      *) echo "$now" ;;
+    esac
+    ;;
+esac

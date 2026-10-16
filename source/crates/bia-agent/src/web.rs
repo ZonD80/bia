@@ -27,8 +27,23 @@ const VNC_ADDR: (&str, u16) = ("127.0.0.1", 5900);
 const MAX_BODY: usize = 2 * 1024 * 1024;
 /// Top-level system directories the file manager refuses to delete outright.
 const PROTECTED: &[&str] = &[
-    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/proc", "/root", "/run",
-    "/sbin", "/sys", "/usr", "/var", "/home/bia", "/home/bia/files",
+    "/",
+    "/bin",
+    "/boot",
+    "/dev",
+    "/etc",
+    "/home",
+    "/lib",
+    "/lib64",
+    "/proc",
+    "/root",
+    "/run",
+    "/sbin",
+    "/sys",
+    "/usr",
+    "/var",
+    "/home/bia",
+    "/home/bia/files",
 ];
 
 /// Cloneable TLS stream shared by a reader and a writer thread. Blocking socket reads
@@ -252,7 +267,8 @@ fn is_public(method: &str, path: &str) -> bool {
     match (method, path) {
         (
             "GET",
-            "/" | "/app.js"
+            "/"
+            | "/app.js"
             | "/app.css"
             | "/term.js"
             | "/emoji.js"
@@ -267,7 +283,10 @@ fn is_public(method: &str, path: &str) -> bool {
         ) => true,
         // First-time root cert only when none is active yet (see serve_bootstrap_root).
         ("POST", "/v1/pki/bootstrap/root") => true,
-        ("GET", p) if p.strip_prefix("/v1/pki/pickup/").is_some_and(|t| !t.is_empty() && !t.contains('/')) => {
+        ("GET", p)
+            if p.strip_prefix("/v1/pki/pickup/")
+                .is_some_and(|t| !t.is_empty() && !t.contains('/')) =>
+        {
             true
         }
         // Certificate requests from peers without a cert: file one, then poll / collect by UUID.
@@ -480,7 +499,10 @@ impl Web {
     }
 
     fn handle(&self, mut tcp: TcpStream) {
-        let peer = tcp.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+        let peer = tcp
+            .peer_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
         let _ = tcp.set_read_timeout(Some(Duration::from_secs(300)));
         let cfg = self.tls.lock().unwrap().clone();
         let mut conn = match ServerConnection::new(cfg) {
@@ -570,7 +592,12 @@ impl Web {
         }
 
         // ---- websockets ----
-        if req.method == "GET" && matches!(req.path.as_str(), "/ws" | "/ws/term" | "/ws/shell" | "/v1/call" | "/gui/ws" | "/websockify") {
+        if req.method == "GET"
+            && matches!(
+                req.path.as_str(),
+                "/ws" | "/ws/term" | "/ws/shell" | "/v1/call" | "/gui/ws" | "/websockify"
+            )
+        {
             let Some(key) = req.header("sec-websocket-key") else {
                 respond(
                     &mut stream,
@@ -606,7 +633,11 @@ impl Web {
                     let channel = crate::webchat::channel_of(&chat);
                     if let Err(e) = crate::webchat::ensure_chat(&id.identity, &channel) {
                         let mut s = stream.clone();
-                        let _ = ws_send(&mut s, 1, json!({"t": "end", "reason": e}).to_string().as_bytes());
+                        let _ = ws_send(
+                            &mut s,
+                            1,
+                            json!({"t": "end", "reason": e}).to_string().as_bytes(),
+                        );
                         stream.shutdown();
                         return;
                     }
@@ -702,7 +733,13 @@ impl Web {
                     "/gui/novnc/vnc.html?autoconnect=1&resize=remote&path=/gui/ws",
                 );
             } else {
-                respond(stream, 200, "text/html; charset=utf-8", GUI.as_bytes(), None);
+                respond(
+                    stream,
+                    200,
+                    "text/html; charset=utf-8",
+                    GUI.as_bytes(),
+                    None,
+                );
             }
             return;
         }
@@ -712,7 +749,7 @@ impl Web {
                 return;
             }
         }
-        if self.hitl_http(method, path, &req.query, body, stream) {
+        if self.hitl_http(method, path, &req.query, body, stream, root) {
             return;
         }
         if method == "GET" {
@@ -724,7 +761,13 @@ impl Web {
                     },
                     Some((rel, name, size)) => {
                         let page = crate::hitl::dl_page(&dl_id, &name, &rel, size);
-                        respond(stream, 200, "text/html; charset=utf-8", page.as_bytes(), None);
+                        respond(
+                            stream,
+                            200,
+                            "text/html; charset=utf-8",
+                            page.as_bytes(),
+                            None,
+                        );
                     }
                     None => respond(stream, 404, "text/plain", b"not found", None),
                 }
@@ -789,7 +832,11 @@ impl Web {
                 )
             }
             ("POST", "/v1/pki/renew") => {
-                let csr = json_body().get("csr").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                let csr = json_body()
+                    .get("csr")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 self.renew_client(stream, id, &csr)
             }
             ("GET", "/v1/pki/certs") => {
@@ -804,7 +851,8 @@ impl Web {
                     .into_iter()
                     .rev()
                     .map(|m| {
-                        let mine = id.serial_hint == m.serial || id.serial_hint.starts_with(&m.serial);
+                        let mine =
+                            id.serial_hint == m.serial || id.serial_hint.starts_with(&m.serial);
                         json!({
                             "serial": m.serial,
                             "identity": m.identity,
@@ -822,18 +870,32 @@ impl Web {
             }
             ("POST", "/v1/pki/issue") => {
                 let v = json_body();
-                let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+                let s = |k: &str| {
+                    v.get(k)
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                };
                 let identity = s("identity");
                 if identity.is_empty()
                     || identity.len() > 64
-                    || !identity
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ':'))
+                    || !identity.chars().all(|c| {
+                        c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ':')
+                    })
                 {
-                    respond(stream, 400, "text/plain", b"identity: letters, digits, - _ . @ :", None);
+                    respond(
+                        stream,
+                        400,
+                        "text/plain",
+                        b"identity: letters, digits, - _ . @ :",
+                        None,
+                    );
                     return;
                 }
-                let role = Some(s("role")).filter(|r| r == "agent").unwrap_or_else(|| "user".into());
+                let role = Some(s("role"))
+                    .filter(|r| r == "agent")
+                    .unwrap_or_else(|| "user".into());
                 let trust = match s("trust").as_str() {
                     "root" => "root".to_string(),
                     "normal" => "normal".to_string(),
@@ -844,7 +906,10 @@ impl Web {
                     Ok((token, meta)) => {
                         self.con.writeln(&self.con.c(
                             crate::console::GRAY,
-                            &format!("  web console: root issued a cert for {identity} ({})", meta.serial),
+                            &format!(
+                                "  web console: root issued a cert for {identity} ({})",
+                                meta.serial
+                            ),
                         ));
                         respond_json(
                             stream,
@@ -857,7 +922,13 @@ impl Web {
                             }),
                         )
                     }
-                    Err(e) => respond(stream, 500, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+                    Err(e) => respond(
+                        stream,
+                        500,
+                        "text/plain; charset=utf-8",
+                        format!("{e:#}").as_bytes(),
+                        None,
+                    ),
                 }
             }
             ("GET", "/v1/pki/requests") => {
@@ -875,10 +946,21 @@ impl Web {
                     .collect();
                 respond_json(stream, json!({"requests": list}))
             }
-            ("POST", p) if request_route(p).is_some_and(|(_, a)| matches!(a, "approve" | "deny")) => {
+            ("POST", p)
+                if request_route(p).is_some_and(|(_, a)| matches!(a, "approve" | "deny")) =>
+            {
                 let (rid, action) = request_route(p).unwrap_or_default();
-                let reason = json_body().get("reason").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                match self.decide_request(rid, action == "approve", &format!("{}@web", id.identity), &reason) {
+                let reason = json_body()
+                    .get("reason")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                match self.decide_request(
+                    rid,
+                    action == "approve",
+                    &format!("{}@web", id.identity),
+                    &reason,
+                ) {
                     Ok(r) => respond_json(stream, request_json(&r)),
                     Err(e) => respond(stream, 409, "text/plain; charset=utf-8", e.as_bytes(), None),
                 }
@@ -888,14 +970,22 @@ impl Web {
                 let serial = v.get("serial").and_then(|x| x.as_str()).unwrap_or("");
                 match self.pki.revoke(serial) {
                     Ok(found) => respond_json(stream, json!({"revoked": found})),
-                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+                    Err(e) => respond(
+                        stream,
+                        400,
+                        "text/plain; charset=utf-8",
+                        format!("{e:#}").as_bytes(),
+                        None,
+                    ),
                 }
             }
             ("GET", "/v1/chats") => respond_json(stream, crate::webchat::hello(&id.identity, root)),
-            ("POST", "/v1/chats/action") => match crate::webchat::action(&id.identity, root, &json_body()) {
-                Ok(v) => respond_json(stream, v),
-                Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
-            },
+            ("POST", "/v1/chats/action") => {
+                match crate::webchat::action(&id.identity, root, &json_body()) {
+                    Ok(v) => respond_json(stream, v),
+                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
+                }
+            }
             ("GET", "/v1/search") => {
                 let chat = Some(req.q("chat")).filter(|s| !s.is_empty());
                 match crate::webchat::search(&id.identity, chat, req.q("q")) {
@@ -906,11 +996,15 @@ impl Web {
             ("GET", "/v1/att") => {
                 let i = req.q("i").parse().unwrap_or(0);
                 match crate::webchat::attachment(&id.identity, req.q("chat"), req.q("id"), i) {
-                    Some((p, name, _)) => send_file(stream, &p, &name, req.q("dl") == "1", req.header("range")),
+                    Some((p, name, _)) => {
+                        send_file(stream, &p, &name, req.q("dl") == "1", req.header("range"))
+                    }
                     None => respond(stream, 404, "text/plain", b"not found", None),
                 }
             }
-            ("GET", "/v1/history") => respond_json(stream, crate::webchat::legacy_history(&id.identity)),
+            ("GET", "/v1/history") => {
+                respond_json(stream, crate::webchat::legacy_history(&id.identity))
+            }
             // legacy file API, relative to the files dir (root)
             ("GET", "/v1/files") => match safe_join(&self.files, req.q("path")) {
                 Some(dir) => {
@@ -943,7 +1037,13 @@ impl Web {
                     v["home"] = json!(self.files.to_string_lossy());
                     respond_json(stream, v)
                 }
-                Some(p) => respond(stream, 404, "text/plain; charset=utf-8", format!("{}: not a directory", p.display()).as_bytes(), None),
+                Some(p) => respond(
+                    stream,
+                    404,
+                    "text/plain; charset=utf-8",
+                    format!("{}: not a directory", p.display()).as_bytes(),
+                    None,
+                ),
                 None => respond(stream, 400, "text/plain", b"bad path", None),
             },
             ("GET", "/v1/fs/get") => match abs_path(req.q("path")) {
@@ -983,8 +1083,18 @@ impl Web {
             }
             Err(e) => {
                 let msg = format!("{e:#}");
-                let code = if msg.contains("revoked") || msg.contains("expired") { 403 } else { 400 };
-                respond(stream, code, "text/plain; charset=utf-8", msg.as_bytes(), None)
+                let code = if msg.contains("revoked") || msg.contains("expired") {
+                    403
+                } else {
+                    400
+                };
+                respond(
+                    stream,
+                    code,
+                    "text/plain; charset=utf-8",
+                    msg.as_bytes(),
+                    None,
+                )
             }
         }
     }
@@ -993,10 +1103,7 @@ impl Web {
     fn serve_ca(&self, stream: &mut dyn Write, format: &str) {
         match self.pki.ca_pem() {
             Ok(pem) if format == "der" => {
-                let b64: String = pem
-                    .lines()
-                    .filter(|l| !l.starts_with("-----"))
-                    .collect();
+                let b64: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
                 match base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
                     Ok(der) => respond(
                         stream,
@@ -1031,21 +1138,43 @@ impl Web {
     fn request_create(&self, stream: &mut dyn Write, body: &[u8], peer: &str) {
         let v: Value = serde_json::from_slice(body).unwrap_or(json!({}));
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let r = match self.pki.create_request(&s("identity"), &s("role"), &s("note"), peer, &s("csr")) {
-            Ok(r) => r,
-            Err(e) => {
-                let code = if format!("{e}").contains("too many") || format!("{e}").contains("already has") { 429 } else { 400 };
-                respond(stream, code, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None);
-                return;
-            }
-        };
+        let r =
+            match self
+                .pki
+                .create_request(&s("identity"), &s("role"), &s("note"), peer, &s("csr"))
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    let code = if format!("{e}").contains("too many")
+                        || format!("{e}").contains("already has")
+                    {
+                        429
+                    } else {
+                        400
+                    };
+                    respond(
+                        stream,
+                        code,
+                        "text/plain; charset=utf-8",
+                        format!("{e:#}").as_bytes(),
+                        None,
+                    );
+                    return;
+                }
+            };
         self.announce_request(&r);
         let mut out = request_json(&r);
         out["poll"] = json!(format!("/v1/pki/requests/{}", r.id));
         out["cert"] = json!(format!("/v1/pki/requests/{}/cert", r.id));
         out["ca_sha256"] = json!(self.ca_sha256());
         let retry = format!("Retry-After: {}", bia_pki::POLL_SECS);
-        respond(stream, 202, "application/json", out.to_string().as_bytes(), Some(&retry));
+        respond(
+            stream,
+            202,
+            "application/json",
+            out.to_string().as_bytes(),
+            Some(&retry),
+        );
     }
 
     fn request_status(&self, stream: &mut dyn Write, id: &str) {
@@ -1057,7 +1186,13 @@ impl Web {
                 }
                 let retry = format!("Retry-After: {}", bia_pki::POLL_SECS);
                 let pending = r.status == bia_pki::RequestStatus::Pending;
-                respond(stream, 200, "application/json", out.to_string().as_bytes(), pending.then_some(retry.as_str()));
+                respond(
+                    stream,
+                    200,
+                    "application/json",
+                    out.to_string().as_bytes(),
+                    pending.then_some(retry.as_str()),
+                );
             }
             None => respond(stream, 404, "text/plain", b"no such request", None),
         }
@@ -1076,7 +1211,13 @@ impl Web {
             S::Expired => 410,
         };
         if code != 0 {
-            respond(stream, code, "application/json", request_json(&r).to_string().as_bytes(), None);
+            respond(
+                stream,
+                code,
+                "application/json",
+                request_json(&r).to_string().as_bytes(),
+                None,
+            );
             return;
         }
         match self.pki.collect_request(id) {
@@ -1084,24 +1225,53 @@ impl Web {
                 if r.status == S::Approved {
                     self.con.writeln(&self.con.c(
                         crate::console::GRAY,
-                        &format!("  web console: {} downloaded its certificate ({}, request {})", after.identity, after.serial, after.short()),
+                        &format!(
+                            "  web console: {} downloaded its certificate ({}, request {})",
+                            after.identity,
+                            after.serial,
+                            after.short()
+                        ),
                     ));
                 }
-                let extra = format!("Content-Disposition: attachment; filename=\"{}.crt\"", after.identity);
-                respond(stream, 200, "application/x-pem-file", pem.as_bytes(), Some(&extra));
+                let extra = format!(
+                    "Content-Disposition: attachment; filename=\"{}.crt\"",
+                    after.identity
+                );
+                respond(
+                    stream,
+                    200,
+                    "application/x-pem-file",
+                    pem.as_bytes(),
+                    Some(&extra),
+                );
             }
-            Err(e) => respond(stream, 409, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+            Err(e) => respond(
+                stream,
+                409,
+                "text/plain; charset=utf-8",
+                format!("{e:#}").as_bytes(),
+                None,
+            ),
         }
     }
 
     /// Show a new request on the console and tell the model, so it can ask root.
     fn announce_request(&self, r: &bia_pki::CertRequest) {
-        let note = if r.note.is_empty() { String::new() } else { format!(" note: \"{}\"", r.note) };
+        let note = if r.note.is_empty() {
+            String::new()
+        } else {
+            format!(" note: \"{}\"", r.note)
+        };
         self.con.writeln(&self.con.c(
             crate::console::YELLOW,
             &format!(
                 "  certificate request {} from {}: {} ({}){note}. /pki approve {} or /pki deny {}",
-                r.short(), r.source, r.identity, r.role, r.short(), r.short()
+                r.short(),
+                r.source,
+                r.identity,
+                r.role,
+                r.short(),
+                r.short()
             ),
         ));
         self.con.push_inbound(crate::console::Inbound {
@@ -1124,11 +1294,25 @@ impl Web {
     }
 
     /// Approve or deny from the console or the web UI.
-    pub fn decide_request(&self, id: &str, approve: bool, by: &str, reason: &str) -> Result<bia_pki::CertRequest, String> {
-        let r = self.pki.decide_request(id, approve, by, reason).map_err(|e| format!("{e:#}"))?;
+    pub fn decide_request(
+        &self,
+        id: &str,
+        approve: bool,
+        by: &str,
+        reason: &str,
+    ) -> Result<bia_pki::CertRequest, String> {
+        let r = self
+            .pki
+            .decide_request(id, approve, by, reason)
+            .map_err(|e| format!("{e:#}"))?;
         self.con.writeln(&self.con.c(
             crate::console::GRAY,
-            &format!("  certificate request {} for {}: {} by {by}", r.short(), r.identity, r.status.as_str()),
+            &format!(
+                "  certificate request {} for {}: {} by {by}",
+                r.short(),
+                r.identity,
+                r.status.as_str()
+            ),
         ));
         Ok(r)
     }
@@ -1140,9 +1324,7 @@ impl Web {
     fn serve_pickup(&self, stream: &mut dyn Write, token: &str) {
         match self.pki.take_pickup(token) {
             Some((bytes, identity)) => {
-                let extra = format!(
-                    "Content-Disposition: attachment; filename=\"{identity}.p12\""
-                );
+                let extra = format!("Content-Disposition: attachment; filename=\"{identity}.p12\"");
                 respond(stream, 200, "application/x-pkcs12", &bytes, Some(&extra));
             }
             None => respond(stream, 404, "text/plain", b"not found", None),
@@ -1187,14 +1369,25 @@ impl Web {
         query: &str,
         body: &[u8],
         stream: &mut dyn Write,
+        root: bool,
     ) -> bool {
         if method == "GET" && path == "/v1/hitl" {
-            respond_json(stream, crate::hitl::list(&self.files));
+            let mut l = crate::hitl::list(&self.files);
+            if !root {
+                if let Some(t) = l["tasks"].as_array_mut() {
+                    t.retain(|t| t["kind"] != "chatgpt");
+                }
+            }
+            respond_json(stream, l);
             return true;
         }
         if method == "GET" {
             if let Some(id) = path.strip_prefix("/v1/hitl/") {
                 if !id.contains('/') {
+                    if !root && crate::hitl::root_only(&self.files, id) {
+                        respond(stream, 403, "text/plain", b"root only", None);
+                        return true;
+                    }
                     match crate::hitl::get(&self.files, id) {
                         Some(v) => respond_json(stream, v),
                         None => respond(stream, 404, "text/plain", b"not found", None),
@@ -1220,11 +1413,22 @@ impl Web {
             }
         }
         if method == "POST" {
-            if let Some(id) = crate::hitl::api_finish_id(path) {
-                let v: Value = serde_json::from_slice(body).unwrap_or(json!({}));
+            let Some((id, action)) = crate::hitl::api_action(path) else {
+                return false;
+            };
+            if !root && crate::hitl::root_only(&self.files, id) {
+                respond(stream, 403, "text/plain", b"root only", None);
+                return true;
+            }
+            if action != "finish" {
+                return false;
+            }
+            let v: Value = serde_json::from_slice(body).unwrap_or(json!({}));
+            {
                 let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(true);
                 let note = v.get("note").and_then(|x| x.as_str()).unwrap_or("");
-                match crate::hitl::finish(&self.files, id, ok, note) {
+                let model = v.get("model").and_then(|x| x.as_str()).unwrap_or("");
+                match crate::hitl::finish(&self.files, id, ok, note, model) {
                     Ok(()) => {
                         self.con.writeln(&self.con.c(
                             crate::console::GRAY,
@@ -1241,7 +1445,13 @@ impl Web {
     }
 
     /// Chat attachment upload into `inbox/web/<identity>/`. Returns `{path, size, name}`.
-    fn upload(&self, stream: &mut dyn Write, mut reader: BufReader<SharedTls>, req: &Req, identity: &str) {
+    fn upload(
+        &self,
+        stream: &mut dyn Write,
+        mut reader: BufReader<SharedTls>,
+        req: &Req,
+        identity: &str,
+    ) {
         let raw_name = Some(req.q("name").to_string())
             .filter(|s| !s.is_empty())
             .or_else(|| req.header("x-filename").map(|s| s.to_string()))
@@ -1256,7 +1466,13 @@ impl Web {
         let dest = self.files.join(&rel);
         match receive_to(&mut reader, &dest, req.content_length()) {
             Ok(n) => respond_json(stream, json!({"path": rel, "size": n, "name": name})),
-            Err((code, e)) => respond(stream, code, "text/plain; charset=utf-8", e.as_bytes(), None),
+            Err((code, e)) => respond(
+                stream,
+                code,
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+                None,
+            ),
         }
     }
 
@@ -1267,7 +1483,13 @@ impl Web {
             return;
         };
         if dest.is_dir() {
-            respond(stream, 409, "text/plain", b"a folder with that name exists", None);
+            respond(
+                stream,
+                409,
+                "text/plain",
+                b"a folder with that name exists",
+                None,
+            );
             return;
         }
         if dest.exists() && req.q("overwrite") != "1" {
@@ -1276,12 +1498,24 @@ impl Web {
         }
         match receive_to(&mut reader, &dest, req.content_length()) {
             Ok(n) => respond_json(stream, json!({"path": dest.to_string_lossy(), "size": n})),
-            Err((code, e)) => respond(stream, code, "text/plain; charset=utf-8", e.as_bytes(), None),
+            Err((code, e)) => respond(
+                stream,
+                code,
+                "text/plain; charset=utf-8",
+                e.as_bytes(),
+                None,
+            ),
         }
     }
 
     /// Chat WebSocket: JSON events out (`webchat`), JSON actions in, `{t:"ack", cid}` replies.
-    fn ws_chat(&self, stream: SharedTls, mut reader: BufReader<SharedTls>, identity: &str, root: bool) {
+    fn ws_chat(
+        &self,
+        stream: SharedTls,
+        mut reader: BufReader<SharedTls>,
+        identity: &str,
+        root: bool,
+    ) {
         // browsers ping every 30s; a silent peer is dropped
         let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
         let (sid, rx) = self.con.add_web_sink(identity);
@@ -1424,9 +1658,12 @@ fn receive_to(reader: &mut impl Read, dest: &Path, len: u64) -> Result<u64, (u16
     }
     let part = dest.with_file_name(format!(
         ".{}.part",
-        dest.file_name().and_then(|s| s.to_str()).unwrap_or("upload")
+        dest.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("upload")
     ));
-    let mut f = std::fs::File::create(&part).map_err(|e| (500, format!("{}: {e}", dest.display())))?;
+    let mut f =
+        std::fs::File::create(&part).map_err(|e| (500, format!("{}: {e}", dest.display())))?;
     let mut left = len;
     let mut buf = vec![0u8; 256 * 1024];
     let fail = |code: u16, msg: String| {
@@ -1462,10 +1699,17 @@ fn fs_list(dir: &Path) -> Value {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
                 let lmd = e.path().symlink_metadata().ok();
-                let link = lmd.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+                let link = lmd
+                    .as_ref()
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
                 let md = std::fs::metadata(e.path()).ok().or(lmd);
                 let is_dir = md.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-                let size = md.as_ref().filter(|m| m.is_file()).map(|m| m.len()).unwrap_or(0);
+                let size = md
+                    .as_ref()
+                    .filter(|m| m.is_file())
+                    .map(|m| m.len())
+                    .unwrap_or(0);
                 let mtime = md
                     .as_ref()
                     .and_then(|m| m.modified().ok())
@@ -1535,7 +1779,11 @@ fn fs_get(stream: &mut dyn Write, p: &Path, attachment: bool, range: Option<&str
         let _ = w.finish();
         return;
     }
-    let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("file").to_string();
+    let name = p
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file")
+        .to_string();
     send_file(stream, p, &name, attachment, range);
 }
 
@@ -1644,7 +1892,14 @@ fn unique_copy_name(p: &Path) -> PathBuf {
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
     for i in 1.. {
-        let c = p.with_file_name(format!("{stem} copy{}{ext}", if i == 1 { String::new() } else { format!(" {i}") }));
+        let c = p.with_file_name(format!(
+            "{stem} copy{}{ext}",
+            if i == 1 {
+                String::new()
+            } else {
+                format!(" {i}")
+            }
+        ));
         if !c.exists() {
             return c;
         }
@@ -1725,8 +1980,16 @@ fn ws_shell(stream: SharedTls, mut reader: BufReader<SharedTls>, req: &Req) {
         req.q("rows").parse().unwrap_or(30),
         req.q("cols").parse().unwrap_or(100),
     );
-    let shell = if Path::new("/bin/bash").exists() { "/bin/bash" } else { "/bin/sh" };
-    let cwd = if Path::new("/home/bia").is_dir() { "/home/bia" } else { "/" };
+    let shell = if Path::new("/bin/bash").exists() {
+        "/bin/bash"
+    } else {
+        "/bin/sh"
+    };
+    let cwd = if Path::new("/home/bia").is_dir() {
+        "/home/bia"
+    } else {
+        "/"
+    };
     let mut cmd = std::process::Command::new(shell);
     cmd.arg("-l")
         .current_dir(cwd)
@@ -1736,7 +1999,10 @@ fn ws_shell(stream: SharedTls, mut reader: BufReader<SharedTls>, req: &Req) {
         .env("USER", "root")
         .env("LOGNAME", "root")
         .env("SHELL", shell)
-        .env("LANG", std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into()))
+        .env(
+            "LANG",
+            std::env::var("LANG").unwrap_or_else(|_| "C.UTF-8".into()),
+        )
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -1747,7 +2013,10 @@ fn ws_shell(stream: SharedTls, mut reader: BufReader<SharedTls>, req: &Req) {
                 return Err(std::io::Error::last_os_error());
             }
             let _ = libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0);
-            if libc::dup2(slave_fd, 0) < 0 || libc::dup2(slave_fd, 1) < 0 || libc::dup2(slave_fd, 2) < 0 {
+            if libc::dup2(slave_fd, 0) < 0
+                || libc::dup2(slave_fd, 1) < 0
+                || libc::dup2(slave_fd, 2) < 0
+            {
                 return Err(std::io::Error::last_os_error());
             }
             if slave_fd > 2 {
@@ -1867,11 +2136,7 @@ fn http_redirect(mut stream: TcpStream, https_port: u16) {
     }
     let host_only = host
         .rsplit_once(':')
-        .filter(|(h, p)| {
-            !h.is_empty()
-                && !h.contains(']')
-                && p.chars().all(|c| c.is_ascii_digit())
-        })
+        .filter(|(h, p)| !h.is_empty() && !h.contains(']') && p.chars().all(|c| c.is_ascii_digit()))
         .map(|(h, _)| h.to_string())
         .unwrap_or(host);
     let loc = if https_port == 443 {
@@ -1995,7 +2260,14 @@ impl Chunked<'_> {
 
 fn tar_dir(abs: &Path, rel: &Path, out: &mut impl Write) -> std::io::Result<()> {
     let md = abs.metadata()?;
-    tar_header(out, &format!("{}/", rel.to_string_lossy()), 0, b'5', mtime_of(&md), "")?;
+    tar_header(
+        out,
+        &format!("{}/", rel.to_string_lossy()),
+        0,
+        b'5',
+        mtime_of(&md),
+        "",
+    )?;
     let mut ents: Vec<_> = std::fs::read_dir(abs)?.flatten().collect();
     ents.sort_by_key(|e| e.file_name());
     for e in ents {
@@ -2006,7 +2278,14 @@ fn tar_dir(abs: &Path, rel: &Path, out: &mut impl Write) -> std::io::Result<()> 
         };
         if lmd.file_type().is_symlink() {
             let t = std::fs::read_link(&child_abs).unwrap_or_default();
-            tar_header(out, &child_rel.to_string_lossy(), 0, b'2', mtime_of(&lmd), &t.to_string_lossy())?;
+            tar_header(
+                out,
+                &child_rel.to_string_lossy(),
+                0,
+                b'2',
+                mtime_of(&lmd),
+                &t.to_string_lossy(),
+            )?;
         } else if lmd.is_dir() {
             tar_dir(&child_abs, &child_rel, out)?;
         } else if lmd.is_file() {
@@ -2014,7 +2293,14 @@ fn tar_dir(abs: &Path, rel: &Path, out: &mut impl Write) -> std::io::Result<()> 
                 continue;
             };
             let size = lmd.len();
-            tar_header(out, &child_rel.to_string_lossy(), size, b'0', mtime_of(&lmd), "")?;
+            tar_header(
+                out,
+                &child_rel.to_string_lossy(),
+                size,
+                b'0',
+                mtime_of(&lmd),
+                "",
+            )?;
             // a file that shrinks while we read is zero-padded to its header size
             let copied = std::io::copy(&mut (&mut f).take(size), out)?;
             let mut left = size - copied;
@@ -2040,7 +2326,14 @@ fn mtime_of(md: &std::fs::Metadata) -> u64 {
 }
 
 /// ustar header; GNU `L` long-name entry first when the name does not fit.
-fn tar_header(out: &mut impl Write, name: &str, size: u64, kind: u8, mtime: u64, link: &str) -> std::io::Result<()> {
+fn tar_header(
+    out: &mut impl Write,
+    name: &str,
+    size: u64,
+    kind: u8,
+    mtime: u64,
+    link: &str,
+) -> std::io::Result<()> {
     if name.len() > 99 {
         let mut data = name.as_bytes().to_vec();
         data.push(0);
@@ -2053,7 +2346,11 @@ fn tar_header(out: &mut impl Write, name: &str, size: u64, kind: u8, mtime: u64,
     let nb = name.as_bytes();
     let n = nb.len().min(99);
     h[..n].copy_from_slice(&nb[..n]);
-    h[100..108].copy_from_slice(if kind == b'5' { b"0000755\0" } else { b"0000644\0" });
+    h[100..108].copy_from_slice(if kind == b'5' {
+        b"0000755\0"
+    } else {
+        b"0000644\0"
+    });
     h[108..116].copy_from_slice(b"0000000\0");
     h[116..124].copy_from_slice(b"0000000\0");
     if size < 0o77777777777 {
@@ -2080,7 +2377,13 @@ fn tar_header(out: &mut impl Write, name: &str, size: u64, kind: u8, mtime: u64,
 fn disposition(name: &str, attachment: bool) -> String {
     let ascii: String = name
         .chars()
-        .map(|c| if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let mut enc = String::new();
     for b in name.bytes() {
@@ -2101,15 +2404,29 @@ fn send_file(stream: &mut dyn Write, p: &Path, name: &str, attachment: bool, ran
     let mut f = match std::fs::File::open(p) {
         Ok(f) => f,
         Err(e) => {
-            let code = if e.kind() == std::io::ErrorKind::NotFound { 404 } else { 403 };
-            respond(stream, code, "text/plain; charset=utf-8", e.to_string().as_bytes(), None);
+            let code = if e.kind() == std::io::ErrorKind::NotFound {
+                404
+            } else {
+                403
+            };
+            respond(
+                stream,
+                code,
+                "text/plain; charset=utf-8",
+                e.to_string().as_bytes(),
+                None,
+            );
             return;
         }
     };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mime = crate::webchat::mime_for(name);
     // never render active content inline from the console origin
-    let mime = if !attachment && (mime.starts_with("text/html") || mime.starts_with("image/svg") || mime.starts_with("text/javascript")) {
+    let mime = if !attachment
+        && (mime.starts_with("text/html")
+            || mime.starts_with("image/svg")
+            || mime.starts_with("text/javascript"))
+    {
         "text/plain; charset=utf-8"
     } else {
         mime

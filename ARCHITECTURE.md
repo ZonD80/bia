@@ -16,6 +16,7 @@ agent is the only user-facing program; everything else is there to serve it.
  │    bia-rescue/rescue.cpio.gz            offline update overlay         │
  │    bia-rescue/next.cfg                  present only while updating    │
  │    EFI/bia/fmm.json                     optional, seeded by bia-flash  │
+ │    EFI/bia/lang.json                    owner's language (bia-flash)   │
  │    EFI/bia/models.txt                   until bia-grow moved the model │
  │ p2 BIABIOS  1 MiB BIOS boot (x86_64 legacy, GRUB core.img)             │
  │ p3 BIAROOT  ext4: Debian + /home/bia (model, MCPs, files) + swapfile   │
@@ -80,14 +81,29 @@ run resumes from the `.part` file. Without a list it only grows the ext4.
    Scripts in the kitty window come from DejaVu, Noto Color Emoji, Noto CJK
    and Noto core, in that fontconfig fallback order. Typing goes through
    fcitx5, which runs on a private session bus (`/run/bia/session-bus`) and
-   which kitty reaches over the IBus protocol. Ctrl+Space switches between
-   the keyboard, pinyin and hangul. Ctrl+Shift+U opens kitty's emoji picker.
-   The fcitx5 defaults are in `/usr/local/share/bia/fcitx5/`.
+   which kitty reaches over the IBus protocol. Ctrl+Space or Ctrl+Shift+Space
+   (macOS, and so a VM on a Mac, keeps Ctrl+Space for itself) switches
+   between the keyboard and the last input method. The right end of the top
+   bar shows the current one (EN, RU, 中, あ…), and a click there cycles
+   through all of them (`bia-im`). Ctrl+Shift+U opens kitty's emoji picker.
+   The image starts with the US keyboard only (`/usr/local/share/bia/fcitx5/`).
+   The list then follows the languages bia has learned (see Speech).
 
    Three limits remain. The kernel text console (the fallback, and tty2) only
    shows what its 512-glyph font holds, so there is no CJK there. kitty does
    not shape Indic conjuncts. Right-to-left text is drawn without bidi
    reordering.
+
+6. The agent's first turn answers a `system` notice about how it started
+   (normal boot, unexpected halt, update, landing). On the machine's very first
+   start (no `files/state/welcomed`, nothing to resume, no earlier exit, not an
+   update or a landing) the notice instead asks for a short welcome in the
+   owner's language: ask for a name, the web console and its first-visit root
+   certificate, logging in to Telegram and WhatsApp, the agent's own accounts
+   on websites (passwords and codes in the password store, human help for
+   captchas), and a stronger cloud brain when it runs on the local model. The
+   marker is then written, so this happens once; an upgraded machine gets the
+   marker on its first boot without the welcome.
 
 ## The agent (`source/crates/bia-agent`)
 
@@ -260,6 +276,38 @@ voice messages are transcribed on an ordered delivery thread before they reach
 the model, and the transcript is shown under the bubble. `say(voice=true, lang)`
 posts a voice reply on web, and on telegram/whatsapp it calls `send_voice`.
 
+Typing follows the same registry (`bia-speech::input`). After every registry
+change, the console's fcitx5 list is set to: the US keyboard, then a layout
+or input method for each learned language whose script a US keyboard cannot
+type (ru → `keyboard-ru`, zh → pinyin, ja → anthy, ko → hangul, vi → unikey,
+hi → `keyboard-in`, …; 44 in all). The default language comes first, so
+Ctrl+Space reaches it. `lang_input` overrides a language's input, for example
+a native Latin layout, or none. Items added by hand in fcitx5 are kept. The
+profile file is rewritten and the running fcitx5 gets the list over DBus
+(`busctl … SetInputMethodGroupInfo`; `fcitx5-remote -r` does not re-read the
+profile). Labels for the top bar go to `bia-labels` next to it. The agent
+syncs once at boot as well. mozc is not used: its server refuses to run as
+root, and the console session is root.
+
+The owner's language can be chosen in the flasher (GUI picker, `bia-flash
+write --lang`, `BIA_LANG=` for `make flash`; the default is the host locale).
+It goes onto the ESP as `EFI/bia/lang.json`. On first boot the agent makes it
+the default language and enables hearing it. The keyboard is added at once,
+and the voice is downloaded in the background, retried every minute for a
+day while there is no network. The ESP file is then deleted. While the
+default language is not English, the system prompt tells the model to use it
+with root, on console and web, and in boot replies, so the first reply is
+already in that language. The console's own labels stay English.
+
+`fold`/`unfold` (and `fly`, OS update) carry all of `files/speech`: the
+registry, the default language, input overrides and the downloaded models, at
+the same paths, so learned languages work at once after an unfold with no
+re-learning. The fcitx5 profile under `/root` is not carried; the boot sync
+rebuilds it from the registry (items added by hand in fcitx5 are lost). At
+every boot `learn::resume` also restarts downloads that were cut off (the home
+language's voice, or a registered voice whose files are gone) in the
+background, with the same one-minute retries.
+
 ### Chrome extension key
 
 `extension.pem` (in `source/crates/bia-mcp-chrome/` and
@@ -356,8 +404,8 @@ not start.
 back, xz-decoded on the fly: it writes a GPT for the whole stick (same
 partition starts as the image's), keeps the image's MBR boot code, copies the
 BIOS boot partition and BIAROOT, streams a Hugging Face model onto the end of
-BIAROOT, checks the image's SHA-256, and writes the ESP last with `fmm.json` and
-`models.txt` added. A damaged download therefore leaves the stick unbootable,
+BIAROOT, checks the image's SHA-256, and writes the ESP last with `fmm.json`,
+`models.txt` and `lang.json` added. A damaged download therefore leaves the stick unbootable,
 never half-written.
 
 `tools/release.sh` publishes `v<workspace version>` on GitHub (`zond80/bia`).
@@ -431,7 +479,8 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
 - `bia-mkimage`: writes that layout into a file/device for `make image`.
 - `bia-flash`: cross-platform USB writer (CLI + egui GUI). Probes the stick's
   size and writes the GPT over all of it, `root.img`, the ESP (via `fatfs`) and
-  BIOS boot; can seed `EFI/bia/fmm.json` and put a Hugging Face GGUF on the
+  BIOS boot; can seed `EFI/bia/fmm.json` and `EFI/bia/lang.json` (`--lang`,
+  `bia-flash langs`) and put a Hugging Face GGUF on the
   stick (`bia-flash search` / `files` / `write --model repo[:file]`). The FMM
   provider is detected from the pasted key (prefixes `sk-or-`, `sk-ant-`, `xai-`,
   OpenAI `sk-proj-`/`T3BlbkFJ`; `sk-`+32 hex is DeepSeek or Qwen, settled by
@@ -461,6 +510,20 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   a `bia` namespace with a fallback to top-level tools). Terminal refresh errors
   (`invalid_grant`, `refresh_token_reused`, …) end the sign-in; network errors
   keep the tokens. The stick takes its own host ID when it seeds `fmm.json`.
+  On a running bia, `system_fmm_chatgpt` (`bia-mcp-system` `chatgpt.rs`) does
+  the same sign-in as a human task, all on bia: the MCP serves a page with a
+  "Login with ChatGPT" button on its `127.0.0.1:1455` listener and sends the
+  agent a `system|fmm` message to open it in Chrome with mcp/chrome
+  (`chrome_new_page`) and to tell the person to switch to Chrome. The web
+  console task page `/hitl/<id>` shows the same screen through `/gui`. Without
+  Chrome the tool fails and sends the agent to `chrome_install`, which says how
+  to get the official Chrome; signing in in the person's own browser is not
+  offered.
+  Chrome (and the task page) then lists the account's models (`GET /v1/models`) and the chosen one
+  is written to `fmm.json` with the tokens; the agent tests it and switches, or
+  restores the previous settings. The task page answers through `<id>.result`
+  (with `model`); these tasks are root-only. bia keeps its own registration (host ID, client per
+  account) in `files/state/chatgpt-client.json`.
   Claude subscriptions are not offered: Anthropic's terms forbid third-party apps
   from using Free/Pro/Max credentials.
   `installers/macos/release.sh` signs, notarizes and packages it as .app/DMG.

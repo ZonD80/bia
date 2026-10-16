@@ -1,4 +1,5 @@
-//! "system" MCP: FMM, web console, HITL, PKI. Disks, network, curl and ss are Debian via bash.
+//! "system" MCP: FMM (with Login with ChatGPT), web console, HITL, PKI. Disks, network, curl and ss are Debian via bash.
+mod chatgpt;
 mod fmm;
 mod hitl;
 mod pki;
@@ -18,6 +19,12 @@ fn main() {
                 "base_url": {"type": "string", "description": "optional. Only if the API address is not the default."},
                 "ctx": {"type": "integer", "description": "optional. How many tokens of context. Default 131072."}}}),
             |_, a| fmm::configure(arg_str_opt(&a, "provider").unwrap_or(""), arg_str(&a, "api_key")?, arg_str_opt(&a, "model").unwrap_or(""), arg_str_opt(&a, "base_url"), arg_u32_opt(&a, "ctx")).map_err(|e| format!("{e:#}")))
+        .tool("fmm_chatgpt", "Let the owner switch the cloud model to their ChatGPT plan (Plus, Pro, Business) with a Login with ChatGPT button: no API key. Serves a page with the button on bia (127.0.0.1) and a web console task page that shows bia's screen. You get a job id now and, right after, a system|fmm message: then open that page in Chrome with chrome_new_page (mcp/chrome) and tell the person with say to switch to Chrome and press Login with ChatGPT. After the sign-in the page lists the account's models and they press Continue; the result arrives as system|job:<id>. Never press the button or sign in yourself. Needs Chrome on bia: if it is missing the call fails: enable mcp/chrome, run chrome_install and follow it, then call again. Only when root asks.",
+            json!({"type": "object", "properties": {
+                "model": {"type": "string", "description": "optional: model to preselect, only if the user named one. Default: the gpt-6.1-sol model. The person can still pick another."},
+                "email": {"type": "string", "description": "optional: the ChatGPT account's email, if the user said it"},
+                "timeout_secs": {"type": "integer", "description": "optional: give up after this many seconds. Default 1800, 0 waits forever."}}}),
+            chatgpt::login)
         .tool("fmm_enable", "Turn the saved cloud model back on.", json!({"type": "object", "properties": {}}),
             |_, _| fmm::set_enabled(true).map_err(|e| format!("{e:#}")))
         .tool("fmm_disable", "Go back to the local model. The saved cloud settings stay.", json!({"type": "object", "properties": {}}),

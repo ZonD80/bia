@@ -103,7 +103,10 @@ struct Inner {
 
 impl Inner {
     fn save(&self) {
-        let f = File { next: self.next, entries: self.entries.clone() };
+        let f = File {
+            next: self.next,
+            entries: self.entries.clone(),
+        };
         if let Ok(b) = serde_json::to_vec_pretty(&f) {
             let tmp = self.path.with_extension("json.tmp");
             if std::fs::write(&tmp, b).is_ok() {
@@ -116,7 +119,11 @@ impl Inner {
     }
     fn trim(&mut self) {
         while self.entries.len() > KEEP {
-            match self.entries.iter().position(|e| !matches!(e.state.as_str(), "queued" | "sending")) {
+            match self
+                .entries
+                .iter()
+                .position(|e| !matches!(e.state.as_str(), "queued" | "sending"))
+            {
                 Some(i) => {
                     self.entries.remove(i);
                 }
@@ -140,14 +147,21 @@ pub struct Outbox {
 }
 
 fn now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// `o17` (or `o17.2` for the second message of a multi-file send).
 pub fn is_local(id: &str) -> bool {
     let id = id.trim();
     id.strip_prefix('o')
-        .map(|r| !r.is_empty() && r.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())))
+        .map(|r| {
+            !r.is_empty()
+                && r.split('.')
+                    .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        })
         .unwrap_or(false)
 }
 
@@ -158,7 +172,10 @@ pub fn native_ids(text: &str) -> Vec<String> {
     };
     let rest = &text[i + "message id ".len()..];
     let rest = rest.split(" →").next().unwrap_or(rest);
-    rest.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    rest.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 /// Run time allowed for one task: two minutes plus 100 KB/s for the attachments, at most 6 h.
@@ -184,11 +201,18 @@ impl Outbox {
             notes: vec![],
         };
         let mut lost = vec![];
-        for e in inner.entries.iter_mut().filter(|e| matches!(e.state.as_str(), "queued" | "sending")) {
+        for e in inner
+            .entries
+            .iter_mut()
+            .filter(|e| matches!(e.state.as_str(), "queued" | "sending"))
+        {
             let was = std::mem::replace(&mut e.state, "lost".into());
             e.ended = now();
             let text = if was == "queued" {
-                format!("[send lost {} → {}] {}: the agent restarted before it was sent; not delivered", e.id, e.channel, e.what)
+                format!(
+                    "[send lost {} → {}] {}: the agent restarted before it was sent; not delivered",
+                    e.id, e.channel, e.what
+                )
             } else {
                 format!("[send lost {} → {}] {}: the agent restarted during the upload; it may or may not have been delivered", e.id, e.channel, e.what)
             };
@@ -197,7 +221,13 @@ impl Outbox {
         if !lost.is_empty() {
             inner.save();
         }
-        (Outbox { inner: Arc::new(Mutex::new(inner)), con }, lost)
+        (
+            Outbox {
+                inner: Arc::new(Mutex::new(inner)),
+                con,
+            },
+            lost,
+        )
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -206,7 +236,16 @@ impl Outbox {
 
     /// Queue `op` for `channel` (`telegram:<chat>`) and wait up to `wait` for it.
     /// `what` describes a send for notices ("2 files, 48 MB").
-    pub fn submit(&self, channel: &str, chat: &str, op: Op, link: LinkSlot, bytes: u64, what: &str, wait: Duration) -> Outcome {
+    pub fn submit(
+        &self,
+        channel: &str,
+        chat: &str,
+        op: Op,
+        link: LinkSlot,
+        bytes: u64,
+        what: &str,
+        wait: Duration,
+    ) -> Outcome {
         let cancel = Arc::new(AtomicBool::new(false));
         let waiter = Arc::new((Mutex::new(Wait::Waiting), Condvar::new()));
         let (local, ahead, spawn) = {
@@ -244,7 +283,10 @@ impl Outbox {
                 wait: waiter.clone(),
             });
             if !busy {
-                g.running.insert(channel.into(), (String::new(), Arc::new(AtomicBool::new(false))));
+                g.running.insert(
+                    channel.into(),
+                    (String::new(), Arc::new(AtomicBool::new(false))),
+                );
             }
             (local, ahead, !busy)
         };
@@ -267,7 +309,9 @@ impl Outbox {
         loop {
             if let Wait::Done(_) = &*st {
                 // An error in hand goes back as the say result; no notice follows.
-                let Wait::Done(r) = std::mem::replace(&mut *st, Wait::Gone) else { unreachable!() };
+                let Wait::Done(r) = std::mem::replace(&mut *st, Wait::Gone) else {
+                    unreachable!()
+                };
                 return Outcome::Done(local, r);
             }
             let left = until.saturating_duration_since(Instant::now());
@@ -275,7 +319,10 @@ impl Outbox {
                 *st = Wait::Gone;
                 return Outcome::Pending(local, ahead);
             }
-            st = cv.wait_timeout(st, left).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
+            st = cv
+                .wait_timeout(st, left)
+                .map(|(g, _)| g)
+                .unwrap_or_else(|e| e.into_inner().0);
         }
     }
 
@@ -285,7 +332,8 @@ impl Outbox {
                 let mut g = self.lock();
                 match g.queues.get_mut(channel).and_then(|q| q.pop_front()) {
                     Some(t) => {
-                        g.running.insert(channel.into(), (t.local.clone(), t.cancel.clone()));
+                        g.running
+                            .insert(channel.into(), (t.local.clone(), t.cancel.clone()));
                         t
                     }
                     None => {
@@ -314,12 +362,27 @@ impl Outbox {
                 }
                 ("send", a)
             }
-            Op::Voice { text, lang } => ("send_voice", json!({"chat_id": t.chat, "text": text, "lang": lang})),
-            Op::Edit { id, text } => ("edit", json!({"chat_id": t.chat, "message_id": self.resolve(id)?, "text": text})),
-            Op::React { id, emoji } => ("react", json!({"chat_id": t.chat, "message_id": self.resolve(id)?, "emoji": emoji})),
+            Op::Voice { text, lang } => (
+                "send_voice",
+                json!({"chat_id": t.chat, "text": text, "lang": lang}),
+            ),
+            Op::Edit { id, text } => (
+                "edit",
+                json!({"chat_id": t.chat, "message_id": self.resolve(id)?, "text": text}),
+            ),
+            Op::React { id, emoji } => (
+                "react",
+                json!({"chat_id": t.chat, "message_id": self.resolve(id)?, "emoji": emoji}),
+            ),
             Op::Delete { ids, revoke } => {
-                let ids = ids.iter().map(|i| self.resolve(i)).collect::<Result<Vec<_>, _>>()?;
-                ("delete_messages", json!({"chat_id": t.chat, "message_ids": ids, "revoke": revoke}))
+                let ids = ids
+                    .iter()
+                    .map(|i| self.resolve(i))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (
+                    "delete_messages",
+                    json!({"chat_id": t.chat, "message_ids": ids, "revoke": revoke}),
+                )
             }
         };
         if !t.local.is_empty() {
@@ -339,16 +402,25 @@ impl Outbox {
                     return if err { Err(text) } else { Ok(text) };
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err("the MCP exited during the call; it may or may not have been delivered".into());
+                    return Err(
+                        "the MCP exited during the call; it may or may not have been delivered"
+                            .into(),
+                    );
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if t.cancel.load(Ordering::Relaxed) {
                         link.abandon(rpc);
-                        return Err("cancelled; files already uploaded may still have been delivered".into());
+                        return Err(
+                            "cancelled; files already uploaded may still have been delivered"
+                                .into(),
+                        );
                     }
                     if Instant::now() >= deadline {
                         link.abandon(rpc);
-                        return Err(format!("timed out after {}s", deadline_for(t.bytes).as_secs()));
+                        return Err(format!(
+                            "timed out after {}s",
+                            deadline_for(t.bytes).as_secs()
+                        ));
                     }
                 }
             }
@@ -366,7 +438,11 @@ impl Outbox {
             None => (id, 1),
         };
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let e = g.entries.iter().find(|e| e.id == base).ok_or_else(|| format!("unknown message {id}"))?;
+        let e = g
+            .entries
+            .iter()
+            .find(|e| e.id == base)
+            .ok_or_else(|| format!("unknown message {id}"))?;
         if e.state != "sent" {
             return Err(format!("{base} was not delivered ({})", e.state));
         }
@@ -406,7 +482,11 @@ impl Outbox {
         }
         drop(st);
         // say already returned: report the outcome.
-        let label = if t.local.is_empty() { String::new() } else { format!(" {}", t.local) };
+        let label = if t.local.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", t.local)
+        };
         let secs = took.as_secs();
         match r {
             Ok(text) => {
@@ -415,17 +495,20 @@ impl Outbox {
                 } else {
                     format!("[{} done on {}] {text}", t.op.verb(), t.channel)
                 };
-                self.con.writeln(&self.con.c(crate::console::GRAY, &format!("  {line}")));
+                self.con
+                    .writeln(&self.con.c(crate::console::GRAY, &format!("  {line}")));
                 self.lock().notes.push(line);
             }
             Err(e) if cancelled && t.op.delivers() => {
                 let line = format!("[send cancelled{label} → {}] {e}", t.channel);
-                self.con.writeln(&self.con.c(crate::console::GRAY, &format!("  {line}")));
+                self.con
+                    .writeln(&self.con.c(crate::console::GRAY, &format!("  {line}")));
                 self.lock().notes.push(line);
             }
             Err(e) => {
                 let line = format!("[{} failed{label} → {}] {e}", t.op.verb(), t.channel);
-                self.con.writeln(&self.con.c(crate::console::RED, &format!("  {line}")));
+                self.con
+                    .writeln(&self.con.c(crate::console::RED, &format!("  {line}")));
                 self.con.push_inbound(notice(&line));
             }
         }
@@ -463,7 +546,16 @@ impl Outbox {
         g.entries
             .iter()
             .filter(|e| matches!(e.state.as_str(), "queued" | "sending"))
-            .map(|e| format!("{} → {} {} ({}, {}s)", e.id, e.channel, e.state, e.what, t.saturating_sub(e.issued)))
+            .map(|e| {
+                format!(
+                    "{} → {} {} ({}, {}s)",
+                    e.id,
+                    e.channel,
+                    e.state,
+                    e.what,
+                    t.saturating_sub(e.issued)
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -513,15 +605,29 @@ done
         std::fs::write(&exe, FAKE).unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let m: Manifest = serde_json::from_value(json!({"name": "telegram", "command": exe.to_str().unwrap()})).unwrap();
+        let m: Manifest =
+            serde_json::from_value(json!({"name": "telegram", "command": exe.to_str().unwrap()}))
+                .unwrap();
         let con = Console::for_test();
         let jobs = Arc::new(Mutex::new(crate::jobs::Store::load(&dir)));
-        let srv = McpServer::spawn(&dir, &m, std::env::consts::ARCH, &[], &dir, con.clone(), jobs).unwrap();
+        let srv = McpServer::spawn(
+            &dir,
+            &m,
+            std::env::consts::ARCH,
+            &[],
+            &dir,
+            con.clone(),
+            jobs,
+        )
+        .unwrap();
         (dir, con, srv)
     }
 
     fn send(text: &str) -> Op {
-        Op::Send { text: text.into(), files: vec![] }
+        Op::Send {
+            text: text.into(),
+            files: vec![],
+        }
     }
 
     fn wait_for(mut f: impl FnMut() -> bool) {
@@ -549,49 +655,81 @@ done
         }
 
         // Slow: the local id comes back; an edit naming it waits behind it and gets the real id.
-        let Outcome::Pending(id, 0) = ob.submit("telegram:5", "5", send("slow"), srv.link(), 0, "2 files", w) else {
+        let Outcome::Pending(id, 0) =
+            ob.submit("telegram:5", "5", send("slow"), srv.link(), 0, "2 files", w)
+        else {
             panic!("expected pending")
         };
         assert_eq!(id, "o2");
         assert!(ob.brief().contains("o2 → telegram:5"));
-        let edit = Op::Edit { id: "o2.2".into(), text: "new".into() };
-        let Outcome::Pending(_, 1) = ob.submit("telegram:5", "5", edit, srv.link(), 0, "", w) else {
+        let edit = Op::Edit {
+            id: "o2.2".into(),
+            text: "new".into(),
+        };
+        let Outcome::Pending(_, 1) = ob.submit("telegram:5", "5", edit, srv.link(), 0, "", w)
+        else {
             panic!("edit should wait behind o2")
         };
         // Another chat is not held up by chat 5.
-        assert!(matches!(ob.submit("telegram:6", "6", send("hi"), srv.link(), 0, "text", w), Outcome::Done(_, Ok(_))));
+        assert!(matches!(
+            ob.submit("telegram:6", "6", send("hi"), srv.link(), 0, "text", w),
+            Outcome::Done(_, Ok(_))
+        ));
 
         wait_for(|| ob.lock().notes.len() >= 2);
         let notes = ob.take_notes();
         assert!(notes[0].starts_with("[sent o2 → telegram:5]"), "{notes:?}");
-        let e = ob.lock().entries.iter().find(|e| e.id == "o2").cloned().unwrap();
+        let e = ob
+            .lock()
+            .entries
+            .iter()
+            .find(|e| e.id == "o2")
+            .cloned()
+            .unwrap();
         assert_eq!(e.state, "sent");
         assert_eq!(e.native.len(), 2);
-        assert!(notes[1].contains(&format!("edited {}", e.native[1])), "{notes:?}");
+        assert!(
+            notes[1].contains(&format!("edited {}", e.native[1])),
+            "{notes:?}"
+        );
         assert!(ob.brief().is_empty());
 
         // Cancel during the upload: quiet note, entry cancelled, edits on it fail loudly.
-        let Outcome::Pending(id, 0) = ob.submit("telegram:5", "5", send("stuck"), srv.link(), 0, "big", w) else {
+        let Outcome::Pending(id, 0) =
+            ob.submit("telegram:5", "5", send("stuck"), srv.link(), 0, "big", w)
+        else {
             panic!("expected pending")
         };
         assert!(ob.cancel(&id).unwrap().starts_with("cancelling"));
         wait_for(|| !ob.lock().notes.is_empty());
         assert!(ob.take_notes()[0].starts_with(&format!("[send cancelled {id}")));
         assert!(ob.cancel(&id).unwrap_err().contains("already cancelled"));
-        let edit = Op::Edit { id: id.clone(), text: "x".into() };
+        let edit = Op::Edit {
+            id: id.clone(),
+            text: "x".into(),
+        };
         match ob.submit("telegram:5", "5", edit, srv.link(), 0, "", w) {
             Outcome::Done(_, Err(e)) => assert!(e.contains("not delivered"), "{e}"),
             _ => panic!("edit of a cancelled send must fail"),
         }
 
         // A send in flight across a restart is reported lost.
-        let Outcome::Pending(id, 0) = ob.submit("telegram:7", "7", send("stuck"), srv.link(), 0, "big", w) else {
+        let Outcome::Pending(id, 0) =
+            ob.submit("telegram:7", "7", send("stuck"), srv.link(), 0, "big", w)
+        else {
             panic!("expected pending")
         };
-        wait_for(|| ob.lock().entries.iter().any(|e| e.id == id && e.state == "sending"));
+        wait_for(|| {
+            ob.lock()
+                .entries
+                .iter()
+                .any(|e| e.id == id && e.state == "sending")
+        });
         let (_, lost) = Outbox::load(&dir, con.clone());
         assert_eq!(lost.len(), 1);
-        assert!(lost[0].text.contains(&format!("[send lost {id} → telegram:7]")));
+        assert!(lost[0]
+            .text
+            .contains(&format!("[send lost {id} → telegram:7]")));
         assert!(con.try_read_inbound().is_none());
         drop(srv);
         let _ = std::fs::remove_dir_all(&dir);
@@ -601,10 +739,26 @@ done
     fn server_exit_fails_loudly() {
         let (dir, con, srv) = setup("exit");
         let (ob, _) = Outbox::load(&dir, con.clone());
-        let Outcome::Pending(id, 0) = ob.submit("telegram:5", "5", send("slow"), srv.link(), 0, "x", Duration::from_millis(200)) else {
+        let Outcome::Pending(id, 0) = ob.submit(
+            "telegram:5",
+            "5",
+            send("slow"),
+            srv.link(),
+            0,
+            "x",
+            Duration::from_millis(200),
+        ) else {
             panic!("expected pending")
         };
-        let _ = ob.submit("telegram:6", "6", send("die"), srv.link(), 0, "x", Duration::from_millis(200));
+        let _ = ob.submit(
+            "telegram:6",
+            "6",
+            send("die"),
+            srv.link(),
+            0,
+            "x",
+            Duration::from_millis(200),
+        );
         let mut got = None;
         wait_for(|| {
             got = con.try_read_inbound();
@@ -632,10 +786,22 @@ done
 
     #[test]
     fn parses_native_ids() {
-        assert_eq!(native_ids("sent, message id 5512 → Ann (@ann)"), vec!["5512"]);
-        assert_eq!(native_ids("sent 2 file(s), message id 1, 2 → Chat"), vec!["1", "2"]);
-        assert_eq!(native_ids("sent message id 3EB0ABC → +1555"), vec!["3EB0ABC"]);
-        assert_eq!(native_ids("sent voice message (3.2s), message id 77 → X"), vec!["77"]);
+        assert_eq!(
+            native_ids("sent, message id 5512 → Ann (@ann)"),
+            vec!["5512"]
+        );
+        assert_eq!(
+            native_ids("sent 2 file(s), message id 1, 2 → Chat"),
+            vec!["1", "2"]
+        );
+        assert_eq!(
+            native_ids("sent message id 3EB0ABC → +1555"),
+            vec!["3EB0ABC"]
+        );
+        assert_eq!(
+            native_ids("sent voice message (3.2s), message id 77 → X"),
+            vec!["77"]
+        );
         assert!(native_ids("sent → X").is_empty());
     }
 }

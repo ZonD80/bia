@@ -295,3 +295,116 @@ pub fn auto_learn(code: &str) -> Option<String> {
         if has_voice { "" } else { "; its voice (to speak it) is downloading now, a few seconds to a minute" }
     ))
 }
+
+/// The owner's language (chosen when the stick was flashed): the default for speech,
+/// learned for hearing at once, and its voice installed in the background, retried
+/// every minute for a day while there is no network yet.
+pub fn adopt_home(lang: &str) -> Result<String, String> {
+    let l = parse_lang(lang)?;
+    let code = l.code.clone();
+    let hear = langs::can_hear(&code);
+    update(|r| {
+        r.default_lang = code.clone();
+        if hear && !r.enabled.contains(&code) {
+            r.enabled.push(code.clone());
+        }
+        r.ignored.retain(|x| *x != code);
+        Ok(())
+    })?;
+    if registry::current().voice.contains_key(&code) || code == "en" {
+        return Ok(format!("home language {}", label(&code)));
+    }
+    install_in_background(vec![lang.trim().to_string()]);
+    Ok(format!("home language {}; its voice is downloading in the background", label(&code)))
+}
+
+/// Install languages one after another in a background thread, retrying each every minute
+/// for a day (the network may not be up yet). Progress goes to the speech log.
+fn install_in_background(langs: Vec<String>) {
+    if langs.is_empty() {
+        return;
+    }
+    std::thread::spawn(move || {
+        for want in langs {
+            for _ in 0..24 * 60 {
+                match install(&Quiet, &want, None) {
+                    Ok(s) => {
+                        crate::diag::log("learn", s);
+                        break;
+                    }
+                    Err(e) => crate::diag::log("learn", format!("{want}: {e}; retrying in 1 min")),
+                }
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            }
+        }
+    });
+}
+
+/// Languages whose voice should be on disk but is not: the home language's voice when an
+/// interrupted download (power cut, fold, flight) never registered it, and registered voices
+/// whose files are gone.
+pub fn unfinished(r: &registry::Registry, has_voice: impl Fn(&str) -> bool) -> Vec<String> {
+    let mut todo: Vec<String> = r
+        .voice
+        .iter()
+        .filter(|(_, id)| {
+            r.voices
+                .get(*id)
+                .is_none_or(|v| !v.bundled && !std::path::Path::new(&v.dir).is_dir())
+        })
+        .map(|(l, _)| l.clone())
+        .collect();
+    let home = &r.default_lang;
+    if !home.is_empty() && home != "en" && !r.voice.contains_key(home) && has_voice(home) && !todo.contains(home) {
+        todo.insert(0, home.clone());
+    }
+    todo
+}
+
+/// At boot (also the first after an unfold or a landing): finish downloads that were cut
+/// off, so learned languages speak again without being learned anew.
+pub fn resume() -> Option<String> {
+    let cat = catalog::load().ok();
+    let todo = unfinished(&registry::current(), |l| {
+        cat.as_ref()
+            .and_then(|c| c.languages.get(l))
+            .is_some_and(|i| !i.voices.is_empty() || !i.default_voice.is_empty())
+    });
+    if todo.is_empty() {
+        return None;
+    }
+    let msg = format!(
+        "speech: finishing voices in the background: {}",
+        todo.iter().map(|l| label(l)).collect::<Vec<_>>().join(", ")
+    );
+    install_in_background(todo);
+    Some(msg)
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::registry::{Registry, Voice};
+
+    #[test]
+    fn finds_cut_off_voices() {
+        let d = std::env::temp_dir().join(format!("bia-resume-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("de")).unwrap();
+        let mut r = Registry::default();
+        let voice = |dir: &std::path::Path, bundled| Voice { dir: dir.display().to_string(), bundled, ..Default::default() };
+        r.voices.insert("v-de".into(), voice(&d.join("de"), false));
+        r.voices.insert("v-fr".into(), voice(&d.join("fr-gone"), false));
+        r.voices.insert("v-en".into(), voice(std::path::Path::new("/nonexistent"), true));
+        for (l, v) in [("de", "v-de"), ("fr", "v-fr"), ("en", "v-en"), ("es", "v-unknown")] {
+            r.voice.insert(l.into(), v.into());
+        }
+        r.default_lang = "ru".into();
+        // ru first (the home language, never registered), then the registered ones whose files are gone
+        assert_eq!(unfinished(&r, |_| true), ["ru", "es", "fr"]);
+        // a text-only home language has nothing to download
+        assert_eq!(unfinished(&r, |_| false), ["es", "fr"]);
+        r.default_lang = "en".into();
+        assert_eq!(unfinished(&r, |_| true), ["es", "fr"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}

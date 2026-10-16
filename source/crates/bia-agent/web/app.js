@@ -2524,7 +2524,8 @@ function renderTasks() {
       h('div', { class: 'actions' },
         h('button', { class: 'btn', onclick: () => go('task/' + t.id) }, ic('display'), 'Open'),
         h('button', { class: 'btn ghost', onclick: () => window.open('/hitl/' + t.id, '_blank', 'noopener') }, ic('external'), 'New tab'),
-        h('button', { class: 'btn ghost', onclick: () => finishTask(t, true) }, ic('check'), 'Done'),
+        // Login with ChatGPT is finished by picking a model on its page
+        t.kind === 'chatgpt' ? null : h('button', { class: 'btn ghost', onclick: () => finishTask(t, true) }, ic('check'), 'Done'),
         h('button', { class: 'btn flat danger', onclick: () => finishTask(t, false) }, "Can't do it"))))));
 }
 async function finishTask(t, ok) {
@@ -2546,7 +2547,7 @@ function openTaskFrame(id) {
   const t = S.tasks.find(x => x.id === id) || { id, title: 'Human task' };
   set($('#taskHead'), iconBtn('back', 'Back', () => go('tasks')), h('div', { class: 'avatar xs c2' }, ic('hand')),
     h('div', { class: 'tbox' }, h('div', { class: 'title ellipsis' }, t.title), h('div', { class: 'subtitle ellipsis' }, t.message || 'do the step on the machine display, then press Done')),
-    h('button', { class: 'btn small', onclick: () => finishTask(t, true) }, ic('check'), 'Done'),
+    t.kind === 'chatgpt' ? null : h('button', { class: 'btn small', onclick: () => finishTask(t, true) }, ic('check'), 'Done'),
     h('button', { class: 'btn flat danger small', onclick: () => finishTask(t, false) }, 'Failed'),
     iconBtn('external', 'New tab', () => window.open('/hitl/' + id, '_blank', 'noopener')));
   const f = $('#taskFrame');

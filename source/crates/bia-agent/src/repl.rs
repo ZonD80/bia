@@ -19,7 +19,8 @@ fn speech_lang(text: &str) -> Option<String> {
     let i = text.find("[speech ")?;
     let rest = &text[i + 8..];
     let code = rest[..rest.find(']')?].trim().trim_end_matches('?');
-    (!code.is_empty() && code.len() <= 4 && code.chars().all(|c| c.is_ascii_lowercase())).then(|| code.to_string())
+    (!code.is_empty() && code.len() <= 4 && code.chars().all(|c| c.is_ascii_lowercase()))
+        .then(|| code.to_string())
 }
 
 fn local_channel(ch: &str) -> bool {
@@ -108,7 +109,9 @@ fn keep_generating(
                 GRAY,
                 &format!(
                     "\n  (queued: {}@{} {})\n",
-                    ib.identity, ib.channel, ib.text.trim()
+                    ib.identity,
+                    ib.channel,
+                    ib.text.trim()
                 ),
             ));
             queued.borrow_mut().push(ib);
@@ -611,12 +614,7 @@ impl Repl {
             let system = self.system.clone();
             let remote = self.remote.as_ref().unwrap();
             let con = self.con.clone();
-            let mut shown = Printer::new(
-                con.clone(),
-                "\u{0}never",
-                self.show_thinking,
-                false,
-            );
+            let mut shown = Printer::new(con.clone(), "\u{0}never", self.show_thinking, false);
             match remote.generate(
                 &system,
                 &self.tools.prompt_specs(),
@@ -650,12 +648,7 @@ impl Repl {
         } else if self.llm.is_some() {
             let prompt = self.fit_history();
             let con = self.con.clone();
-            let mut shown = Printer::new(
-                con.clone(),
-                "\u{0}never",
-                self.show_thinking,
-                false,
-            );
+            let mut shown = Printer::new(con.clone(), "\u{0}never", self.show_thinking, false);
             let con2 = self.con.clone();
             match self.llm.as_mut().unwrap().generate(
                 &prompt,
@@ -719,7 +712,9 @@ impl Repl {
                 Err(e) => {
                     if let Some(old_c) = prev {
                         let _ = old_c.save(&self.fmm_path);
-                        if let Ok(r) = Remote::from_config(&old_c).map(|r| r.with_store(&self.fmm_path)) {
+                        if let Ok(r) =
+                            Remote::from_config(&old_c).map(|r| r.with_store(&self.fmm_path))
+                        {
                             self.remote = Some(r);
                         }
                     }
@@ -1275,6 +1270,7 @@ impl Repl {
                 let fmm = matches!(
                     name.as_str(),
                     "system_fmm_configure"
+                        | "system_fmm_chatgpt"
                         | "system_fmm_enable"
                         | "system_fmm_disable"
                         | "system_fmm_forget"
@@ -1377,13 +1373,14 @@ impl Repl {
         if matches!(
             job.tool.as_str(),
             "system_fmm_configure"
+                | "system_fmm_chatgpt"
                 | "system_fmm_enable"
                 | "system_fmm_disable"
                 | "system_fmm_forget"
         ) {
             let want_on = matches!(
                 job.tool.as_str(),
-                "system_fmm_configure" | "system_fmm_enable"
+                "system_fmm_configure" | "system_fmm_chatgpt" | "system_fmm_enable"
             );
             let backup = self.fmm_backups.remove(id);
             if ok {
@@ -1424,12 +1421,7 @@ impl Repl {
             .fold_invoke_for_remote(normalize_history(self.format, &self.history));
         let tools = self.tools.prompt_specs();
         let con = self.con.clone();
-        let mut shown = Printer::new(
-            con.clone(),
-            "\u{0}never",
-            self.show_thinking,
-            false,
-        );
+        let mut shown = Printer::new(con.clone(), "\u{0}never", self.show_thinking, false);
         let queued: std::cell::RefCell<Vec<Inbound>> = std::cell::RefCell::new(vec![]);
         let t0 = std::time::Instant::now();
         let out_chars = std::cell::Cell::new(0usize);
@@ -1711,8 +1703,7 @@ impl Repl {
             && !ib.channel.starts_with(crate::jobs::PREFIX)
             && ib.channel != crate::tools::CH_SCHEDULE
         {
-            *self.tools.reply_to.borrow_mut() =
-                Some((ib.identity.clone(), ib.channel.clone()));
+            *self.tools.reply_to.borrow_mut() = Some((ib.identity.clone(), ib.channel.clone()));
         }
         if !local_channel(&ib.channel)
             && ib.identity != ID_SYSTEM
@@ -1726,8 +1717,15 @@ impl Repl {
         // [speech ru] … (calls, voice messages): learn the person's language
         if ib.identity != ID_SYSTEM {
             if let Some(code) = speech_lang(&ib.text) {
-                if let Ok(Some(l)) = self.tools.addressbook.observe_lang(&ib.identity, &ib.channel, &code) {
-                    self.con.writeln(&self.con.c(GRAY, &format!("  addressbook: {}@{} speaks {l}", ib.identity, ib.channel)));
+                if let Ok(Some(l)) =
+                    self.tools
+                        .addressbook
+                        .observe_lang(&ib.identity, &ib.channel, &code)
+                {
+                    self.con.writeln(&self.con.c(
+                        GRAY,
+                        &format!("  addressbook: {}@{} speaks {l}", ib.identity, ib.channel),
+                    ));
                 }
             }
         }
@@ -1774,7 +1772,13 @@ impl Repl {
             return;
         }
         let text = notes.join("\n");
-        let env = envelope(ID_SYSTEM, crate::outbox::CH_OUTBOX, crate::clock::now(), &crate::console::mint_msg_id(), &text);
+        let env = envelope(
+            ID_SYSTEM,
+            crate::outbox::CH_OUTBOX,
+            crate::clock::now(),
+            &crate::console::mint_msg_id(),
+            &text,
+        );
         self.log("system", &text);
         self.push_history(Msg::user(env));
     }
@@ -1907,12 +1911,7 @@ impl Repl {
             self.con.drain();
             self.set_state("thinking");
             let con = self.con.clone();
-            let mut shown = Printer::new(
-                con.clone(),
-                start_marker,
-                self.show_thinking,
-                self.think,
-            );
+            let mut shown = Printer::new(con.clone(), start_marker, self.show_thinking, self.think);
             let con2 = self.con.clone();
             let prefill_shown = std::cell::Cell::new(false);
             let queued: std::cell::RefCell<Vec<Inbound>> = std::cell::RefCell::new(vec![]);
@@ -1961,8 +1960,16 @@ impl Repl {
             } else {
                 0.0
             };
-            let ctx_used = self.llm.as_ref().map(|l| l.cached_tokens()).unwrap_or(stats.prompt_tokens + stats.generated);
-            let ctx_total = self.llm.as_ref().map(|l| l.n_ctx).unwrap_or(self.ctx_budget());
+            let ctx_used = self
+                .llm
+                .as_ref()
+                .map(|l| l.cached_tokens())
+                .unwrap_or(stats.prompt_tokens + stats.generated);
+            let ctx_total = self
+                .llm
+                .as_ref()
+                .map(|l| l.n_ctx)
+                .unwrap_or(self.ctx_budget());
             let msgs = self.history.len() + 1;
             self.con.writeln(&self.con.c(
                 GRAY,
