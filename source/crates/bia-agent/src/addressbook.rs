@@ -30,8 +30,9 @@ pub struct Contact {
     pub lang_pending: String,
 }
 
-/// Channels that belong to the client identity rather than to a stored link.
-pub fn local_channel(channel: &str) -> bool {
+/// Channels that name the person by their identity (console: root; web: the client certificate)
+/// rather than by a stored link (telegram:<id>, whatsapp:<phone>).
+pub fn identity_channel(channel: &str) -> bool {
     channel == "console" || channel == "web" || channel.starts_with("web:")
 }
 
@@ -109,7 +110,7 @@ impl AddressBook {
 
     /// The contact behind an envelope: web/console by identity, others by channel.
     pub fn find_for(&self, identity: &str, channel: &str) -> Option<&Contact> {
-        if local_channel(channel) {
+        if identity_channel(channel) {
             return self.contacts.iter().find(|c| c.id == identity);
         }
         self.contacts
@@ -130,7 +131,7 @@ impl AddressBook {
         if code.is_empty() {
             return Ok(None);
         }
-        let idx = if local_channel(channel) {
+        let idx = if identity_channel(channel) {
             match self.contacts.iter().position(|c| c.id == identity) {
                 Some(i) => i,
                 None => {
@@ -181,7 +182,7 @@ impl AddressBook {
     /// Hard-link `channel` to contact `id`: it leaves any other contact (an auto-created
     /// one left without channels is merged away: its language carries over).
     pub fn link(&mut self, id: &str, channel: &str) -> Result<Contact> {
-        if local_channel(channel) {
+        if identity_channel(channel) {
             bail!("{channel} belongs to the client identity already (contact id = identity)");
         }
         if !self.contacts.iter().any(|c| c.id == id) {

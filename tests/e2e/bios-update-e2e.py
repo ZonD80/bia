@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Offline update through the rescue image on legacy BIOS (SeaBIOS, x86_64).
 
-  ARCH=x86_64 tools/update-e2e.sh images && ARCH=x86_64 tools/update-e2e.sh patch
-  tools/bios-update-e2e.py [disk|flash|rescue …]        (default: all three)
+  ARCH=x86_64 tests/e2e/update-e2e.sh images && ARCH=x86_64 tests/e2e/update-e2e.sh patch
+  tests/e2e/bios-update-e2e.py [disk|flash|rescue …]        (default: all three)
 
-Uses the update-e2e images in dist/ut-x86_64 (prep/check from tools/update-e2e-img.py).
+Uses the update-e2e images in dist/ut-x86_64 (prep/check from tests/e2e/update-e2e-img.py).
 Scenarios, as they happen on a BIOS machine:
   disk    runs from the disk with no stick; the stick is hot-plugged ahead of the disk in
           the boot order (a user plugging in a new stick), then /update. SeaBIOS boots
@@ -18,7 +18,7 @@ Env: MEM (6G), CPUS (4), TIMEOUT (minutes per long phase, 30)
 """
 import os, re, subprocess, sys, time
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 UT = f"{ROOT}/dist/ut-x86_64"
 os.environ.setdefault("LE", UT)
 os.environ.setdefault("MEM", "6G")
@@ -27,6 +27,7 @@ import e2e_vm
 from e2e_vm import VM, die, stamp
 
 T = int(os.environ.get("TIMEOUT", "30")) * 60
+READY = r"Ready for commands|<-(?:\x1b\[[0-9;]*m)* "  # the agent answered its boot notice (a first start greets instead)
 e2e_vm.SHOW = re.compile(r"bia-update:|bia-rescue:|unfold:|Kernel panic|legacy BIOS|DMI: .*BIOS|Command line:")
 FLASH, DISK = f"{UT}/flash.img", f"{UT}/disk.img"
 NET = ["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
@@ -56,7 +57,7 @@ def boot(tag, stick=True, disk=True, stick_first=True):
 
 def image_tool(*args):
     r = subprocess.run(["docker", "run", "--rm", "-i", "--privileged", "--platform", "linux/amd64", "-e", "ARCH=x86_64",
-                        "-v", f"{UT}:/ut:rw", "-v", f"{ROOT}:/work:ro", "-v", f"{ROOT}/tools/update-e2e-img.py:/img.py:ro",
+                        "-v", f"{UT}:/ut:rw", "-v", f"{ROOT}:/work:ro", "-v", f"{ROOT}/tests/e2e/update-e2e-img.py:/img.py:ro",
                         "bia-build:x86_64", "python3", "/img.py", *args], capture_output=True, text=True)
     print(r.stdout + r.stderr, flush=True)
     if r.returncode:
@@ -92,7 +93,7 @@ def finish(vm):
     vm.expect("final boot idle", r"bia-update: idle", 900, fail=FAIL_UPD)
     if re.search(r"bia-rescue: bia rescue image", vm.text()[vm.cursor:]):
         die("rescue image ran again", vm)
-    vm.expect("agent console after update", r"Ready for commands", 600)
+    vm.expect("agent console after update", READY, 600)
     time.sleep(10)
     vm.send("/poweroff")
     vm.stop()
@@ -115,7 +116,7 @@ def run(scen):
     e2e_vm.VMS.clear()
     if scen == "disk":
         vm = boot("disk1", stick=False, disk=True)
-        vm.expect("agent on the disk", r"Ready for commands", T)
+        vm.expect("agent on the disk", READY, T)
         time.sleep(10)
         # The user plugs the new stick in; the BIOS boot order puts USB first.
         vm.mon(f"drive_add 0 if=none,id=stick,format=raw,file={FLASH}")
@@ -129,7 +130,7 @@ def run(scen):
         finish(vm)
     elif scen == "flash":
         vm = boot("flash1")
-        vm.expect("agent on the stick", r"Ready for commands", T)
+        vm.expect("agent on the stick", READY, T)
         time.sleep(10)
         trigger(vm, "/update")
         vm.expect("other ESP marked for BIOS", r"legacy BIOS: the firmware picks the next drive", 600, fail=FAIL_UPD)
@@ -138,7 +139,7 @@ def run(scen):
         finish(vm)
     elif scen == "rescue":
         vm = boot("rescue1")
-        vm.expect("agent on the stick", r"Ready for commands", T)
+        vm.expect("agent on the stick", READY, T)
         time.sleep(10)
         trigger(vm, "/rescue")
         vm.expect("other ESP marked for BIOS", r"legacy BIOS: the firmware picks the next drive", 600, fail=FAIL_UPD)

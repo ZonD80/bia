@@ -33,6 +33,24 @@ fn shared_lib_loadable(soname: &str) -> bool {
     }
 }
 
+/// An MCP's stderr log stays across restarts: each start appends a marker line, and a log
+/// over `MCP_LOG_MAX` moves to `.1` first (one older generation), so a restart or crash does
+/// not wipe what the MCP printed just before it.
+const MCP_LOG_MAX: u64 = 5 << 20;
+
+fn open_mcp_log(log_dir: &Path, name: &str) -> std::io::Result<std::fs::File> {
+    let path = log_dir.join(format!("mcp-{name}.log"));
+    if std::fs::metadata(&path).is_ok_and(|md| md.len() > MCP_LOG_MAX) {
+        let _ = std::fs::rename(&path, log_dir.join(format!("mcp-{name}.log.1")));
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    writeln!(f, "=== {name} started {} ===", crate::clock::rfc3339_now())?;
+    Ok(f)
+}
+
 fn whatsapp_opus_missing_notice(log_dir: &Path) -> Option<String> {
     if !shared_lib_loadable("libopus.so.0") {
         return Some(WHATSAPP_OPUS_HINT.into());
@@ -41,7 +59,9 @@ fn whatsapp_opus_missing_notice(log_dir: &Path) -> Option<String> {
     let Ok(text) = std::fs::read_to_string(&log) else {
         return None;
     };
-    if text.contains("libopus.so.0") || text.contains("libopus.so") {
+    // the log keeps earlier runs; only this run (after the last start marker) counts
+    let text = text.rsplit("=== whatsapp started").next().unwrap_or(&text);
+    if text.contains("libopus.so") {
         Some(WHATSAPP_OPUS_HINT.into())
     } else {
         None
@@ -241,7 +261,7 @@ impl McpServer {
         }
         let args = &m.args;
         std::fs::create_dir_all(log_dir).ok();
-        let stderr = std::fs::File::create(log_dir.join(format!("mcp-{}.log", m.name)))
+        let stderr = open_mcp_log(log_dir, &m.name)
             .map(Stdio::from)
             .unwrap_or_else(|_| Stdio::null());
         let mut c = Command::new(&exe);
@@ -711,4 +731,41 @@ pub fn discover(dir: &Path) -> Vec<(PathBuf, Result<Manifest>)> {
 /// Timeout for a model-facing MCP tool.
 pub fn timeout_for(_tool: &str) -> Duration {
     Duration::from_secs(3600)
+}
+
+#[cfg(test)]
+mod log_tests {
+    #[test]
+    fn mcp_log_survives_a_restart_and_rotates_when_big() {
+        let dir = std::env::temp_dir().join(format!("bia-mcplog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use std::io::Write;
+        writeln!(
+            super::open_mcp_log(&dir, "telegram").unwrap(),
+            "before the crash"
+        )
+        .unwrap();
+        super::open_mcp_log(&dir, "telegram").unwrap();
+        let log = std::fs::read_to_string(dir.join("mcp-telegram.log")).unwrap();
+        assert!(log.contains("before the crash"), "{log}");
+        assert_eq!(log.matches("=== telegram started").count(), 2, "{log}");
+        // over the limit: the old log becomes .1 and a new one starts
+        let big = vec![b'x'; (super::MCP_LOG_MAX + 1) as usize];
+        std::fs::write(dir.join("mcp-telegram.log"), &big).unwrap();
+        super::open_mcp_log(&dir, "telegram").unwrap();
+        assert_eq!(
+            std::fs::metadata(dir.join("mcp-telegram.log.1"))
+                .unwrap()
+                .len(),
+            big.len() as u64
+        );
+        assert!(
+            std::fs::metadata(dir.join("mcp-telegram.log"))
+                .unwrap()
+                .len()
+                < 100
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

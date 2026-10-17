@@ -11,7 +11,9 @@ pub fn state_file() -> PathBuf {
 }
 
 pub(crate) fn load() -> Option<Value> {
-    fs::read(state_file()).ok().and_then(|d| serde_json::from_slice(&d).ok())
+    fs::read(state_file())
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
 }
 
 pub(crate) fn save(v: &Value) -> Result<()> {
@@ -40,7 +42,14 @@ fn mask(k: &str) -> String {
     }
 }
 
-const PROVIDERS: &[&str] = &["openrouter", "openai", "anthropic", "xai", "deepseek", "qwen"];
+const PROVIDERS: &[&str] = &[
+    "openrouter",
+    "openai",
+    "anthropic",
+    "xai",
+    "deepseek",
+    "qwen",
+];
 
 /// Provider implied by the key's format (same rules as bia-flash `fmm::provider_for_key`).
 fn provider_for_key(key: &str) -> Option<&'static str> {
@@ -51,7 +60,11 @@ fn provider_for_key(key: &str) -> Option<&'static str> {
         Some("anthropic")
     } else if k.starts_with("xai-") {
         Some("xai")
-    } else if ["sk-proj-", "sk-svcacct-", "sk-admin-"].iter().any(|p| k.starts_with(p)) || (k.starts_with("sk-") && k.contains("T3BlbkFJ")) {
+    } else if ["sk-proj-", "sk-svcacct-", "sk-admin-"]
+        .iter()
+        .any(|p| k.starts_with(p))
+        || (k.starts_with("sk-") && k.contains("T3BlbkFJ"))
+    {
         Some("openai")
     } else {
         None
@@ -61,17 +74,39 @@ fn provider_for_key(key: &str) -> Option<&'static str> {
 /// DeepSeek and Qwen (DashScope) keys are both `sk-` + 32 hex: ask which API accepts it.
 /// Returns the provider and the base_url (set only for a mainland China Qwen key).
 fn probe_key(key: &str) -> Result<(&'static str, &'static str)> {
-    let hex = key.trim().strip_prefix("sk-").is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    let hex = key
+        .trim()
+        .strip_prefix("sk-")
+        .is_some_and(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit()));
     if !hex {
-        bail!("cannot tell the provider from this key; pass provider ({})", PROVIDERS.join(", "));
+        bail!(
+            "cannot tell the provider from this key; pass provider ({})",
+            PROVIDERS.join(", ")
+        );
     }
-    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(15))).build().into();
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .build()
+        .into();
     for (provider, models, base) in [
         ("deepseek", "https://api.deepseek.com/v1/models", ""),
-        ("qwen", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models", ""),
-        ("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1/models", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        (
+            "qwen",
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+            "",
+        ),
+        (
+            "qwen",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        ),
     ] {
-        if agent.get(models).header("Authorization", &format!("Bearer {}", key.trim())).call().is_ok() {
+        if agent
+            .get(models)
+            .header("Authorization", &format!("Bearer {}", key.trim()))
+            .call()
+            .is_ok()
+        {
             return Ok((provider, base));
         }
     }
@@ -89,7 +124,13 @@ fn default_model(provider: &str) -> &'static str {
     }
 }
 
-pub fn configure(provider: &str, api_key: &str, model: &str, base_url: Option<&str>, ctx: Option<u32>) -> Result<String> {
+pub fn configure(
+    provider: &str,
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    ctx: Option<u32>,
+) -> Result<String> {
     if api_key.trim().is_empty() {
         bail!("api_key is required");
     }
@@ -111,7 +152,9 @@ pub fn configure(provider: &str, api_key: &str, model: &str, base_url: Option<&s
         }
     } else if !PROVIDERS.contains(&provider.as_str()) {
         bail!("provider must be one of {}", PROVIDERS.join(", "));
-    } else if let Some(d) = provider_for_key(api_key).filter(|d| *d != provider && base_url.is_empty()) {
+    } else if let Some(d) =
+        provider_for_key(api_key).filter(|d| *d != provider && base_url.is_empty())
+    {
         bail!("this is a {d} key, not {provider}; call again with provider={d} (or leave provider out)");
     }
     let model = match model.trim() {
@@ -119,7 +162,13 @@ pub fn configure(provider: &str, api_key: &str, model: &str, base_url: Option<&s
         m => m,
     };
     let prev = load();
-    let ctx_val = ctx.map(|n| n.max(512).min(2_000_000)).or_else(|| prev.as_ref().and_then(|c| c["ctx"].as_u64().map(|n| n as u32))).unwrap_or(131072);
+    let ctx_val = ctx
+        .map(|n| n.max(512).min(2_000_000))
+        .or_else(|| {
+            prev.as_ref()
+                .and_then(|c| c["ctx"].as_u64().map(|n| n as u32))
+        })
+        .unwrap_or(131072);
     let cfg = json!({
         "provider": provider,
         "api_key": api_key.trim(),
@@ -136,7 +185,9 @@ pub fn configure(provider: &str, api_key: &str, model: &str, base_url: Option<&s
 }
 
 pub fn set_enabled(on: bool) -> Result<String> {
-    let Some(mut cfg) = load() else { bail!("FMM is not configured yet; call fmm_configure first") };
+    let Some(mut cfg) = load() else {
+        bail!("FMM is not configured yet; call fmm_configure first")
+    };
     cfg["enabled"] = json!(on);
     save(&cfg)?;
     Ok(if on {
@@ -152,12 +203,37 @@ pub fn status() -> String {
         None => "FMM not configured (local model only)".into(),
         Some(c) => format!(
             "FMM {}: provider {}, model {}, key {}, context {} tokens, base_url {}",
-            if c["enabled"].as_bool().unwrap_or(false) { "enabled" } else { "disabled" },
+            if c["enabled"].as_bool().unwrap_or(false) {
+                "enabled"
+            } else {
+                "disabled"
+            },
             c["provider"].as_str().unwrap_or("?"),
-            { let m = c["model"].as_str().unwrap_or(""); if m.is_empty() { "(provider default)" } else { m } },
+            {
+                let m = c["model"].as_str().unwrap_or("");
+                if m.is_empty() {
+                    "(provider default)"
+                } else {
+                    m
+                }
+            },
             mask(c["api_key"].as_str().unwrap_or("")),
-            { let n = c["ctx"].as_u64().unwrap_or(0); if n == 0 { 131072 } else { n } },
-            { let b = c["base_url"].as_str().unwrap_or(""); if b.is_empty() { "(default)" } else { b } },
+            {
+                let n = c["ctx"].as_u64().unwrap_or(0);
+                if n == 0 {
+                    131072
+                } else {
+                    n
+                }
+            },
+            {
+                let b = c["base_url"].as_str().unwrap_or("");
+                if b.is_empty() {
+                    "(default)"
+                } else {
+                    b
+                }
+            },
         ),
     }
 }

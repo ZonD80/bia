@@ -2497,7 +2497,7 @@ impl Wa {
         if self.is_banned(&key) || (key != sender_key && self.is_banned(&sender_key)) {
             let reply = {
                 let mut m = self.ban_replies.lock().unwrap();
-                let due = m.get(&key).map_or(true, |t| t.elapsed() >= BAN_REPLY_GAP);
+                let due = m.get(&key).is_none_or(|t| t.elapsed() >= BAN_REPLY_GAP);
                 if due {
                     m.insert(key.clone(), Instant::now());
                 }

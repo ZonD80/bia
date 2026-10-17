@@ -1,9 +1,9 @@
 //! Web chats: Telegram-style message store behind the HTTPS console.
 //! Each client-cert identity owns its chats (`main` ↔ channel `web`, others ↔ `web:<chat>`).
 //! Messages carry replies, forwards, attachments, reactions, edits, pins, read marks,
-//! inline buttons and polls. Browsers get JSON events through `Console::web_event`;
+//! inline buttons and polls. Browsers get JSON events through `Bus::web_event`;
 //! user actions reach the model as normal inbound envelopes.
-use crate::console::{mint_msg_id, Console, Inbound, GRAY, GREEN, RESET};
+use crate::bus::{mint_msg_id, Bus, Inbound};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -123,14 +123,14 @@ struct User {
 
 struct Hub {
     files: PathBuf,
-    con: Arc<Console>,
+    con: Arc<Bus>,
     users: Mutex<HashMap<String, User>>,
     typing: Mutex<HashSet<(String, String)>>,
 }
 
 static HUB: OnceLock<Hub> = OnceLock::new();
 
-pub fn init(files: &Path, con: Arc<Console>) {
+pub fn init(files: &Path, con: Arc<Bus>) {
     let _ = HUB.set(Hub {
         files: files.to_path_buf(),
         con,
@@ -140,7 +140,8 @@ pub fn init(files: &Path, con: Arc<Console>) {
 }
 
 fn hub() -> Result<&'static Hub, String> {
-    HUB.get().ok_or_else(|| "web console is off".to_string())
+    HUB.get()
+        .ok_or_else(|| "web chats are not started".to_string())
 }
 
 pub fn now_ms() -> u64 {
@@ -153,12 +154,12 @@ pub fn now_ms() -> u64 {
 // ---- channels ----
 
 pub fn is_web(channel: &str) -> bool {
-    channel == crate::tools::CH_WEB || channel.starts_with("web:")
+    channel == crate::bus::CH_WEB || channel.starts_with("web:")
 }
 
 /// `web` → `main`, `web:<chat>` → `<chat>`.
 pub fn chat_of(channel: &str) -> Option<&str> {
-    if channel == crate::tools::CH_WEB {
+    if channel == crate::bus::CH_WEB {
         Some(MAIN)
     } else {
         channel.strip_prefix("web:").filter(|c| !c.is_empty())
@@ -167,7 +168,7 @@ pub fn chat_of(channel: &str) -> Option<&str> {
 
 pub fn channel_of(chat: &str) -> String {
     if chat == MAIN {
-        crate::tools::CH_WEB.into()
+        crate::bus::CH_WEB.into()
     } else {
         format!("web:{chat}")
     }
@@ -491,20 +492,9 @@ impl Hub {
 
     /// Hand a user action to the model as an inbound envelope on the chat's channel.
     fn to_agent(&self, identity: &str, chat: &str, id: &str, text: String) {
-        let channel = channel_of(chat);
-        let first = text.lines().next().unwrap_or("");
-        let shown: String = first.chars().take(200).collect();
-        let tag = format!("[{identity}@{channel}]");
-        let notice = if self.con.color {
-            format!("\n{GRAY}{tag}{RESET} {GREEN}{shown}{RESET}\n")
-        } else {
-            format!("\n{tag} {shown}\n")
-        };
-        self.con.write(&notice);
         self.con.push_inbound(Inbound {
             identity: identity.to_string(),
-            channel,
-            issued: crate::clock::now(),
+            channel: channel_of(chat),
             id: id.to_string(),
             text,
         });
@@ -561,7 +551,7 @@ fn agent_text(u: &User, chat: &str, m: &Msg) -> String {
         parts.push(format!(
             "[forwarded from {} {}]",
             f.from,
-            crate::clock::rfc3339_unix(f.ts / 1000)
+            crate::bus::rfc3339_unix(f.ts / 1000)
         ));
     }
     if !m.text.trim().is_empty() {
@@ -802,7 +792,7 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
     match s("t").as_str() {
         // legacy `{t:"line", v, files}` from older pages and peer agents
         "call_decline" => {
-            crate::webcall::decline(identity, &chat);
+            crate::call::decline(identity, &chat);
             Ok(json!({}))
         }
         "line" | "send" => {
@@ -1129,20 +1119,6 @@ pub fn action(identity: &str, root: bool, v: &Value) -> Result<Value, String> {
             h.emit(identity, json!({"t": "chat_del", "id": chat}));
             Ok(json!({"ok": true}))
         }
-        "stop" => {
-            if !root {
-                return Err("only root can interrupt the model".into());
-            }
-            // a blank local line stops generation (see repl::keep_generating)
-            h.con.push_inbound(Inbound {
-                identity: identity.to_string(),
-                channel: channel_of(&chat),
-                issued: crate::clock::now(),
-                id: String::new(),
-                text: String::new(),
-            });
-            Ok(json!({"ok": true}))
-        }
         other => Err(format!("unknown action {other}")),
     }
 }
@@ -1290,6 +1266,94 @@ fn deliver(d: Delivery) {
 }
 
 // ---- model side ----
+
+/// A person who can have web chats: root, an identity with an active client certificate, or
+/// one that already has chats. Never bia itself — bia is the other side of every web chat.
+pub fn known_identity(identity: &str) -> bool {
+    let id = identity.trim();
+    if id.is_empty() || id == BIA {
+        return false;
+    }
+    if id == crate::bus::ID_ROOT {
+        return true;
+    }
+    let Ok(h) = hub() else { return false };
+    if h.users.lock().map(|u| u.contains_key(id)).unwrap_or(false)
+        || h.files
+            .join("state")
+            .join("web")
+            .join(safe_seg(id))
+            .is_dir()
+    {
+        return true;
+    }
+    bia_pki::Pki::load_or_create(&h.files)
+        .map(|p| p.has_active_identity(id))
+        .unwrap_or(false)
+}
+
+/// Identities that have web chats on disk (or in memory), sorted.
+pub fn users() -> Vec<String> {
+    let Ok(h) = hub() else { return vec![] };
+    let mut out: Vec<String> = h
+        .users
+        .lock()
+        .map(|u| u.keys().cloned().collect())
+        .unwrap_or_default();
+    if let Ok(rd) = std::fs::read_dir(h.files.join("state").join("web")) {
+        for e in rd.flatten() {
+            if e.path().is_dir() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n != BIA && !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// One line per chat of `identity`: `channel  title  (n unread)`.
+/// Whether `identity` already has the chat on `channel` (their main chat always counts).
+pub fn has_chat(identity: &str, channel: &str) -> bool {
+    let Some(chat) = chat_of(channel) else {
+        return false;
+    };
+    if chat == MAIN {
+        return true;
+    }
+    let Ok(h) = hub() else { return false };
+    h.with_user(identity, |u| {
+        u.msgs.contains_key(chat) || u.chats.iter().any(|c| c.id == chat)
+    })
+}
+
+pub fn chat_lines(identity: &str) -> Vec<String> {
+    let Ok(h) = hub() else { return vec![] };
+    h.with_user(identity, |u| {
+        u.chats
+            .iter()
+            .map(|c| {
+                let unread = u
+                    .msgs
+                    .get(&c.id)
+                    .map(|v| {
+                        v.iter()
+                            .filter(|m| m.from != BIA && !m.read && !m.service)
+                            .count()
+                    })
+                    .unwrap_or(0);
+                let unread = if unread > 0 {
+                    format!("  ({unread} unread)")
+                } else {
+                    String::new()
+                };
+                format!("{}  \"{}\"{unread}", channel_of(&c.id), c.title)
+            })
+            .collect()
+    })
+}
 
 fn chat_for(h: &Hub, identity: &str, channel: &str) -> Result<String, String> {
     let chat = chat_of(channel)
@@ -1441,11 +1505,9 @@ pub fn ensure_chat(identity: &str, channel: &str) -> Result<String, String> {
 pub fn agent_notice(identity: &str, chat: &str, text: &str) {
     let Ok(h) = hub() else { return };
     let channel = channel_of(chat);
-    h.con.write(&format!("\n[system@{channel}] {text}\n"));
     h.con.push_inbound(Inbound {
-        identity: crate::tools::ID_SYSTEM.into(),
+        identity: crate::bus::ID_SYSTEM.into(),
         channel,
-        issued: crate::clock::now(),
         id: mint_msg_id(),
         text: format!("{text} (web call with {identity})"),
     });
@@ -1686,7 +1748,7 @@ pub fn agent_history(identity: &str, channel: &str, limit: usize) -> Result<Stri
                 format!(
                     "{} {} {}:{extra} {}",
                     m.id,
-                    crate::clock::rfc3339_unix(m.ts / 1000),
+                    crate::bus::rfc3339_unix(m.ts / 1000),
                     m.from,
                     snippet(m)
                 )
@@ -1732,7 +1794,7 @@ mod voice_tests {
     use super::*;
     use std::time::Duration;
 
-    /// Real models: BIA_SPEECH_DIR=<bundled speech tree> cargo test -p bia-agent -- --ignored voice
+    /// Real models: BIA_SPEECH_DIR=<bundled speech tree> cargo test -p bia-mcp-web -- --ignored voice
     #[test]
     #[ignore = "needs the speech models (BIA_SPEECH_DIR)"]
     fn voice_both_ways() {
@@ -1740,7 +1802,7 @@ mod voice_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("BIA_SPEECH_STORE", dir.join("speech"));
-        let con = Console::open(false);
+        let con = Arc::new(Bus::new(dir.clone()));
         init(&dir, con.clone());
         let h = hub().unwrap();
 
@@ -1771,15 +1833,13 @@ mod voice_tests {
             "test",
             "",
             None,
-            &[rel.clone()],
+            std::slice::from_ref(&rel),
             Some("voice"),
         )
         .unwrap();
-        // (skip what the stdin reader of a test console may push)
         let ib = loop {
             let ib = con
-                .read_inbound_timeout(Duration::from_secs(60))
-                .unwrap()
+                .next_held(Duration::from_secs(60))
                 .expect("delivered to the model");
             if is_web(&ib.channel) {
                 break ib;

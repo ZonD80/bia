@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Image side of tools/land-e2e.sh. Runs in the bia-build container (root, loop devices).
+"""Image side of tests/e2e/land-e2e.sh. Runs in the bia-build container (root, loop devices).
 
   prep-fly    fly.img: FMM keys, a marker file to carry over, eth1 static on the test link
   check       land.img after the flight: the flyer's agent is there, land identity kept
 """
-import importlib.util, os, shutil, sys
+import glob, importlib.util, os, shutil, sys
 
-spec = importlib.util.spec_from_file_location("ut", "/work/tools/update-e2e-img.py")
+spec = importlib.util.spec_from_file_location("ut", "/work/tests/e2e/update-e2e-img.py")
 ut = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ut)
 ut.IMAGES.update({"fly": "/ut/fly.img", "land": "/ut/land.img"})
@@ -99,6 +99,11 @@ def check(token):
         want(os.path.exists(f"{d.esp}/vmlinuz-lts") and os.path.exists(f"{d.esp}/initramfs-lts"), "ESP has kernel + initramfs")
         cfgs = list(ut.grub_cfgs(d.esp))
         want(cfgs and all("root=LABEL=BIALAND" in read(c) for c in cfgs), "grub.cfg boots LABEL=BIALAND")
+    with ut.Img("fly", ro=True) as f:
+        f.mount()
+        logs = glob.glob(f"{f.root}/home/bia/files/sessions/session-*.md")
+        want(any(f"archive accepted by {LAND_IP}" in read(p) for p in logs),
+             f"flyer got the ack: carry_fly result in its session log ({len(logs)} logs)")
     if errs:
         sys.exit(f"CHECK land: {len(errs)} failure(s)")
     print("CHECK land: all good")

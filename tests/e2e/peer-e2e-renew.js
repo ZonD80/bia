@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Browser renewal path against a running bia (tools/peer-e2e.sh): the same web/pki.js
+// Browser renewal path against a running bia (tests/e2e/peer-e2e.sh): the same web/pki.js
 // the console uses makes the key and CSR, bia signs it, the .p12 is built here.
 //
-//   node tools/peer-e2e-renew.js https://127.0.0.1:18443 <out dir>
+//   node tests/e2e/peer-e2e-renew.js https://127.0.0.1:18443 <out dir>
 //
 // Steps: CA (trust on first use) -> first root .p12 via /v1/pki/bootstrap/root (password
 // 12345678, read with openssl) -> POST /v1/pki/renew {csr} with that cert -> new cert
@@ -12,7 +12,7 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const BiaPki = require(path.join(__dirname, '../source/crates/bia-agent/web/pki.js'));
+const BiaPki = require(path.join(__dirname, '../../source/crates/bia-mcp-web/web/pki.js'));
 
 const [base, out] = process.argv.slice(2);
 if (!base || !out) { console.error('usage: peer-e2e-renew.js <https base> <out dir>'); process.exit(2); }

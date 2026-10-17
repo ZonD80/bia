@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Image side of tools/update-e2e.sh. Runs in the bia-build container (root, loop devices).
+"""Image side of tests/e2e/update-e2e.sh. Runs in the bia-build container (root, loop devices).
 
   make-disk          turn /ut/disk.img (a copy of the flash layout) into an internal
                      disk: LABEL=BIADISK / BIADBOOT, new ext4 UUID, fstab, grub.cfg
-  prep <scenario>    releases (source = dst + 1), markers, clean /bia-update + rescue markers
+  prep <scenario>    versions (source = higher), markers, clean /bia-update + rescue markers;
+                     internet: also a release in /ut/release (the real bia-<arch>.img stamped
+                     9.9.9, xz, bia-os.json) that the disk downloads over QEMU's NAT
   check <scenario>   assert the destination was updated and kept its agent
   patch              copy /work overlay scripts + /work/dist/<arch> binaries into both
                      images and rebuild the rescue overlay inside each root (fast iteration)
@@ -15,7 +17,13 @@ IMAGES = {"flash": f"{UT}/flash.img", "disk": f"{UT}/disk.img"}
 LABEL = {"flash": "BIAROOT", "disk": "BIADISK"}
 ESPLABEL = {"flash": "BIABOOT", "disk": "BIADBOOT"}
 # scenario -> (destination, source)
-SCEN = {"disk": ("disk", "flash"), "flash": ("flash", "disk"), "rescue": ("disk", "flash")}
+SCEN = {"disk": ("disk", "flash"), "flash": ("flash", "disk"), "rescue": ("disk", "flash"),
+        # the disk updates from GitHub-style release files; the flash stays attached (not newer)
+        "internet": ("disk", "flash")}
+REL = f"{UT}/release"
+NET_VERSION = "9.9.9"
+# QEMU user networking: the host's loopback is 10.0.2.2 in the guest
+RELEASE_URL = "http://10.0.2.2:8099"
 
 
 def sh(*cmd, check=True, capture=False):
@@ -160,8 +168,13 @@ def prep(scen):
             for d in ("bia-rescue", "EFI/bia/bia-rescue"):
                 if os.path.exists(f"{im.esp}/{d}/next.cfg"):
                     os.remove(f"{im.esp}/{d}/next.cfg")
-            r = base + 1 if name == src else base
+            newer = name == src and scen != "internet"
+            r = base + 1 if newer else base
             put(f"{im.root}/etc/bia-release", f"{r}\n")
+            # bia-update compares versions, not the build stamp
+            put(f"{im.root}/etc/bia-version", "1.0.1\n" if newer else "1.0.0\n")
+            if os.path.exists(f"{im.root}/etc/bia-release-url"):
+                os.remove(f"{im.root}/etc/bia-release-url")
         # Make the source ESP's initramfs differ (trailing zeros are ignored by
         # the kernel) so the check can see the destination ESP was refreshed.
         si, di = f"{imgs[src].esp}/initramfs-lts", f"{imgs[dst].esp}/initramfs-lts"
@@ -169,11 +182,64 @@ def prep(scen):
             with open(si, "ab") as f:
                 f.write(b"\0" * 4096)
         put(f"{imgs[src].root}/etc/ut-new-os", f"from {src}\n")
+        if scen == "internet":
+            put(f"{imgs[dst].root}/etc/bia-release-url", RELEASE_URL + "\n")
         put(f"{imgs[dst].root}/usr/local/share/ut-old-only", "must be deleted by the update\n")
         put(f"{imgs[dst].root}/home/bia/files/ut-agent-marker", f"agent of {dst}\n")
         os.chown(f"{imgs[dst].root}/home/bia/files/ut-agent-marker", 1000, 1000)
         for name, im in imgs.items():
-            print(f"{name}: {LABEL[name]} release {rel(im.root)}" + ("  <- source" if name == src else "  <- destination"))
+            print(f"{name}: {LABEL[name]} version {open(im.root + '/etc/bia-version').read().strip()}"
+                  + ("  <- source" if name == src and scen != "internet" else "  <- destination" if name == dst else ""))
+    if scen == "internet":
+        make_release()
+
+
+def make_release():
+    """The real release image, stamped as a newer version, packed like tools/release.sh does."""
+    arch = os.environ.get("ARCH", "arm64")
+    src = f"/work/dist/{arch}/bia-{arch}.img"
+    if not os.path.exists(src):
+        sys.exit(f"{src} is missing: run make img ARCH={arch} first")
+    shutil.rmtree(REL, ignore_errors=True)
+    os.makedirs(REL)
+    raw = f"{REL}/os.img"
+    sh("cp", "--sparse=always", src, raw)
+    parts = partitions(raw)
+    loops = [sh("losetup", "-f", "--show", "-o", str(o), "--sizelimit", str(s), raw, capture=True) for _, o, s in parts]
+    root_dev = loops[max(range(len(parts)), key=lambda i: parts[i][2])]
+    esp_dev = loops[0]
+    try:
+        for d, dev, fs in (("/mnt/rel-root", root_dev, "ext4"), ("/mnt/rel-esp", esp_dev, "vfat")):
+            os.makedirs(d, exist_ok=True)
+            sh("mount", "-t", fs, dev, d)
+        put("/mnt/rel-root/etc/bia-version", NET_VERSION + "\n")
+        put("/mnt/rel-root/etc/ut-new-os", "from internet\n")
+        # a kernel file that differs from the old one, so the check sees the ESP was refreshed
+        with open("/mnt/rel-esp/initramfs-lts", "ab") as f:
+            f.write(b"\0" * 4096)
+    finally:
+        for d in ("/mnt/rel-esp", "/mnt/rel-root"):
+            subprocess.run(["umount", d], capture_output=True)
+        for l in loops:
+            subprocess.run(["losetup", "-d", l], capture_output=True)
+    name = f"bia-{arch}.img.xz"
+    print(f"release: packing {name} (xz -1)", flush=True)
+    with open(f"{REL}/{name}", "wb") as o:
+        subprocess.run(["xz", "-1", "-T0", "-c", raw], stdout=o, check=True)
+    import hashlib, json
+
+    def sha(p):
+        h = hashlib.sha256()
+        with open(p, "rb") as f:
+            while c := f.read(16 << 20):
+                h.update(c)
+        return h.hexdigest()
+    m = {"version": NET_VERSION, "tag": f"v{NET_VERSION}", "os": {arch: {"image": {
+        "file": name, "size": os.path.getsize(f"{REL}/{name}"), "sha256": sha(f"{REL}/{name}"),
+        "raw_size": os.path.getsize(raw), "raw_sha256": sha(raw)}}}}
+    with open(f"{REL}/bia-os.json", "w") as f:
+        json.dump(m, f, indent=2)
+    print(f"release: {NET_VERSION} at {RELEASE_URL} ({os.path.getsize(f'{REL}/{name}') >> 20} MiB)")
 
 
 def check(scen):
@@ -185,6 +251,8 @@ def check(scen):
         if not cond:
             errs.append(msg)
 
+    if scen == "internet":
+        return check_internet()
     with Img(dst, ro=True) as d, Img(src, ro=True) as s:
         d.mount(), s.mount()
         srel = rel(s.root)
@@ -223,6 +291,53 @@ def check(scen):
     if errs:
         sys.exit(f"CHECK {scen}: {len(errs)} failure(s)")
     print(f"CHECK {scen}: all good")
+
+
+def check_internet():
+    dst = "disk"
+    errs = []
+
+    def want(cond, msg):
+        print(("  ok   " if cond else "  FAIL ") + msg)
+        if not cond:
+            errs.append(msg)
+
+    raw = f"{REL}/os.img"
+    parts = partitions(raw)
+    esp_loop = sh("losetup", "-f", "--show", "-r", "-o", str(parts[0][1]), "--sizelimit", str(parts[0][2]), raw, capture=True)
+    os.makedirs("/mnt/rel-esp", exist_ok=True)
+    sh("mount", "-t", "vfat", "-o", "ro", esp_loop, "/mnt/rel-esp")
+    try:
+        with Img(dst, ro=True) as d, Img("flash", ro=True) as fl:
+            d.mount(), fl.mount()
+            ver = open(f"{d.root}/etc/bia-version").read().strip()
+            want(ver == NET_VERSION, f"disk runs the downloaded version ({ver})")
+            want(os.path.exists(f"{d.root}/etc/ut-new-os") and open(f"{d.root}/etc/ut-new-os").read() == "from internet\n",
+                 "new OS file from the release is on the disk (not from the flash)")
+            want(not os.path.exists(f"{d.root}/usr/local/share/ut-old-only"), "file only in the old OS was deleted")
+            mk = f"{d.root}/home/bia/files/ut-agent-marker"
+            want(os.path.exists(mk) and open(mk).read() == f"agent of {dst}\n", "the disk agent's files survived (fold/unfold)")
+            want(not os.path.exists(f"{d.root}/bia-update"), "/bia-update (and the download) cleaned up")
+            fstab = open(f"{d.root}/etc/fstab").read()
+            want("LABEL=BIADISK" in fstab, "fstab still mounts LABEL=BIADISK")
+            want(blk(d.root_dev, "LABEL") == "BIADISK", "root label still BIADISK")
+            for rd in ("bia-rescue", "EFI/bia/bia-rescue"):
+                want(not os.path.exists(f"{d.esp}/{rd}/next.cfg"), f"no rescue marker {rd}/next.cfg on the disk ESP")
+            for k in ("vmlinuz-lts", "initramfs-lts"):
+                same = subprocess.run(["cmp", "-s", f"{d.esp}/{k}", f"/mnt/rel-esp/{k}"]).returncode == 0
+                want(same, f"disk ESP {k} == release ESP {k}")
+            for cfg in grub_cfgs(d.esp):
+                c = open(cfg).read()
+                want("# bia-rescue hook" in c and "root=LABEL=BIADISK" in c, f"{cfg[len(d.esp):]}: rescue hook + root=LABEL=BIADISK")
+            want(open(f"{fl.root}/etc/bia-version").read().strip() == "1.0.0"
+                 and open(f"{fl.root}/etc/ut-new-os").read() == "from flash\n", "flash left untouched")
+            want(os.path.exists(f"{d.root}/home/bia/bia.toml"), "disk /home/bia/bia.toml present")
+    finally:
+        subprocess.run(["umount", "/mnt/rel-esp"], capture_output=True)
+        subprocess.run(["losetup", "-d", esp_loop], capture_output=True)
+    if errs:
+        sys.exit(f"CHECK internet: {len(errs)} failure(s)")
+    print("CHECK internet: all good")
 
 
 def patch():

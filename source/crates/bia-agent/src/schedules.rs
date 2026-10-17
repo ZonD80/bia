@@ -207,11 +207,11 @@ fn parse_every(s: &str) -> Result<u64> {
 }
 
 fn format_every(secs: u64) -> String {
-    if secs % 86400 == 0 {
+    if secs.is_multiple_of(86400) {
         format!("{}d", secs / 86400)
-    } else if secs % 3600 == 0 {
+    } else if secs.is_multiple_of(3600) {
         format!("{}h", secs / 3600)
-    } else if secs % 60 == 0 {
+    } else if secs.is_multiple_of(60) {
         format!("{}m", secs / 60)
     } else {
         format!("{secs}s")
@@ -988,8 +988,8 @@ impl Cron {
         let minute = parse_field(fields[0], 0, 59, &[])?;
         let hour = parse_field(fields[1], 0, 23, &[])?;
         let dom = parse_field(fields[2], 1, 31, &[])?;
-        let month = parse_field(fields[3], 1, 12, &MONTHS)?;
-        let dow = parse_field(fields[4], 0, 7, &DOW)?;
+        let month = parse_field(fields[3], 1, 12, MONTHS)?;
+        let dow = parse_field(fields[4], 0, 7, DOW)?;
         Ok(Cron {
             source: fields.join(" "),
             minute,

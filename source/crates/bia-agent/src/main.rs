@@ -8,15 +8,14 @@ mod clock;
 mod config;
 mod console;
 mod gguf;
-mod hitl;
 mod hw;
 mod jobs;
 mod llama_srv;
 mod llm;
 mod mcp;
 mod memory;
-mod openapi;
 mod outbox;
+mod release;
 mod remote;
 mod repl;
 mod schedules;
@@ -26,9 +25,7 @@ mod tools;
 mod tune;
 mod tz;
 mod unanswered;
-mod web;
-mod webcall;
-mod webchat;
+mod weblink;
 
 #[path = "../../listen.rs"]
 mod listen;
@@ -43,6 +40,8 @@ use tools::human;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
+    // one rustls crypto provider for the whole process (HTTPS to cloud models)
+    bia_pki::install_crypto_provider();
     let system = sys::is_system();
     let con = Console::open(system);
     let result =
@@ -200,26 +199,10 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             if c.ntp { "on" } else { "off" }
         ));
     }
-    let web = if cfg.web.enabled {
-        // System: HTTPS :443 + HTTP→HTTPS on :80. Dev: HTTPS :8443 only.
-        let port = if system_mode { 443 } else { 8443 };
-        let http_port = if system_mode { 80 } else { 0 };
-        match web::Web::start(con.clone(), port, http_port, paths.files.clone()) {
-            Ok((w, warn)) => {
-                if let Some(wmsg) = warn {
-                    boot.warn(&wmsg);
-                }
-                boot.note(&format!("web console listening on port {}", w.port));
-                Some(w)
-            }
-            Err(e) => {
-                boot.warn(&e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // The web server is the web MCP (a bus like telegram); the agent only shows its address.
+    weblink::clear(&paths.files);
+    weblink::watch(con.clone(), paths.files.clone());
+    con.set_status_file(paths.files.join("state").join("status.json"));
     let fmm_path = paths.files.join("state").join("fmm.json");
     // QEMU tests pass the repo fmm.json via fw_cfg. A real stick still seeds from the ESP.
     // Either one runs only while files/state/fmm.json is missing.
@@ -314,7 +297,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         let load = |mctx: &config::ModelCfg| {
             let b = boot.clone();
             let mut last = -1i32;
-            llm::Llm::load(&model_path, mctx, &cfg.sampling, &plan, move |f| {
+            llm::Llm::load(model_path, mctx, &cfg.sampling, plan, move |f| {
                 let pct = (f * 100.0) as i32;
                 if pct != last {
                     last = pct;
@@ -443,6 +426,15 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             "BIA_FILES".to_string(),
             paths.files.to_string_lossy().to_string(),
         ),
+        // web MCP: HTTPS :443 + HTTP→HTTPS on :80; dev runs use :8443 only
+        (
+            "BIA_WEB_PORT".to_string(),
+            if system_mode { "443" } else { "8443" }.to_string(),
+        ),
+        (
+            "BIA_WEB_HTTP_PORT".to_string(),
+            if system_mode { "80" } else { "0" }.to_string(),
+        ),
         (
             "BIA_MCPS".to_string(),
             paths.mcps.to_string_lossy().to_string(),
@@ -462,9 +454,6 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     }
     for n in notes {
         boot.warn(&n);
-    }
-    if let Some(w) = &web {
-        w.refresh();
     }
 
     // ---- resume a saved conversation ----
@@ -542,6 +531,22 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             Err(e) => boot.warn(&format!("MCP whatsapp: restore failed: {e:#}")),
         }
     }
+    // The web bus is always up when enabled (people reach bia there before any login).
+    if cfg.web.enabled && !tools.mcp_started("web") {
+        match tools.ensure_loaded("web") {
+            Ok(()) => {
+                // its address appears in web.json once it has bound
+                for _ in 0..30 {
+                    if weblink::read(&paths.files).is_some() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                boot.note("MCP web: listening");
+            }
+            Err(e) => boot.warn(&format!("MCP web: start failed: {e:#}")),
+        }
+    }
 
     let n_tools = tools.specs.len();
     con.update_status(|s| s.tools = n_tools);
@@ -574,7 +579,6 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         show_thinking: cfg.agent.show_thinking,
         remote: None,
         fmm_path,
-        web: web.clone(),
         memory: crate::memory::Store::open(&paths.files.join("state")),
         fmm_ctx_used: 0,
         fmm_backups: Default::default(),
@@ -628,8 +632,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
         boot.note(&line);
     }
-    if let Some(w) = &web {
-        boot.note(&w.info_line());
+    if cfg.web.enabled {
+        boot.note(&weblink::info_line(&paths.files));
     }
     let resumed = !repl.history.is_empty();
     let nmsg = repl.history.len();
@@ -647,14 +651,23 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     // or a landing. The marker keeps the welcome to once (an upgraded machine gets it set on
     // its first boot with this version, without the welcome).
     let welcomed = paths.files.join("state").join("welcomed");
-    let first_launch = !welcomed.exists()
-        && migrated.is_none()
-        && updated.is_none()
-        && last_exit.is_none()
-        && !resumed;
+    let was_welcomed = welcomed.exists();
+    let first_launch =
+        !was_welcomed && migrated.is_none() && updated.is_none() && last_exit.is_none() && !resumed;
     if !welcomed.exists() {
         let _ = std::fs::write(&welcomed, format!("bia {VERSION}\n"));
     }
+    // Release notes for every version since the one that ran before. Machines from before
+    // versions were recorded (≤ 1.1.0) count as updated when an older bia clearly ran here.
+    let state_dir = paths.files.join("state");
+    let prev_version = release::last_version(&state_dir);
+    let older_bia_ran = was_welcomed || updated.is_some() || last_exit.is_some() || resumed;
+    let release_notes = if prev_version.is_some() || (older_bia_ran && !first_launch) {
+        release::notice(prev_version.as_deref(), VERSION)
+    } else {
+        None
+    };
+    release::record(&state_dir, VERSION);
     let how = if let Some(msg) = migrated {
         if resumed {
             format!(
@@ -683,9 +696,22 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             format!("system booted (bia {VERSION}, {n_tools} tools); new conversation"),
     }
     };
+    let release_steps = release_notes
+        .as_deref()
+        .is_some_and(|n| n.contains("Update steps for you"));
+    let how = match &release_notes {
+        Some(n) => {
+            boot.note(&format!(
+                "release notes: {} → {VERSION}",
+                prev_version.as_deref().unwrap_or("older")
+            ));
+            format!("{how}.\n{n}")
+        }
+        None => how,
+    };
     let hw = crate::hw::summary();
     boot.note(&hw);
-    boot.note(&how);
+    boot.note(how.lines().next().unwrap_or(""));
     // One system envelope, then a model turn. Identity is system, not root.
     repl.pending.insert(
         0,
@@ -695,17 +721,28 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             issued: clock::now(),
             id: String::new(),
             text: format!(
-                "{how}. {}",
+                "{how}{} {}{BOOT_BATCH}",
+                if release_notes.is_some() { "\n" } else { "." },
                 if how.contains("Repair these yourself")
                     || how.contains("Propose fixes to the user and wait for approval")
                 {
-                    String::from("Tell the user this sentence, then repair it yourself without waiting: for each package that did not install, search the internet, download the .deb for the version and architecture named here and install it; copy binaries that were not copied into place. Ask the user first only before a destructive step (removing or overwriting existing files, packages or binaries, up- or downgrading installed packages, disk or partition changes, reboot or poweroff). When done, tell the user what you fixed and what still fails.")
+                    let mut s = String::from("Tell the user this sentence, then repair it yourself without waiting: for each package that did not install, search the internet, download the .deb for the version and architecture named here and install it; copy binaries that were not copied into place. Ask the user first only before a destructive step (removing or overwriting existing files, packages or binaries, up- or downgrading installed packages, disk or partition changes, reboot or poweroff). When done, tell the user what you fixed and what still fails.");
+                    if release_notes.is_some() {
+                        s.push_str(" After that, tell them what changed in this update and do the update steps listed above.");
+                    }
+                    s
                 } else if how.contains("this boot landed") || how.contains("this boot restored") {
-                    "Say that sentence to the user, then say you are ready for commands. Do not call tools.".into()
+                    if release_notes.is_some() {
+                        format!("Say that sentence to the user first. {}", release::instruction(release_steps))
+                    } else {
+                        "Say that sentence to the user, then say you are ready for commands. Do not call tools for this notice.".into()
+                    }
+                } else if release_notes.is_some() {
+                    release::instruction(release_steps).to_string()
                 } else if first_launch {
-                    welcome(web.as_ref().map(|w| w.info_line()), repl.remote.is_some())
+                    welcome(cfg.web.enabled.then(|| weblink::info_line(&paths.files)), repl.remote.is_some())
                 } else {
-                    "Reply that you are ready for commands. Do not call tools.".into()
+                    READY_PLAIN.into()
                 }
             ),
         }
@@ -750,6 +787,14 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
     }
     repl.pending.extend(fresh);
+    // people wrote while bia was off: the plain boot notice asks for their answers, not for
+    // a "ready for commands" that the model takes as the whole turn
+    if repl.pending.len() > 1 && repl.pending[0].text.contains(READY_PLAIN) {
+        let waiting = repl.pending.len() - 1;
+        repl.pending[0].text = repl.pending[0]
+            .text
+            .replace(READY_PLAIN, &catch_up(waiting));
+    }
     if !repl.pending.is_empty() {
         boot.note(&format!(
             "{} inbound message(s) waiting (telegram/whatsapp catch-up / schedules / queued)",
@@ -804,8 +849,8 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
         bia_speech::langs::name(&code)
     };
     let web = match web {
-        Some(w) if !w.contains("no network") => format!("the web console ({w}): from a phone or computer on the same network, the first visit lets them take the root certificate, then they get chats, files, the screen and voice there"),
-        _ => "the web console: once you are on a network its address shows at the top of the screen; the first visit lets them take the root certificate, then they get chats, files, the screen and voice there".into(),
+        Some(w) if w.contains("https://") => format!("the web app ({w}): from a phone or computer on the same network, the first visit lets them take the root certificate, then they get chats with you, files, the screen and voice there"),
+        _ => "the web app: once you are on a network its address shows at the top of the screen; the first visit lets them take the root certificate, then they get chats with you, files, the screen and voice there".into(),
     };
     let brain = if cloud {
         String::new()
@@ -819,9 +864,23 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
 - you can log in to their Telegram and WhatsApp, so they can write and call you there and you can message for them; ask whether they want that.\n\
 - you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
 - you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
-End by asking what your name should be and what they would like to start with. Do not call tools now."
+End by asking what your name should be and what they would like to start with. Do not call tools for this greeting."
     )
 }
+
+/// The plain boot instruction (nothing else waiting).
+const READY_PLAIN: &str =
+    "Reply that you are ready for commands. Do not call tools for this notice.";
+
+/// The boot instruction when messages are waiting from while bia was off.
+fn catch_up(n: usize) -> String {
+    format!("{n} message(s) that came while you were off are delivered with this notice. Do not say you are ready for commands; answer and handle each of them now as usual, with tools when they need them.")
+}
+
+/// Appended to every boot notice: catch-up messages (people who wrote while bia was off,
+/// jobs cut short) are delivered in the same turn and must not inherit the notice's
+/// "no tools" rule.
+const BOOT_BATCH: &str = "\nThat instruction is for this notice only. Messages delivered together with it (people who wrote while you were off, jobs or sends cut short by the restart) are normal: answer and handle each of them as usual, with tools when they need them.";
 
 /// A home language other than English goes into the system prompt, so bia speaks it
 /// from the first boot reply on.
@@ -846,14 +905,40 @@ fn first_chars(s: &str, n: usize) -> String {
 }
 
 #[cfg(test)]
+mod boot_notice_tests {
+    #[test]
+    fn catch_up_replaces_the_ready_order() {
+        let notice = format!("System booted. {}{}", super::READY_PLAIN, super::BOOT_BATCH);
+        let t = notice.replace(super::READY_PLAIN, &super::catch_up(2));
+        assert!(
+            !t.contains("ready for commands.")
+                && t.contains("2 message(s) that came while you were off")
+        );
+        assert!(t.contains("Do not say you are ready for commands") && t.contains("with tools"));
+    }
+}
+
+#[cfg(test)]
 mod welcome_tests {
     #[test]
     fn welcome_names_the_topics() {
-        let w = super::welcome(Some("web console: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca".into()), false);
-        for want in ["very first start", "Write in English", "https://10.0.0.5/", "Telegram and WhatsApp", "own accounts", "ChatGPT plan", "what your name should be", "Do not call tools"] {
+        let w = super::welcome(
+            Some("web: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca".into()),
+            false,
+        );
+        for want in [
+            "very first start",
+            "Write in English",
+            "https://10.0.0.5/",
+            "Telegram and WhatsApp",
+            "own accounts",
+            "ChatGPT plan",
+            "what your name should be",
+            "Do not call tools for this greeting",
+        ] {
             assert!(w.contains(want), "missing {want:?} in {w}");
         }
-        let w = super::welcome(Some("web console: (no network yet)  CA at /v1/pki/ca".into()), true);
+        let w = super::welcome(Some("web: (no network yet)  CA at /v1/pki/ca".into()), true);
         assert!(w.contains("once you are on a network") && !w.contains("ChatGPT plan"));
     }
 }

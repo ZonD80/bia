@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive one update scenario in QEMU over the serial socket (tools/update-e2e.sh run).
+"""Drive one update scenario in QEMU over the serial socket (tests/e2e/update-e2e.sh run).
 
   update-e2e-drive.py <scenario> <logfile> -- <command that starts QEMU>
 
@@ -148,9 +148,10 @@ time.sleep(15)
 if TRIGGER == "agent":
     req = {"disk": "Update this computer's OS from the flash stick now. Call carry_update.",
            "flash": "Update this flash system from the internal disk now. Call carry_update.",
-           "rescue": "Rescue the internal disk from this flash now. Call carry_rescue."}[scen]
+           "rescue": "Rescue the internal disk from this flash now. Call carry_rescue.",
+           "internet": "Update this computer's OS from the internet now. Call carry_update with from='internet'."}[scen]
 else:
-    req = {"disk": "/update", "flash": "/update", "rescue": "/rescue"}[scen]
+    req = {"disk": "/update", "flash": "/update", "rescue": "/rescue", "internet": "/update internet"}[scen]
 for attempt in range(6):
     send(req)
     try_end = time.time() + (240 if TRIGGER == "agent" else 60)
@@ -164,6 +165,10 @@ else:
     die("trigger: bia-update never started")
 
 # 3. stage -> reboot into rescue
+if scen == "internet":
+    expect("release found", r"bia-update: newest release 9\.9\.9", 300, fail=FAIL_UPD)
+    expect("download checked", r"download bia-\S+ \.+ \[ OK \]", 1800, fail=FAIL_UPD)
+    expect("release unpacked", r"unpacked release 9\.9\.9 \.+ \[ OK \]", 1800, fail=FAIL_UPD)
 expect("staging (fold + marker)", r"rebooting into the rescue image", 1800, fail=FAIL_UPD)
 expect("rescue image boots", r"bia-rescue: bia rescue image", 600, fail=FAIL_RESCUE)
 expect("rescue copies + verifies", r"bia-rescue: update copied", COPY_TIMEOUT, fail=FAIL_RESCUE)

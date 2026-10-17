@@ -56,7 +56,7 @@ pub fn offset_east(zone: &Zone, unix: u64) -> i32 {
 pub fn format_offset(east: i32) -> String {
     let sign = if east >= 0 { '+' } else { '-' };
     let a = east.unsigned_abs();
-    if a % 3600 == 0 {
+    if a.is_multiple_of(3600) {
         format!("{sign}{:02}", a / 3600)
     } else {
         format!("{sign}{:02}:{:02}", a / 3600, (a % 3600) / 60)

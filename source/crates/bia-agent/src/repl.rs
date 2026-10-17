@@ -7,7 +7,7 @@ use crate::remote::{fmm_ctx, FmmConfig, Remote};
 use crate::state;
 use crate::tools::{
     envelope, human, normalize_history, Msg, Role, ToolCall, ToolFormat, Tools, CH_CONSOLE,
-    ID_ROOT, ID_SYSTEM,
+    ID_SYSTEM,
 };
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -23,8 +23,9 @@ fn speech_lang(text: &str) -> Option<String> {
         .then(|| code.to_string())
 }
 
+/// The physical console (screen, serial). Every other channel — web included — is a bus.
 fn local_channel(ch: &str) -> bool {
-    ch == CH_CONSOLE || crate::webchat::is_web(ch)
+    ch == CH_CONSOLE
 }
 
 /// Run `bia-update <args>` and stream stderr lines to `on_line`. Blocks until exit/reboot.
@@ -50,13 +51,9 @@ fn run_bia_update(args: &[&str], mut on_line: impl FnMut(&str)) -> Result<(), St
     }
 }
 
-/// Local slash command (physical console or web), without the leading `/`.
+/// Slash command typed on the physical console, without the leading `/`.
 fn console_command(ib: &Inbound) -> Option<&str> {
     if !local_channel(&ib.channel) {
-        return None;
-    }
-    // Slash commands on the web bus only for root (cert identity).
-    if crate::webchat::is_web(&ib.channel) && ib.identity != ID_ROOT {
         return None;
     }
     ib.text.trim().strip_prefix('/')
@@ -141,7 +138,6 @@ pub struct Repl {
     /// Frontier Model Mode: the remote brain, when configured and enabled
     pub remote: Option<Remote>,
     pub fmm_path: PathBuf,
-    pub web: Option<Arc<crate::web::Web>>,
     pub memory: crate::memory::Store,
     /// last known FMM prompt+completion tokens (header ctx meter; 0 until the first remote reply)
     pub fmm_ctx_used: usize,
@@ -287,7 +283,7 @@ impl Repl {
     fn history_token_estimate(&self) -> usize {
         self.history
             .iter()
-            .map(|m| (m.content.chars().count() + 3) / 4)
+            .map(|m| m.content.chars().count().div_ceil(4))
             .sum()
     }
 
@@ -816,12 +812,14 @@ impl Repl {
         Ok(())
     }
 
+    /// This machine's CA (files/state/pki): client certificates for the web MCP.
+    fn pki(&self) -> Result<bia_pki::Pki, String> {
+        bia_pki::Pki::load_or_create(&self.tools.files_dir).map_err(|e| format!("{e:#}"))
+    }
+
     fn print_web_info(&self) {
-        if let Some(w) = &self.web {
-            w.refresh();
-            self.con
-                .writeln(&self.con.c(GRAY, &format!("  {}", w.info_line())));
-        }
+        let line = crate::weblink::info_line(&self.tools.files_dir);
+        self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
     }
 
     /// Things the model scheduled with tools: forgetting the conversation.
@@ -907,7 +905,7 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/fmm [on|off]  Frontier Model Mode status / switch (configured via the system MCP)\n/update [force] [/dev/…]  update this OS from the other attached bia system (newer flash or disk) via the rescue image\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web console HTTPS URL and CA path\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/fmm [on|off]  Frontier Model Mode status / switch (configured via the system MCP)\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
             "tools" => {
                 let visible: Vec<String> = self.tools.visible_specs().iter().map(|t| t.name.clone()).collect();
@@ -1026,21 +1024,32 @@ impl Repl {
                         } else {
                             "normal"
                         });
-                        match &self.web {
-                            Some(w) => match w.issue_pickup(identity, role, trust) {
-                                Ok(msg) => {
-                                    for l in msg.lines() {
-                                        self.con.writeln(&self.con.c(GRAY, &format!("  {l}")));
-                                    }
+                        match self.pki().and_then(|p| {
+                            p.issue_pickup(identity, role, trust).map_err(|e| format!("{e:#}"))
+                        }) {
+                            Ok((token, meta)) => {
+                                let port = crate::weblink::read(&self.tools.files_dir)
+                                    .map(|l| l.port)
+                                    .filter(|p| *p > 0)
+                                    .unwrap_or(443);
+                                self.con.writeln(&self.con.c(
+                                    GRAY,
+                                    &format!("  issued {} for {identity} (role {role}, trust {trust}); one-time PKCS#12 (password 12345678):", meta.serial),
+                                ));
+                                let urls = crate::listen::pickup_urls(port, &token);
+                                if urls.is_empty() {
+                                    self.con.writeln(&self.con.c(GRAY, &format!("  /v1/pki/pickup/{token} (no network address yet)")));
                                 }
-                                Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
-                            },
-                            None => self.con.writeln(&self.con.c(GRAY, "  web console is off")),
+                                for u in urls {
+                                    self.con.writeln(&self.con.c(GRAY, &format!("  {u}")));
+                                }
+                            }
+                            Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
                         }
                     }
-                    Some("requests") => match &self.web {
-                        Some(w) => {
-                            let list = w.list_requests();
+                    Some("requests") => match self.pki() {
+                        Ok(p) => {
+                            let list = p.list_requests();
                             if list.is_empty() {
                                 self.con.writeln(&self.con.c(GRAY, "  (no certificate requests)"));
                             }
@@ -1052,18 +1061,20 @@ impl Repl {
                                 ));
                             }
                         }
-                        None => self.con.writeln(&self.con.c(GRAY, "  web console is off")),
+                        Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
                     },
                     Some(verb @ ("approve" | "deny")) => {
                         let id = it.next().unwrap_or("");
                         let reason = it.collect::<Vec<_>>().join(" ");
-                        match &self.web {
-                            Some(w) => {
-                                if let Err(e) = w.decide_request(id, verb == "approve", "root@console", &reason) {
-                                    self.con.writeln(&self.con.c(RED, &format!("  pki: {e}")));
-                                }
-                            }
-                            None => self.con.writeln(&self.con.c(GRAY, "  web console is off")),
+                        match self.pki().and_then(|p| {
+                            p.decide_request(id, verb == "approve", "root@console", &reason)
+                                .map_err(|e| format!("{e:#}"))
+                        }) {
+                            Ok(r) => self.con.writeln(&self.con.c(
+                                GRAY,
+                                &format!("  certificate request {} for {}: {}", r.short(), r.identity, r.status.as_str()),
+                            )),
+                            Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
                         }
                     }
                     _ => self.con.writeln(
@@ -1119,11 +1130,14 @@ impl Repl {
                 self.con.writeln("conversation forgotten: starting from scratch");
             }
             name @ ("update" | "rescue") => {
-                // /update [force] [/dev/…]   /rescue [/dev/…]
+                // /update [force] [/dev/…|internet]   /rescue [/dev/…]
                 let mut args: Vec<String> = vec![if name == "rescue" { "rescue" } else { "start" }.into()];
                 for a in it.by_ref() {
                     match a {
                         "force" | "--force" if name == "update" => args.push("--force".into()),
+                        "internet" | "net" | "github" if name == "update" => {
+                            args.push("--from=internet".into())
+                        }
                         dev if name == "update" => args.push(format!("--from={dev}")),
                         dev => args.push(dev.into()),
                     }
@@ -1438,7 +1452,7 @@ impl Repl {
                 }
                 out_chars.set(out_chars.get() + piece.chars().count());
                 let secs = t0.elapsed().as_secs_f64().max(0.05);
-                let out_est = (out_chars.get() + 3) / 4;
+                let out_est = out_chars.get().div_ceil(4);
                 let tps = out_est as f64 / secs;
                 con.update_status(|s| {
                     s.tps = tps as f32;
@@ -1456,7 +1470,7 @@ impl Repl {
         let r = r?;
         self.con.writeln("");
         let secs = t0.elapsed().as_secs_f64();
-        let out_est = ((out_chars.get() + 3) / 4) as u64;
+        let out_est = out_chars.get().div_ceil(4) as u64;
         let input_tokens = if r.input_tokens > 0 {
             r.input_tokens
         } else {
@@ -1703,9 +1717,10 @@ impl Repl {
             && !ib.channel.starts_with(crate::jobs::PREFIX)
             && ib.channel != crate::tools::CH_SCHEDULE
         {
-            *self.tools.reply_to.borrow_mut() = Some((ib.identity.clone(), ib.channel.clone()));
+            self.tools.note_inbound(&ib.identity, &ib.channel);
         }
-        if !local_channel(&ib.channel)
+        // web/console name the person by identity; only linked channels are remembered
+        if !crate::addressbook::identity_channel(&ib.channel)
             && ib.identity != ID_SYSTEM
             && ib.channel != crate::tools::CH_SCHEDULE
         {
@@ -1749,8 +1764,8 @@ impl Repl {
         } else {
             ib.id.clone()
         };
-        if crate::webchat::is_web(&ib.channel) {
-            crate::webchat::agent_read(&ib.identity, &ib.channel, &id);
+        if crate::tools::is_web(&ib.channel) {
+            self.tools.web_read(&ib.identity, &ib.channel, &id);
         }
         let now = crate::clock::unix(crate::clock::now());
         if ib.channel.starts_with(crate::jobs::PREFIX) {
@@ -1815,17 +1830,13 @@ impl Repl {
         }
         let mut web: Vec<(String, String)> = messages
             .iter()
-            .filter(|ib| crate::webchat::is_web(&ib.channel))
+            .filter(|ib| crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM)
             .map(|ib| (ib.identity.clone(), ib.channel.clone()))
             .collect();
         web.dedup();
-        for (id, ch) in &web {
-            crate::webchat::typing(id, ch, true);
-        }
+        self.tools.set_web_typing(&web, true);
         self.turn_inner(messages);
-        for (id, ch) in &web {
-            crate::webchat::typing(id, ch, false);
-        }
+        self.tools.set_web_typing(&web, false);
         if !tg.is_empty() {
             self.tools.set_telegram_typing(&tg, false);
         }
@@ -2443,5 +2454,70 @@ pub fn human_count(n: u64) -> String {
         format!("{:.1}B", n as f64 / 1e9)
     } else {
         format!("{:.0}M", n as f64 / 1e6)
+    }
+}
+
+#[cfg(test)]
+mod channel_tests {
+    use super::*;
+
+    fn ib(identity: &str, channel: &str, text: &str) -> Inbound {
+        Inbound {
+            identity: identity.into(),
+            channel: channel.into(),
+            issued: std::time::SystemTime::now(),
+            id: "b1".into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn only_the_physical_console_is_local() {
+        assert!(local_channel("console"));
+        for ch in ["web", "web:trip", "telegram:1", "whatsapp:420", "schedule"] {
+            assert!(!local_channel(ch), "{ch}");
+        }
+    }
+
+    #[test]
+    fn slash_commands_only_on_the_console() {
+        assert_eq!(
+            console_command(&ib("root", "console", "/status")),
+            Some("status")
+        );
+        // root on web is a person in a chat: "/status" is a message for the model
+        assert_eq!(console_command(&ib("root", "web", "/status")), None);
+        assert_eq!(console_command(&ib("root", "web:x", "/reboot")), None);
+        assert_eq!(console_command(&ib("alex", "telegram:5", "/forget")), None);
+    }
+
+    #[test]
+    fn web_messages_are_tracked_like_any_bus() {
+        assert!(needs_answer(&ib("root", "web", "/status")));
+        assert!(needs_answer(&ib("alex", "web:trip", "hi")));
+        assert!(!needs_answer(&ib("root", "console", "hi")));
+        assert!(!needs_answer(&ib("system", "web", "[call ended]")));
+    }
+
+    #[test]
+    fn a_blank_web_message_does_not_stop_generation() {
+        let con = Console::for_test();
+        let queued = std::cell::RefCell::new(vec![]);
+        con.push_inbound(ib("root", "web", ""));
+        assert!(
+            keep_generating(&con, &queued, true),
+            "web is not the console's Enter key"
+        );
+        con.push_inbound(ib("root", "console", ""));
+        assert!(
+            !keep_generating(&con, &queued, true),
+            "blank Enter on the console stops"
+        );
+        con.push_inbound(ib("root", "web", "/reboot"));
+        assert!(
+            keep_generating(&con, &queued, true),
+            "a web slash line is just queued"
+        );
+        assert_eq!(queued.borrow().len(), 2);
     }
 }

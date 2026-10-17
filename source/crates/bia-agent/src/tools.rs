@@ -1,6 +1,7 @@
 //! Tool registry (built-in + MCP), prompt rendering and tool-call parsing for the model's format.
 use crate::console::{Console, BCYAN, CYAN, GRAY, RESET};
 use crate::mcp::{McpServer, McpTool};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub const ID_SYSTEM: &str = "system";
@@ -8,6 +9,30 @@ pub const ID_ROOT: &str = "root";
 pub const CH_CONSOLE: &str = "console";
 pub const CH_WEB: &str = "web";
 pub const CH_SCHEDULE: &str = "schedule";
+
+/// MCP functions the model never sees: the agent's built-ins (say, react, delete_messages,
+/// pin_message, close_poll, chat_history, read receipts, typing) call them for web chats.
+const AGENT_ONLY_WEB: &[&str] = &[
+    "send",
+    "edit",
+    "react",
+    "delete_messages",
+    "pin",
+    "close_poll",
+    "history",
+    "read",
+    "typing",
+];
+
+fn agent_only(server: &str, tool: &str) -> bool {
+    server == "web" && AGENT_ONLY_WEB.contains(&tool)
+}
+
+/// A web chat channel (`web` = the person's main chat, `web:<chat>` = another one). Web is a
+/// bus served by the web MCP, like telegram or whatsapp; the person is the envelope identity.
+pub fn is_web(channel: &str) -> bool {
+    channel == CH_WEB || channel.starts_with("web:")
+}
 
 /// `identity|channel|issued|delivered|id|message` — RFC 3339 UTC timestamps of when the message
 /// was created and when it was handed to the model. `id` is the platform message id (empty if none).
@@ -46,8 +71,9 @@ pub enum ToolFormat {
     Qwen,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum Role {
+    #[default]
     User,
     Assistant,
     Tool,
@@ -66,12 +92,6 @@ pub struct Msg {
     pub call_id: String,
     /// journal id (`m_N`); empty in old saved conversations
     pub id: String,
-}
-
-impl Default for Role {
-    fn default() -> Self {
-        Role::User
-    }
 }
 
 impl Msg {
@@ -704,7 +724,7 @@ pub struct Tools {
     catalog: Vec<ServerInfo>,
     /// MCP servers whose functions are currently advertised to the model
     pub loaded: std::collections::HashSet<usize>,
-    files_dir: PathBuf,
+    pub files_dir: PathBuf,
     pub pending_exit: std::cell::Cell<Option<PendingExit>>,
     /// the model asked to forget the conversation; done by the REPL after this turn
     pub pending_forget: std::cell::Cell<bool>,
@@ -725,6 +745,8 @@ pub struct Tools {
     pub fired_job: std::cell::Cell<bool>,
     /// Last human inbound this turn: (identity, channel). `say` defaults to these.
     pub reply_to: std::cell::RefCell<Option<(String, String)>>,
+    /// identity of the last human inbound on each channel
+    pub last_on: std::cell::RefCell<HashMap<String, String>>,
     /// Human messages the model has not closed with answered=[ids] yet.
     pub unanswered: crate::unanswered::Set,
     mcp_arch: String,
@@ -747,7 +769,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "talk",
         blurb: "Speak to people and keep contacts.",
-        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web console → web for its main chat, web:<chat> for every other chat (never shorten web:<chat> to web); telegram:<chat_id>; whatsapp:<phone>. Web chats work like Telegram: inbound text may start with [reply to <id> from <who>: \"…\"] or [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp. On telegram/whatsapp an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). A bus (console, web, telegram, whatsapp, …) reconnects when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. telegram_unban / whatsapp_unban let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. addressbook_* is your contacts (trust normal or root). channels lists buses.",
+        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web → web for the person's main chat, web:<chat> for every other chat (never shorten web:<chat> to web), with identity = that person; telegram:<chat_id>; whatsapp:<phone>. Web chats work like Telegram: inbound text may start with [reply to <id> from <who>: \"…\"] or [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp. On telegram/whatsapp an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). The console is the physical screen; web, telegram and whatsapp are buses of their MCPs (web calls: web_call_start / web_call_hangup in mcp/web) and reconnect when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. telegram_unban / whatsapp_unban let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. addressbook_* is your contacts (trust normal or root). channels lists buses.",
     },
     Branch {
         id: "calendar",
@@ -804,7 +826,7 @@ fn blob_has(blob: &str, words: &[String]) -> bool {
         .collect();
     words.iter().any(|w| {
         if w.len() <= 3 {
-            tokens.iter().any(|t| *t == w.as_str())
+            tokens.contains(&w.as_str())
         } else {
             lowered.contains(w.as_str())
         }
@@ -843,6 +865,7 @@ impl Tools {
             outbox_lost,
             fired_job: std::cell::Cell::new(false),
             reply_to: std::cell::RefCell::new(None),
+            last_on: std::cell::RefCell::new(HashMap::new()),
             unanswered: crate::unanswered::Set::load(&state),
             mcp_arch: std::env::consts::ARCH.into(),
             mcp_env: vec![],
@@ -879,6 +902,7 @@ impl Tools {
                 "lang": {"type": "string", "description": "language of message (en, ru, es-MX…) for voice=true and for speaking it in an active call; defaults to the person's preferred language (addressbook)"},
                 "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram or whatsapp; only when the user asks for a voice reply"},
                 "reply_to": {"type": "string", "description": "web: id of the message to quote"},
+                "new_chat": {"type": "boolean", "description": "web: true opens a new chat named by channel web:<chat>; a chat that does not exist is refused otherwise"},
                 "edit": {"type": "string", "description": "id of a message you sent (from its say result): replace its text with message instead of sending a new one (web, telegram, whatsapp)"},
                 "cancel": {"type": "string", "description": "telegram/whatsapp: local id o<n> of a send that is still queued or uploading; stops it and sends nothing else"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"},
@@ -898,27 +922,12 @@ impl Tools {
                 "emoji": {"type": "string", "description": "e.g. 👍; empty removes"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"}
             }), &["message_id"]));
-        t.add_grouped("talk", "web_call_start", "Call a person in their open web console (an incoming-call screen with ringing). [call started] arrives when they answer, [call declined] or [no answer] otherwise. They can also call you from the chat. During a call their speech arrives as [speech <lang>] on that channel; answer with say (lang required, keep it short): it is spoken and posted. Wait for [you finished speaking] before speaking again; [interrupted] means they talked over you. A summary with the transcript is posted to the chat when the call ends.",
-            obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
-                "identity": {"type": "string", "description": "who to call (chat owner); defaults to last human inbound"}
-            }), &[]));
-        t.add_grouped("talk", "web_call_cancel", "Cancel your web call while it is still ringing (before they answer). For an answered call use web_call_hangup.",
-            obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
-                "identity": {"type": "string", "description": "chat owner; defaults to last human inbound"}
-            }), &[]));
-        t.add_grouped("talk", "web_call_hangup", "End the web call you are in (like telegram_call_hangup), or stop ringing. Say goodbye with say first: if you are still speaking, the call ends as soon as that has played.",
-            obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
-                "identity": {"type": "string", "description": "chat owner; defaults to last human inbound"}
-            }), &[]));
-        t.add_grouped("talk", "delete_messages", "Delete messages for everyone on a web chat, or on telegram/whatsapp (there revoke=true deletes for the other side too).",
+        t.add_grouped("talk", "delete_messages", "Delete messages on a web, telegram or whatsapp chat. They are deleted for everyone (revoke=true, the default); revoke=false deletes them only on bia's side (telegram/whatsapp).",
             obj(json!({
                 "channel": {"type": "string", "description": "web, web:<chat>, telegram:<id>, whatsapp:<phone>; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "web only: chat owner identity; defaults to last human inbound"},
                 "message_ids": {"type": "array", "items": {"type": "string"}},
-                "revoke": {"type": "boolean", "description": "telegram/whatsapp: also for the other person"}
+                "revoke": {"type": "boolean", "description": "telegram/whatsapp: true (default) deletes for the other person too; false only on this account"}
             }), &["message_ids"]));
         t.add_grouped("talk", "pin_message", "Pin (or unpin with on=false) a message at the top of a web chat.",
             obj(json!({
@@ -1107,6 +1116,9 @@ impl Tools {
         let idx = self.servers.len();
         self.infos.push(info);
         for t in tools {
+            if agent_only(&server.name, &t.name) {
+                continue; // the agent calls these itself (web_invoke); the model uses say & co.
+            }
             self.specs.push(ToolSpec {
                 name: format!("{}_{}", server.name, t.name),
                 description: t.description,
@@ -1700,12 +1712,12 @@ impl Tools {
                 let key = format!("tool:{name}");
                 self.enabled.insert(group.clone());
                 if self.schemas_sent.contains(&group) || self.schemas_sent.contains(&key) {
-                    return Ok(Self::call_by_name(&name, &[name.clone()], true));
+                    return Ok(Self::call_by_name(&name, std::slice::from_ref(&name), true));
                 }
                 self.schemas_sent.insert(key);
                 Ok(format!(
                     "{}\n{}",
-                    Self::call_by_name(&name, &[name.clone()], false),
+                    Self::call_by_name(&name, std::slice::from_ref(&name), false),
                     self.schema_one(i)
                 ))
             }
@@ -1721,12 +1733,12 @@ impl Tools {
                 let key = format!("tool:{name}");
                 self.ensure_loaded(&srv)?;
                 if self.schemas_sent.contains(&server_key) || self.schemas_sent.contains(&key) {
-                    return Ok(Self::call_by_name(&name, &[name.clone()], true));
+                    return Ok(Self::call_by_name(&name, std::slice::from_ref(&name), true));
                 }
                 self.schemas_sent.insert(key);
                 Ok(format!(
                     "{}\n{}",
-                    Self::call_by_name(&name, &[name.clone()], false),
+                    Self::call_by_name(&name, std::slice::from_ref(&name), false),
                     self.schema_one(i)
                 ))
             }
@@ -2518,18 +2530,6 @@ impl Tools {
             "react" | "delete_messages" | "pin_message" | "close_poll" | "chat_history" => {
                 self.chat_action(name, args)
             }
-            "web_call_start" | "web_call_hangup" | "web_call_cancel" => {
-                let (identity, channel) = self.target(args);
-                if !crate::webchat::is_web(&channel) {
-                    bail!("{name} works on web chats (web, web:<chat>); for Telegram/WhatsApp use their call tools");
-                }
-                let r = match name {
-                    "web_call_start" => crate::webcall::ring(&identity, &channel),
-                    "web_call_cancel" => crate::webcall::cancel_ring(&identity, &channel),
-                    _ => crate::webcall::hangup(&identity, &channel),
-                };
-                r.map_err(|e| anyhow::anyhow!(e))
-            }
             "bash" => unreachable!("handled as a job"),
             "channels" => {
                 let rows: Vec<String> = self
@@ -2543,7 +2543,7 @@ impl Tools {
                                 format!("  contact={} lang={}", p.id, p.lang)
                             }
                             Some(p) => format!("  contact={}", p.id),
-                            None if crate::addressbook::local_channel(&c.id) => {
+                            None if crate::addressbook::identity_channel(&c.id) => {
                                 "  contact=<client identity>".into()
                             }
                             None => "  contact=(none)".into(),
@@ -2775,6 +2775,9 @@ impl Tools {
     }
 
     /// `(identity, channel)` from the arguments, falling back to the last human inbound.
+    /// A channel given without an identity takes the identity of the last human inbound on
+    /// that same channel (on web the channel only names a chat — every person has their own
+    /// `web` — so the person must come from that chat, never from another bus).
     fn target(&self, args: &Value) -> (String, String) {
         let s = |k: &str| {
             args.get(k)
@@ -2787,10 +2790,28 @@ impl Tools {
             .borrow()
             .clone()
             .unwrap_or_else(|| (ID_ROOT.into(), CH_CONSOLE.into()));
-        (
-            s("identity").unwrap_or(def_id),
-            s("channel").unwrap_or(def_ch),
-        )
+        let channel = s("channel").unwrap_or_else(|| def_ch.clone());
+        let identity = s("identity").unwrap_or_else(|| {
+            if channel == def_ch {
+                def_id
+            } else if let Some(id) = self.last_on.borrow().get(&channel) {
+                id.clone()
+            } else if is_web(&channel) {
+                // no one wrote on this web chat yet: the web MCP names its users
+                String::new()
+            } else {
+                def_id
+            }
+        });
+        (identity, channel)
+    }
+
+    /// A human message arrived: it is the default target of the next reply.
+    pub fn note_inbound(&self, identity: &str, channel: &str) {
+        *self.reply_to.borrow_mut() = Some((identity.to_string(), channel.to_string()));
+        self.last_on
+            .borrow_mut()
+            .insert(channel.to_string(), identity.to_string());
     }
 
     /// A say/react went out on `channel`: record it and close `answered` ids.
@@ -2870,16 +2891,15 @@ impl Tools {
         }
         if args.get("voice").and_then(|v| v.as_bool()).unwrap_or(false) {
             let lang = s("lang").unwrap_or_default();
-            let detail = if crate::webchat::is_web(&channel) {
-                let id = crate::webchat::say_voice(
-                    &identity,
-                    &channel,
-                    &message,
-                    &lang,
-                    s("reply_to").as_deref(),
-                )
-                .map_err(|e| anyhow::anyhow!(e))?;
-                format!("voice message id {id}")
+            let detail = if is_web(&channel) {
+                let r = self.web_invoke(
+                    "send",
+                    json!({"identity": identity, "channel": channel, "text": message,
+                           "lang": lang, "voice": true, "reply_to": s("reply_to")}),
+                )?;
+                r.rsplit_once(" (")
+                    .map(|(_, d)| d.trim_end_matches(')').to_string())
+                    .unwrap_or(r)
             } else if let Some((mcp, chat)) = channel
                 .split_once(':')
                 .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
@@ -2922,26 +2942,17 @@ impl Tools {
             echo(&self.con);
             return Ok(format!("sent to {identity}@{channel}"));
         }
-        if crate::webchat::is_web(&channel) {
-            let id = crate::webchat::say(
-                &identity,
-                &channel,
-                &message,
-                s("reply_to").as_deref(),
-                &files,
-                args.get("buttons"),
-                args.get("poll"),
-            )
-            .map_err(|e| anyhow::anyhow!(e))?;
-            echo(&self.con);
-            if crate::webcall::active(&identity, &channel) && !message.trim().is_empty() {
-                let lang = s("lang").unwrap_or_default();
-                return Ok(match crate::webcall::speak(&identity, &channel, &message, &lang) {
-                    Ok(_) => format!("spoken in the web call and sent to {identity}@{channel} (message id {id}); [you finished speaking] arrives when it has played"),
-                    Err(e) => format!("sent to {identity}@{channel} (message id {id}); NOT spoken in the active web call: {e}"),
-                });
+        if is_web(&channel) {
+            let mut a = json!({"identity": identity, "channel": channel, "text": message,
+                               "files": files, "lang": s("lang").unwrap_or_default()});
+            for k in ["reply_to", "buttons", "poll", "new_chat"] {
+                if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
+                    a[k] = v.clone();
+                }
             }
-            return Ok(format!("sent to {identity}@{channel} (message id {id})"));
+            let r = self.web_invoke("send", a)?;
+            echo(&self.con);
+            return Ok(r);
         }
         let detail = self.send_on_channel(
             &channel,
@@ -2975,9 +2986,11 @@ impl Tools {
         if let Some(k) = ["files", "voice", "poll"].into_iter().find(|k| has(k)) {
             bail!("edit replaces text only; {k} cannot be combined with edit (send a new message instead)");
         }
-        if crate::webchat::is_web(channel) {
-            crate::webchat::agent_edit(identity, channel, id, message)
-                .map_err(|e| anyhow::anyhow!(e))?;
+        if is_web(channel) {
+            self.web_invoke(
+                "edit",
+                json!({"identity": identity, "channel": channel, "message_id": id, "text": message}),
+            )?;
         } else if let Some((mcp, chat)) = channel
             .split_once(':')
             .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
@@ -3159,7 +3172,14 @@ impl Tools {
                 .unwrap_or_default()
         };
         let (identity, channel) = self.target(args);
-        let web = crate::webchat::is_web(&channel);
+        let web = is_web(&channel);
+        let to = |extra: Value| {
+            let mut a = json!({"identity": identity, "channel": channel});
+            if let (Some(o), Some(e)) = (a.as_object_mut(), extra.as_object()) {
+                o.extend(e.clone());
+            }
+            a
+        };
         let bus = channel
             .split_once(':')
             .filter(|(b, _)| *b == "telegram" || *b == "whatsapp");
@@ -3170,16 +3190,12 @@ impl Tools {
                 bail!("{name} works on web chats only (channel web or web:<chat>), not {channel}")
             }
         };
-        let e = |r: Result<String, String>| r.map_err(|e| anyhow::anyhow!(e));
         match name {
             "react" => {
                 let id = s("message_id");
                 let emoji = s("emoji");
                 if web {
-                    e(
-                        crate::webchat::agent_react(&identity, &channel, &id, &emoji)
-                            .map(|_| format!("reacted {emoji} on {id}")),
-                    )
+                    self.web_invoke("react", to(json!({"message_id": id, "emoji": emoji})))
                 } else if let Some((mcp, chat)) = bus {
                     self.outbox_action(mcp, chat, crate::outbox::Op::React { id, emoji })
                 } else {
@@ -3192,13 +3208,9 @@ impl Tools {
                     bail!("message_ids required");
                 }
                 if web {
-                    e(crate::webchat::agent_delete(&identity, &channel, &ids)
-                        .map(|n| format!("deleted {n} message(s)")))
+                    self.web_invoke("delete_messages", to(json!({"message_ids": ids})))
                 } else if let Some((mcp, chat)) = bus {
-                    let revoke = args
-                        .get("revoke")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
+                    let revoke = args.get("revoke").and_then(|v| v.as_bool()).unwrap_or(true);
                     self.outbox_action(mcp, chat, crate::outbox::Op::Delete { ids, revoke })
                 } else {
                     bail!("cannot delete messages on {channel}")
@@ -3208,21 +3220,55 @@ impl Tools {
                 need_web()?;
                 let id = s("message_id");
                 let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
-                e(crate::webchat::agent_pin(&identity, &channel, &id, on)
-                    .map(|_| format!("{} {id}", if on { "pinned" } else { "unpinned" })))
+                self.web_invoke("pin", to(json!({"message_id": id, "on": on})))
             }
             "close_poll" => {
                 need_web()?;
                 let id = s("message_id");
-                e(crate::webchat::agent_close_poll(&identity, &channel, &id)
-                    .map(|t| format!("poll {id} closed: {t}")))
+                self.web_invoke("close_poll", to(json!({"message_id": id})))
             }
             "chat_history" => {
                 need_web()?;
                 let n = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
-                e(crate::webchat::agent_history(&identity, &channel, n))
+                self.web_invoke("history", to(json!({"limit": n})))
             }
             _ => bail!("unknown chat action"),
+        }
+    }
+
+    /// Call a web MCP tool (web chats are its bus); the MCP is started on first use.
+    pub fn web_invoke(&mut self, tool: &str, args: Value) -> Result<String> {
+        let _ = self.load("web");
+        let idx = self
+            .server_index("web")
+            .ok_or_else(|| anyhow::anyhow!("the web MCP is not running"))?;
+        let (text, err) = self.mcp_invoke(idx, tool, args, &mut |_| {});
+        if err {
+            bail!("{text}");
+        }
+        Ok(text)
+    }
+
+    /// The model took this web message: the person sees ✓✓.
+    pub fn web_read(&mut self, identity: &str, channel: &str, id: &str) {
+        if self.server_index("web").is_some() {
+            let _ = self.web_invoke(
+                "read",
+                json!({"identity": identity, "channel": channel, "message_id": id}),
+            );
+        }
+    }
+
+    /// Web typing indicator while the model is thinking on those chats.
+    pub fn set_web_typing(&mut self, chats: &[(String, String)], on: bool) {
+        if self.server_index("web").is_none() {
+            return;
+        }
+        for (identity, channel) in chats {
+            let _ = self.web_invoke(
+                "typing",
+                json!({"identity": identity, "channel": channel, "on": on}),
+            );
         }
     }
 
@@ -3368,5 +3414,145 @@ pub fn human(bytes: u64) -> String {
         format!("{bytes} B")
     } else {
         format!("{v:.2} {}", U[i])
+    }
+}
+
+#[cfg(test)]
+mod web_tests {
+    use super::*;
+
+    /// A stand-in web MCP: answers initialize and tools/list, logs every tools/call line.
+    const FAKE: &str = r#"#!/bin/sh
+log="$(dirname "$0")/calls.log"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"web","version":"t"}}}\n' "$id" ;;
+    *'"method":"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"send","description":"d","inputSchema":{"type":"object"}},{"name":"chats","description":"d","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' "$line" >> "$log"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"sent (message id b1)"}]}}\n' "$id" ;;
+  esac
+done
+"#;
+
+    fn tools_with_fake_web(tag: &str) -> (PathBuf, Tools) {
+        let dir = std::env::temp_dir().join(format!("bia-webtools-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mcp = dir.join("MCPs").join("web");
+        std::fs::create_dir_all(&mcp).unwrap();
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        std::fs::write(mcp.join("fake.sh"), FAKE).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(mcp.join("fake.sh"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(
+            mcp.join("mcp.json"),
+            r#"{"name":"web","command":"fake.sh"}"#,
+        )
+        .unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        t.mcp_env = vec![("BIA_MCPS".into(), dir.join("MCPs").to_string_lossy().into())];
+        t.mcp_log_dir = dir.clone();
+        (dir, t)
+    }
+
+    fn calls(dir: &Path) -> Vec<Value> {
+        std::fs::read_to_string(dir.join("MCPs/web/calls.log"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .map(|v| v["params"].clone())
+            .collect()
+    }
+
+    #[test]
+    fn default_target_comes_from_the_same_channel() {
+        let t = Tools::new(&std::env::temp_dir(), Console::for_test());
+        // nothing yet: root on the console
+        assert_eq!(t.target(&json!({})), ("root".into(), "console".into()));
+        // a channel nobody wrote on: web needs the person, others keep the old default
+        assert_eq!(
+            t.target(&json!({"channel": "web"})),
+            ("".into(), "web".into())
+        );
+        t.note_inbound("alex", "web");
+        t.note_inbound("Bob", "telegram:42");
+        // the last human inbound is the default for both
+        assert_eq!(t.target(&json!({})), ("Bob".into(), "telegram:42".into()));
+        // web without identity: who wrote on web, never the telegram person or bia
+        assert_eq!(
+            t.target(&json!({"channel": "web"})),
+            ("alex".into(), "web".into())
+        );
+        // an explicit identity always wins
+        assert_eq!(
+            t.target(&json!({"channel": "web", "identity": "root"})),
+            ("root".into(), "web".into())
+        );
+        // web:<chat> is its own channel
+        assert_eq!(
+            t.target(&json!({"channel": "web:trip"})),
+            ("".into(), "web:trip".into())
+        );
+        t.note_inbound("carol", "web:trip");
+        assert_eq!(
+            t.target(&json!({"channel": "web:trip"})),
+            ("carol".into(), "web:trip".into())
+        );
+    }
+
+    #[test]
+    fn say_on_web_goes_to_the_web_mcp_with_the_person() {
+        // The 1.1.0 regression: Alex writes on web, then something arrives on another bus,
+        // and the reply on web must still go to alex (not to bia or the other sender).
+        let (dir, mut t) = tools_with_fake_web("say");
+        t.note_inbound("alex", "web");
+        t.note_inbound("Bob", "telegram:42");
+        let r = t
+            .say(&json!({"channel": "web", "message": "hello Alex"}))
+            .unwrap();
+        assert!(r.contains("message id b1"), "{r}");
+        let c = calls(&dir);
+        assert_eq!(c.len(), 1, "{c:?}");
+        assert_eq!(c[0]["name"], "send");
+        assert_eq!(c[0]["arguments"]["identity"], "alex");
+        assert_eq!(c[0]["arguments"]["channel"], "web");
+        assert_eq!(c[0]["arguments"]["text"], "hello Alex");
+        // the model answers with say: web_send is the agent's own path, never a model tool
+        let names: Vec<&str> = t.specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"web_chats") && !names.contains(&"web_send"),
+            "{names:?}"
+        );
+
+        // the chat actions address the same person and chat through the MCP
+        t.chat_action(
+            "react",
+            &json!({"channel": "web", "message_id": "b9", "emoji": "👍"}),
+        )
+        .unwrap();
+        t.chat_action(
+            "delete_messages",
+            &json!({"channel": "web", "message_ids": ["b9"]}),
+        )
+        .unwrap();
+        let c = calls(&dir);
+        assert_eq!(
+            (c[1]["name"].as_str(), c[2]["name"].as_str()),
+            (Some("react"), Some("delete_messages"))
+        );
+        assert!(c[1..].iter().all(|x| x["arguments"]["identity"] == "alex"));
+    }
+
+    #[test]
+    fn web_call_tools_are_not_agent_builtins() {
+        let t = Tools::new(&std::env::temp_dir(), Console::for_test());
+        let names: Vec<&str> = t.specs.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"say") && names.contains(&"react"),
+            "{names:?}"
+        );
+        assert!(!names.iter().any(|n| n.starts_with("web_")), "{names:?}");
     }
 }

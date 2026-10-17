@@ -1,5 +1,5 @@
 """QEMU VMs driven over their serial sockets, for the two-VM e2e tests
-(tools/land-e2e-drive.py, tools/peer-e2e-drive.py).
+(tests/e2e/land-e2e-drive.py, tests/e2e/peer-e2e-drive.py).
 
 Env: ARCH (arm64), LE (work dir: images, sockets, logs), MEM (4G), CPUS (4).
 Each VM's serial output goes to $LE/<name>.log; lines matching SHOW are echoed.
@@ -8,7 +8,7 @@ import os, re, shutil, socket, subprocess, sys, threading, time
 
 ARCH = os.environ.get("ARCH", "arm64")
 LE = os.environ["LE"]
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MEM, CPUS = os.environ.get("MEM", "4G"), os.environ.get("CPUS", "4")
 FW = "/opt/homebrew/share/qemu"
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[78()][0-9A-B]?")

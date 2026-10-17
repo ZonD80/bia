@@ -309,7 +309,7 @@ impl Calls {
         // Speaking: let the goodbye play out first ([you finished speaking] → hang up).
         {
             let mut g = self.st.lock().unwrap();
-            let ours = g.active.as_ref().is_some_and(|a| want.as_ref().map_or(true, |k| *k == a.key));
+            let ours = g.active.as_ref().is_some_and(|a| want.as_ref().is_none_or(|k| *k == a.key));
             if ours && g.speaking && g.hangup_after.is_none() {
                 let utt = g.speak_gen;
                 g.hangup_after = Some((want.clone(), utt));
@@ -341,7 +341,7 @@ impl Calls {
             let mut g = self.st.lock().unwrap();
             let was = g.speaking;
             match g.active.take() {
-                Some(a) if want.as_ref().map_or(true, |k| *k == a.key) => {
+                Some(a) if want.as_ref().is_none_or(|k| *k == a.key) => {
                     g.speaking = false;
                     (Some(a), was)
                 }

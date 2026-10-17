@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the land ISO install and a fly/land between two QEMU VMs (tools/land-e2e.sh run).
+"""Drive the land ISO install and a fly/land between two QEMU VMs (tests/e2e/land-e2e.sh run).
 
 Env: ARCH, LE (work dir with bia-land.iso link, land.img, fly.img), MEM, CPUS.
 Serial output of each VM goes to $LE/<vm>.log. Phases:
@@ -21,7 +21,7 @@ e2e_vm.SHOW = re.compile(r"bia land|bia-land|land:|fly:|CODE|Installed on|Erasin
 
 for f in (ISO, f"{LE}/land.img", f"{LE}/fly.img"):
     if not os.path.exists(f):
-        sys.exit(f"missing {f}; run tools/land-e2e.sh images")
+        sys.exit(f"missing {f}; run tests/e2e/land-e2e.sh images")
 
 LAND_FAIL = r"bia-land: .*failed|Copy onto the disk failed|Partitions did not appear|is too small|No disk|Kernel panic|land: [a-z].*(timed out|failed|refused|mismatch|did not)"
 
@@ -111,8 +111,10 @@ fly.send(f"The landing computer shows code {code} and I typed it there. The two 
 # ---- 4. transfer + unfold on land ----
 land.expect("both sides confirmed", r"both sides confirmed", 300, fail=r"did not confirm|code does not match")
 land.expect("archive received", r"land: archive accepted, unfolding", 1800, fail=LAND_FAIL + r"|checksum did not match")
-land.expect("unfold reboots", r"unfold: rebooting", 1800, fail=r"unfold: .*(failed|error)")
-fly.expect("flyer gets the ack", r"archive accepted by 10\.77\.0\.2", 300)
+# "replace busy ... (os error 26)" is normal: the running carry binary is unlinked and replaced
+land.expect("unfold reboots", r"unfold: rebooting", 1800, fail=r"unfold: (?!replace busy|replaced|skip busy).*(failed|error)")
+# the flyer's ack (carry_fly's job result) is checked in fly.img's session log afterwards: the
+# console shows it only when it lands outside a model reply
 
 # ---- 5. land VM boots the flyer's agent ----
 land.expect("land disk reboots into the agent", r"bia-update: (idle|boot)", 900, fail=r"Kernel panic")

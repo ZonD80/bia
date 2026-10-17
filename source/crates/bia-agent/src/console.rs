@@ -111,36 +111,13 @@ pub const HEADER_BG: &str = "\x1b[97;44m"; // white on blue
 const HEADER_LINES: u16 = 3;
 
 struct Out {
-    id: usize,
     w: Box<dyn Write + Send>,
-    /// Tty fd for `TIOCGWINSZ`. `None` for the web sink.
+    /// Tty fd for `TIOCGWINSZ`. `None` when output is not a terminal.
     fd: Option<i32>,
     rows: u16,
     cols: u16,
     tty: bool,
-    /// browser chat/logs: status is a JSON overlay, not DECSC/CUP
-    web: bool,
-    /// Client-cert identity for web sinks (`None` on physical consoles).
-    web_identity: Option<String>,
 }
-
-/// Writer that forwards bytes to a web console client.
-struct ChannelWriter {
-    tx: Sender<Vec<u8>>,
-}
-impl Write for ChannelWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.tx
-            .send(buf.to_vec())
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "web client gone"))?;
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-const REPLAY_BYTES: usize = 256 * 1024;
 
 #[derive(Default, Clone)]
 pub struct StatusData {
@@ -155,11 +132,29 @@ pub struct StatusData {
     pub tools: usize,
     pub state: String,
     pub messages: usize,
-    /// web console login code (empty if the web server is off)
-    pub web_code: String,
+    /// HTTPS port of the web MCP (0 while it is not listening), from files/state/web.json
     pub web_port: u16,
-    /// one-click login URLs (`http://ip/?code=`), space-separated
+    /// its HTTPS addresses, space-separated
     pub web_login: String,
+}
+
+impl StatusData {
+    /// What the web MCP shows on its status page (files/state/status.json).
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "version": self.version,
+            "arch": self.arch,
+            "kernel": self.kernel,
+            "model": self.model,
+            "model_detail": self.model_detail,
+            "ctx_used": self.ctx_used,
+            "ctx_total": self.ctx_total,
+            "tps": self.tps,
+            "tools": self.tools,
+            "state": self.state,
+            "messages": self.messages,
+        })
+    }
 }
 
 pub struct Console {
@@ -174,9 +169,8 @@ pub struct Console {
     pub color: bool,
     status: Mutex<StatusData>,
     last_drawn: Mutex<Vec<String>>,
-    /// recent output, replayed to a web client when it connects
-    recent: Mutex<VecDeque<u8>>,
-    next_id: Mutex<usize>,
+    /// files/state/status.json and what was last written there
+    status_file: Mutex<Option<(std::path::PathBuf, String)>>,
 }
 
 fn winsize(fd: i32) -> (u16, u16) {
@@ -204,8 +198,7 @@ impl Console {
             color: false,
             status: Mutex::new(StatusData::default()),
             last_drawn: Mutex::new(vec![]),
-            recent: Mutex::new(VecDeque::new()),
-            next_id: Mutex::new(0),
+            status_file: Mutex::new(None),
         })
     }
 
@@ -223,14 +216,11 @@ impl Console {
                     let fd = f.as_raw_fd();
                     let (rows, cols) = winsize(fd);
                     outs.push(Out {
-                        id: outs.len(),
                         w: Box::new(f),
                         fd: Some(fd),
                         rows,
                         cols,
                         tty: true,
-                        web: false,
-                        web_identity: None,
                     });
                     if let Ok(r) = OpenOptions::new().read(true).open(&dev) {
                         let fd = r.as_raw_fd();
@@ -247,14 +237,11 @@ impl Console {
             let tty = unsafe { libc::isatty(1) } == 1;
             let (rows, cols) = if tty { winsize(1) } else { (0, 0) };
             outs.push(Out {
-                id: outs.len(),
                 w: Box::new(std::io::stdout()),
                 fd: tty.then_some(1),
                 rows,
                 cols,
                 tty,
-                web: false,
-                web_identity: None,
             });
             spawn_tty_reader(
                 std::io::stdin(),
@@ -266,7 +253,6 @@ impl Console {
             devices.push("stdio".into());
         }
         let color = outs.iter().any(|o| o.tty);
-        let n = outs.len();
         let con = Arc::new(Console {
             outs: Mutex::new(outs),
             rx: Mutex::new(rx),
@@ -277,8 +263,7 @@ impl Console {
             color,
             status: Mutex::new(StatusData::default()),
             last_drawn: Mutex::new(vec![]),
-            recent: Mutex::new(VecDeque::with_capacity(REPLAY_BYTES)),
-            next_id: Mutex::new(n),
+            status_file: Mutex::new(None),
         });
         con.init_screen();
         let c = con.clone();
@@ -319,7 +304,7 @@ impl Console {
     fn init_screen(&self) {
         let mut outs = self.outs.lock().unwrap();
         for o in outs.iter_mut() {
-            if o.tty && !o.web {
+            if o.tty {
                 if std::env::var_os("BIA_GUI").is_some() {
                     let _ = write!(o.w, "\x1b[0m\x1b[2J\x1b[H");
                 } else {
@@ -336,169 +321,14 @@ impl Console {
         }
     }
 
-    /// A browser chat session of this identity is connected.
-    pub fn has_web(&self, identity: &str) -> bool {
-        self.outs
-            .lock()
-            .map(|o| {
-                o.iter()
-                    .any(|o| o.web && o.web_identity.as_deref() == Some(identity))
-            })
-            .unwrap_or(false)
-    }
-
-    /// JSON event for the browser chat sinks of one client-cert identity (see `webchat`).
-    pub fn web_event(&self, identity: &str, payload: &str) {
-        let mut pkt = Vec::with_capacity(1 + payload.len());
-        pkt.push(0x1d);
-        pkt.extend_from_slice(payload.as_bytes());
-        let mut outs = self.outs.lock().unwrap();
-        for o in outs.iter_mut() {
-            if o.web && o.web_identity.as_deref() == Some(identity) {
-                let _ = o.w.write_all(&pkt);
-                let _ = o.w.flush();
-            }
-        }
-    }
-
     pub fn write(&self, s: &str) {
-        {
-            let mut r = self.recent.lock().unwrap();
-            for b in s.bytes() {
-                if r.len() >= REPLAY_BYTES {
-                    r.pop_front();
-                }
-                r.push_back(b);
-            }
-        }
         let mut outs = self.outs.lock().unwrap();
         for o in outs.iter_mut() {
-            // Chat sinks get JSON events only; the console stream goes to TTYs and root's web terminal.
-            if o.web {
-                continue;
-            }
             let _ = o.w.write_all(s.as_bytes());
             let _ = o.w.flush();
         }
     }
 
-    // ---- web console sinks ----
-
-    fn next_sink_id(&self) -> usize {
-        let mut n = self.next_id.lock().unwrap();
-        *n += 1;
-        *n
-    }
-
-    /// Register a browser chat session; it receives `web_event` JSON (0x1d-prefixed) only.
-    pub fn add_web_sink(&self, identity: &str) -> (usize, Receiver<Vec<u8>>) {
-        let (tx, rx) = channel::<Vec<u8>>();
-        let id = self.next_sink_id();
-        self.outs.lock().unwrap().push(Out {
-            id,
-            w: Box::new(ChannelWriter { tx }),
-            fd: None,
-            rows: 0,
-            cols: 0,
-            tty: false,
-            web: true,
-            web_identity: Some(identity.to_string()),
-        });
-        (id, rx)
-    }
-
-    /// Register root's browser terminal: a full console stream like a physical TTY
-    /// (status header, scroll region, colors). Recent output is replayed first.
-    pub fn add_term_sink(&self, rows: u16, cols: u16) -> (usize, Receiver<Vec<u8>>) {
-        let (tx, rx) = channel::<Vec<u8>>();
-        let id = self.next_sink_id();
-        let rows = rows.max(HEADER_LINES + 2);
-        let cols = cols.max(20);
-        let mut w = ChannelWriter { tx };
-        let replay: Vec<u8> = self.recent.lock().unwrap().iter().copied().collect();
-        let _ = write!(
-            w,
-            "\x1b[0m\x1b[2J\x1b[{};{}r\x1b[{};1H",
-            HEADER_LINES + 1,
-            rows,
-            HEADER_LINES + 1
-        );
-        let _ = w.write_all(&replay);
-        self.outs.lock().unwrap().push(Out {
-            id,
-            w: Box::new(w),
-            fd: None,
-            rows,
-            cols,
-            tty: true,
-            web: false,
-            web_identity: Some(crate::tools::ID_ROOT.into()),
-        });
-        self.last_drawn.lock().unwrap().clear();
-        self.draw_status(true);
-        (id, rx)
-    }
-    pub fn remove_sink(&self, id: usize) {
-        self.outs.lock().unwrap().retain(|o| o.id != id);
-        self.last_drawn.lock().unwrap().clear();
-    }
-    pub fn resize_sink(&self, id: usize, rows: u16, cols: u16) {
-        let mut outs = self.outs.lock().unwrap();
-        if let Some(o) = outs.iter_mut().find(|o| o.id == id) {
-            o.rows = rows.max(if o.web { 2 } else { HEADER_LINES + 2 });
-            o.cols = cols.max(20);
-            if !o.web {
-                let _ = write!(o.w, "\x1b[{};{}r", HEADER_LINES + 1, o.rows);
-            }
-        }
-        drop(outs);
-        self.last_drawn.lock().unwrap().clear();
-        self.draw_status(true);
-    }
-    pub fn send_to_sink(&self, id: usize, bytes: &[u8]) -> bool {
-        let mut outs = self.outs.lock().unwrap();
-        match outs.iter_mut().find(|o| o.id == id) {
-            Some(o) => o.w.write_all(bytes).is_ok(),
-            None => false,
-        }
-    }
-    /// A line typed on a client terminal (root's web terminal → channel `console`).
-    /// Echoed to every other console output, then queued like a physical keystroke line.
-    pub fn push_input_from(
-        &self,
-        identity: String,
-        channel: String,
-        line: String,
-        origin: Option<usize>,
-    ) {
-        let echo = format!(
-            "{}\n",
-            if self.color {
-                format!("{GREEN}{line}{RESET}")
-            } else {
-                line.clone()
-            }
-        );
-        {
-            let mut outs = self.outs.lock().unwrap();
-            for o in outs.iter_mut() {
-                if Some(o.id) != origin && !o.web {
-                    let _ = o.w.write_all(echo.as_bytes());
-                    let _ = o.w.flush();
-                }
-            }
-        }
-        let _ = self.tx.send(
-            Inbound {
-                identity,
-                channel,
-                issued: SystemTime::now(),
-                id: String::new(),
-                text: line,
-            }
-            .ensure_id(),
-        );
-    }
     pub fn push_inbound(&self, ib: Inbound) {
         let ib = ib.ensure_id();
         if journaled(&ib) {
@@ -645,13 +475,27 @@ impl Console {
         while self.try_read_line().is_some() {}
     }
 
-    pub fn status(&self) -> StatusData {
-        self.status.lock().unwrap().clone()
+    pub fn update_status(&self, f: impl FnOnce(&mut StatusData)) {
+        let json = {
+            let mut st = self.status.lock().unwrap();
+            f(&mut st);
+            st.to_json().to_string()
+        };
+        self.draw_status(false);
+        if let Some((path, last)) = self.status_file.lock().unwrap().as_mut() {
+            if *last != json {
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, &json).is_ok() && std::fs::rename(&tmp, &*path).is_ok() {
+                    *last = json;
+                }
+            }
+        }
     }
 
-    pub fn update_status(&self, f: impl FnOnce(&mut StatusData)) {
-        f(&mut self.status.lock().unwrap());
-        self.draw_status(false);
+    /// Publish the status (model, context, state) to `path` for the web MCP's status page.
+    pub fn set_status_file(&self, path: std::path::PathBuf) {
+        *self.status_file.lock().unwrap() = Some((path, String::new()));
+        self.update_status(|_| {});
     }
 
     /// Redraw the header on every terminal; only writes when the content changed (or `force`).
@@ -664,9 +508,6 @@ impl Console {
         drawn.resize(outs.len(), String::new());
         for (i, o) in outs.iter_mut().enumerate() {
             if !o.tty {
-                continue;
-            }
-            if o.web {
                 continue;
             }
             let cols = o.cols as usize;
@@ -696,13 +537,13 @@ impl Console {
             let used = m.total.saturating_sub(m.available);
             let l2 = format!(
                 " {}  {}  {}  {:.1} tok/s  msgs {}  {}",
-                meter2("RAM", used, m.cached, m.total, mw, |v| format!("{}", gb(v))),
+                meter2("RAM", used, m.cached, m.total, mw, |v| gb(v).to_string()),
                 meter(
                     "swap",
                     m.swap_total.saturating_sub(m.swap_free),
                     m.swap_total,
                     mw,
-                    |v| format!("{}", gb(v))
+                    |v| gb(v).to_string()
                 ),
                 meter(
                     "ctx",

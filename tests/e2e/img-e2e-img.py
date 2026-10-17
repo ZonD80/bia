@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Image side of tools/img-e2e.sh. Runs in the bia-build:<arch> container.
+"""Image side of tests/e2e/img-e2e.sh. Runs in the bia-build:<arch> container.
 
   patch          /ie/root.img: overlay scripts, agent and carry/system MCPs from the work tree
   keys           /ie/stick.img (MODE=dd): ./fmm.json onto the ESP as EFI/bia/fmm.json, the way
@@ -76,6 +76,11 @@ def patch():
                 shutil.copy2(f"{out}/bia-mcp-{mcp}", dst)
         sh("cp", "-a", "/work/source/os/overlay/usr/local/sbin/.", f"{r}/usr/local/sbin/")
         sh("cp", "-a", "/work/source/os/overlay/usr/local/share/bia/.", f"{r}/usr/local/share/bia/")
+        # unit files too (ordering fixes such as bia-grow after /boot); enablement links stay as built
+        units = "/work/source/os/overlay/etc/systemd/system"
+        for n in os.listdir(units):
+            if os.path.isfile(f"{units}/{n}"):
+                shutil.copy2(f"{units}/{n}", f"{r}/etc/systemd/system/{n}")
         state = f"{r}/home/bia/files/state"
         leaked = [n for n in os.listdir(state) if n == "fmm.json"] if os.path.isdir(state) else []
         if leaked:

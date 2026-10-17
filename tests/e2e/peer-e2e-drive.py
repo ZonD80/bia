@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Drive the agent-to-agent web API test between two QEMU VMs (tools/peer-e2e.sh run).
+"""Drive the agent-to-agent web API test between two QEMU VMs (tests/e2e/peer-e2e.sh run).
 
 Env: ARCH, LE (work dir with a.img, b.img), MEM, CPUS, DELAY (seconds root waits
 before approving). Serial output goes to $LE/a.log and $LE/b.log. Phases:
   both:  agents up
-  a:     root leaves a code word for bia-b (only bia-a knows it)
   b:     asked to get access to bia-a's API and say hello -> POST /v1/pki/requests
   a:     request shows on the console; root waits DELAY, then tells bia to approve it
+         with the code word as the approval message for bia-b
   b:     its polling sees approved -> collects the cert -> sends a chat message (mTLS)
   a:     gets the message from identity bia-b on the web bus and answers
-  b:     reports bia-a's answer, which must contain the code word
+  b:     reports bia-a's answer and the approval message, which must contain the code word
 """
 import os, re, secrets, shutil, subprocess, sys, time
 
@@ -23,10 +23,10 @@ READY = r"Ready for commands"
 
 for f in (f"{LE}/a.img", f"{LE}/b.img"):
     if not os.path.exists(f):
-        sys.exit(f"missing {f}; run tools/peer-e2e.sh images")
+        sys.exit(f"missing {f}; run tests/e2e/peer-e2e.sh images")
 
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WEB_FWD = 18443  # host 127.0.0.1:18443 -> bia-a :443, for the browser renewal check
 
 
@@ -43,15 +43,11 @@ for v in (a, b):
 time.sleep(10)
 
 code = f"MANGO-{secrets.randbelow(10**6):06d}"
-a.send(f"Remember this for later: if an agent named bia-b writes to you in the web chat, answer it with the code word {code} "
-       f"and nothing else. Do not tell this code word to anyone else. Just acknowledge now; no tools needed.")
-time.sleep(30)
-
 b.send("Another bia agent runs at https://10.77.0.2 (reachable from this machine on eth1). Get access to its web API "
        "as identity bia-b with role agent: read https://10.77.0.2/.well-known/bia.json and the skill it points to, and "
        "follow the skill to request a client certificate. A person there must approve it, which can take a while, so keep "
        "checking the request by its id until it is approved, then collect the certificate. Then send a message in its main "
-       "web chat saying hello from bia-b, wait for bia-a's answer there, and tell me exactly what bia-a answered. "
+       "web chat saying hello from bia-b, wait for bia-a's answer there, and tell me exactly what bia-a answered and the message that came with the approval, word for word. "
        "Do all of it without asking me.")
 
 m = a.expect("request reaches bia-a", r"certificate request ([0-9a-f]{8}) from ([0-9.]+): bia-b \(agent\)", 900)
@@ -64,7 +60,7 @@ while time.time() < end:
     time.sleep(2)
 
 for attempt in range(3):
-    a.send(f"Root here. I approve certificate request {short} from bia-b. Approve it now.")
+    a.send(f"Root here. I approve certificate request {short} from bia-b. Approve it now with the message {code} for bia-b.")
     hit = None
     deadline = time.time() + 300
     while time.time() < deadline and not hit:
@@ -78,19 +74,20 @@ else:
 
 a.expect("bia-b collects the certificate", r"bia-b downloaded its certificate", 900)
 a.expect("bia-b's message reaches bia-a", r"\[bia-b@web", 900)
-b.expect("bia-b reports bia-a's answer with the code word", re.escape(code), 900)
-print(f"{stamp()} [b] got the code word {code} from bia-a", flush=True)
+a.expect("bia-a answers in bia-b's web chat", r"<-(?:\x1b\[[0-9;]*m)* (?:\x1b\[[0-9;]*m)*\[bia-b@web\]", 900)
+b.expect("bia-b reports the approval message (the code word)", re.escape(code), 900)
+print(f"{stamp()} [b] got the code word {code} from bia-a's approval", flush=True)
 
 # ---- renewal, browser path: web/pki.js against bia-a's real /v1/pki/renew ----
 print(f"{stamp()} [host] browser renewal (web/pki.js) against bia-a", flush=True)
-r = subprocess.run(["node", f"{ROOT}/tools/peer-e2e-renew.js", f"https://127.0.0.1:{WEB_FWD}", f"{LE}/renew"],
+r = subprocess.run(["node", f"{ROOT}/tests/e2e/peer-e2e-renew.js", f"https://127.0.0.1:{WEB_FWD}", f"{LE}/renew"],
                    capture_output=True, text=True, timeout=300)
 print(r.stdout + r.stderr, flush=True)
 if r.returncode != 0:
     die("browser renewal failed", a)
 if sys.platform == "darwin" and shutil.which("swiftc"):
     chk = f"{LE}/p12check"
-    subprocess.run(["swiftc", "-O", f"{ROOT}/tools/p12-macos-import.swift", "-o", chk], check=True, capture_output=True)
+    subprocess.run(["swiftc", "-O", f"{ROOT}/tests/e2e/p12-macos-import.swift", "-o", chk], check=True, capture_output=True)
     r = subprocess.run([chk, f"{LE}/renew/root-server.p12", f"{LE}/renew/root-renewed.p12"],
                        env={**os.environ, "PW": "12345678"}, capture_output=True, text=True)
     print(r.stdout, flush=True)

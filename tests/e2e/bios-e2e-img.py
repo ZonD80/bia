@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Image side of tools/bios-e2e.sh. Runs in the bia-build:x86_64 container.
+"""Image side of tests/e2e/bios-e2e.sh. Runs in the bia-build:x86_64 container.
 
   prep    flash.img: FMM keys, current agent + MCPs + overlay scripts from dist/ and /work
   check   internal.img after the install: GPT, BIOS GRUB in the MBR and BIOS boot
@@ -7,7 +7,7 @@
 """
 import importlib.util, os, shutil, struct, sys, uuid
 
-spec = importlib.util.spec_from_file_location("ut", "/work/tools/update-e2e-img.py")
+spec = importlib.util.spec_from_file_location("ut", "/work/tests/e2e/update-e2e-img.py")
 ut = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ut)
 ut.IMAGES.update({"flash": "/ut/flash.img", "internal": "/ut/internal.img"})

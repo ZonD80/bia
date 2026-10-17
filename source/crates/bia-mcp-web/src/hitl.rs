@@ -1,5 +1,5 @@
 //! Human-in-the-loop tasks: list/complete files written by system_ask_human.
-use crate::web;
+use crate::server as web;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};

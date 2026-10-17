@@ -6,10 +6,10 @@
 #   dist/internal.img  — internal disk (fs LABEL=BIADISK, serial=internal)
 #
 # Usage:
-#   tools/qemu-update-test.sh prep     # labels, bump flash release, clear /bia-update
-#   tools/qemu-update-test.sh flash    # boot flash (rescue / /update from stick)
-#   tools/qemu-update-test.sh disk     # boot BIADISK (/update stages → flash)
-#   tools/qemu-update-test.sh status   # show labels + releases (no boot)
+#   tests/e2e/qemu-update-test.sh prep     # labels, bump flash release, clear /bia-update
+#   tests/e2e/qemu-update-test.sh flash    # boot flash (rescue / /update from stick)
+#   tests/e2e/qemu-update-test.sh disk     # boot BIADISK (/update stages → flash)
+#   tests/e2e/qemu-update-test.sh status   # show labels + releases (no boot)
 #
 # Env (passed through to run-qemu.sh):
 #   ARCH=x86_64|arm64   default x86_64
@@ -19,7 +19,7 @@
 #   BUMP=1              prep: flash release = disk + 1 (default 1)
 #   CLEAR=1             prep: wipe /bia-update on both (default 1)
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
 cmd=${1:-}
@@ -27,7 +27,7 @@ case $cmd in
   prep|flash|disk|status) ;;
   *)
     cat <<'EOF' >&2
-usage: tools/qemu-update-test.sh prep|flash|disk|status
+usage: tests/e2e/qemu-update-test.sh prep|flash|disk|status
 
   prep    label flash=BIAROOT, disk=BIADISK; bump flash release if needed;
           clear /bia-update (clean update/rescue run)
@@ -37,12 +37,12 @@ usage: tools/qemu-update-test.sh prep|flash|disk|status
 
 Test plan after prep (flash release = disk + 1):
   A) update the disk from the flash
-       tools/qemu-update-test.sh disk   → /update (or ask the agent: carry_update)
+       tests/e2e/qemu-update-test.sh disk   → /update (or ask the agent: carry_update)
        → fold into /bia-update, reboot into the rescue image, copy flash → disk,
          reboot into the disk, unfold
   B) rescue the disk from the flash
-       tools/qemu-update-test.sh flash  → /rescue (carry_rescue)
-Automated version of all of this: tools/update-e2e.sh (make update-e2e).
+       tests/e2e/qemu-update-test.sh flash  → /rescue (carry_rescue)
+Automated version of all of this: tests/e2e/update-e2e.sh (make update-e2e).
 EOF
     exit 1
     ;;
@@ -254,8 +254,8 @@ do_prep() {
   fi
   run_image_tool prep
   echo
-  echo "Boot flash to rescue:  tools/qemu-update-test.sh flash"
-  echo "Boot disk to update:   tools/qemu-update-test.sh disk"
+  echo "Boot flash to rescue:  tests/e2e/qemu-update-test.sh flash"
+  echo "Boot disk to update:   tests/e2e/qemu-update-test.sh disk"
 }
 
 do_boot() {

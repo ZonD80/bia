@@ -75,7 +75,7 @@ rust() {
   local want_tg=0
   local want_wa=0
   if [ ${#FILTERS[@]} -eq 0 ]; then
-    main_pkgs=(bia-agent bia-mcp-system bia-mcp-secrets bia-mcp-chrome bia-mcp-screen bia-mcp-carry bia-mcp-lang)
+    main_pkgs=(bia-agent bia-mcp-system bia-mcp-web bia-mcp-secrets bia-mcp-chrome bia-mcp-screen bia-mcp-carry bia-mcp-lang)
     want_tg=1
     want_wa=1
   else
@@ -83,10 +83,10 @@ rust() {
     for f in "${FILTERS[@]}"; do
       case $f in
         agent) main_pkgs+=(bia-agent) ;;
-        system|secrets|chrome|screen|carry|lang) main_pkgs+=(bia-mcp-"$f") ;;
+        system|web|secrets|chrome|screen|carry|lang) main_pkgs+=(bia-mcp-"$f") ;;
         telegram) want_tg=1 ;;
         whatsapp) want_wa=1 ;;
-        *) echo "unknown rust filter: $f (want agent|system|secrets|chrome|screen|carry|lang|telegram|whatsapp)" >&2; exit 1 ;;
+        *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|telegram|whatsapp)" >&2; exit 1 ;;
       esac
     done
   fi
@@ -163,8 +163,9 @@ rust() {
 mcps() {
   echo "== assembling MCP folders for $RARCH"
   local M=/work/source/flash/MCPs
-  mkdir -p "$M/system/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH"
+  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH"
   cp "$OUT/bia-mcp-system" "$M/system/bin/$RARCH/"
+  cp "$OUT/bia-mcp-web" "$M/web/bin/$RARCH/"
   cp "$OUT/bia-mcp-telegram" "$M/telegram/bin/$RARCH/"
   cp "$OUT/bia-mcp-whatsapp" "$M/whatsapp/bin/$RARCH/"
   cp "$OUT/bia-mcp-secrets" "$M/secrets/bin/$RARCH/"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the bia disk image boot test (tools/img-e2e.sh run).
+"""Drive the bia disk image boot test (tests/e2e/img-e2e.sh run).
 
 Env: LE (dir with stick.img), ARCH, MODE (flash|dd), FIRMWARE (uefi|bios), MODEL, MEM, CPUS,
 TIMEOUT (minutes per long phase). Serial output: $LE/stick.log.
@@ -14,11 +14,11 @@ T = int(os.environ.get("TIMEOUT", "30")) * 60
 MODE, FIRMWARE = os.environ.get("MODE", "flash"), os.environ.get("FIRMWARE", "uefi")
 e2e_vm.SHOW = re.compile(r"(?i)DMI:|command line:|bia-grow|Ready for commands|Powering off|reboot: Power down|"
                          r"Kernel panic|FMM seeded")
-READY = r"Ready for commands"
+READY = r"Ready for commands|<-(?:\x1b\[[0-9;]*m)* "  # the agent answered its boot notice (a first start greets instead)
 FAIL = r"Kernel panic|bia-grow: .*(could not|failed|mismatch|overwritten|still sees)"
 
 if not os.path.exists(f"{LE}/stick.img"):
-    sys.exit(f"missing {LE}/stick.img; run tools/img-e2e.sh images")
+    sys.exit(f"missing {LE}/stick.img; run tests/e2e/img-e2e.sh images")
 
 disk = ["-drive", f"if=none,id=d0,format=raw,file={LE}/stick.img",
         "-device", "virtio-blk-pci,drive=d0,serial=stick,bootindex=0"]

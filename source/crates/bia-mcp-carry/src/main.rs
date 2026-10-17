@@ -202,9 +202,9 @@ fn main() {
         )
         .tool(
             "update",
-            "Update this computer's OS from the other bia system attached to it: the flash stick when running from the internal disk, or the internal disk when running from the flash. Folds this agent into /bia-update, reboots into the rescue image, which copies the other system onto this one while neither runs, then this computer boots and unfolds the agent (settings, chats, files, packages). The source must have a newer release unless force=true. Not automatic; call only when the user asks to update. The computer reboots several times; tell the user before calling.",
+            "Update this computer's OS. Source: the other bia system attached to it (the flash stick when running from the internal disk, or the internal disk when running from the flash) — preferred; when none is attached, the newest bia release from GitHub over the internet (downloaded, checked and unpacked first; needs about twice the image size free). Folds this agent into /bia-update, reboots into the rescue image, which copies the new system onto this one while it does not run, then this computer boots and unfolds the agent (settings, chats, files, packages). The source must have a higher version unless force=true. Not automatic; call only when the user asks to update. The computer reboots several times; tell the user before calling.",
             json!({"type": "object", "properties": {
-                "from": {"type": "string", "description": "optional partition to update from, e.g. /dev/sdb3 (lsblk -f). Omit to use the other bia system with the newest release."},
+                "from": {"type": "string", "description": "optional: a partition to update from, e.g. /dev/sdb3 (lsblk -f), or internet for the newest GitHub release even when a flash stick is attached. Omit to use the attached bia system, else the internet."},
                 "force": {"type": "boolean", "description": "true installs the source even when its release is not newer. Ask the user first. Default false."}
             }}),
             |ctx, a| update::update(ctx, arg_str_opt(&a, "from"), arg_bool(&a, "force", false)),

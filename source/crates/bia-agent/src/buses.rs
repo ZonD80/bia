@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 
 pub const BUS_CONSOLE: &str = "console";
 pub const CH_CONSOLE: &str = "console";
-pub const BUS_WEB: &str = "web";
-pub const CH_WEB: &str = "web";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChannelInfo {
@@ -33,16 +31,14 @@ fn builtin(id: &str, bus: &str, title: &str) -> ChannelInfo {
     }
 }
 
+/// Only the physical console is built in; web, telegram, whatsapp, … are buses of MCPs.
 fn is_builtin(id: &str) -> bool {
-    id == CH_CONSOLE || id == CH_WEB
+    id == CH_CONSOLE
 }
 
 impl Buses {
     pub fn load(path: &Path) -> Buses {
-        let mut channels = vec![
-            builtin(CH_CONSOLE, BUS_CONSOLE, "console (screen, serial)"),
-            builtin(CH_WEB, BUS_WEB, "web console (HTTPS)"),
-        ];
+        let mut channels = vec![builtin(CH_CONSOLE, BUS_CONSOLE, "console (screen, serial)")];
         if let Ok(b) = std::fs::read(path) {
             if let Ok(f) = serde_json::from_slice::<File>(&b) {
                 for c in f.channels {

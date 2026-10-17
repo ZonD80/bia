@@ -3,11 +3,10 @@ name = "bia-mcp-system"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MCP: FMM, web console, HITL"
+description = "MCP: FMM, HITL tasks, file links"
 
 [dependencies]
 bia-mcp = { path = "../bia-mcp" }
-bia-pki = { path = "../bia-pki" }
 serde_json.workspace = true
 serde.workspace = true
 libc.workspace = true

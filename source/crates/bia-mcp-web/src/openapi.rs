@@ -1,4 +1,4 @@
-//! OpenAPI document generated from the web console route table.
+//! OpenAPI document generated from the web app route table.
 use serde_json::{json, Value};
 
 /// Build OpenAPI 3.1 as YAML text (generated, not hand-maintained).
@@ -11,7 +11,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
     json!({
         "openapi": "3.1.0",
         "info": {
-            "title": "bia web console",
+            "title": "bia web",
             "version": env!("CARGO_PKG_VERSION"),
             "description": "HTTPS console and machine API. Auth is mTLS with certificates issued by this agent CA. Bootstrap (no client cert): download CA from /v1/pki/ca, pick up one-time PKCS#12 after root issues a cert."
         },
@@ -226,7 +226,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/v1/chats/action": {
                 "post": {
                     "tags": ["chat"],
-                    "summary": "One chat action: send, edit, delete, react, pin, read, forward, button, vote, chat_new, chat_rename, chat_mute, chat_clear, chat_delete, stop (root)",
+                    "summary": "One chat action: send, edit, delete, react, pin, read, forward, button, vote, chat_new, chat_rename, chat_mute, chat_clear, chat_delete",
                     "security": [{"mtls": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["t"], "properties": {"t": {"type": "string"}, "chat": {"type": "string"}}, "additionalProperties": true}}}},
                     "responses": {"200": {"description": "Result"}, "400": {"description": "Error text"}}
@@ -417,14 +417,6 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["chat"],
                     "summary": "Live voice call with bia on a web chat (?chat=<id>, ?ring=<id> to answer bia's call). Binary 16 kHz mono s16le frames in; JSON {t:played|mute|hangup} in; bia's speech as binary [gen u32][rate u32][s16le] plus JSON ready/say/say_end/stop/caption/end out.",
-                    "security": [{"mtls": []}],
-                    "responses": {"101": {"description": "Switching Protocols"}}
-                }
-            },
-            "/ws/term": {
-                "get": {
-                    "tags": ["root"],
-                    "summary": "Live agent console stream; {t:line|resize} in (root)",
                     "security": [{"mtls": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }

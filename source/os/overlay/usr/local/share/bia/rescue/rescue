@@ -5,9 +5,12 @@
 # wrote that marker after folding the destination's agent into
 # <dst>/bia-update/. Kernel command line (filesystem specs, UUID= preferred):
 #
-#   bia.src=     root to copy from (mounted read-only)
+#   bia.src=     root to copy from (mounted read-only), or DIR=<path> on the
+#                destination: a release bia-update downloaded and unpacked
+#                there (/bia-update/net/root); it is removed after the copy
 #   bia.dst=     root to copy onto (its /bia-update/fold.tar.gz must exist)
 #   bia.srcesp=  ESP that boots bia.src: kernel, initramfs, shim/GRUB come from it
+#                (or DIR=<path> on the destination: that release's boot files)
 #   bia.dstesp=  ESP that boots bia.dst: refreshed from bia.srcesp
 #   bia.markesp= ESP holding the marker, bia.mark= its path on that ESP
 #
@@ -183,13 +186,28 @@ if [ -d /sys/firmware/efi/efivars ]; then
 fi
 ok "drivers"
 
-src_dev=$(dev_of "$SRC") || die "source" "cannot find $SRC"
+# DIR=<path>: a directory on the destination root (an internet release), not a device
+src_dir=
+srcesp_dir=
+src_dev=
+srcesp_dev=
+case $SRC in DIR=/bia-update/*) src_dir=${SRC#DIR=} ;; DIR=*) die "arguments" "a source directory must be under /bia-update ($SRC)" ;; esac
+case $SRCESP in DIR=/bia-update/*) srcesp_dir=${SRCESP#DIR=} ;; DIR=*) die "arguments" "a source ESP directory must be under /bia-update ($SRCESP)" ;; esac
+if [ -z "$src_dir" ]; then
+  src_dev=$(dev_of "$SRC") || die "source" "cannot find $SRC"
+fi
 dst_dev=$(dev_of "$DST") || die "destination" "cannot find $DST"
-srcesp_dev=$(dev_of "$SRCESP") || die "source ESP" "cannot find $SRCESP"
+if [ -z "$srcesp_dir" ]; then
+  srcesp_dev=$(dev_of "$SRCESP") || die "source ESP" "cannot find $SRCESP"
+fi
 dstesp_dev=$(dev_of "$DSTESP") || die "destination ESP" "cannot find $DSTESP"
 markesp_dev=$(dev_of "$MARKESP") || die "marker ESP" "cannot find $MARKESP"
-[ "$(readlink -f "$src_dev")" != "$(readlink -f "$dst_dev")" ] || die "arguments" "source and destination are the same device ($src_dev)"
-say "source      $src_dev ($(blkid -s LABEL -o value "$src_dev" 2>/dev/null)) ESP $srcesp_dev"
+if [ -n "$src_dev" ]; then
+  [ "$(readlink -f "$src_dev")" != "$(readlink -f "$dst_dev")" ] || die "arguments" "source and destination are the same device ($src_dev)"
+  say "source      $src_dev ($(blkid -s LABEL -o value "$src_dev" 2>/dev/null)) ESP $srcesp_dev"
+else
+  say "source      $src_dir on the destination (downloaded release) ESP files ${srcesp_dir:-$srcesp_dev}"
+fi
 say "destination $dst_dev ($(blkid -s LABEL -o value "$dst_dev" 2>/dev/null)) ESP $dstesp_dev"
 
 # Remove the GRUB marker (on the ESP the rescue was started from), then make
@@ -210,6 +228,7 @@ remove_marker() {
   # Legacy BIOS updates mark both bia ESPs (bia-update: mark_other_esp_for_bios).
   local e
   for e in "$srcesp_dev" "$dstesp_dev"; do
+    [ -n "$e" ] || continue
     [ "$(readlink -f "$e")" = "$(readlink -f "$markesp_dev")" ] && continue
     for d in "$DSTESP_MNT" "$SRCESP_MNT"; do
       if mountpoint -q "$d" && [ "$(readlink -f "$(findmnt -n -o SOURCE "$d")")" = "$(readlink -f "$e")" ]; then
@@ -272,13 +291,20 @@ e2fsck -p "$dst_dev"
 rc=$?
 [ "$rc" -lt 4 ] || die "fsck destination" "e2fsck -p $dst_dev exited $rc; repair it from the shell (e2fsck -f $dst_dev)"
 ok "fsck destination"
-# noload: never replay the source journal; it is only read.
-mount -o ro,noload "$src_dev" "$SRC_MNT" || die "mount source" "cannot mount $src_dev read-only"
 mount -o rw "$dst_dev" "$DST_MNT" || die "mount destination" "cannot mount $dst_dev"
 UPD=$DST_MNT/bia-update
+if [ -n "$src_dir" ]; then
+  SRC_MNT=$DST_MNT$src_dir
+  [ -d "$SRC_MNT" ] || die "source" "$src_dir is missing on $dst_dev (the download was removed?)"
+else
+  # noload: never replay the source journal; it is only read.
+  mount -o ro,noload "$src_dev" "$SRC_MNT" || die "mount source" "cannot mount $src_dev read-only"
+fi
 [ -f "$SRC_MNT/etc/bia-release" ] || die "source" "$src_dev has no etc/bia-release; not a bia root"
 src_rel=$(tr -cd 0-9 < "$SRC_MNT/etc/bia-release")
 dst_rel=$(tr -cd 0-9 < "$DST_MNT/etc/bia-release" 2>/dev/null)
+src_ver=$(tr -cd 0-9. < "$SRC_MNT/etc/bia-version" 2>/dev/null)
+dst_ver=$(tr -cd 0-9. < "$DST_MNT/etc/bia-version" 2>/dev/null)
 if [ ! -s "$UPD/fold.tar.gz" ]; then
   # Marker still there but the work is done (the destination already unfolded
   # onto the new release): clear it and boot on instead of failing forever.
@@ -291,7 +317,7 @@ if [ ! -s "$UPD/fold.tar.gz" ]; then
   fi
   die "fold" "$dst_dev has no /bia-update/fold.tar.gz; refusing to overwrite an agent that was not folded"
 fi
-say "release ${dst_rel:-none} -> $src_rel"
+say "version ${dst_ver:-unknown} -> ${src_ver:-unknown} (build $src_rel)"
 rm -f "$UPD/rescue-failed"
 printf 'copying from %s release %s\n' "$SRC" "$src_rel" > "$UPD/copying"
 sync
@@ -313,7 +339,7 @@ EXCLUDES=(
   --exclude=/home/bia/files
 )
 RSYNC=(rsync -aHAX --numeric-ids --delete --delete-delay --no-inc-recursive)
-say "copying $src_dev onto $dst_dev"
+say "copying ${src_dev:-$src_dir} onto $dst_dev"
 # --checksum: a file with the same size and mtime but other content (e.g. a
 # release stamp) must still be copied; the quick check would skip it.
 "${RSYNC[@]}" --checksum --info=progress2,stats1 "${EXCLUDES[@]}" "$SRC_MNT/" "$DST_MNT/"
@@ -339,7 +365,12 @@ fi
 ok "verifying"
 
 # ---- boot files --------------------------------------------------------------
-mount -o ro "$srcesp_dev" "$SRCESP_MNT" || die "mount source ESP" "cannot mount $srcesp_dev"
+if [ -n "$srcesp_dir" ]; then
+  SRCESP_MNT=$DST_MNT$srcesp_dir
+  [ -d "$SRCESP_MNT" ] || die "source ESP" "$srcesp_dir is missing on $dst_dev"
+else
+  mount -o ro "$srcesp_dev" "$SRCESP_MNT" || die "mount source ESP" "cannot mount $srcesp_dev"
+fi
 mount -o rw "$dstesp_dev" "$DSTESP_MNT" || die "mount destination ESP" "cannot mount $dstesp_dev"
 skdir=
 for c in "" /EFI/bia; do
@@ -392,6 +423,11 @@ cpio=$DST_MNT/usr/local/share/bia/rescue.cpio.gz
 bash /bia-rescue/bia-rescue-hook "$DSTESP_MNT" "$cpio" || die "boot files" "cannot install the GRUB rescue hook on $dstesp_dev"
 sync
 ok "boot files"
+if [ -n "$src_dir" ]; then
+  rm -rf "$DST_MNT/bia-update/net"
+  sync
+  ok "downloaded release removed"
+fi
 
 # ---- hand over to the destination --------------------------------------------
 printf 'pending\n' > "$UPD/pending"
@@ -403,5 +439,5 @@ remove_marker || die "update marker" "could not remove $MARK from $markesp_dev; 
 umount_all
 
 boot_destination
-ok "update copied (release $src_rel)"
+ok "update copied (version ${src_ver:-unknown})"
 next_boot

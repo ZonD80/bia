@@ -1,7 +1,7 @@
 #!/bin/bash
 # End-to-end QEMU test of the bia disk image (bia-<arch>.img.xz, what releases ship).
 #
-#   tools/img-e2e.sh images   bia-<arch>.img.xz from dist/<arch>/root.img (overlay scripts,
+#   tests/e2e/img-e2e.sh images   bia-<arch>.img.xz from dist/<arch>/root.img (overlay scripts,
 #                             agent, carry/system MCPs from the work tree), then the stick:
 #                               MODE=flash  a local "GitHub release" (bia-os.json + .img.xz
 #                                           over HTTP) written by bia-flash onto the whole
@@ -9,12 +9,12 @@
 #                               MODE=dd     the .img.xz decoded onto a bigger disk as Etcher,
 #                                           Rufus or dd would, plus ./fmm.json copied onto
 #                                           its ESP by hand (EFI/bia/fmm.json)
-#   tools/img-e2e.sh run      boot the stick (FIRMWARE=uefi|bios): bia-grow grows BIAROOT over
+#   tests/e2e/img-e2e.sh run      boot the stick (FIRMWARE=uefi|bios): bia-grow grows BIAROOT over
 #                             the disk (dd) or moves the model in (flash); agent comes up on
 #                             the FMM keys; /poweroff
-#   tools/img-e2e.sh check    inspect the stick: GPT over the whole disk, ext4 filling BIAROOT,
+#   tests/e2e/img-e2e.sh check    inspect the stick: GPT over the whole disk, ext4 filling BIAROOT,
 #                             keys seeded, model in /home/bia/model (flash), BIOS GRUB (x86_64)
-#   tools/img-e2e.sh all      images + run + check
+#   tests/e2e/img-e2e.sh all      images + run + check
 #
 # Env: ARCH (arm64), MODE (flash), FIRMWARE (uefi; bios needs ARCH=x86_64), STICK_GB (8),
 #      MODEL (bartowski/SmolLM2-135M-Instruct-GGUF:SmolLM2-135M-Instruct-Q4_K_M.gguf),
@@ -22,7 +22,7 @@
 # Files in dist/ie-<arch>/.
 set -euo pipefail
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-cd "$(dirname "$SELF")/.."
+cd "$(dirname "$SELF")/../.."
 ROOT=$(pwd)
 ARCH=${ARCH:-arm64}
 MODE=${MODE:-flash}
@@ -36,7 +36,7 @@ mkdir -p "$IE"
 
 image_tool() {
   docker run --rm -i --privileged --platform "$PLATFORM" -e ARCH="$ARCH" -e MODE="$MODE" \
-    -v "$IE":/ie:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tools/img-e2e-img.py "$@"
+    -v "$IE":/ie:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tests/e2e/img-e2e-img.py "$@"
 }
 
 do_images() {
@@ -90,7 +90,7 @@ PY
 
 do_run() {
   ARCH=$ARCH LE=$IE MODE=$MODE FIRMWARE=$FIRMWARE MODEL=$MODEL MEM=${MEM:-4G} CPUS=${CPUS:-4} \
-    TIMEOUT=${TIMEOUT:-30} python3 "$ROOT/tools/img-e2e-drive.py"
+    TIMEOUT=${TIMEOUT:-30} python3 "$ROOT/tests/e2e/img-e2e-drive.py"
 }
 
 case ${1:-} in

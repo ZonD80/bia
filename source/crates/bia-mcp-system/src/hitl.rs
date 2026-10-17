@@ -61,73 +61,12 @@ fn console_urls() -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn with_status(body: String) -> String {
-    let p = files_dir().join("state").join("status.txt");
-    let st = fs::read_to_string(p).unwrap_or_default();
-    let st = st.trim();
-    if st.is_empty() {
-        body
-    } else {
-        format!("{body}\n\n{st}")
-    }
-}
-
 fn with_path(url: &str, path: &str) -> String {
     if let Some((base, q)) = url.split_once('?') {
         format!("{}{path}?{q}", base.trim_end_matches('/'))
     } else {
         format!("{}{path}", url.trim_end_matches('/'))
     }
-}
-
-pub fn web_console(_: &Ctx, _: Value) -> Result<String, String> {
-    let p = files_dir().join("state").join("web.json");
-    let raw = fs::read_to_string(&p).ok();
-    let v: Option<Value> = raw.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    let err = v
-        .as_ref()
-        .and_then(|x| x.get("error"))
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .trim();
-    let port = v
-        .as_ref()
-        .and_then(|x| x.get("port"))
-        .and_then(|x| x.as_u64())
-        .filter(|n| *n > 0 && *n <= 65535)
-        .map(|n| n as u16)
-        .unwrap_or(0);
-    let ca = v
-        .as_ref()
-        .and_then(|x| x.get("ca_sha256"))
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if port == 0 {
-        if !err.is_empty() {
-            return Err(format!("web console is not listening: {err}"));
-        }
-        return Err("web console has no address yet (no network, or not started)".into());
-    }
-    let urls = console_urls();
-    if urls.is_empty() {
-        return Err(format!(
-            "web console is on :{port} (mTLS). CA at /v1/pki/ca. No non-loopback IPv4 yet — wait for dhcp, then call web_console again."
-        ));
-    }
-    let mut lines = urls.clone();
-    lines.push("auth: mtls (client cert)".into());
-    lines.push(format!("CA (public): {}/v1/pki/ca", urls[0].trim_end_matches('/')));
-    if !ca.is_empty() {
-        lines.push(format!("ca_sha256: {ca}"));
-    }
-    lines.push(format!(
-        "discovery: {}/.well-known/bia.json",
-        urls[0].trim_end_matches('/')
-    ));
-    lines.push("issue a client cert with pki_issue when root asks; pickup URL is one-time".into());
-    Ok(with_status(lines.join("\n")))
 }
 
 fn files_root() -> Result<PathBuf, String> {
@@ -169,7 +108,7 @@ fn file_rel(raw: &str) -> Result<(String, String), String> {
 
 pub fn share(ctx: &Ctx, args: Value) -> Result<String, String> {
     let path = bia_mcp::arg_str(&args, "path")?;
-    let (rel, name) = file_rel(&path)?;
+    let (rel, name) = file_rel(path)?;
     let meta = fs::metadata(files_dir().join(&rel)).map_err(|e| format!("{rel}: {e}"))?;
     if !meta.is_file() {
         return Err(format!("{rel} is not a file"));
@@ -273,10 +212,7 @@ pub fn ask(ctx: &Ctx, args: Value) -> Result<String, String> {
         if result_path.is_file() {
             let raw = fs::read_to_string(&result_path).unwrap_or_default();
             let v: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
-            let status = v
-                .get("status")
-                .and_then(|x| x.as_str())
-                .unwrap_or("done");
+            let status = v.get("status").and_then(|x| x.as_str()).unwrap_or("done");
             let note = v
                 .get("note")
                 .and_then(|x| x.as_str())

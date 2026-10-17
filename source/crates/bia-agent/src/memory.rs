@@ -336,10 +336,8 @@ pub fn normalize_category(s: &str) -> String {
     for c in s.trim().to_ascii_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
             o.push(c);
-        } else if c == ' ' || c == '-' || c == '/' {
-            if !o.ends_with('_') && !o.is_empty() {
-                o.push('_');
-            }
+        } else if (c == ' ' || c == '-' || c == '/') && !o.ends_with('_') && !o.is_empty() {
+            o.push('_');
         }
     }
     let o = o.trim_matches('_').to_string();

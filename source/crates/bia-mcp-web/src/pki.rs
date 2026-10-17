@@ -2,13 +2,13 @@
 use bia_mcp::Ctx;
 use bia_pki::Pki;
 use serde_json::Value;
-use std::path::PathBuf;
 
-fn files_dir() -> PathBuf {
-    PathBuf::from(std::env::var("BIA_FILES").unwrap_or_else(|_| "/home/bia/files".into()))
-}
+use crate::files_dir;
 
 fn web_port() -> u16 {
+    if let Some(w) = crate::WEB.get() {
+        return w.port;
+    }
     let p = files_dir().join("state").join("web.json");
     let Ok(raw) = std::fs::read_to_string(p) else {
         return 443;
@@ -28,17 +28,15 @@ pub fn issue(ctx: &Ctx, args: Value) -> Result<String, String> {
     if identity.is_empty() {
         return Err("identity is required".into());
     }
-    let role = bia_mcp::arg_str_opt(&args, "role").unwrap_or_else(|| "user".into());
-    let trust = bia_mcp::arg_str_opt(&args, "trust").unwrap_or_else(|| {
-        if identity == "root" {
-            "root".into()
-        } else {
-            "normal".into()
-        }
+    let role = bia_mcp::arg_str_opt(&args, "role").unwrap_or("user");
+    let trust = bia_mcp::arg_str_opt(&args, "trust").unwrap_or(if identity == "root" {
+        "root"
+    } else {
+        "normal"
     });
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     let (token, meta) = pki
-        .issue_pickup(&identity, &role, &trust)
+        .issue_pickup(&identity, role, trust)
         .map_err(|e| format!("issue: {e:#}"))?;
     let port = web_port();
     let urls = crate::listen::pickup_urls(port, &token);
@@ -109,8 +107,19 @@ pub fn requests(_: &Ctx, _: Value) -> Result<String, String> {
     Ok(list
         .iter()
         .map(|r| {
-            let note = if r.note.is_empty() { String::new() } else { format!("  note (untrusted): \"{}\"", r.note) };
-            format!("{}  {}  identity={} role={} from {}{note}", r.short(), r.status.as_str(), r.identity, r.role, r.source)
+            let note = if r.note.is_empty() {
+                String::new()
+            } else {
+                format!("  note (untrusted): \"{}\"", r.note)
+            };
+            format!(
+                "{}  {}  identity={} role={} from {}{note}",
+                r.short(),
+                r.status.as_str(),
+                r.identity,
+                r.role,
+                r.source
+            )
         })
         .collect::<Vec<_>>()
         .join("\n"))
@@ -118,18 +127,32 @@ pub fn requests(_: &Ctx, _: Value) -> Result<String, String> {
 
 /// Approve or deny a request. The requester polls and collects the certificate itself.
 pub fn decide(ctx: &Ctx, args: Value, approve: bool) -> Result<String, String> {
-    let id = bia_mcp::arg_str(&args, "id")?.trim().to_string();
-    let reason = bia_mcp::arg_str_opt(&args, "reason").unwrap_or_default();
+    // the request notice says "request <id>", so accept that name too
+    let id = bia_mcp::arg_str_opt(&args, "id")
+        .or_else(|| bia_mcp::arg_str_opt(&args, "request"))
+        .ok_or("id is required (the request id from web_pki_requests or the notice)")?
+        .trim()
+        .to_string();
+    // deny: why; approve: root's message for the requester (it reads it when it polls)
+    let reason = bia_mcp::arg_str_opt(&args, "reason")
+        .or_else(|| bia_mcp::arg_str_opt(&args, "message"))
+        .unwrap_or_default();
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     let r = pki
-        .decide_request(&id, approve, "root@agent", &reason)
+        .decide_request(&id, approve, "root@agent", reason)
         .map_err(|e| format!("{e:#}"))?;
-    ctx.log(format!("certificate request {} for {}: {}", r.short(), r.identity, r.status.as_str()));
+    ctx.log(format!(
+        "certificate request {} for {}: {}",
+        r.short(),
+        r.identity,
+        r.status.as_str()
+    ));
     Ok(if approve {
         format!(
-            "approved request {} for {}. It downloads its certificate itself on its next check (it polls by request id); nothing to send.",
+            "approved request {} for {}. It downloads its certificate itself on its next check (it polls by request id){}",
             r.short(),
-            r.identity
+            r.identity,
+            if r.reason.is_empty() { "; nothing to send.".to_string() } else { format!(" and reads your message with it: \"{}\"", r.reason) }
         )
     } else {
         format!("denied request {} for {}.", r.short(), r.identity)

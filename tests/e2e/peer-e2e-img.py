@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Image side of tools/peer-e2e.sh. Runs in the bia-build container (root, loop devices).
+"""Image side of tests/e2e/peer-e2e.sh. Runs in the bia-build container (root, loop devices).
 
   prep <a|b>   FMM keys, hostname bia-<x>, eth1 static on the test link, and the current
-               agent + system MCP + overlay scripts from dist/ (root.img may be older)
+               agent + system and web MCPs + overlay scripts from dist/ (root.img may be older)
   check        a.img after the run: the request was approved and collected, bia-b talked
 """
-import importlib.util, json, os, shutil, sys
+import importlib.util, json, os, re, shutil, sys
 
-spec = importlib.util.spec_from_file_location("ut", "/work/tools/update-e2e-img.py")
+spec = importlib.util.spec_from_file_location("ut", "/work/tests/e2e/update-e2e-img.py")
 ut = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ut)
 ut.IMAGES.update({"a": "/ut/a.img", "b": "/ut/b.img"})
@@ -22,6 +22,11 @@ def prep(name):
         r = im.root
         ut.seed_fmm(im)
         ut.put(f"{r}/etc/hostname", f"bia-{name}\n")
+        # not a first start and no pending release notes: the agent boots to "Ready for commands"
+        ver = re.search(r'^version = "(.*)"', open("/work/Cargo.toml").read(), re.M).group(1)
+        for f, text in (("welcomed", f"bia {ver}\n"), ("version", f"{ver}\n")):
+            ut.put(f"{r}/home/bia/files/state/{f}", text)
+            os.chown(f"{r}/home/bia/files/state/{f}", 1000, 1000)
         ifs = f"{r}/etc/network/interfaces"
         s = open(ifs).read()
         if "iface eth1" not in s:
@@ -30,14 +35,17 @@ def prep(name):
         out = f"/work/dist/{ARCH}"
         if os.path.exists(f"{out}/bia-agent"):
             shutil.copy2(f"{out}/bia-agent", f"{r}/usr/local/sbin/bia-agent")
-        sysbin = f"{r}/home/bia/MCPs/system/bin/{FARCH}/bia-mcp-system"
-        if os.path.exists(f"{out}/bia-mcp-system") and os.path.isdir(os.path.dirname(sysbin)):
-            shutil.copy2(f"{out}/bia-mcp-system", sysbin)
-        shutil.copy2("/work/source/flash/MCPs/system/mcp.json", f"{r}/home/bia/MCPs/system/mcp.json")
+        # the system MCP and the web MCP (the HTTPS API this test talks to) from this build
+        for mcp in ("system", "web"):
+            bindir = f"{r}/home/bia/MCPs/{mcp}/bin/{FARCH}"
+            os.makedirs(bindir, exist_ok=True)
+            if os.path.exists(f"{out}/bia-mcp-{mcp}"):
+                shutil.copy2(f"{out}/bia-mcp-{mcp}", f"{bindir}/bia-mcp-{mcp}")
+            shutil.copy2(f"/work/source/flash/MCPs/{mcp}/mcp.json", f"{r}/home/bia/MCPs/{mcp}/mcp.json")
         ut.sh("cp", "-a", "/work/source/os/overlay/usr/local/share/bia/.", f"{r}/usr/local/share/bia/")
         for d in (f"{r}/home/bia/files/state/pki/requests",):
             shutil.rmtree(d, ignore_errors=True)
-        print(f"{name}: bia-{name}, eth1 {LINK_IP[name]}, agent + system MCP from dist")
+        print(f"{name}: bia-{name}, eth1 {LINK_IP[name]}, agent + system and web MCPs from dist")
 
 
 def check():
@@ -63,6 +71,7 @@ def check():
         if done:
             q = done[0]
             want(q.get("decided_by", "").startswith("root"), f"decided by {q.get('decided_by')!r}")
+            want(q.get("reason", "").startswith("MANGO-"), f"approved with root's message for bia-b {q.get('reason')!r}")
             want(q["decided"] - q["created"] >= 60, f"approval came {q['decided'] - q['created']}s after the request (requester had to wait)")
             meta = f"{pki}/issued/{q['serial']}.json"
             m = json.load(open(meta)) if os.path.exists(meta) else {}
@@ -118,7 +127,8 @@ def check():
                     if ut.sh("openssl", "pkey", "-in", path, "-pubout", capture=True, check=False) == newpub:
                         found.append(path[len(b.root):])
             want(bool(found), f"bia-b holds the key for its renewed cert {found}")
-        roots = sorted([m for m in issued if m["identity"] == "root"], key=lambda m: m["created"])
+        # renewal can land in the same second as the first cert: the revoked one is the older
+        roots = sorted([m for m in issued if m["identity"] == "root"], key=lambda m: (m["created"], not m["revoked"]))
         want(len(roots) == 2 and roots[0]["revoked"] and not roots[1]["revoked"],
              f"root renewed from the browser code: {[(m['serial'], 'revoked' if m['revoked'] else 'active') for m in roots]}")
         stray = []
@@ -138,6 +148,13 @@ def check():
                 except OSError:
                     pass
         want("bia-b" in text or len(text) > 0, "the chat has messages")
+        main = f"{chat}/main.json"
+        msgs = json.loads(open(main).read(), strict=False) if os.path.exists(main) else []
+        if isinstance(msgs, dict):
+            msgs = msgs.get("messages", msgs.get("msgs", []))
+        froms = [m.get("from") for m in msgs if isinstance(m, dict)]
+        want("bia-b" in froms and "bia" in froms, f"bia-b's main chat has bia-b's message and bia's answer (from: {sorted(set(froms))})")
+        want(not os.path.isdir(f"{a.root}/home/bia/files/state/web/bia"), "nothing written under web/bia")
     if errs:
         sys.exit(f"CHECK peer: {len(errs)} failure(s)")
     print("CHECK peer: all good")

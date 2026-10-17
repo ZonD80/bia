@@ -186,7 +186,7 @@ impl Llm {
             .complete(&ids, max_new, &self.sampling, on_prefill, on_piece)?;
         self.cached = prompt.to_vec();
         self.cached
-            .extend(std::iter::repeat(LlamaToken::new(0)).take(c.generated));
+            .extend(std::iter::repeat_n(LlamaToken::new(0), c.generated));
         let stop = if c.interrupted {
             Stop::Interrupted
         } else if c.truncated {

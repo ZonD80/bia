@@ -64,7 +64,7 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 
 ## For AI agents
 
-A running bia exposes a web console with a documented API at /.well-known/bia.json and /openapi.yaml
+A running bia exposes a web app (chats, an MCP bus like Telegram) with a documented API at /.well-known/bia.json and /openapi.yaml
 (client-certificate authentication; keys are issued by the bia's owner).
 `
 }

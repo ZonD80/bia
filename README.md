@@ -40,8 +40,8 @@ bia is the successor of two earlier projects:
 
 A normal OS boots into a shell or a desktop and you start programs. bia boots
 into a single long-running conversation. The agent (`bia-agent`) is a systemd
-service on tty1 (and every serial console, and an HTTPS web console). Every
-input — your typing, a Telegram message, a calendar reminder, a finished
+service on tty1 (and every serial console). Every
+input — your typing, a Telegram or web chat message, a calendar reminder, a finished
 background job, a boot notice — reaches the model as one line:
 
 ```
@@ -67,10 +67,11 @@ where it left off.
 ├── source/
 │   ├── crates/
 │   │   ├── bia-agent/         the agent: console UI, REPL, tool registry, llama-server
-│   │   │                      supervisor, FMM client, web console, memory, schedules
+│   │   │                      supervisor, FMM client, memory, schedules
 │   │   ├── bia-mcp/           tiny MCP-over-stdio server library used by every MCP
 │   │   ├── bia-pki/           agent-owned CA, server/client certs, CSR requests, PKCS#12 pickup
-│   │   ├── bia-mcp-system/    FMM config, web console link, human-in-the-loop, PKI
+│   │   ├── bia-mcp-system/    FMM config, human-in-the-loop, file links
+│   │   ├── bia-mcp-web/       the web bus: HTTPS + mTLS app (chats, calls, files, shell, display), PKI
 │   │   ├── bia-mcp-secrets/   passwords, TOTP/HOTP, WebAuthn passkeys, 1Password import
 │   │   ├── bia-mcp-chrome/    Google Chrome lifecycle, passkey extension, devtools MCP
 │   │   ├── bia-mcp-screen/    screenshot + mouse/keyboard on display :0
@@ -206,7 +207,7 @@ as `<name>_<tool>`. Rust MCPs can use the `bia-mcp` crate.
 ## Status
 
 Working: x86_64 and arm64 builds, UEFI + Secure Boot (shim), legacy BIOS on
-x86_64, local llama.cpp with GPU backends, FMM, web console with mTLS,
+x86_64, local llama.cpp with GPU backends, FMM, web app (an MCP bus) with mTLS,
 Telegram and WhatsApp (text + voice), Chrome + passkeys, screen control,
 secrets, memory, schedules, backup / fly / OS update through the rescue image
 (e2e-tested on arm64).

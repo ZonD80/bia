@@ -16,19 +16,34 @@
 #   3. bia-update boot (bia-update.service) sees pending and unfolds the agent,
 #      then reboots into the updated system.
 #
+#   The source is, in this order: --from=/dev/…, the other bia root attached
+#      (a flash stick is preferred), else the newest GitHub release over the
+#      internet (--from=internet forces it). Internet: bia-os.json and the image
+#      are downloaded and checked (sha256), the image's root tree and boot files
+#      are unpacked into /bia-update/net/ on this root, and the rescue image
+#      copies from that directory instead of another drive. "Newer" always means
+#      a higher version (/etc/bia-version, the manifest's version); the build
+#      timestamp in etc/bia-release is not compared.
+#
 #   bia-update rescue [/dev/…]  (carry_rescue) from the flash: same, but the
 #      destination is the internal disk: its agent is folded into the disk's
 #      /bia-update/, the marker goes on this (flash) ESP, and the rescue image
 #      boots the disk afterwards.
 #
-#   bia-update start [--force] [--from=/dev/…]
+#   bia-update start [--force] [--from=/dev/…|--from=internet]
 #   bia-update rescue [/dev/…]
 #   bia-update boot
 #   bia-update status
 set -euo pipefail
 
 RELEASE=etc/bia-release
+VERSION_FILE=etc/bia-version
 UPDATE=/bia-update
+NET=$UPDATE/net
+# GitHub releases. BIA_RELEASE_URL or /etc/bia-release-url: another directory with
+# bia-os.json and the images (tests, mirrors).
+RELEASE_URL=${BIA_RELEASE_URL:-$(cat /etc/bia-release-url 2>/dev/null || true)}
+RELEASE_URL=${RELEASE_URL:-https://github.com/zond80/bia/releases/latest/download}
 MNT=/run/bia-update-src
 DEST=/run/bia-update-dst
 ESP_MNT=/run/bia-update-esp
@@ -127,6 +142,23 @@ rel_of() {
   tr -cd '0-9' < "$1/$RELEASE"
 }
 
+# The bia version of a root (1.1.1); "0" for roots built before versions were stamped.
+ver_of() {
+  local v=
+  [ -f "$1/$VERSION_FILE" ] && v=$(tr -cd '0-9.' < "$1/$VERSION_FILE")
+  printf '%s\n' "${v:-0}"
+}
+
+# 1.10.2 → 000010001000002, so versions compare as numbers.
+ver_key() {
+  local IFS=. a b c
+  read -r a b c <<< "$1"
+  printf '%05d%05d%05d\n' "$((10#${a:-0}))" "$((10#${b:-0}))" "$((10#${c:-0}))"
+}
+
+# version_newer A B: A is a higher version than B.
+version_newer() { [ "$(ver_key "$1")" \> "$(ver_key "$2")" ]; }
+
 label_of() { blkid -c /dev/null -o value -s LABEL "$1" 2>/dev/null || true; }
 uuid_of() { blkid -c /dev/null -o value -s UUID "$1" 2>/dev/null || true; }
 
@@ -214,7 +246,7 @@ run_logged() {
   fi
 }
 
-# Every bia root that is not this boot: "<dev> <label> <release>" lines.
+# Every bia root that is not this boot: "<dev> <label> <version>" lines.
 other_roots() {
   local root dev label r
   root=$(live_root)
@@ -224,9 +256,10 @@ other_roots() {
       [ -n "$root" ] && same_dev "$dev" "$root" && continue
       mount_ro "$dev" "$MNT" || continue
       r=$(rel_of "$MNT")
+      v=$(ver_of "$MNT")
       umount "$MNT" || true
       [ -n "$r" ] || continue
-      printf '%s %s %s\n' "$dev" "$label" "$r"
+      printf '%s %s %s\n' "$dev" "$label" "$v"
     done < <(blkid -c /dev/null -o device -t LABEL="$label" 2>/dev/null || true)
   done
 }
@@ -287,6 +320,8 @@ write_marker() {
   args=
   for u in "bia.src=$src" "bia.dst=$dst" "bia.srcesp=$srcesp" "bia.dstesp=$dstesp" "bia.markesp=$markesp"; do
     local k=${u%%=*} dev=${u#*=} id
+    # an unpacked internet release: a directory on the destination root
+    case $dev in DIR=*) args="$args $k=$dev"; continue ;; esac
     id=$(uuid_of "$dev")
     [ -n "$id" ] || refuse "rescue marker" "$dev has no filesystem UUID"
     args="$args $k=UUID=$id"
@@ -354,16 +389,165 @@ reboot_into_rescue() {
 
 describe() {
   local root=$1 dev=$2
-  say "bia-update: $(label_of "$dev") ($dev) release $(rel_of "$root") arch $(arch_of "$root" || echo unreadable)"
+  say "bia-update: $(label_of "$dev") ($dev) version $(ver_of "$root") (built $(rel_of "$root")) arch $(arch_of "$root" || echo unreadable)"
 }
 
-# ---- start: update this system from the other bia root -------------------------
+# ---- internet: the newest GitHub release, unpacked into /bia-update/net -----------
+# Architecture key of bia-os.json for this machine.
+release_arch() {
+  case $(uname -m) in
+    aarch64|arm64) echo arm64 ;;
+    x86_64|amd64) echo x86_64 ;;
+    *) uname -m ;;
+  esac
+}
+
+# Field of this architecture's image (or the top level) in bia-os.json.
+manifest_get() {
+  python3 -I -c '
+import json, sys
+m = json.load(open(sys.argv[1]))
+k = sys.argv[3]
+v = m.get(k) if k in ("version", "tag") else m["os"][sys.argv[2]]["image"][k]
+print(v)' "$NET/bia-os.json" "$(release_arch)" "$1"
+}
+
+# Download with resume and a progress line every 10 s. Args: url file size
+fetch() {
+  local url=$1 out=$2 size=$3 pid have last=0
+  case $url in
+    file://*) cp -f "${url#file://}" "$out.part" || return 1 ;;
+    *)
+      curl -fsSL --retry 5 --retry-delay 3 -C - -o "$out.part" "$url" &
+      pid=$!
+      while kill -0 "$pid" 2>/dev/null; do
+        sleep 1
+        last=$((last + 1))
+        if [ $((last % 10)) -eq 0 ] && [ "$size" -gt 0 ]; then
+          have=$(stat -c %s "$out.part" 2>/dev/null || echo 0)
+          say "bia-update: downloading… $((have * 100 / size))% ($((have >> 20)) of $((size >> 20)) MiB)"
+        fi
+      done
+      wait "$pid" || return 1
+      ;;
+  esac
+  mv -f "$out.part" "$out"
+}
+
+# "<offset> <size>" in bytes for each GPT partition of an image file.
+gpt_parts() {
+  python3 -I -c '
+import struct, sys
+f = open(sys.argv[1], "rb")
+f.seek(512)
+h = f.read(92)
+if h[:8] != b"EFI PART":
+    sys.exit("no GPT")
+lba, n, sz = struct.unpack_from("<QII", h, 72)
+f.seek(lba * 512)
+for i in range(n):
+    e = f.read(sz)
+    first, last = struct.unpack_from("<QQ", e, 32)
+    if e[:16] != bytes(16) and last >= first:
+        print(first * 512, (last - first + 1) * 512)' "$1"
+}
+
+# Unmount and detach the downloaded image; drop it and partial downloads.
+net_cleanup() {
+  local d l
+  for d in /bia-update/net/mnt-esp /bia-update/net/mnt-root; do
+    findmnt -n "$d" >/dev/null 2>&1 && umount "$d"
+  done
+  for l in ${NET_LOOPS:-}; do losetup -d "$l" 2>/dev/null; done
+  NET_LOOPS=
+  rm -rf /bia-update/net/mnt-esp /bia-update/net/mnt-root /bia-update/net/os.img
+}
+
+# A failed stage leaves nothing behind but a partial download (it resumes).
+net_fail() {
+  net_cleanup
+  rm -rf /bia-update/net/root /bia-update/net/esp
+}
+
+# Download, check and unpack the newest release. Args: this-version force
+# The last stdout line is "<version> <tag>" on success.
+net_stage() {
+  local here=$1 force=$2 arch ver tag file size sum raw_size raw_sum need free p c esp= root=
+  for c in curl xz losetup sha256sum python3 rsync; do
+    command -v "$c" >/dev/null 2>&1 || refuse "internet" "$c is missing; update from a flash stick instead"
+  done
+  arch=$(release_arch)
+  mkdir -p "$NET"
+  chmod 700 "$UPDATE"
+  ip route show default 2>/dev/null | grep -q . || wait_route
+  say "bia-update: checking $RELEASE_URL for the newest release"
+  fetch "$RELEASE_URL/bia-os.json" "$NET/bia-os.json" 0 \
+    || refuse "internet" "cannot download bia-os.json from $RELEASE_URL (no internet?)"
+  ver=$(manifest_get version) || refuse "internet" "bia-os.json is not readable"
+  tag=$(manifest_get tag)
+  file=$(manifest_get file 2>/dev/null) || refuse "internet" "release $ver has no $arch image"
+  size=$(manifest_get size)
+  sum=$(manifest_get sha256)
+  raw_size=$(manifest_get raw_size)
+  raw_sum=$(manifest_get raw_sha256)
+  say "bia-update: newest release $ver ($tag): $file, $((size >> 20)) MiB"
+  if ! version_newer "$ver" "$here" && [ "$force" != 1 ]; then
+    rm -rf /bia-update/net
+    refuse "source" "this system already runs $here; the newest release is $ver. Pass force=true to install it anyway."
+  fi
+  # the unpacked image plus its root tree (plus the download) is the peak
+  need=$(( (2 * raw_size + size) / 1024 + 512 * 1024 ))
+  free=$(df -Pk "$NET" | awk 'NR == 2 { print $4 }')
+  [ "${free:-0}" -gt "$need" ] \
+    || refuse "disk space" "the internet update needs $((need >> 20)) GiB free for $UPDATE, there is $((${free:-0} >> 20)) GiB"
+  trap net_fail EXIT
+  fetch "$RELEASE_URL/$file" "$NET/$file" "$size" || refuse "download" "downloading $file failed (it resumes next time)"
+  if [ "$(sha256sum "$NET/$file" | cut -d' ' -f1)" != "$sum" ]; then
+    rm -f "/bia-update/net/$file"
+    refuse "download" "$file does not match its sha256; it is downloaded again next time"
+  fi
+  ok "download $file"
+  say "bia-update: unpacking the image"
+  xz -dc "$NET/$file" | dd of="$NET/os.img" bs=4M conv=sparse status=none || refuse "unpack" "xz failed"
+  rm -f "/bia-update/net/$file"
+  [ "$(sha256sum "$NET/os.img" | cut -d' ' -f1)" = "$raw_sum" ] || refuse "unpack" "the unpacked image does not match its sha256"
+  # each partition on its own read-only loop device (no partition scan, no udev needed)
+  NET_LOOPS=
+  while read -r off len; do
+    p=$(losetup -r --show -f -o "$off" --sizelimit "$len" "$NET/os.img") || refuse "unpack" "losetup failed"
+    NET_LOOPS="$NET_LOOPS $p"
+    case $(blkid -c /dev/null -p -o value -s TYPE "$p" 2>/dev/null) in
+      vfat) [ -z "$esp" ] && esp=$p ;;
+      ext4) [ "$(blkid -c /dev/null -p -o value -s LABEL "$p" 2>/dev/null)" = BIAROOT ] && root=$p ;;
+    esac
+  done < <(gpt_parts "$NET/os.img" || true)
+  [ -n "$root" ] && [ -n "$esp" ] || refuse "unpack" "the image has no BIAROOT or ESP partition"
+  mkdir -p "$NET/mnt-root" "$NET/mnt-esp" "$NET/root" "$NET/esp"
+  mount -o ro,noload "$root" "$NET/mnt-root" || refuse "unpack" "cannot mount the image's root"
+  mount -o ro "$esp" "$NET/mnt-esp" || refuse "unpack" "cannot mount the image's ESP"
+  [ "$(arch_of "$NET/mnt-root" || true)" = "$(arch_of / || true)" ] \
+    || refuse "architecture" "the $arch image is not this machine's architecture"
+  say "bia-update: copying the new system into $NET/root"
+  rsync -aHAX --numeric-ids --delete "$NET/mnt-root/" "$NET/root/" \
+    || refuse "unpack" "copying the image's root failed (disk full?)"
+  rsync -rt --delete "$NET/mnt-esp/" "$NET/esp/" || refuse "unpack" "copying the image's boot files failed"
+  [ "$(ver_of "$NET/root")" = "$ver" ] || say "bia-update: note: the image says version $(ver_of "$NET/root"), the manifest $ver"
+  net_cleanup
+  rm -f /bia-update/net/*.img.xz /bia-update/net/*.part
+  trap - EXIT
+  sync
+  ok "unpacked release $ver"
+  printf '%s %s\n' "$ver" "$tag"
+}
+
+# ---- start: update this system from the other bia root (or the internet) --------
 start_main() {
-  local force=0 from= bin root here src src_rel here_arch src_arch line best best_rel
-  local esp_dev esp_mnt srcesp
+  local force=0 from= bin root here src src_ver here_arch src_arch line best best_ver
+  local esp_dev esp_mnt srcesp net=0 newest staged
   for a in "$@"; do
     case $a in
       --force) force=1 ;;
+      --from=internet|--from=net|--net) net=1 ;;
       --from=*) from=${a#--from=} ;;
       *) refuse "arguments" "unknown argument $a" ;;
     esac
@@ -372,36 +556,73 @@ start_main() {
   [ -x "$bin" ] || refuse "update" "no carry binary at $bin"
   [ ! -f "$UPDATE/pending" ] || refuse "update" "an unfold is pending; reboot to finish it first"
   root=$(live_root)
-  here=$(rel_of /)
-  [ -n "$here" ] || refuse "update" "this system has no $RELEASE"
-  say "bia-update: this system is $(label_of "$root") ($root) release $here"
+  [ -n "$(rel_of /)" ] || refuse "update" "this system has no $RELEASE"
+  here=$(ver_of /)
+  say "bia-update: this system is $(label_of "$root") ($root) version $here"
 
   if [ -n "$from" ]; then
     case $from in /dev/*) ;; *) from=/dev/$from ;; esac
     [ -b "$from" ] || refuse "source" "$from is not a block device"
     same_dev "$from" "$root" && refuse "source" "$from is this system"
     mount_ro "$from" "$MNT" || refuse "source" "cannot mount $from"
-    src_rel=$(rel_of "$MNT")
+    if [ -z "$(rel_of "$MNT")" ]; then
+      umount "$MNT" || true
+      refuse "source" "$from is not a bia root (no $RELEASE)"
+    fi
+    src_ver=$(ver_of "$MNT")
     umount "$MNT" || true
-    [ -n "$src_rel" ] || refuse "source" "$from is not a bia root (no $RELEASE)"
     src=$from
-  else
+  elif [ "$net" != 1 ]; then
+    # an attached bia drive (the flash stick) is preferred over the internet
     best=
-    best_rel=0
+    best_ver=0
     while read -r line; do
       set -- $line
-      say "bia-update: found $2 ($1) release $3"
-      if [ "$3" -gt "$best_rel" ]; then
+      say "bia-update: found $2 ($1) version $3"
+      if [ -z "$best" ] || version_newer "$3" "$best_ver"; then
         best=$1
-        best_rel=$3
+        best_ver=$3
       fi
     done < <(other_roots)
-    [ -n "$best" ] || refuse "source" "no other bia system is attached (insert the flash stick, or the internal disk is missing)"
-    src=$best
-    src_rel=$best_rel
+    if [ -n "$best" ]; then
+      src=$best
+      src_ver=$best_ver
+    else
+      say "bia-update: no other bia system is attached; updating over the internet"
+      net=1
+    fi
   fi
-  if [ "$src_rel" -le "$here" ] && [ "$force" != 1 ]; then
-    refuse "source" "$(label_of "$src") ($src) has release $src_rel, not newer than this system's $here. Pass force=true to install it anyway."
+
+  if [ "$net" = 1 ]; then
+    # net_stage runs in a subshell: its refusal text is what the caller must see
+    if ! staged=$(net_stage "$here" "$force"); then
+      printf '%s\n' "$staged"
+      exit 1
+    fi
+    newest=$(printf '%s\n' "$staged" | tail -n 1)
+    [ -n "$newest" ] && [ -d "$NET/root" ] || refuse "internet" "the release could not be prepared"
+    src_ver=${newest%% *}
+    read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
+    say "bia-update: folding this machine into $UPDATE"
+    rm -f /bia-update/fold.tar.gz /bia-update/rescue-failed /bia-update/rescue.log
+    if ! run_logged "$bin" --fold-to "$UPDATE/fold.tar.gz" >&2; then
+      rm -rf /bia-update/net
+      refuse "folding this machine" "the fold failed; nothing was changed"
+    fi
+    ok "folding this machine"
+    stash_mcps /home/bia/MCPs "$NET/root/home/bia/MCPs" "$UPDATE/local-mcps"
+    printf '%s\n' "$APPLY_LEAD" > "$UPDATE/lead"
+    printf 'from the internet: release %s\n' "$newest" > "$UPDATE/need-apply"
+    sync
+    write_marker "$esp_mnt" "DIR=$NET/root" "$root" "DIR=$NET/esp" "$esp_dev" "$esp_dev"
+    boot_next_current
+    printf 'staged: version %s (downloaded) will be copied onto this system (version %s) by the rescue image, then the agent is unfolded. Rebooting now.\n' \
+      "$src_ver" "$here"
+    reboot_into_rescue
+  fi
+
+  if ! version_newer "$src_ver" "$here" && [ "$force" != 1 ]; then
+    refuse "source" "$(label_of "$src") ($src) has version $src_ver, not newer than this system's $here. Pass force=true to install it anyway."
   fi
 
   mount_ro "$src" "$MNT" || refuse "source" "cannot mount $src"
@@ -419,14 +640,15 @@ start_main() {
   say "bia-update: folding this machine into $UPDATE"
   mkdir -p "$UPDATE"
   chmod 700 "$UPDATE"
-  rm -f "$UPDATE/fold.tar.gz" "$UPDATE/rescue-failed" "$UPDATE/rescue.log"
+  rm -rf /bia-update/net
+  rm -f /bia-update/fold.tar.gz /bia-update/rescue-failed /bia-update/rescue.log
   if ! run_logged "$bin" --fold-to "$UPDATE/fold.tar.gz" >&2; then
     refuse "folding this machine" "the fold failed; nothing was changed"
   fi
   ok "folding this machine"
   stash_mcps /home/bia/MCPs "$MNT/home/bia/MCPs" "$UPDATE/local-mcps"
   printf '%s\n' "$APPLY_LEAD" > "$UPDATE/lead"
-  printf 'from %s %s release %s\n' "$(label_of "$src")" "$src" "$src_rel" > "$UPDATE/need-apply"
+  printf 'from %s %s version %s\n' "$(label_of "$src")" "$src" "$src_ver" > "$UPDATE/need-apply"
   umount "$MNT" || true
   trap - EXIT
   sync
@@ -434,8 +656,8 @@ start_main() {
   write_marker "$esp_mnt" "$src" "$root" "$srcesp" "$esp_dev" "$esp_dev"
   mark_other_esp_for_bios "$srcesp" "$src" "$root" "$srcesp" "$esp_dev"
   boot_next_current
-  printf 'staged: %s release %s will be copied onto this system (release %s) by the rescue image, then the agent is unfolded. Rebooting now.\n' \
-    "$(label_of "$src")" "$src_rel" "$here"
+  printf 'staged: %s version %s will be copied onto this system (version %s) by the rescue image, then the agent is unfolded. Rebooting now.\n' \
+    "$(label_of "$src")" "$src_ver" "$here"
   reboot_into_rescue
 }
 
@@ -585,20 +807,23 @@ boot_main() {
 
 status_main() {
   local line
-  say "bia-update: this system $(label_of "$(live_root)") ($(live_root)) release $(rel_of /)"
+  say "bia-update: this system $(label_of "$(live_root)") ($(live_root)) version $(ver_of /)"
   for f in need-apply copying pending rescue-failed; do
     [ -f "$UPDATE/$f" ] && say "bia-update: $UPDATE/$f: $(head -n 1 "$UPDATE/$f")"
   done
   while read -r line; do
     set -- $line
-    say "bia-update: other $2 ($1) release $3"
+    say "bia-update: other $2 ($1) version $3"
   done < <(other_roots)
 }
+
+# tests source this file for its functions
+[ "${BIA_UPDATE_LIB:-}" = 1 ] && return 0
 
 case ${1:-} in
   start|--start|update) shift; start_main "$@" ;;
   rescue|--rescue) shift; rescue_main "${1:-}" ;;
   boot|"") boot_main ;;
   status) status_main ;;
-  *) echo "usage: bia-update start [--force] [--from=/dev/…] | rescue [/dev/…] | boot | status" >&2; exit 2 ;;
+  *) echo "usage: bia-update start [--force] [--from=/dev/…|--from=internet] | rescue [/dev/…] | boot | status" >&2; exit 2 ;;
 esac

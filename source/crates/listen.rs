@@ -1,4 +1,4 @@
-//! Who owns a listening TCP/UDP port. Shared by the agent (bind errors) and system MCP (web_console).
+//! Who owns a listening TCP/UDP port. Shared by the agent (bind errors) and the web MCP.
 //! Compiled into two binaries with different call sites; unused items in one crate are used in the other.
 #![allow(dead_code)]
 use serde_json::Value;
@@ -325,20 +325,24 @@ pub fn http_origins(port: u16) -> Vec<String> {
 /// HTTPS origins for the web console (no secrets in the URL).
 pub fn https_origins(port: u16) -> Vec<String> {
     let ips = ipv4_addrs();
+    let mut out = vec![];
+    // QEMU user networking (10.0.2.x): the host reaches us through its forward on 127.0.0.1
     if ips.iter().any(|(_, ip)| ip.starts_with("10.0.2.")) {
         let p = if port == 443 { 8443 } else { port };
-        return vec![format!("https://127.0.0.1:{p}")];
+        out.push(format!("https://127.0.0.1:{p}"));
     }
-    ips.into_iter()
-        .filter(|(_, ip)| !ip.starts_with("169.254."))
-        .map(|(_, ip)| {
-            if port == 443 {
-                format!("https://{ip}")
-            } else {
-                format!("https://{ip}:{port}")
-            }
-        })
-        .collect()
+    out.extend(
+        ips.into_iter()
+            .filter(|(_, ip)| !ip.starts_with("169.254.") && !ip.starts_with("10.0.2."))
+            .map(|(_, ip)| {
+                if port == 443 {
+                    format!("https://{ip}")
+                } else {
+                    format!("https://{ip}:{port}")
+                }
+            }),
+    );
+    out
 }
 
 /// Public CA download URLs (no auth).

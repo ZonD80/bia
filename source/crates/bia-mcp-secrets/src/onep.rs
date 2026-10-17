@@ -348,7 +348,10 @@ mod tests {
         assert!(ents.iter().any(|e| e.kind == "passkey" && e.rp_id.as_deref() == Some("google.com")), "{ents:?}");
     }
 
+    /// A real 1Password export (personal data, never in git):
+    /// cargo test -p bia-mcp-secrets -- --ignored sample_file_gmail
     #[test]
+    #[ignore = "needs source/1password_sample.json, a real export that is not in git"]
     fn sample_file_gmail() {
         let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../1password_sample.json");
         let text = std::fs::read_to_string(&p).expect("1password_sample.json");

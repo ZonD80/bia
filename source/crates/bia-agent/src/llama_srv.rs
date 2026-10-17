@@ -474,9 +474,8 @@ impl Server {
                 }
             }
             if ev.get("stop").and_then(|s| s.as_bool()).unwrap_or(false) {
-                match ev.get("stop_type").and_then(|s| s.as_str()).unwrap_or("") {
-                    "eos" => eos = true,
-                    _ => {}
+                if ev.get("stop_type").and_then(|s| s.as_str()).unwrap_or("") == "eos" {
+                    eos = true
                 }
                 if let Some(ms) = ev.pointer("/timings/prompt_ms").and_then(|n| n.as_f64()) {
                     prefill_secs = ms / 1000.0;

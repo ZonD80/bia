@@ -1,4 +1,4 @@
-//! Live voice calls in the web console, over a WebSocket (`/v1/call?chat=<id>`).
+//! Live voice calls in the web app, over a WebSocket (`/v1/call?chat=<id>`).
 //!
 //! Browser → agent: binary frames of 16 kHz mono s16le (20 ms each); text JSON
 //! `{t:"played", gen}` (an utterance finished playing), `{t:"mute", on}`, `{t:"hangup"}`.
@@ -7,7 +7,7 @@
 //!
 //! Speech goes through bia-speech (VAD, language per phrase, auto-learn) and reaches the
 //! model as `[speech <lang>] …` on the chat's channel. `say` on that channel speaks
-//! into the call (`speak`). bia can ring an open web console (`ring`); after the call a
+//! into the call (`speak`). bia can ring an open web app (`ring`); after the call a
 //! summary with the transcript is posted to the chat.
 
 use serde_json::{json, Value};
@@ -44,7 +44,7 @@ struct Call {
 impl Call {
     fn send_json(&self, v: Value) {
         if let Ok(mut o) = self.out.lock() {
-            let _ = crate::web::ws_send(&mut **o, 1, v.to_string().as_bytes());
+            let _ = crate::server::ws_send(&mut **o, 1, v.to_string().as_bytes());
         }
     }
 
@@ -56,17 +56,17 @@ impl Call {
             pkt.extend_from_slice(&s.to_le_bytes());
         }
         match self.out.lock() {
-            Ok(mut o) => crate::web::ws_send(&mut **o, 2, &pkt).is_ok(),
+            Ok(mut o) => crate::server::ws_send(&mut **o, 2, &pkt).is_ok(),
             Err(_) => false,
         }
     }
 
     fn channel(&self) -> String {
-        crate::webchat::channel_of(&self.chat)
+        crate::chat::channel_of(&self.chat)
     }
 
     fn system(&self, text: &str) {
-        crate::webchat::agent_notice(&self.identity, &self.chat, text);
+        crate::chat::agent_notice(&self.identity, &self.chat, text);
     }
 
     /// Stop what bia is saying (new utterance, interruption, hangup).
@@ -101,7 +101,7 @@ fn rings() -> &'static Mutex<HashMap<Key, Ring>> {
 }
 
 fn key(identity: &str, channel: &str) -> Option<Key> {
-    crate::webchat::chat_of(channel).map(|c| (identity.to_string(), c.to_string()))
+    crate::chat::chat_of(channel).map(|c| (identity.to_string(), c.to_string()))
 }
 
 fn find(identity: &str, channel: &str) -> Option<Arc<Call>> {
@@ -138,7 +138,7 @@ pub fn serve(
         .and_then(|mut r| r.remove(&k))
         .is_some_and(|r| r.id == ring_id || ring_id.is_empty());
     if answered {
-        crate::webchat::emit_event(identity, json!({"t": "ring_end", "chat": chat}));
+        crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": chat}));
     }
     let call = Arc::new(Call {
         identity: identity.to_string(),
@@ -171,7 +171,7 @@ pub fn serve(
         }
     };
     call.send_json(json!({"t": "ready"}));
-    crate::webchat::emit_event(identity, json!({"t": "call", "chat": chat, "on": true}));
+    crate::chat::emit_event(identity, json!({"t": "call", "chat": chat, "on": true}));
     call.system(if answered {
         "[call started] (they answered your call)"
     } else {
@@ -236,7 +236,7 @@ pub fn serve(
             }
             Ok((9, payload)) => {
                 if let Ok(mut o) = call.out.lock() {
-                    let _ = crate::web::ws_send(&mut **o, 10, &payload);
+                    let _ = crate::server::ws_send(&mut **o, 10, &payload);
                 }
             }
             Ok((8, _)) | Err(_) => break,
@@ -263,7 +263,7 @@ fn transcribe(call: Arc<Call>, utt: bia_speech::Utterance) {
                     if let Ok(mut l) = call.lines.lock() {
                         l.push((call.identity.clone(), words));
                     }
-                    crate::webchat::agent_speech(&call.identity, &call.chat, &text);
+                    crate::chat::agent_speech(&call.identity, &call.chat, &text);
                 }
                 if let Some(n) = heard.notice {
                     call.system(&n);
@@ -340,7 +340,7 @@ fn hang_up(call: &Call, reason: &str) {
 pub fn cancel_ring(identity: &str, channel: &str) -> Result<String, String> {
     let k = key(identity, channel).ok_or_else(|| format!("{channel} is not a web chat"))?;
     if rings().lock().ok().and_then(|mut r| r.remove(&k)).is_some() {
-        crate::webchat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
+        crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
         return Ok(format!(
             "call to {channel} cancelled before it was answered"
         ));
@@ -355,7 +355,7 @@ pub fn cancel_ring(identity: &str, channel: &str) -> Result<String, String> {
 pub fn hangup(identity: &str, channel: &str) -> Result<String, String> {
     if let Some(k) = key(identity, channel) {
         if rings().lock().ok().and_then(|mut r| r.remove(&k)).is_some() {
-            crate::webchat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
+            crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
             return Ok("stopped ringing".into());
         }
     }
@@ -395,7 +395,7 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
         return;
     }
     let dur = fmt_dur(call.started.elapsed());
-    crate::webchat::emit_event(
+    crate::chat::emit_event(
         &call.identity,
         json!({"t": "call", "chat": call.chat, "on": false}),
     );
@@ -415,22 +415,22 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
             summary.push_str(&format!("\n**{who}:** {text}"));
         }
     }
-    let _ = crate::webchat::post_bia(&call.identity, &call.chat, &summary);
+    let _ = crate::chat::post_bia(&call.identity, &call.chat, &summary);
 }
 
-/// bia calls an open web console (an incoming-call screen with ringing).
+/// bia calls an open web app (an incoming-call screen with ringing).
 pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
     let k = key(identity, channel).ok_or_else(|| format!("{channel} is not a web chat"))?;
-    if !crate::webchat::has_client(identity) {
+    if !crate::chat::has_client(identity) {
         return Err(format!(
-            "no web console is open for {identity}; send a message instead"
+            "no web app is open for {identity}; send a message instead"
         ));
     }
     if find(identity, channel).is_some() {
         return Err("already in a call on this channel".into());
     }
-    crate::webchat::ensure_chat(identity, channel)?;
-    let id = crate::console::mint_msg_id();
+    crate::chat::ensure_chat(identity, channel)?;
+    let id = crate::bus::mint_msg_id();
     if let Ok(mut r) = rings().lock() {
         r.insert(
             k.clone(),
@@ -440,7 +440,7 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
             },
         );
     }
-    crate::webchat::emit_event(identity, json!({"t": "ring", "chat": k.1, "id": id}));
+    crate::chat::emit_event(identity, json!({"t": "ring", "chat": k.1, "id": id}));
     let (ident, chat, rid) = (identity.to_string(), k.1.clone(), id);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(RING_SECS));
@@ -456,8 +456,8 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
             })
             .is_some();
         if expired {
-            crate::webchat::emit_event(&ident, json!({"t": "ring_end", "chat": chat}));
-            crate::webchat::agent_notice(&ident, &chat, "[no answer]");
+            crate::chat::emit_event(&ident, json!({"t": "ring_end", "chat": chat}));
+            crate::chat::agent_notice(&ident, &chat, "[no answer]");
         }
     });
     Ok(format!(
@@ -469,15 +469,15 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
 pub fn decline(identity: &str, chat: &str) {
     let k = (identity.to_string(), chat.to_string());
     if rings().lock().ok().and_then(|mut r| r.remove(&k)).is_some() {
-        crate::webchat::emit_event(identity, json!({"t": "ring_end", "chat": chat}));
-        crate::webchat::agent_notice(identity, chat, "[call declined]");
+        crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": chat}));
+        crate::chat::agent_notice(identity, chat, "[call declined]");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::console::Console;
+    use crate::bus::Bus;
     use std::sync::mpsc;
 
     #[derive(Clone, Default)]
@@ -514,19 +514,16 @@ mod tests {
         out
     }
 
-    fn next_web(con: &Console) -> crate::console::Inbound {
+    fn next_web(con: &Bus) -> crate::bus::Inbound {
         loop {
-            let ib = con
-                .read_inbound_timeout(Duration::from_secs(60))
-                .unwrap()
-                .expect("inbound");
-            if crate::webchat::is_web(&ib.channel) {
+            let ib = con.next_held(Duration::from_secs(60)).expect("inbound");
+            if crate::chat::is_web(&ib.channel) {
                 return ib;
             }
         }
     }
 
-    /// Real models: BIA_SPEECH_DIR=<speech tree> cargo test -p bia-agent -- --ignored web_call
+    /// Real models: BIA_SPEECH_DIR=<speech tree> cargo test -p bia-mcp-web -- --ignored web_call
     #[test]
     #[ignore = "needs the speech models (BIA_SPEECH_DIR)"]
     fn web_call_roundtrip() {
@@ -534,9 +531,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("BIA_SPEECH_STORE", dir.join("speech"));
-        let con = Console::open(false);
-        crate::webchat::init(&dir, con.clone());
-        crate::webchat::ensure_chat("root", "web:test").unwrap();
+        let con = Arc::new(Bus::new(dir.clone()));
+        crate::chat::init(&dir, con.clone());
+        crate::chat::ensure_chat("root", "web:test").unwrap();
 
         let sink = Sink::default();
         let (tx, rx) = mpsc::channel::<(u8, Vec<u8>)>();
@@ -563,7 +560,7 @@ mod tests {
         let pcm: Vec<i16> = x16.iter().map(|s| (s * 32767.0) as i16).collect();
         for f in pcm
             .chunks(320)
-            .chain(std::iter::repeat([0i16; 320].as_slice()).take(75))
+            .chain(std::iter::repeat_n([0i16; 320].as_slice(), 75))
         {
             tx.send((2, f.iter().flat_map(|s| s.to_le_bytes()).collect()))
                 .unwrap();
@@ -636,7 +633,7 @@ mod tests {
         server.join().unwrap();
         let ib = next_web(&con);
         assert!(ib.text.starts_with("[call ended]"), "{}", ib.text);
-        let h = crate::webchat::chat_text("root", "test");
+        let h = crate::chat::chat_text("root", "test");
         eprintln!("chat:\n{h}");
         assert!(
             h.contains("📞 Call")

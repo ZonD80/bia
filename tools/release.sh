@@ -2,7 +2,7 @@
 # Release bia on GitHub (zond80/bia): check what the release for this version already
 # has, build only the missing packages, notarize the Mac flasher, upload.
 #
-#   tools/release.sh [-n NOTES] [--only PKG,…] [--dry-run] [--build-only] [--allow-dirty] [--rebuild-os] [--force]
+#   tools/release.sh [-n NOTES] [--only PKG,…]  (NOTES default: this version's Changes in RELEASE_NOTES.md) [--dry-run] [--build-only] [--allow-dirty] [--rebuild-os] [--force]
 #
 #   --only        packages and/or groups, comma-separated:
 #                   flashers = flash-macos,flash-linux,flash-windows   os = os-x86_64,os-arm64
@@ -126,8 +126,17 @@ echo "== release $TAG at ${SHA:0:12} ($([[ $EXISTS -eq 1 ]] && echo exists || ec
 [[ ${#TODO[@]} -gt 0 ]] || { echo "== nothing missing"; exit 0; }
 [[ $DRY -eq 0 ]] || exit 0
 
+# default notes: this version's "Changes" in RELEASE_NOTES.md (the same text bia tells its owner)
+if [[ -z "$NOTES" && -f RELEASE_NOTES.md ]]; then
+  NOTES=$(awk -v v="## $VERSION" '
+    $0 == v { inv = 1; next }
+    inv && /^## / { exit }
+    inv && /^### / { inc = ($0 == "### Changes"); next }
+    inv && inc && NF { print }' RELEASE_NOTES.md)
+  [[ -n "$NOTES" ]] && echo "== release notes from RELEASE_NOTES.md ($VERSION)"
+fi
 if [[ $BUILD_ONLY -eq 0 && $EXISTS -eq 0 && -z "$NOTES" ]]; then
-  [[ -t 0 ]] || die "release notes are required for a new release (-n)"
+  [[ -t 0 ]] || die "release notes are required for a new release (-n, or a $VERSION section in RELEASE_NOTES.md)"
   echo "Release notes for $TAG (end with Ctrl-D):"
   NOTES=$(cat)
   [[ -n "${NOTES//[[:space:]]/}" ]] || die "release notes cannot be empty"

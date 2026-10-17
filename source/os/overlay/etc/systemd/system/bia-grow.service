@@ -1,6 +1,8 @@
 [Unit]
 Description=Grow the root filesystem over the whole stick and move in the flashed model
-After=local-fs.target
+# /boot is nofail in fstab, so local-fs.target does not wait for it; models.txt lives there
+Wants=boot.mount
+After=local-fs.target boot.mount
 Before=bia-update.service bia.service
 Conflicts=shutdown.target
 ConditionPathExists=/usr/local/sbin/bia-grow

@@ -399,9 +399,30 @@ EOF
     say "Installed on $disk. $ADDR via $GW, DNS $DNS, interface $IFACE."
   fi
   say "Eject this ISO, then the disk boots and waits for another bia to fly here."
-  ask "Press enter to reboot"
-  systemctl reboot || true
-  sleep 30
+  reboot_prompt
+}
+
+# The last prompt. The user ejects the ISO before pressing enter, and every program lives on
+# it, so from here on only shell builtins: wait for enter on any terminal, then reboot through
+# sysrq (the disk is already synced and unmounted).
+reboot_prompt() {
+  local t n=0
+  echo 1 >/proc/sys/kernel/sysrq
+  say "Press enter to reboot"
+  for t in "${TERMS[@]}"; do
+    [ -c "$t" ] || continue
+    (
+      trap - EXIT
+      IFS= read -r _ <"$t"
+      echo b >/proc/sysrq-trigger
+    ) &
+    n=1
+  done
+  if [ "$n" = 0 ]; then
+    IFS= read -r _
+    echo b >/proc/sysrq-trigger
+  fi
+  wait
   exit 1
 }
 

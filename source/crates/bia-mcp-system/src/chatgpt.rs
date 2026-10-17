@@ -25,17 +25,18 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const AUTHORIZE_URL: &str = "https://auth.openai.com/api/accounts/authorize";
 const TOKEN_URL: &str = "https://auth.openai.com/api/accounts/oauth/token";
 const RESOURCE: &str = "https://api.openai.com/v1";
-const SCOPES: &str = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
+const SCOPES: &str =
+    "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 /// The scope that lets requests bill the user's ChatGPT plan.
 const PLAN_SCOPE: &str = "chatgpt.tokens.use.direct";
 const ISSUER: &str = "https://auth.openai.com";
@@ -70,7 +71,14 @@ fn uuid_urn() -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("urn:uuid:{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "urn:uuid:{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn enc(s: &str) -> String {
@@ -203,7 +211,12 @@ struct Attempt {
     url: String,
 }
 
-fn attempt(local: &Local, known: Option<&Account>, redirect: &str, login_hint: Option<&str>) -> Attempt {
+fn attempt(
+    local: &Local,
+    known: Option<&Account>,
+    redirect: &str,
+    login_hint: Option<&str>,
+) -> Attempt {
     let verifier = random_b64(48);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state = random_b64(24);
@@ -219,7 +232,9 @@ fn attempt(local: &Local, known: Option<&Account>, redirect: &str, login_hint: O
         ("code_challenge", challenge),
         ("ext_agent_host_id", local.host_id.clone()),
     ];
-    let hint = login_hint.or(known.map(|a| a.email.as_str())).filter(|s| !s.is_empty());
+    let hint = login_hint
+        .or(known.map(|a| a.email.as_str()))
+        .filter(|s| !s.is_empty());
     match known {
         Some(a) => {
             params.push(("client_id", a.client_id.clone()));
@@ -297,15 +312,25 @@ struct Signed {
 
 /// Turn the redirect query into tokens: check state, exchange the code (PKCE), verify the ID
 /// token and that plan use was allowed.
-fn redeem(local: &mut Local, att: &Attempt, redirect: &str, q: &[(String, String)]) -> Result<Signed, String> {
+fn redeem(
+    local: &mut Local,
+    att: &Attempt,
+    redirect: &str,
+    q: &[(String, String)],
+) -> Result<Signed, String> {
     if get(q, "state") != Some(att.state.as_str()) {
-        return Err("this sign-in page is old or for another task; press Login with ChatGPT again".into());
+        return Err(
+            "this sign-in page is old or for another task; press Login with ChatGPT again".into(),
+        );
     }
     if let Some(e) = get(q, "error") {
         return Err(if e == "access_denied" {
             "ChatGPT sign-in was declined".into()
         } else {
-            format!("ChatGPT sign-in: {e} {}", get(q, "error_description").unwrap_or(""))
+            format!(
+                "ChatGPT sign-in: {e} {}",
+                get(q, "error_description").unwrap_or("")
+            )
         });
     }
     let code = get(q, "code").ok_or("ChatGPT sign-in: no code in the address")?;
@@ -332,8 +357,14 @@ fn redeem(local: &mut Local, att: &Attempt, redirect: &str, q: &[(String, String
         ("redirect_uri", redirect),
         ("resource", RESOURCE),
     ])?;
-    let access = v["access_token"].as_str().ok_or("no access_token in reply")?.to_string();
-    let refresh = v["refresh_token"].as_str().ok_or("no refresh_token in reply")?.to_string();
+    let access = v["access_token"]
+        .as_str()
+        .ok_or("no access_token in reply")?
+        .to_string();
+    let refresh = v["refresh_token"]
+        .as_str()
+        .ok_or("no refresh_token in reply")?
+        .to_string();
     let id_token = v["id_token"].as_str().unwrap_or("").to_string();
     let scopes: Vec<String> = v["scope"]
         .as_str()
@@ -357,7 +388,9 @@ fn redeem(local: &mut Local, att: &Attempt, redirect: &str, q: &[(String, String
     }
     let email = claims["email"].as_str().unwrap_or("").to_string();
     local.pending_client_id.clear();
-    local.accounts.retain(|a| a.email != email && a.client_id != client_id);
+    local
+        .accounts
+        .retain(|a| a.email != email && a.client_id != client_id);
     local.accounts.push(Account {
         email: email.clone(),
         client_id: client_id.clone(),
@@ -381,7 +414,11 @@ fn redeem(local: &mut Local, att: &Attempt, redirect: &str, q: &[(String, String
         "email": email,
         "scopes": scopes,
     });
-    Ok(Signed { auth, email, access })
+    Ok(Signed {
+        auth,
+        email,
+        access,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -420,7 +457,7 @@ fn parse_models(v: &Value) -> Vec<Model> {
         .unwrap_or_default();
     let mut out: Vec<Model> = items
         .iter()
-        .filter(|m| m["visibility"].as_str().map_or(true, |s| s == "list"))
+        .filter(|m| m["visibility"].as_str().is_none_or(|s| s == "list"))
         .filter_map(|m| {
             let id = m["slug"].as_str().or_else(|| m["id"].as_str())?.to_string();
             Some(Model {
@@ -456,7 +493,12 @@ fn preselect(models: &[Model], wanted: &[&str]) -> String {
                 .map(|m| m.id.clone())
         })
         .or_else(|| has("gpt-5").then(|| "gpt-5".to_string()))
-        .or_else(|| models.iter().find(|m| m.id.starts_with("gpt-5")).map(|m| m.id.clone()))
+        .or_else(|| {
+            models
+                .iter()
+                .find(|m| m.id.starts_with("gpt-5"))
+                .map(|m| m.id.clone())
+        })
         .or_else(|| models.first().map(|m| m.id.clone()))
         .unwrap_or_default()
 }
@@ -495,9 +537,12 @@ impl Task {
     }
     fn save(&self) -> Result<(), String> {
         let tmp = self.path("json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(&self.v).map_err(|e| e.to_string())?)
-            .and_then(|_| fs::rename(&tmp, self.path("json")))
-            .map_err(|e| format!("write task: {e}"))
+        fs::write(
+            &tmp,
+            serde_json::to_vec_pretty(&self.v).map_err(|e| e.to_string())?,
+        )
+        .and_then(|_| fs::rename(&tmp, self.path("json")))
+        .map_err(|e| format!("write task: {e}"))
     }
     fn set(&mut self, k: &str, v: Value) {
         self.v[k] = v;
@@ -643,7 +688,11 @@ fn read_request(sock: TcpStream) -> Option<Req> {
         }
     }
     let (path, query) = target.split_once('?').unwrap_or((target.as_str(), ""));
-    Some(Req { path: path.to_string(), query: query.to_string(), sock })
+    Some(Req {
+        path: path.to_string(),
+        query: query.to_string(),
+        sock,
+    })
 }
 
 fn respond(sock: &mut TcpStream, status: &str, html: &str) {
@@ -658,8 +707,13 @@ fn respond(sock: &mut TcpStream, status: &str, html: &str) {
 
 /// `fmm_chatgpt`: run the sign-in as a human task and switch FMM to the chosen model.
 pub fn login(ctx: &Ctx, args: Value) -> Result<String, String> {
-    let wanted_model = bia_mcp::arg_str_opt(&args, "model").unwrap_or("").trim().to_string();
-    let login_hint = bia_mcp::arg_str_opt(&args, "email").map(str::trim).filter(|s| !s.is_empty());
+    let wanted_model = bia_mcp::arg_str_opt(&args, "model")
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let login_hint = bia_mcp::arg_str_opt(&args, "email")
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let timeout = bia_mcp::arg_u32_opt(&args, "timeout_secs").unwrap_or(1800);
     if !browser_here() {
         return Err("Google Chrome is not installed on bia, and the ChatGPT sign-in runs only in bia's own browser. Set it up first: discover(path='mcp/chrome', enable=true), then chrome_install and do what it says to get the official Google Chrome. Then call system_fmm_chatgpt again.".into());
@@ -716,11 +770,15 @@ pub fn login(ctx: &Ctx, args: Value) -> Result<String, String> {
     unsafe { libc::sync() };
     ctx.log(format!("human task {id}: Login with ChatGPT"));
     for u in hitl::task_links(&id) {
-        ctx.log(format!("web console task page {u} — bia's screen and the model list"));
+        ctx.log(format!(
+            "web console task page {u} — bia's screen and the model list"
+        ));
     }
     let start_url = format!("http://127.0.0.1:{port}/");
     let links = hitl::task_links(&id).join(" ");
-    ctx.log(format!("Login with ChatGPT page: {start_url} (open it in Chrome on this screen)"));
+    ctx.log(format!(
+        "Login with ChatGPT page: {start_url} (open it in Chrome on this screen)"
+    ));
     // The job's result comes only when it is over; this tells the model now, so it opens the
     // page and sends the person to Chrome while the tool waits.
     ctx.inbound(
@@ -756,49 +814,67 @@ pub fn login(ctx: &Ctx, args: Value) -> Result<String, String> {
         // The redirect from bia's browser.
         let mut query: Option<String> = None;
         let mut sock: Option<TcpStream> = None;
-        match server.rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(Req { path, query: q, sock: mut s }) => {
-                let q = q.as_str();
-                match path.as_str() {
-                    CALLBACK_PATH => {
-                        query = Some(q.to_string());
-                        sock = Some(s);
-                    }
-                    "/choose" => {
-                        let q = parse_query(q);
-                        let ok = signed.is_some() && get(&q, "state") == Some(att.state.as_str());
-                        let m = get(&q, "model").unwrap_or("").to_string();
-                        if ok && models.iter().any(|x| x.id == m) {
-                            respond(&mut s, "200 OK", &page("ChatGPT", &format!(
-                                "<h2>Done</h2><p>bia is switching to {} on your ChatGPT plan. You can close this tab.</p>", html_escape(&m))));
-                            break m;
-                        }
-                        respond(&mut s, "400 Bad Request", &page("ChatGPT", "<h2>Pick a model from the list.</h2>"));
-                    }
-                    "/" if signed.is_some() => {
-                        let html = chooser(&att.state, &signed.as_ref().unwrap().email, &models,
-                            task.v["model"].as_str().unwrap_or(""));
-                        respond(&mut s, "200 OK", &html);
-                    }
-                    "/" => respond(&mut s, "200 OK", &start_page(task.v["error"].as_str().unwrap_or(""))),
-                    "/login" => {
-                        let _ = s.write_all(
-                            format!("HTTP/1.1 302 Found\r\nLocation: {}\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", att.url)
-                                .as_bytes(),
-                        );
-                    }
-                    _ => respond(&mut s, "404 Not Found", ""),
+        if let Ok(Req {
+            path,
+            query: q,
+            sock: mut s,
+        }) = server.rx.recv_timeout(Duration::from_millis(200))
+        {
+            let q = q.as_str();
+            match path.as_str() {
+                CALLBACK_PATH => {
+                    query = Some(q.to_string());
+                    sock = Some(s);
                 }
+                "/choose" => {
+                    let q = parse_query(q);
+                    let ok = signed.is_some() && get(&q, "state") == Some(att.state.as_str());
+                    let m = get(&q, "model").unwrap_or("").to_string();
+                    if ok && models.iter().any(|x| x.id == m) {
+                        respond(&mut s, "200 OK", &page("ChatGPT", &format!(
+                            "<h2>Done</h2><p>bia is switching to {} on your ChatGPT plan. You can close this tab.</p>", html_escape(&m))));
+                        break m;
+                    }
+                    respond(
+                        &mut s,
+                        "400 Bad Request",
+                        &page("ChatGPT", "<h2>Pick a model from the list.</h2>"),
+                    );
+                }
+                "/" if signed.is_some() => {
+                    let html = chooser(
+                        &att.state,
+                        &signed.as_ref().unwrap().email,
+                        &models,
+                        task.v["model"].as_str().unwrap_or(""),
+                    );
+                    respond(&mut s, "200 OK", &html);
+                }
+                "/" => respond(
+                    &mut s,
+                    "200 OK",
+                    &start_page(task.v["error"].as_str().unwrap_or("")),
+                ),
+                "/login" => {
+                    let _ = s.write_all(
+                        format!("HTTP/1.1 302 Found\r\nLocation: {}\r\nCache-Control: no-store\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", att.url)
+                            .as_bytes(),
+                    );
+                }
+                _ => respond(&mut s, "404 Not Found", ""),
             }
-            Err(_) => {}
         }
         let Some(q) = query else {
             continue;
         };
         if signed.is_some() {
             if let Some(mut s) = sock {
-                let html = chooser(&att.state, &signed.as_ref().unwrap().email, &models,
-                    task.v["model"].as_str().unwrap_or(""));
+                let html = chooser(
+                    &att.state,
+                    &signed.as_ref().unwrap().email,
+                    &models,
+                    task.v["model"].as_str().unwrap_or(""),
+                );
                 respond(&mut s, "200 OK", &html);
             }
             continue;
@@ -808,16 +884,27 @@ pub fn login(ctx: &Ctx, args: Value) -> Result<String, String> {
         let r = redeem(&mut local, &att, &redirect, &q).and_then(|s| {
             let m = list_models(&s.access)?;
             if m.is_empty() {
-                return Err(format!("{} is signed in, but ChatGPT lists no models for it", s.email));
+                return Err(format!(
+                    "{} is signed in, but ChatGPT lists no models for it",
+                    s.email
+                ));
             }
             Ok((s, m))
         });
         match r {
             Ok((s, m)) => {
                 let pick = preselect(&m, &[&wanted_model, &current_model]);
-                ctx.log(format!("ChatGPT: signed in as {}; {} models", s.email, m.len()));
+                ctx.log(format!(
+                    "ChatGPT: signed in as {}; {} models",
+                    s.email,
+                    m.len()
+                ));
                 if let Some(mut sock) = sock {
-                    respond(&mut sock, "200 OK", &chooser(&att.state, &s.email, &m, &pick));
+                    respond(
+                        &mut sock,
+                        "200 OK",
+                        &chooser(&att.state, &s.email, &m, &pick),
+                    );
                 }
                 task.v["stage"] = json!("model");
                 task.v["email"] = json!(s.email);
@@ -898,11 +985,18 @@ mod tests {
             {"id": "gpt-4.1"}
         ]});
         let m = parse_models(&v);
-        assert_eq!(m.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["gpt-4.1", "gpt-5", "gpt-5-mini"]);
+        assert_eq!(
+            m.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+            ["gpt-4.1", "gpt-5", "gpt-5-mini"]
+        );
         assert_eq!(preselect(&m, &["", ""]), "gpt-5");
         let mut sol = m.clone();
         for id in ["gpt-6.1-sol-mini", "gpt-6.1-sol"] {
-            sol.push(Model { id: id.into(), name: id.into(), ctx: 0 });
+            sol.push(Model {
+                id: id.into(),
+                name: id.into(),
+                ctx: 0,
+            });
         }
         assert_eq!(preselect(&sol, &["", ""]), "gpt-6.1-sol");
         assert_eq!(preselect(&sol, &["gpt-5-mini", ""]), "gpt-5-mini");
@@ -912,27 +1006,51 @@ mod tests {
 
     #[test]
     fn pages() {
-        assert!(start_page("").contains("<form action=/login method=get><button>Login with ChatGPT</button>"));
+        assert!(start_page("")
+            .contains("<form action=/login method=get><button>Login with ChatGPT</button>"));
         assert!(start_page("declined <x>").contains("declined &lt;x&gt;"));
         let m = vec![
-            Model { id: "gpt-5".into(), name: "GPT-5".into(), ctx: 400000 },
-            Model { id: "gpt-5-mini".into(), name: "gpt-5-mini".into(), ctx: 0 },
+            Model {
+                id: "gpt-5".into(),
+                name: "GPT-5".into(),
+                ctx: 400000,
+            },
+            Model {
+                id: "gpt-5-mini".into(),
+                name: "gpt-5-mini".into(),
+                ctx: 0,
+            },
         ];
         let html = chooser("st", "a@b", &m, "gpt-5-mini");
         assert!(html.contains("<option value=\"gpt-5\">gpt-5 — GPT-5 (400k context)</option>"));
         assert!(html.contains("<option value=\"gpt-5-mini\" selected>gpt-5-mini</option>"));
-        assert!(html.contains("name=state value=\"st\"") && html.contains("<button>Continue</button>"));
+        assert!(
+            html.contains("name=state value=\"st\"") && html.contains("<button>Continue</button>")
+        );
     }
 
     #[test]
     fn authorize_url() {
-        let l = Local { host_id: "urn:uuid:x".into(), ..Default::default() };
+        let l = Local {
+            host_id: "urn:uuid:x".into(),
+            ..Default::default()
+        };
         let a = attempt(&l, None, "http://127.0.0.1:1455/auth/callback", None);
         assert!(a.url.contains("client_id=dynamic_agent_client"));
-        assert!(a.url.contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"));
-        let acc = Account { email: "a@b".into(), client_id: "c1".into(), id_token: "t".into() };
+        assert!(a
+            .url
+            .contains("redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"));
+        let acc = Account {
+            email: "a@b".into(),
+            client_id: "c1".into(),
+            id_token: "t".into(),
+        };
         let a = attempt(&l, Some(&acc), "http://x", None);
-        assert!(a.url.contains("client_id=c1") && a.url.contains("login_hint=a%40b") && a.url.contains("id_token_hint=t"));
+        assert!(
+            a.url.contains("client_id=c1")
+                && a.url.contains("login_hint=a%40b")
+                && a.url.contains("id_token_hint=t")
+        );
         assert_eq!(a.client_id.as_deref(), Some("c1"));
     }
 }

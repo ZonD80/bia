@@ -2,20 +2,20 @@
 # End-to-end QEMU test of legacy BIOS (SeaBIOS, no UEFI): boot the flash image, let the
 # agent install onto the internal disk, then boot that disk with the stick removed.
 #
-#   tools/bios-e2e.sh images   flash.img written by bia-flash from dist/x86_64/bia-x86_64.img
+#   tests/e2e/bios-e2e.sh images   flash.img written by bia-flash from dist/x86_64/bia-x86_64.img
 #                              (./fmm.json; current dist binaries patched in) + a blank internal disk
-#   tools/bios-e2e.sh run      SeaBIOS boots the stick -> agent asked to install onto the
+#   tests/e2e/bios-e2e.sh run      SeaBIOS boots the stick -> agent asked to install onto the
 #                              internal disk (carry_to_disk) -> powers off (BIOS cannot be
 #                              told to boot the disk) -> QEMU restarted without the stick ->
 #                              SeaBIOS boots the disk -> agent on BIADISK
-#   tools/bios-e2e.sh check    inspect the internal disk (GPT, BIOS GRUB, ESP, fstab)
-#   tools/bios-e2e.sh all      images + run + check
+#   tests/e2e/bios-e2e.sh check    inspect the internal disk (GPT, BIOS GRUB, ESP, fstab)
+#   tests/e2e/bios-e2e.sh all      images + run + check
 #
 # x86_64 under TCG (no acceleration on Apple silicon): slow. Files in dist/be-x86_64/.
 # Env: MEM (6G), CPUS (4), TIMEOUT (minutes for boot/copy phases, 60)
 set -euo pipefail
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-cd "$(dirname "$SELF")/.."
+cd "$(dirname "$SELF")/../.."
 ROOT=$(pwd)
 ARCH=x86_64
 BE=$ROOT/dist/be-$ARCH
@@ -23,7 +23,7 @@ mkdir -p "$BE"
 
 image_tool() {
   docker run --rm -i --privileged --platform linux/amd64 -e ARCH="$ARCH" \
-    -v "$BE":/ut:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tools/bios-e2e-img.py "$@"
+    -v "$BE":/ut:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tests/e2e/bios-e2e-img.py "$@"
 }
 
 do_images() {
@@ -40,7 +40,7 @@ do_images() {
 }
 
 do_run() {
-  ARCH=$ARCH LE=$BE MEM=${MEM:-6G} CPUS=${CPUS:-4} TIMEOUT=${TIMEOUT:-60} python3 "$ROOT/tools/bios-e2e-drive.py"
+  ARCH=$ARCH LE=$BE MEM=${MEM:-6G} CPUS=${CPUS:-4} TIMEOUT=${TIMEOUT:-60} python3 "$ROOT/tests/e2e/bios-e2e-drive.py"
 }
 
 case ${1:-} in

@@ -1,6 +1,7 @@
 mod audio_out;
 mod calls;
 mod client;
+mod groups;
 mod speech;
 mod tts;
 
@@ -435,17 +436,17 @@ fn main() {
         )
         .tool(
             "delete_messages",
-            "Delete specific messages. message_ids come from telegram_history. revoke true also deletes them for the other person. revoke false deletes them only on this account. This cannot be undone.",
+            "Delete specific messages. message_ids come from telegram_history. By default (revoke true) they are deleted for everyone in the chat; revoke false deletes them only on this account. This cannot be undone.",
             json!({"type": "object", "required": ["chat_id", "message_ids"], "properties": {
                 "chat_id": {"type": "string", "description": "chat number from telegram_search, or @username"},
                 "message_ids": {"type": "array", "items": {"type": "string"}, "description": "message ids from telegram_history"},
-                "revoke": {"type": "boolean", "description": "true deletes for the other person too. Default false."}
+                "revoke": {"type": "boolean", "description": "true (default) deletes for everyone; false only on this account."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
                 let chat = arg_str(&a, "chat_id")?;
                 let ids = arg_i64_list(&a, "message_ids")?;
-                let revoke = arg_bool(&a, "revoke", false);
+                let revoke = arg_bool(&a, "revoke", true);
                 let (n, chat_id, title, username) =
                     Tg::global().delete_messages(chat, &ids, revoke)?;
                 Ok(format!(
@@ -457,16 +458,16 @@ fn main() {
         )
         .tool(
             "delete_history",
-            "Delete the whole message history of a chat with a person or a group. chat_id is a chat number or @username. revoke true also deletes the history for the other person. remove true also drops the chat from the chat list. This cannot be undone.",
+            "Delete the whole message history of a chat with a person or a group. chat_id is a chat number or @username. By default (revoke true) the history is deleted for the other person too; revoke false clears it only on this account. remove true also drops the chat from the chat list. This cannot be undone.",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "chat number from telegram_search, or @username"},
-                "revoke": {"type": "boolean", "description": "true deletes the history for the other person too. Default false."},
+                "revoke": {"type": "boolean", "description": "true (default) deletes the history for the other person too; false only on this account."},
                 "remove": {"type": "boolean", "description": "true also removes the chat from the chat list. Default false."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
                 let chat = arg_str(&a, "chat_id")?;
-                let revoke = arg_bool(&a, "revoke", false);
+                let revoke = arg_bool(&a, "revoke", true);
                 let remove = arg_bool(&a, "remove", false);
                 let (chat_id, title, username) =
                     Tg::global().delete_history(chat, revoke, remove)?;
@@ -480,6 +481,69 @@ fn main() {
                     side(revoke),
                     Tg::format_chat(chat_id, &title, &username)
                 ))
+            },
+        )
+        .tool(
+            "create_group",
+            "Create a Telegram group (a supergroup) with this account as its owner and add people to it. members are @usernames, chat numbers from telegram_search, or phone numbers of your contacts. Returns the group's chat_id (use it with telegram_send) and an invite link; people whose privacy settings block adding them are listed — send them the link.",
+            json!({"type": "object", "required": ["title"], "properties": {
+                "title": {"type": "string", "description": "group name"},
+                "members": {"type": "array", "items": {"type": "string"}, "description": "people to add: @username, chat number or contact phone"},
+                "about": {"type": "string", "description": "optional description"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().create_group(
+                    arg_str(&a, "title")?,
+                    &arg_str_list(&a, "members"),
+                    arg_str_opt(&a, "about").unwrap_or_default(),
+                )
+            },
+        )
+        .tool(
+            "add_members",
+            "Add people to a Telegram group (chat_id from telegram_create_group or telegram_chats). Those whose privacy settings block it are listed with an invite link to send them.",
+            json!({"type": "object", "required": ["chat_id", "members"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "members": {"type": "array", "items": {"type": "string"}, "description": "@username, chat number or contact phone"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().add_members(arg_str(&a, "chat_id")?, &arg_str_list(&a, "members"))
+            },
+        )
+        .tool(
+            "remove_member",
+            "Remove a person from a Telegram group you administer. They can be added again later.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "member": {"type": "string", "description": "@username or chat number of the person"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().remove_member(arg_str(&a, "chat_id")?, arg_str(&a, "member")?)
+            },
+        )
+        .tool(
+            "leave_group",
+            "Leave a Telegram group.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().leave_group(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "group_invite_link",
+            "An invite link to a Telegram group you administer (anyone with it can join).",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().group_invite_link(arg_str(&a, "chat_id")?)
             },
         )
         .tool(

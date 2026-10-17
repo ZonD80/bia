@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive the legacy BIOS boot + install test (tools/bios-e2e.sh run).
+"""Drive the legacy BIOS boot + install test (tests/e2e/bios-e2e.sh run).
 
 Env: LE (dir with flash.img, internal.img), MEM, CPUS, TIMEOUT (minutes per long phase).
 Serial output: $LE/stick.log (first boot) and $LE/disk.log (after the stick is removed).
@@ -13,12 +13,12 @@ from e2e_vm import LE, VM, die, stamp
 T = int(os.environ.get("TIMEOUT", "60")) * 60
 e2e_vm.SHOW = re.compile(r"DMI:|Command line:|bia-migrate|legacy BIOS|carry_to_disk|Ready for commands|"
                          r"rebooting|Powering off|reboot: Power down|Kernel panic|bia-update: (idle|boot)")
-READY = r"Ready for commands"
+READY = r"Ready for commands|<-(?:\x1b\[[0-9;]*m)* "  # the agent answered its boot notice (a first start greets instead)
 FAIL = r"Kernel panic|bia-migrate: .*(failed|error|Error)"
 
 for f in (f"{LE}/flash.img", f"{LE}/internal.img"):
     if not os.path.exists(f):
-        sys.exit(f"missing {f}; run tools/bios-e2e.sh images")
+        sys.exit(f"missing {f}; run tests/e2e/bios-e2e.sh images")
 
 
 def disks(with_stick):

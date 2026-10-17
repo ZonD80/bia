@@ -1,7 +1,8 @@
 //! Attended OS update (never automatic at boot): fold this agent into
 //! /bia-update, mark the rescue image on this ESP and reboot. The rescue image
-//! copies the other bia root (flash or internal disk) onto this one offline,
-//! then this system boots and unfolds the agent.
+//! copies the other bia root (flash or internal disk; preferred) or the newest
+//! GitHub release (downloaded and unpacked into /bia-update/net) onto this one
+//! offline, then this system boots and unfolds the agent.
 use bia_mcp::Ctx;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -16,8 +17,10 @@ pub fn update(ctx: &Ctx, from: Option<&str>, force: bool) -> Result<String, Stri
     if force {
         args.push("--force".into());
     }
-    if let Some(dev) = from.map(str::trim).filter(|s| !s.is_empty()) {
-        args.push(format!("--from={dev}"));
+    match from.map(str::trim).filter(|s| !s.is_empty()) {
+        Some("internet" | "net" | "github" | "web") => args.push("--from=internet".into()),
+        Some(dev) => args.push(format!("--from={dev}")),
+        None => {}
     }
     let mut child = Command::new("/usr/local/sbin/bia-update")
         .args(&args)

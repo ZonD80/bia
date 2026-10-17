@@ -1,6 +1,6 @@
 bia home (/home/bia). The agent works here.
 
-  bia.toml  configuration: model, sampling, system prompt, web console.
+  bia.toml  configuration: model, sampling, system prompt, web app.
   model/    local *.gguf models (split parts allowed). bia.toml picks which one.
             Not packed into the image: bia-flash puts a Hugging Face GGUF on the stick.
   files/    the agent's own files: notes, memory, schedules, inbox, state.

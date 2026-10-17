@@ -205,14 +205,14 @@ QEMU+=(-smp "$CPUS" -m "$MEM" -device virtio-rng-pci)
 case $NET in
   user)
     QEMU+=(-netdev "user,id=n0,hostfwd=tcp:127.0.0.1:${WEBPORT}-:80" -device virtio-net-pci,netdev=n0)
-    WEBMSG="web console from this Mac: http://127.0.0.1:${WEBPORT}/  (QEMU user-net NAT; do not open the 10.0.2.x address)"
+    WEBMSG="web app from this Mac: http://127.0.0.1:${WEBPORT}/  (QEMU user-net NAT; do not open the 10.0.2.x address)"
     ;;
   bridge)
     IFACE=$(wifi_if)
     [ -n "$IFACE" ] || { echo "no Wi-Fi interface; set WIFI_IF=en0 (or the Device from networksetup -listallhardwareports)"; exit 1; }
     ifconfig "$IFACE" >/dev/null 2>&1 || { echo "Wi-Fi interface $IFACE is not present"; exit 1; }
     QEMU+=(-netdev "vmnet-bridged,id=n0,ifname=$IFACE" -device virtio-net-pci,netdev=n0)
-    WEBMSG="web console: guest DHCP on Wi-Fi $IFACE (LAN IP printed at boot; not 127.0.0.1:${WEBPORT})"
+    WEBMSG="web app: guest DHCP on Wi-Fi $IFACE (LAN IP printed at boot; not 127.0.0.1:${WEBPORT})"
     echo "== bridged onto $IFACE ($(ifconfig "$IFACE" | awk '/inet /{print $2; exit}'))"
     ;;
   *)

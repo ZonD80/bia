@@ -107,7 +107,7 @@ in_chroot apt-get install -y --no-install-recommends \
   e2fsprogs dosfstools exfatprogs ntfs-3g \
   util-linux fdisk parted mount procps rsync \
   efibootmgr \
-  bash ca-certificates wget curl bzip2 \
+  bash ca-certificates wget curl bzip2 xz-utils \
   python3-minimal \
   wpasupplicant iw \
   tzdata adduser passwd login \
@@ -194,6 +194,9 @@ fi
   (cd "$ROOT" && find etc/opt/chrome etc/opt/google/chrome etc/chromium -type f 2>/dev/null | sed 's|^\./||')
 } | sort -u > "$ROOT/etc/bia-shipped"
 date -u +%Y%m%d%H%M%S > "$ROOT/etc/bia-release"
+# The bia version (workspace Cargo.toml): bia-update compares versions, never the build stamp.
+sed -n 's/^version = "\(.*\)"/\1/p' /work/Cargo.toml | head -1 > "$ROOT/etc/bia-version"
+[ -s "$ROOT/etc/bia-version" ] || { echo "no version in /work/Cargo.toml" >&2; exit 1; }
 
 echo "== initramfs"
 in_chroot update-initramfs -u || in_chroot update-initramfs -c -k all

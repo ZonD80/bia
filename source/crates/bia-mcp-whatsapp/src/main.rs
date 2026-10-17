@@ -1,6 +1,7 @@
 mod audio_out;
 mod calls;
 mod client;
+mod groups;
 mod qr_win;
 mod tts;
 
@@ -400,17 +401,17 @@ fn main() {
         )
         .tool(
             "delete_messages",
-            "Delete specific messages. message_ids come from whatsapp_history. revoke true deletes them for everyone (WhatsApp only allows this for your own messages, or any message when you are a group admin). revoke false deletes them only on this account. This cannot be undone.",
+            "Delete specific messages. message_ids come from whatsapp_history. By default (revoke true) they are deleted for everyone (WhatsApp allows this for your own messages, or any message when you are a group admin); revoke false deletes them only on this account. This cannot be undone.",
             json!({"type": "object", "required": ["chat_id", "message_ids"], "properties": {
                 "chat_id": {"type": "string", "description": "chat id from whatsapp_search"},
                 "message_ids": {"type": "array", "items": {"type": "string"}, "description": "message ids from whatsapp_history"},
-                "revoke": {"type": "boolean", "description": "true deletes for everyone. Default false."}
+                "revoke": {"type": "boolean", "description": "true (default) deletes for everyone; false only on this account."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
                 let chat = arg_str(&a, "chat_id")?;
                 let ids = arg_id_list(&a, "message_ids")?;
-                let revoke = arg_bool(&a, "revoke", false);
+                let revoke = arg_bool(&a, "revoke", true);
                 let (n, key, title) = Wa::global().delete_messages(chat, &ids, revoke)?;
                 Ok(format!(
                     "deleted {n} message(s) {} → {}",
@@ -421,16 +422,16 @@ fn main() {
         )
         .tool(
             "delete_history",
-            "Delete the whole message history of a chat with a person or a group on this account. revoke true also tries to delete your own recent messages for everyone (WhatsApp cannot wipe the other person's copy). remove true also drops the chat from the chat list. This cannot be undone.",
+            "Delete the whole message history of a chat with a person or a group on this account. By default (revoke true) your own recent messages are also deleted for everyone (WhatsApp cannot wipe the other person's copy); revoke false clears it only on this account. remove true also drops the chat from the chat list. This cannot be undone.",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "chat id from whatsapp_search"},
-                "revoke": {"type": "boolean", "description": "true also revokes your own recent messages for everyone. Default false."},
+                "revoke": {"type": "boolean", "description": "true (default) also revokes your own recent messages for everyone; false only on this account."},
                 "remove": {"type": "boolean", "description": "true also removes the chat from the chat list. Default false."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
                 let chat = arg_str(&a, "chat_id")?;
-                let revoke = arg_bool(&a, "revoke", false);
+                let revoke = arg_bool(&a, "revoke", true);
                 let remove = arg_bool(&a, "remove", false);
                 let (key, title) = Wa::global().delete_history(chat, revoke, remove)?;
                 let listed = if remove {
@@ -447,6 +448,64 @@ fn main() {
                     },
                     Wa::format_chat(&key, &title)
                 ))
+            },
+        )
+        .tool(
+            "create_group",
+            "Create a WhatsApp group with this account as its admin and add people to it. members are phone numbers with country code (digits) or names from whatsapp_search. Returns the group's chat_id (…@g.us, use it with whatsapp_send) and an invite link; people whose privacy settings block adding them are listed — send them the link.",
+            json!({"type": "object", "required": ["title"], "properties": {
+                "title": {"type": "string", "description": "group name"},
+                "members": {"type": "array", "items": {"type": "string"}, "description": "phone numbers with country code, or contact names"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().create_group(arg_str(&a, "title")?, &arg_str_list(&a, "members"))
+            },
+        )
+        .tool(
+            "add_members",
+            "Add people to a WhatsApp group you administer (chat_id …@g.us). Those whose privacy settings block it are listed with an invite link to send them.",
+            json!({"type": "object", "required": ["chat_id", "members"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "members": {"type": "array", "items": {"type": "string"}, "description": "phone numbers with country code, or contact names"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().add_members(arg_str(&a, "chat_id")?, &arg_str_list(&a, "members"))
+            },
+        )
+        .tool(
+            "remove_member",
+            "Remove a person from a WhatsApp group you administer.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "member": {"type": "string", "description": "phone number with country code, or contact name"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().remove_member(arg_str(&a, "chat_id")?, arg_str(&a, "member")?)
+            },
+        )
+        .tool(
+            "leave_group",
+            "Leave a WhatsApp group.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().leave_group(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "group_invite_link",
+            "An invite link to a WhatsApp group you administer (anyone with it can join).",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().group_invite_link(arg_str(&a, "chat_id")?)
             },
         )
         .tool(

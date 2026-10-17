@@ -148,7 +148,7 @@ fn pci_list() -> Vec<Pci> {
 pub fn chassis() -> String {
     let t = read_trim("/sys/class/dmi/id/chassis_type");
     match t.parse::<u32>().unwrap_or(0) {
-        3 | 4 | 5 | 6 | 7 => "desktop",
+        3..=7 => "desktop",
         8 | 9 | 10 | 14 => "laptop",
         11 => "handheld",
         13 => "all-in-one",

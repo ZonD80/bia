@@ -30,8 +30,8 @@ agent is the only user-facing program; everything else is there to serve it.
         ├── bia.service ─ bia-session ─ Xorg :0 + openbox + tint2 + kitty
         │                                └── bia-agent  (console on tty1/serial/kitty)
         │                                     ├── llama-server (child, 127.0.0.1)
-        │                                     ├── MCP children over stdio
-        │                                     └── HTTPS web console :443 (mTLS)
+        │                                     └── MCP children over stdio
+        │                                          └── web: HTTPS app :443 (mTLS)
         ├── bia-land.service     (ISO/"land" mode only, instead of bia.service)
         └── networking, getty@tty2, logind …
 ```
@@ -98,12 +98,20 @@ run resumes from the `.part` file. Without a list it only grows the ext4.
    (normal boot, unexpected halt, update, landing). On the machine's very first
    start (no `files/state/welcomed`, nothing to resume, no earlier exit, not an
    update or a landing) the notice instead asks for a short welcome in the
-   owner's language: ask for a name, the web console and its first-visit root
+   owner's language: ask for a name, the web app and its first-visit root
    certificate, logging in to Telegram and WhatsApp, the agent's own accounts
    on websites (passwords and codes in the password store, human help for
    captchas), and a stronger cloud brain when it runs on the local model. The
    marker is then written, so this happens once; an upgraded machine gets the
    marker on its first boot without the welcome.
+7. After an update the notice also carries the release notes: `RELEASE_NOTES.md`
+   (repo root, built into the agent; `release.rs`) has per version a **Changes**
+   list for the owner and a **For bia** list of steps (e.g. link client
+   certificates to addressbook contacts). The agent keeps the version it last
+   booted in `files/state/version`; on the first boot of a newer one it gets every
+   release in between, tells root what changed and does the steps itself.
+   Machines from before the version file (≤ 1.1.0) get the current release.
+   `tools/release.sh` uses the same Changes as the GitHub release text.
 
 ## The agent (`source/crates/bia-agent`)
 
@@ -111,8 +119,8 @@ One Rust binary, dynamically linked against glibc. Main modules:
 
 | Module | Role |
 |---|---|
-| `main.rs`, `sys.rs` | startup: `/home/bia` checks, memory tuning (swap, THP, mlock), web console, model, MCPs, resume, FMM |
-| `console.rs` | writes to every kernel console at once; pinned 3-line status header (DECSTBM scroll region); input from all consoles |
+| `main.rs`, `sys.rs` | startup: `/home/bia` checks, memory tuning (swap, THP, mlock), model, MCPs (the web MCP always), resume, FMM |
+| `console.rs` | the physical console: writes to every kernel console at once; pinned 3-line status header (DECSTBM scroll region); input from all consoles; status also published to `files/state/status.json` |
 | `repl.rs` | the loop: slash commands, chat turns, tool rounds, streaming, interruption, autosave |
 | `tools.rs` | tool registry (built-ins + MCP), prompt rendering, tool-call parsing (Qwen/Hermes JSON and LFM2 pythonic) |
 | `llama_srv.rs`, `llm.rs`, `tune.rs`, `gguf.rs` | supervise prebuilt `llama-server`; pick backend (CUDA → ROCm → SYCL → Vulkan → CPU), threads, ctx and KV from sysfs + GGUF header |
@@ -123,8 +131,8 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `memory.rs` | append-only journal + time-ranged categorized reflections (`/reflect`) |
 | `schedules.rs` | calendar of tasks/reminders, delivered as `system|schedule` with catch-up after boot |
 | `state.rs` | `files/state/conversation.json` (fsynced, `.bak` fallback) |
-| `buses.rs`, `addressbook.rs` | buses (console, web, telegram, whatsapp), channels, contacts with trust levels |
-| `web.rs`, `webchat.rs`, `openapi.rs`, `hitl.rs` | HTTPS + mTLS web console, Telegram-style web chats, `/openapi.yaml`, human-in-the-loop tasks |
+| `buses.rs`, `addressbook.rs` | buses (console built in; web, telegram, whatsapp from their MCPs), channels, contacts with trust levels |
+| `weblink.rs` | the web MCP's address from `files/state/web.json`, for the status header, `/web` and the first-boot tour |
 | `clock.rs`, `tz.rs`, `hw.rs` | RFC 3339 time, NTP/RTC, IANA zones without tzdata; DMI/PCI/USB identity |
 
 ### Inference
@@ -183,17 +191,34 @@ an MCP's function definitions as a `system` message, so the cached prompt
 prefix stays valid. Keyword matches in a request can load a server too.
 Loaded servers persist with the conversation.
 
-### Web console
+### Web
 
-HTTPS on :443 (HTTP :80 redirects) inside the agent, rustls + ring. The CA,
+The web app is the `web` MCP (`source/crates/bia-mcp-web`), a bus like telegram
+and whatsapp. It has nothing to do with the console: the console is the
+physical screen and serial line, and only there do slash commands, a blank
+Enter (stop) and the model's own notes exist. People on web are envelope
+identities (their client certificate), each with their own chats: the main chat
+is channel `web`, others are `web:<chat>`. Their messages reach the agent as MCP
+`inbound` notifications and are journaled like any bus; the agent answers through
+the MCP (`say`, `react`, `delete_messages`, `pin_message`, `close_poll` and
+`chat_history` call its `send`, `react`, … functions, as do read marks and typing;
+those functions are the agent's own path and are not model tools). A web channel
+only names a chat, so a reply always
+carries the person: `say(channel="web")` without an identity uses whoever last
+wrote on that same channel, and the MCP refuses an unknown identity or `bia`
+itself. The agent loads the MCP at boot when `[web] enabled` and passes
+`BIA_WEB_PORT` / `BIA_WEB_HTTP_PORT` (443/80, dev 8443/0); the MCP publishes its
+address in `files/state/web.json`.
+
+HTTPS on :443 (HTTP :80 redirects), rustls + ring. The CA,
 server and client certificates come from `bia-pki` under
 `files/state/pki/`. The CA is public at `/v1/pki/ca`; everything else needs a
 client certificate. The first root certificate can be issued from the
 onboarding page while none exists; later ones are issued by root (web
-Settings, `pki_issue` or `/pki issue <id>`) and delivered once as a PKCS#12
+Settings, `web_pki_issue` or `/pki issue <id>` on the console) and delivered once as a PKCS#12
 pickup URL. Every .p12 bia hands out uses the password `12345678` (macOS will
 not import one with an empty password). Renewal (`POST /v1/pki/renew`) takes a
-CSR and returns PEM: no key is made here. The web console's Renew button makes
+CSR and returns PEM: no key is made here. The web app's Renew button makes
 a P-256 key with WebCrypto (`web/pki.js`), sends the CSR and builds the .p12
 in the browser. Both sides write the same modern PKCS#12 (`bia-pki/src/p12.rs`,
 `web/pki.js`): PBES2 (PBKDF2-HMAC-SHA256, AES-256-CBC) key bag, SHA-256 MAC, no
@@ -202,34 +227,32 @@ RC2/3DES, so OpenSSL 3 opens it without `-legacy`.
 Another agent without a certificate asks for one with a CSR for a key it made
 itself: `POST /v1/pki/requests` `{identity, role, note, csr}` checks the CSR's
 signature and key (RSA >= 2048, EC, Ed25519) and returns a random UUID and
-`202`. The request is stored in `pki/requests/<uuid>.json`, shown on the console
-and handed to the model as a system notice so it can ask root. Root decides with
-`/pki approve|deny <id>`, in web Settings, or by telling bia (`pki_approve` /
-`pki_deny` in the system MCP). Approval signs the CSR's public key with an
+`202`. The request is stored in `pki/requests/<uuid>.json` and handed to the
+model as a `system|web` notice so it can ask root. Root decides with
+`/pki approve|deny <id>` on the console, in web Settings, or by telling bia (`web_pki_approve` /
+`web_pki_deny`). Approval signs the CSR's public key with an
 identity, role (`agent`), trust (`normal`) and usages set here; the private key
 never exists on this machine. Deciding can take days, so the requester polls
 `GET /v1/pki/requests/<uuid>` (`pending` with `Retry-After`, then `approved`,
 `denied`, `issued` or `expired`) and downloads the PEM certificate + CA from
 `…/<uuid>/cert`. Pending requests lapse after 3 days; at most 20 wait at once, 3
-per address. Certificates root issues for people (`pki_issue`, pickup URL) and the first
+per address. Certificates root issues for people (`web_pki_issue`, pickup URL) and the first
 root certificate are still made here as PKCS#12, since browsers import those.
-`tools/peer-e2e.sh` (`make peer-e2e`) runs this between two QEMU agents.
+`tests/e2e/peer-e2e.sh` (`make peer-e2e`) runs this between two QEMU agents.
 
 The page (`web/index.html`, `app.js`, `app.css`, `term.js`, `emoji.js`) is a
-Telegram-style app. `webchat.rs` keeps each identity's chats in
-`files/state/web/<identity>/`: the main chat is channel `web`, others are
-`web:<chat>`. Messages carry replies, forwards, attachments (uploads go to
+Telegram-style app. `chat.rs` keeps each identity's chats in
+`files/state/web/<identity>/`. Messages carry replies, forwards, attachments (uploads go to
 `files/inbox/web/<identity>/`), reactions, edits, pins, read marks, inline
 buttons and polls; user actions reach the model as envelopes with `[reply to …]`,
-`[edited …]`, `[reaction] …`, `[button] …`, `[vote] …` markers, and the model
-uses `say(reply_to, files, buttons, poll, edit)`, `react`,
-`delete_messages`, `pin_message`, `close_poll` and `chat_history`. Streamed
-answers show live as drafts. For root the app adds the live agent console
-(`/ws/term`, the same byte stream as the screen, status header included), a
+`[edited …]`, `[reaction] …`, `[button] …`, `[vote] …` markers. Voice calls run
+in the MCP (`call.rs`, `web_call_start` / `web_call_hangup`). For root the app adds a
 root shell on a PTY (`/ws/shell`), a file manager over the whole filesystem
 (`/v1/fs/*`), human tasks (`/hitl`), the display (`/gui`, noVNC → x11vnc on
-127.0.0.1:5900) and certificate admin. Discovery: `/.well-known/bia.json`,
-`/openapi.yaml`, `/skills/web-console/SKILL.md`.
+127.0.0.1:5900), machine status (from `files/state/status.json`) and certificate
+admin; there is no console in the web app. Discovery: `/.well-known/bia.json`,
+`/openapi.yaml`, `/skills/web-console/SKILL.md`. `tests/integration/web-mcp-e2e.py` drives the
+MCP binary end to end.
 
 ## MCP servers (`source/crates/bia-mcp-*`, `source/flash/MCPs/*`)
 
@@ -239,12 +262,13 @@ into `/home/bia/MCPs`.
 
 | MCP | What it does |
 |---|---|
-| `system` | FMM configure/disable, web console link, human-in-the-loop, client-cert issue. Disks and network are plain Debian tools through `bash`. |
+| `system` | FMM configure/disable, human-in-the-loop, file links. Disks and network are plain Debian tools through `bash`. |
+| `web` | the web bus: HTTPS + mTLS app with Telegram-style chats and calls for people (client certificates), root shell, files, display, human tasks; client certificates and agent requests (`web_pki_*`) |
 | `secrets` | passwords, TOTP/HOTP, WebAuthn passkeys (ES256) in `files/state/passwords.json`; 1Password CSV/JSON import, CXF export |
 | `chrome` | Google Chrome on profile `~/.config/bia-chrome` with remote debugging; force-installed CRX extension proxies WebAuthn to `secrets`; page automation through Google's `chrome-devtools-mcp` (vendored Node) |
 | `screen` | screenshot, mouse and keyboard on `:0` (xdotool/scrot) |
-| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`) |
-| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`) |
+| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`); deletes are for everyone unless `revoke=false` |
+| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools); deletes are for everyone unless `revoke=false` |
 | `lang` | languages bia hears and speaks: catalog (`catalog.json`, sha256-pinned), on-demand installs into `files/speech`, voices, speech settings, transcribe/synthesize files |
 | `carry` | `fold`/`unfold` backups of `/home/bia`; `fly` to a machine in land mode (UDP discovery, X25519 handshake, confirmed code); `update` and `rescue` (see below); `morph` |
 
@@ -350,7 +374,7 @@ overwritten:
 On failure the marker stays (every boot retries), the log goes to
 `<dst>/bia-update/rescue.log`, and a shell opens. `carry_rescue` / `/rescue`
 does the same from the flash with the internal disk as destination.
-`tools/update-e2e.sh` (`make update-e2e`) tests disk, flash and rescue cases
+`tests/e2e/update-e2e.sh` (`make update-e2e`) tests disk, flash and rescue cases
 in QEMU (passing on arm64).
 
 Legacy BIOS has no BootNext, and a stick plugged in for the update usually
@@ -361,7 +385,7 @@ When it ran from a drive that is not the destination (an update of the disk
 started from the stick, or `/rescue`), it powers off and says to remove the
 stick, since a reboot would start the stick again. BIOS GRUB (MBR + core.img)
 is not changed by updates; its modules on the ESP stay with it.
-`tools/bios-update-e2e.py` (`make bios-update-e2e`, x86_64 SeaBIOS) runs all
+`tests/e2e/bios-update-e2e.py` (`make bios-update-e2e`, x86_64 SeaBIOS) runs all
 three cases, with the stick hot-plugged ahead of the disk for `disk`.
 
 ## Installing to an internal disk
@@ -377,7 +401,7 @@ remove the stick. The embed does what `grub-bios-setup` does: boot.img in the MB
 points at core.img, and core.img's first-sector blocklist points at its own
 remaining sectors (grub-mkimage's default only fits core.img at LBA 1).
 `bia-flash` does this natively (`bia_disk::embed_bios_grub`); `mkimage.sh` and
-`bia-migrate` use `grub-bios-embed.py`. `tools/bios-e2e.sh` (`make bios-e2e`)
+`bia-migrate` use `grub-bios-embed.py`. `tests/e2e/bios-e2e.sh` (`make bios-e2e`)
 tests the whole path in QEMU (SeaBIOS, x86_64) with a stick written by
 `bia-flash`.
 `bia-migrate to-flash` goes the other way. Later updates between the two use
@@ -427,7 +451,7 @@ it in its cache (`~/Library/Caches/bia-flash`, `%LOCALAPPDATA%\bia-flash\cache`,
 `--os-image dist/<arch>/bia-<arch>.img` (the GUI's advanced field reads
 `dist/<arch>/local-files.json`, written by `make build`).
 
-`tools/img-e2e.sh` (`make img-e2e`) tests both paths in QEMU: `MODE=flash`
+`tests/e2e/img-e2e.sh` (`make img-e2e`) tests both paths in QEMU: `MODE=flash`
 serves a local release over HTTP and has `bia-flash` write it with keys and a
 real Hugging Face model; `MODE=dd` decodes the `.img.xz` onto a bigger disk
 and adds the keys by hand. `FIRMWARE=bios` boots x86_64 under SeaBIOS.
@@ -444,7 +468,7 @@ the agent that lands installs its packages and reaches its model over the
 internet. The flyer folds into `/var/tmp` before it looks for the landing
 machine (`/run` is RAM and usually smaller than `/home/bia`); the landing side
 receives into `/var/tmp` and installs only manual packages it lacks.
-`tools/land-e2e.sh` (`make land-e2e`) boots the ISO in QEMU, installs onto a
+`tests/e2e/land-e2e.sh` (`make land-e2e`) boots the ISO in QEMU, installs onto a
 blank disk, flies a second VM onto it and checks the result (passing on arm64).
 
 ## Build pipeline
@@ -543,7 +567,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   and without debuginfo, so it carries no builder paths.
 - **Runtime.** All user state (`files/state`: conversation, `passwords.json`,
   PKI, FMM, Telegram/WhatsApp sessions, Chrome profile) lives on the target's
-  ext4 root. The web console requires mTLS client certs from the agent's CA;
+  ext4 root. The web app (web MCP) requires mTLS client certs from the machine's CA;
   the GUI/VNC bridge listens on loopback only.
 - **Telegram app credentials.** `api_id`/`api_hash` live in the gitignored
   `.env` (`BIA_TG_API_ID`, `BIA_TG_API_HASH`). `builders/build.sh` reads only
@@ -578,7 +602,7 @@ levels, schedules). The secrets store keeps Yaaia's `passwords.json` format
 
 - [x] Debian root, Secure Boot, BIOS + UEFI, x86_64 + arm64
 - [x] prebuilt llama-server with GPU backends; FMM cloud models
-- [x] web console with agent CA / mTLS; HITL
+- [x] web app as an MCP bus with its own CA / mTLS; HITL
 - [x] Telegram and WhatsApp buses, voice calls with local STT/TTS
 - [x] Chrome + passkeys, screen control, secrets
 - [x] memory, schedules, jobs

@@ -1,14 +1,14 @@
 #!/bin/bash
 # End-to-end QEMU test of the land ISO and carry fly/land.
 #
-#   tools/land-e2e.sh images   bia-land.iso (make iso), a blank land disk, fly.img from
+#   tests/e2e/land-e2e.sh images   bia-land.iso (make iso), a blank land disk, fly.img from
 #                              dist/$ARCH/root.img with ./fmm.json, a marker and eth1
-#   tools/land-e2e.sh run      VM 1 boots the ISO, installs onto its blank disk (static
+#   tests/e2e/land-e2e.sh run      VM 1 boots the ISO, installs onto its blank disk (static
 #                              address), reboots and waits in land. VM 2 (fly.img) asks
 #                              its agent to fly there; both sides confirm the code; the
 #                              land disk unfolds, reboots and starts the flyer's agent.
-#   tools/land-e2e.sh check    inspect the land disk
-#   tools/land-e2e.sh all      images + run + check
+#   tests/e2e/land-e2e.sh check    inspect the land disk
+#   tests/e2e/land-e2e.sh all      images + run + check
 #
 # The two VMs share a private L2 link (QEMU stream netdev over a unix socket): land eth0
 # 10.77.0.2/24, fly eth1 10.77.0.3/24. The flyer also has user-net on eth0 for FMM and
@@ -17,7 +17,7 @@
 # Files live in dist/le-$ARCH/. Env: ARCH (default arm64), MEM (4G), CPUS (4)
 set -euo pipefail
 SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
-cd "$(dirname "$SELF")/.."
+cd "$(dirname "$SELF")/../.."
 ROOT=$(pwd)
 ARCH=${ARCH:-arm64}
 LE=$ROOT/dist/le-$ARCH
@@ -30,7 +30,7 @@ mkdir -p "$LE"
 
 image_tool() {
   docker run --rm -i --privileged --platform "$PLATFORM" -e ARCH="$ARCH" \
-    -v "$LE":/ut:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tools/land-e2e-img.py "$@"
+    -v "$LE":/ut:rw -v "$ROOT":/work:ro "bia-build:$ARCH" python3 /work/tests/e2e/land-e2e-img.py "$@"
 }
 
 token() {
@@ -48,7 +48,7 @@ do_images() {
 }
 
 do_run() {
-  ARCH=$ARCH LE=$LE MEM=${MEM:-4G} CPUS=${CPUS:-4} python3 "$ROOT/tools/land-e2e-drive.py"
+  ARCH=$ARCH LE=$LE MEM=${MEM:-4G} CPUS=${CPUS:-4} python3 "$ROOT/tests/e2e/land-e2e-drive.py"
 }
 
 case ${1:-} in

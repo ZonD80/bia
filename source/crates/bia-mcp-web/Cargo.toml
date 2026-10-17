@@ -1,0 +1,22 @@
+[package]
+name = "bia-mcp-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: the web bus — HTTPS + mTLS chats, calls, files, root shell, screen, human tasks and certificates"
+
+[[bin]]
+name = "bia-mcp-web"
+path = "src/main.rs"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+bia-pki = { path = "../bia-pki" }
+bia-speech = { path = "../bia-speech" }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+base64 = "0.22"
+sha1_smol = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
