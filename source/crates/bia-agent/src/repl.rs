@@ -2230,6 +2230,8 @@ struct Printer {
     hidden: bool,
     printed_any: bool,
     thinking: bool,
+    /// inside reasoning that a remote API streams apart from the reply text
+    remote_thought: bool,
     think_chars: usize,
     show_thinking: bool,
     /// incomplete output line, rendered as markdown when it ends
@@ -2253,6 +2255,7 @@ impl Printer {
             hidden: false,
             printed_any: false,
             thinking: start_thinking,
+            remote_thought: false,
             think_chars: 0,
             show_thinking,
             md_buf: String::new(),
@@ -2283,11 +2286,38 @@ impl Printer {
         }
     }
     fn push_thought(&mut self, piece: &str) {
+        if !self.remote_thought {
+            if piece.trim().is_empty() {
+                return;
+            }
+            self.remote_thought = true;
+            self.think_chars = 0;
+            self.con.write(&self.con.c(
+                GRAY,
+                if self.show_thinking {
+                    "\n~ "
+                } else {
+                    "\n  thinking"
+                },
+            ));
+        }
         self.emit_thought(piece);
+    }
+    /// Close a remote reasoning block once the reply (or the end) arrives.
+    fn end_remote_thought(&mut self) {
+        if self.remote_thought {
+            self.remote_thought = false;
+            let n = self.think_chars;
+            self.con
+                .write(&self.con.c(GRAY, &format!("\n  (thought for {n} chars)\n")));
+        }
     }
     fn push(&mut self, piece: &str) {
         if self.hidden {
             return;
+        }
+        if !piece.is_empty() {
+            self.end_remote_thought();
         }
         self.buf.push_str(piece);
         loop {
@@ -2393,6 +2423,7 @@ impl Printer {
         self.con.write(&rendered);
     }
     fn flush(&mut self) {
+        self.end_remote_thought();
         if !self.hidden && !self.buf.is_empty() {
             let b = std::mem::take(&mut self.buf);
             self.emit(&b);

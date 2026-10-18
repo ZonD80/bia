@@ -411,6 +411,19 @@ async function showBoot() {
     } catch (e) { err.textContent = 'Pickup failed: ' + e.message; }
   };
 
+  // The browser presented a certificate this machine refused (another bia's, expired, revoked).
+  const bad = info.cert_problem;
+  const why = bad && ({
+    other_ca: 'was issued by another bia, not by this machine',
+    expired: 'has expired',
+    revoked: 'was revoked on this machine',
+  }[bad.kind] || 'is not valid here');
+  const problemStep = bad ? h('div', { class: 'step problem' },
+    h('h2', null, ic('shield'), 'Wrong certificate selected'),
+    h('p', null, `The certificate “${bad.identity || 'unnamed'}” you picked ${why}.`),
+    h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 1.'),
+    bad.kind === 'other_ca' ? h('p', null, 'Every bia names its CA “bia agent CA”, so certificates of other machines are offered too. Removing the ones you no longer use from your keychain or certificate store avoids picking them again.') : null) : null;
+
   const certStep = h('div', { class: 'step' },
     h('h2', null, h('span', { class: 'num' }, '2'), 'Get your certificate'),
     info.root_issued
@@ -435,7 +448,7 @@ async function showBoot() {
     h('img', { class: 'logo', src: '/icon.svg', alt: '' }),
     h('h1', null, 'bia'),
     h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Three steps to get in.'),
-    caStep, certStep, importStep, err,
+    problemStep, caStep, certStep, importStep, err,
     h('p', { class: 'muted', style: 'text-align:center;font-size:13px' },
       h('a', { href: '/openapi.yaml', target: '_blank' }, 'OpenAPI'), ' · ',
       h('a', { href: '/skills/web-console/SKILL.md', target: '_blank' }, 'Skill for agents'), ' · ',

@@ -3,7 +3,7 @@
 //! Bootstrap without a client cert (public CA download, first root cert, PKCS#12 pickup).
 use crate::bus::Bus;
 use base64::Engine;
-use bia_pki::{client_id_from_certs, ClientId, Pki};
+use bia_pki::{CertProblem, ClientId, Pki};
 use rustls::ServerConnection;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -502,8 +502,11 @@ impl Web {
                 return;
             }
         }
-        let client = client_id_from_certs(conn.peer_certificates())
-            .filter(|c| !self.pki.is_revoked(&c.serial_hint));
+        // The handshake takes any certificate; the CA, expiry and revocation are checked here.
+        let (client, problem) = match self.pki.check_client(conn.peer_certificates()) {
+            Ok(c) => (c, None),
+            Err(p) => (None, Some(p)),
+        };
 
         let Ok(tls) = SharedTls::new(conn, tcp) else {
             return;
@@ -550,7 +553,24 @@ impl Web {
                 body = vec![0u8; (req.content_length() as usize).min(MAX_BODY)];
                 let _ = reader.read_exact(&mut body);
             }
-            self.public(&req, &body, &peer, &mut stream);
+            self.public(&req, &body, &peer, &mut stream, problem.as_ref());
+            return;
+        }
+        if let (None, Some(p)) = (&client, &problem) {
+            // A page load goes to the start page, which explains the rejected certificate.
+            if req.method == "GET"
+                && req
+                    .header("accept")
+                    .is_some_and(|a| a.contains("text/html"))
+            {
+                redirect(&mut stream, "/");
+                return;
+            }
+            let msg = format!(
+                "client certificate \"{}\" rejected ({}); quit the browser or use a private window to choose another",
+                p.identity, p.kind
+            );
+            respond(&mut stream, 401, "text/plain", msg.as_bytes(), None);
             return;
         }
         let Some(id) = client else {
@@ -659,7 +679,14 @@ impl Web {
         self.authed(&req, &body, &mut stream, &id, root);
     }
 
-    fn public(&self, req: &Req, body: &[u8], peer: &str, stream: &mut SharedTls) {
+    fn public(
+        &self,
+        req: &Req,
+        body: &[u8],
+        peer: &str,
+        stream: &mut SharedTls,
+        problem: Option<&CertProblem>,
+    ) {
         let asset = |s: &mut SharedTls, ctype: &str, body: &str| {
             respond(s, 200, ctype, body.as_bytes(), None)
         };
@@ -691,6 +718,8 @@ impl Web {
                     "ca": "/v1/pki/ca",
                     "ca_sha256": self.ca_sha256(),
                     "origins": self.origins(),
+                    // the certificate this browser presented and why it was refused
+                    "cert_problem": problem.map(|p| json!({"kind": p.kind, "identity": p.identity})),
                 }),
             ),
             ("POST", "/v1/pki/bootstrap/root") => self.serve_bootstrap_root(stream),

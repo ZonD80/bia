@@ -17,7 +17,12 @@ fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     if n < 0x80 {
         out.push(n as u8);
     } else {
-        let b: Vec<u8> = n.to_be_bytes().iter().copied().skip_while(|x| *x == 0).collect();
+        let b: Vec<u8> = n
+            .to_be_bytes()
+            .iter()
+            .copied()
+            .skip_while(|x| *x == 0)
+            .collect();
         out.push(0x80 | b.len() as u8);
         out.extend_from_slice(&b);
     }
@@ -40,7 +45,12 @@ fn null() -> Vec<u8> {
     vec![0x05, 0x00]
 }
 fn int(v: u32) -> Vec<u8> {
-    let mut b: Vec<u8> = v.to_be_bytes().iter().copied().skip_while(|x| *x == 0).collect();
+    let mut b: Vec<u8> = v
+        .to_be_bytes()
+        .iter()
+        .copied()
+        .skip_while(|x| *x == 0)
+        .collect();
     if b.is_empty() || b[0] & 0x80 != 0 {
         b.insert(0, 0);
     }
@@ -61,7 +71,12 @@ fn oid(dotted: &str) -> Vec<u8> {
     tlv(0x06, &out)
 }
 fn bmp(s: &str) -> Vec<u8> {
-    tlv(0x1e, &s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<_>>())
+    tlv(
+        0x1e,
+        &s.encode_utf16()
+            .flat_map(|u| u.to_be_bytes())
+            .collect::<Vec<_>>(),
+    )
 }
 
 const DATA: &str = "1.2.840.113549.1.7.1";
@@ -78,7 +93,9 @@ const AES256_CBC: &str = "2.16.840.1.101.3.4.1.42";
 
 fn random<const N: usize>() -> Result<[u8; N]> {
     let mut b = [0u8; N];
-    SystemRandom::new().fill(&mut b).map_err(|_| anyhow!("no randomness"))?;
+    SystemRandom::new()
+        .fill(&mut b)
+        .map_err(|_| anyhow!("no randomness"))?;
     Ok(b)
 }
 
@@ -86,7 +103,10 @@ fn random<const N: usize>() -> Result<[u8; N]> {
 fn p12_kdf(password: &str, salt: &[u8], id: u8, iterations: u32, n: usize) -> Vec<u8> {
     const U: usize = 32;
     const V: usize = 64;
-    let mut pw: Vec<u8> = password.encode_utf16().flat_map(|u| u.to_be_bytes()).collect();
+    let mut pw: Vec<u8> = password
+        .encode_utf16()
+        .flat_map(|u| u.to_be_bytes())
+        .collect();
     pw.extend_from_slice(&[0, 0]);
     let fill = |src: &[u8]| -> Vec<u8> {
         if src.is_empty() {
@@ -99,7 +119,11 @@ fn p12_kdf(password: &str, salt: &[u8], id: u8, iterations: u32, n: usize) -> Ve
     let mut i_buf = [fill(salt), fill(&pw)].concat();
     let mut out = Vec::with_capacity(n);
     while out.len() < n {
-        let mut a = Sha256::new().chain_update(d).chain_update(&i_buf).finalize().to_vec();
+        let mut a = Sha256::new()
+            .chain_update(d)
+            .chain_update(&i_buf)
+            .finalize()
+            .to_vec();
         for _ in 1..iterations {
             a = Sha256::digest(&a).to_vec();
         }
@@ -132,15 +156,29 @@ fn shroud(pkcs8: &[u8], password: &str) -> Result<Vec<u8>> {
         password.as_bytes(),
         &mut key,
     );
-    let ct = cbc::Encryptor::<aes::Aes256>::new(&key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(pkcs8);
-    let kdf = seq(&[&oid(PBKDF2), &seq(&[&octets(&salt), &int(ITERATIONS), &seq(&[&oid(HMAC_SHA256), &null()])])]);
+    let ct = cbc::Encryptor::<aes::Aes256>::new(&key.into(), &iv.into())
+        .encrypt_padded_vec_mut::<Pkcs7>(pkcs8);
+    let kdf = seq(&[
+        &oid(PBKDF2),
+        &seq(&[
+            &octets(&salt),
+            &int(ITERATIONS),
+            &seq(&[&oid(HMAC_SHA256), &null()]),
+        ]),
+    ]);
     let cipher = seq(&[&oid(AES256_CBC), &octets(&iv)]);
     let alg = seq(&[&oid(PBES2), &seq(&[&kdf, &cipher])]);
     Ok(seq(&[&alg, &octets(&ct)]))
 }
 
 /// PKCS#12 holding `key_pkcs8` with `cert` (then `chain`), protected by `password`.
-pub fn build(cert: &[u8], key_pkcs8: &[u8], chain: &[&[u8]], friendly: &str, password: &str) -> Result<Vec<u8>> {
+pub fn build(
+    cert: &[u8],
+    key_pkcs8: &[u8],
+    chain: &[&[u8]],
+    friendly: &str,
+    password: &str,
+) -> Result<Vec<u8>> {
     let key_id = &Sha256::digest(cert)[..20];
     let attrs = set(&[
         &seq(&[&oid(FRIENDLY_NAME), &set(&[&bmp(friendly)])]),
@@ -157,12 +195,19 @@ pub fn build(cert: &[u8], key_pkcs8: &[u8], chain: &[&[u8]], friendly: &str, pas
     let mut bags = vec![cert_bag(cert, true)];
     bags.extend(chain.iter().map(|c| cert_bag(c, false)));
     let certs = tlv(0x30, &bags.concat());
-    let keys = seq(&[&seq(&[&oid(SHROUDED_KEY_BAG), &ctx0(&shroud(key_pkcs8, password)?), &attrs])]);
+    let keys = seq(&[&seq(&[
+        &oid(SHROUDED_KEY_BAG),
+        &ctx0(&shroud(key_pkcs8, password)?),
+        &attrs,
+    ])]);
     let data = |body: &[u8]| seq(&[&oid(DATA), &ctx0(&octets(body))]);
     let auth_safe = seq(&[&data(&certs), &data(&keys)]);
     let salt: [u8; 16] = random()?;
     let mac_key = p12_kdf(password, &salt, 3, ITERATIONS, 32);
-    let mac = ring::hmac::sign(&ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &mac_key), &auth_safe);
+    let mac = ring::hmac::sign(
+        &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, &mac_key),
+        &auth_safe,
+    );
     let mac_data = seq(&[
         &seq(&[&seq(&[&oid(SHA256), &null()]), &octets(mac.as_ref())]),
         &octets(&salt),

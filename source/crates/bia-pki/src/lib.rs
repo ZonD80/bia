@@ -4,9 +4,14 @@ use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose, SanType,
 };
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::client::danger::HandshakeSignatureValid;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::WebPkiClientVerifier;
-use rustls::{RootCertStore, ServerConfig};
+use rustls::{
+    CertificateError, DigitallySignedStruct, DistinguishedName, RootCertStore, ServerConfig,
+    SignatureScheme,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -95,9 +100,7 @@ impl Pki {
     fn bootstrap_ca(&self) -> Result<()> {
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params
-            .distinguished_name
-            .push(DnType::CommonName, CA_NAME);
+        params.distinguished_name.push(DnType::CommonName, CA_NAME);
         params
             .distinguished_name
             .push(DnType::OrganizationName, "bia");
@@ -195,12 +198,8 @@ impl Pki {
         Ok(true)
     }
 
-    pub fn server_config(&self) -> Result<Arc<ServerConfig>> {
-        let cert_pem = fs::read(self.server_cert_path()).context("read server.crt")?;
-        let key_pem = fs::read(self.server_key_path()).context("read server.key")?;
-        let certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
-        let key = pem_to_key_der(std::str::from_utf8(&key_pem)?)?;
-
+    /// Verifier of client certificates against this CA (chain and validity time).
+    fn client_verifier(&self) -> Result<Arc<dyn ClientCertVerifier>> {
         let mut roots = RootCertStore::empty();
         let ca = pem_to_cert_ders(&self.ca_pem()?)?;
         for c in ca {
@@ -208,10 +207,24 @@ impl Pki {
                 .add(c)
                 .map_err(|e| anyhow!("add CA to root store: {e}"))?;
         }
-        let verifier = WebPkiClientVerifier::builder(Arc::new(roots))
+        WebPkiClientVerifier::builder(Arc::new(roots))
             .allow_unauthenticated()
             .build()
-            .map_err(|e| anyhow!("client verifier: {e}"))?;
+            .map_err(|e| anyhow!("client verifier: {e}"))
+    }
+
+    /// The handshake accepts any client certificate whose key the browser holds; the chain
+    /// is checked per request by `check_client`. A browser that picked a certificate of
+    /// another bia (same CA name) or an expired one then gets a page saying so instead of
+    /// a bare TLS alert (ERR_SSL_DECRYPT_ERROR_ALERT), which it would keep hitting until
+    /// it is restarted.
+    pub fn server_config(&self) -> Result<Arc<ServerConfig>> {
+        let cert_pem = fs::read(self.server_cert_path()).context("read server.crt")?;
+        let key_pem = fs::read(self.server_key_path()).context("read server.key")?;
+        let certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
+        let key = pem_to_key_der(std::str::from_utf8(&key_pem)?)?;
+
+        let verifier = Arc::new(AnyClientCert(self.client_verifier()?));
 
         let mut cfg = ServerConfig::builder()
             .with_client_cert_verifier(verifier)
@@ -232,14 +245,26 @@ impl Pki {
             .next()
             .ok_or_else(|| anyhow!("empty CA"))?;
         let key_der = key.serialize_der();
-        let p12 = p12::build(cert.der().as_ref(), &key_der, &[ca_der.as_ref()], &meta.identity, P12_PASSWORD)?;
+        let p12 = p12::build(
+            cert.der().as_ref(),
+            &key_der,
+            &[ca_der.as_ref()],
+            &meta.identity,
+            P12_PASSWORD,
+        )?;
         Ok((p12, meta))
     }
 
     /// Sign the public key of a verified CSR. Identity, role, trust and usages come from
     /// this side; the CSR's subject and extensions are ignored. Returns the certificate
     /// followed by the CA, as PEM.
-    pub fn issue_csr(&self, identity: &str, role: &str, trust: &str, csr_pem: &str) -> Result<(String, IssuedMeta)> {
+    pub fn issue_csr(
+        &self,
+        identity: &str,
+        role: &str,
+        trust: &str,
+        csr_pem: &str,
+    ) -> Result<(String, IssuedMeta)> {
         let csr = check_csr(csr_pem)?;
         let (cert, meta, ca_pem) = self.sign_client(identity, role, trust, &csr.public_key)?;
         Ok((format!("{}{}", cert.pem(), ca_pem), meta))
@@ -347,6 +372,38 @@ impl Pki {
         Ok(true)
     }
 
+    /// Who the presented client certificate belongs to: `Ok(None)` when none was sent,
+    /// `Err` when one was sent that this bia does not accept.
+    pub fn check_client(
+        &self,
+        certs: Option<&[CertificateDer<'_>]>,
+    ) -> std::result::Result<Option<ClientId>, CertProblem> {
+        let Some((end, rest)) = certs.and_then(|c| c.split_first()) else {
+            return Ok(None);
+        };
+        let problem = |kind| CertProblem {
+            kind,
+            identity: presented_identity(end),
+        };
+        let verifier = self.client_verifier().map_err(|_| problem("invalid"))?;
+        if let Err(e) = verifier.verify_client_cert(end, rest, UnixTime::now()) {
+            return Err(problem(match e {
+                rustls::Error::InvalidCertificate(
+                    CertificateError::Expired | CertificateError::ExpiredContext { .. },
+                ) => "expired",
+                rustls::Error::InvalidCertificate(
+                    CertificateError::UnknownIssuer | CertificateError::BadSignature,
+                ) => "other_ca",
+                _ => "invalid",
+            }));
+        }
+        let id = client_id_from_certs(certs).ok_or_else(|| problem("invalid"))?;
+        if self.is_revoked(&id.serial_hint) {
+            return Err(problem("revoked"));
+        }
+        Ok(Some(id))
+    }
+
     pub fn is_revoked(&self, serial_hint: &str) -> bool {
         self.list_issued()
             .unwrap_or_default()
@@ -431,9 +488,76 @@ impl Pki {
         if current.not_after <= now {
             bail!("certificate is expired; ask root for a new one");
         }
-        let (pem, meta) = self.issue_csr(&current.identity, &current.role, &current.trust, csr_pem)?;
+        let (pem, meta) =
+            self.issue_csr(&current.identity, &current.role, &current.trust, csr_pem)?;
         let _ = self.revoke(&current.serial_hint);
         Ok((pem, meta))
+    }
+}
+
+/// A client certificate was presented but is not accepted here.
+#[derive(Clone, Debug)]
+pub struct CertProblem {
+    /// "other_ca" (issued by another bia), "expired", "revoked" or "invalid"
+    pub kind: &'static str,
+    /// Subject CN of the presented certificate, e.g. "Identity: root"
+    pub identity: String,
+}
+
+fn presented_identity(der: &CertificateDer<'_>) -> String {
+    x509_parser::parse_x509_certificate(der.as_ref())
+        .ok()
+        .and_then(|(_, c)| {
+            c.subject()
+                .iter_common_name()
+                .next()
+                .and_then(|a| a.as_str().ok().map(str::to_string))
+        })
+        .unwrap_or_default()
+}
+
+/// Client verifier for the handshake: requests a certificate (with this CA as the hint, so
+/// browsers offer the matching ones first) and checks that the peer holds its key, but
+/// leaves the chain to `Pki::check_client`.
+#[derive(Debug)]
+struct AnyClientCert(Arc<dyn ClientCertVerifier>);
+
+impl ClientCertVerifier for AnyClientCert {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+    fn root_hint_subjects(&self) -> &[DistinguishedName] {
+        self.0.root_hint_subjects()
+    }
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> std::result::Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_verify_schemes()
     }
 }
 
@@ -572,11 +696,17 @@ pub fn check_csr(pem: &str) -> Result<rcgen::CertificateSigningRequestParams> {
         .ok()
         .flatten()
         .ok_or_else(|| anyhow!("csr: not PEM"))?;
-    let (_, req) = x509_parser::certification_request::X509CertificationRequest::from_der(der.as_ref())
-        .map_err(|_| anyhow!("csr: cannot parse"))?;
-    if let Ok(x509_parser::public_key::PublicKey::RSA(rsa)) = req.certification_request_info.subject_pki.parsed() {
+    let (_, req) =
+        x509_parser::certification_request::X509CertificationRequest::from_der(der.as_ref())
+            .map_err(|_| anyhow!("csr: cannot parse"))?;
+    if let Ok(x509_parser::public_key::PublicKey::RSA(rsa)) =
+        req.certification_request_info.subject_pki.parsed()
+    {
         if rsa.key_size() < 2048 {
-            bail!("csr: RSA key is {} bits; use at least 2048 (or EC P-256)", rsa.key_size());
+            bail!(
+                "csr: RSA key is {} bits; use at least 2048 (or EC P-256)",
+                rsa.key_size()
+            );
         }
     }
     rcgen::CertificateSigningRequestParams::from_pem(pem)

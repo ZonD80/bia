@@ -209,6 +209,23 @@ impl FlashApp {
         }
     }
 
+    /// "Load…": native file dialog for fmm.json.
+    fn pick_fmm_file(&mut self) {
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Choose fmm.json")
+            .add_filter("fmm.json", &["json"]);
+        let current = PathBuf::from(self.fmm_path.trim());
+        if let Some(dir) = current.parent().filter(|d| d.is_dir()) {
+            dialog = dialog.set_directory(dir);
+        } else if let Ok(cwd) = std::env::current_dir() {
+            dialog = dialog.set_directory(cwd);
+        }
+        if let Some(p) = dialog.set_file_name("fmm.json").pick_file() {
+            self.fmm_path = p.display().to_string();
+            self.load_fmm_file();
+        }
+    }
+
     fn load_fmm_file(&mut self) {
         let path = PathBuf::from(self.fmm_path.trim());
         if path.as_os_str().is_empty() {
@@ -958,9 +975,12 @@ impl eframe::App for FlashApp {
                         key_help(ui, self.api_key.trim().is_empty());
                         ui.horizontal(|ui| {
                             ui.label("fmm.json");
-                            ui.text_edit_singleline(&mut self.fmm_path);
-                            if ui.button("Load").clicked() {
+                            let r = ui.text_edit_singleline(&mut self.fmm_path);
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                                 self.load_fmm_file();
+                            }
+                            if ui.button("Load…").clicked() {
+                                self.pick_fmm_file();
                             }
                         });
                         ui.horizontal(|ui| {

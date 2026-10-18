@@ -96,6 +96,8 @@ select.input { background: var(--panel); }
 details.howto { margin-top: 10px; font-size: 14px; color: var(--dim2); }
 details.howto summary { cursor: pointer; color: var(--acc); }
 details.howto li { margin: 4px 0; }
+.step.problem { border-color: var(--warn); }
+.step.problem h2 { color: var(--warn); }
 .err-line { color: var(--err); min-height: 1.3em; font-size: 14px; margin-top: 8px; }
 
 /* ---------- layout ---------- */

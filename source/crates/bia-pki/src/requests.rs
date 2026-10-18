@@ -101,7 +101,14 @@ pub fn new_uuid() -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn valid_uuid(s: &str) -> bool {
@@ -137,7 +144,8 @@ impl Pki {
         if !valid_uuid(&id) {
             return None;
         }
-        let mut r: CertRequest = serde_json::from_slice(&fs::read(self.request_path(&id)).ok()?).ok()?;
+        let mut r: CertRequest =
+            serde_json::from_slice(&fs::read(self.request_path(&id)).ok()?).ok()?;
         let at = r.expires_at();
         if at > 0 && now_secs() > at {
             r.status = Status::Expired;
@@ -184,7 +192,14 @@ impl Pki {
     }
 
     /// File a new request. `source` is the peer address (for limits and for the approver).
-    pub fn create_request(&self, identity: &str, role: &str, note: &str, source: &str, csr: &str) -> Result<CertRequest> {
+    pub fn create_request(
+        &self,
+        identity: &str,
+        role: &str,
+        note: &str,
+        source: &str,
+        csr: &str,
+    ) -> Result<CertRequest> {
         let identity = sanitize_id(identity)?;
         if identity == "root" {
             bail!("root certificates are not requested; root issues them on this machine");
@@ -231,7 +246,13 @@ impl Pki {
     }
 
     /// Approve or deny a pending request. `by` records who decided (for the log).
-    pub fn decide_request(&self, id_or_prefix: &str, approve: bool, by: &str, reason: &str) -> Result<CertRequest> {
+    pub fn decide_request(
+        &self,
+        id_or_prefix: &str,
+        approve: bool,
+        by: &str,
+        reason: &str,
+    ) -> Result<CertRequest> {
         let mut r = self.find_request(id_or_prefix)?;
         if r.status != Status::Pending {
             bail!("request {} is already {}", r.short(), r.status.as_str());
@@ -241,10 +262,18 @@ impl Pki {
             r.cert = pem;
             r.serial = meta.serial;
         }
-        r.status = if approve { Status::Approved } else { Status::Denied };
+        r.status = if approve {
+            Status::Approved
+        } else {
+            Status::Denied
+        };
         r.decided = now_secs();
         r.decided_by = by.to_string();
-        r.reason = reason.chars().filter(|c| !c.is_control()).take(NOTE_MAX).collect();
+        r.reason = reason
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(NOTE_MAX)
+            .collect();
         self.save_request(&r)?;
         Ok(r)
     }
@@ -301,31 +330,71 @@ mod tests {
         crate::install_crypto_provider();
         let (pki, dir) = temp_pki("flow");
         let (pem, key) = csr("root");
-        assert!(pki.create_request("root", "agent", "", "1.2.3.4", &pem).is_err());
-        assert!(pki.create_request("peer-bia", "agent", "", "1.2.3.4", "").is_err(), "csr required");
-        assert!(pki.create_request("peer-bia", "agent", "", "1.2.3.4", "-----BEGIN CERTIFICATE REQUEST-----\nAAAA\n-----END CERTIFICATE REQUEST-----").is_err());
-        let r = pki.create_request("peer-bia", "", "hello\u{7}there", "1.2.3.4", &pem).unwrap();
+        assert!(pki
+            .create_request("root", "agent", "", "1.2.3.4", &pem)
+            .is_err());
+        assert!(
+            pki.create_request("peer-bia", "agent", "", "1.2.3.4", "")
+                .is_err(),
+            "csr required"
+        );
+        assert!(pki
+            .create_request(
+                "peer-bia",
+                "agent",
+                "",
+                "1.2.3.4",
+                "-----BEGIN CERTIFICATE REQUEST-----\nAAAA\n-----END CERTIFICATE REQUEST-----"
+            )
+            .is_err());
+        let r = pki
+            .create_request("peer-bia", "", "hello\u{7}there", "1.2.3.4", &pem)
+            .unwrap();
         assert_eq!(r.role, "agent");
         assert_eq!(r.note, "hellothere");
         assert!(pki.collect_request(&r.id).is_err(), "not before approval");
-        assert!(pki.request(&r.id[..8]).is_none(), "requesters need the full id");
+        assert!(
+            pki.request(&r.id[..8]).is_none(),
+            "requesters need the full id"
+        );
         let d = pki.decide_request(&r.id[..8], true, "root", "").unwrap();
         assert_eq!(d.status, Status::Approved);
-        assert!(pki.decide_request(&r.id, false, "root", "").is_err(), "decided once");
+        assert!(
+            pki.decide_request(&r.id, false, "root", "").is_err(),
+            "decided once"
+        );
         let (chain, after) = pki.collect_request(&r.id).unwrap();
         assert_eq!(after.status, Status::Issued);
         assert!(!chain.contains("PRIVATE KEY"));
         assert_eq!(chain.matches("BEGIN CERTIFICATE").count(), 2, "leaf + CA");
         // the leaf carries the requester's key and the identity set here, not the CSR's CN
-        let leaf = rustls_pemfile::certs(&mut chain.as_bytes()).next().unwrap().unwrap();
+        let leaf = rustls_pemfile::certs(&mut chain.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
         let (_, x) = x509_parser::parse_x509_certificate(leaf.as_ref()).unwrap();
-        assert_eq!(x.public_key().subject_public_key.data.as_ref(), key.public_key_raw());
-        let cn = x.subject().iter_common_name().next().unwrap().as_str().unwrap().to_string();
+        assert_eq!(
+            x.public_key().subject_public_key.data.as_ref(),
+            key.public_key_raw()
+        );
+        let cn = x
+            .subject()
+            .iter_common_name()
+            .next()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(cn, "Identity: peer-bia");
         assert!(x.subject().to_string().contains("trust:normal"));
-        assert!(pki.collect_request(&r.id).is_ok(), "re-download is harmless");
+        assert!(
+            pki.collect_request(&r.id).is_ok(),
+            "re-download is harmless"
+        );
         let m = pki.list_issued().unwrap();
-        assert!(m.iter().any(|m| m.serial == after.serial && m.identity == "peer-bia" && m.trust == "normal"));
+        assert!(m
+            .iter()
+            .any(|m| m.serial == after.serial && m.identity == "peer-bia" && m.trust == "normal"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -342,7 +411,15 @@ mod tests {
             }
         }
         let (pki, dir) = temp_pki("openssl");
-        let r = pki.create_request("o", "agent", "", "1.1.1.1", include_str!("../testdata/p256.csr")).unwrap();
+        let r = pki
+            .create_request(
+                "o",
+                "agent",
+                "",
+                "1.1.1.1",
+                include_str!("../testdata/p256.csr"),
+            )
+            .unwrap();
         pki.decide_request(&r.id, true, "root", "").unwrap();
         assert!(pki.collect_request(&r.id).is_ok());
         let _ = fs::remove_dir_all(dir);
@@ -365,12 +442,28 @@ mod tests {
         let (next, key) = csr("ignored");
         let (chain, meta) = pki.renew_csr(&me, &next).unwrap();
         assert!(!chain.contains("PRIVATE KEY"));
-        assert_eq!((meta.identity.as_str(), meta.role.as_str(), meta.trust.as_str()), ("alice", "user", "root"));
-        let leaf = rustls_pemfile::certs(&mut chain.as_bytes()).next().unwrap().unwrap();
+        assert_eq!(
+            (
+                meta.identity.as_str(),
+                meta.role.as_str(),
+                meta.trust.as_str()
+            ),
+            ("alice", "user", "root")
+        );
+        let leaf = rustls_pemfile::certs(&mut chain.as_bytes())
+            .next()
+            .unwrap()
+            .unwrap();
         let (_, x) = x509_parser::parse_x509_certificate(leaf.as_ref()).unwrap();
-        assert_eq!(x.public_key().subject_public_key.data.as_ref(), key.public_key_raw());
+        assert_eq!(
+            x.public_key().subject_public_key.data.as_ref(),
+            key.public_key_raw()
+        );
         assert!(pki.is_revoked(&old.serial), "old serial revoked");
-        assert!(pki.renew_csr(&me, &next).is_err(), "a revoked cert cannot renew again");
+        assert!(
+            pki.renew_csr(&me, &next).is_err(),
+            "a revoked cert cannot renew again"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -398,15 +491,29 @@ mod tests {
             let _ = fs::remove_dir_all(dir);
             return;
         };
-        let text = format!("{}{}", String::from_utf8_lossy(&info.stdout), String::from_utf8_lossy(&info.stderr));
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&info.stdout),
+            String::from_utf8_lossy(&info.stderr)
+        );
         assert!(info.status.success(), "{text}");
-        assert!(text.contains("MAC: sha256") && text.contains("PBES2, PBKDF2, AES-256-CBC"), "{text}");
+        assert!(
+            text.contains("MAC: sha256") && text.contains("PBES2, PBKDF2, AES-256-CBC"),
+            "{text}"
+        );
         assert!(!text.contains("RC2") && !text.contains("3DES"), "{text}");
         assert!(!run("wrong", &["-noout"]).unwrap().status.success());
         let pem = run(crate::P12_PASSWORD, &["-nodes"]).unwrap();
         let pem = String::from_utf8_lossy(&pem.stdout).to_string();
-        assert!(pem.contains("PRIVATE KEY") && pem.matches("BEGIN CERTIFICATE").count() == 2, "{pem}");
-        assert!(pem.contains("Identity: bob") && pem.contains(&format!("friendlyName: {}", meta.identity)), "{pem}");
+        assert!(
+            pem.contains("PRIVATE KEY") && pem.matches("BEGIN CERTIFICATE").count() == 2,
+            "{pem}"
+        );
+        assert!(
+            pem.contains("Identity: bob")
+                && pem.contains(&format!("friendlyName: {}", meta.identity)),
+            "{pem}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -425,18 +532,128 @@ mod tests {
     fn deny_expire_and_limits() {
         let (pki, dir) = temp_pki("limits");
         let (pem, _) = csr("x");
-        let a = pki.create_request("a1", "agent", "", "9.9.9.9", &pem).unwrap();
+        let a = pki
+            .create_request("a1", "agent", "", "9.9.9.9", &pem)
+            .unwrap();
         pki.decide_request(&a.id, false, "root", "no").unwrap();
         assert_eq!(pki.request(&a.id).unwrap().status, Status::Denied);
         assert!(pki.collect_request(&a.id).is_err());
         for i in 0..3 {
-            pki.create_request(&format!("b{i}"), "agent", "", "5.5.5.5", &pem).unwrap();
+            pki.create_request(&format!("b{i}"), "agent", "", "5.5.5.5", &pem)
+                .unwrap();
         }
-        assert!(pki.create_request("b3", "agent", "", "5.5.5.5", &pem).is_err(), "per-source cap");
-        let mut old = pki.create_request("c", "agent", "", "6.6.6.6", &pem).unwrap();
+        assert!(
+            pki.create_request("b3", "agent", "", "5.5.5.5", &pem)
+                .is_err(),
+            "per-source cap"
+        );
+        let mut old = pki
+            .create_request("c", "agent", "", "6.6.6.6", &pem)
+            .unwrap();
         old.created = 1;
         pki.save_request(&old).unwrap();
         assert_eq!(pki.request(&old.id).unwrap().status, Status::Expired);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    /// Client chain and key for `pki`, made the way an agent gets one (CSR).
+    fn client_of(
+        pki: &Pki,
+        id: &str,
+    ) -> (
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rcgen::KeyPair,
+        String,
+    ) {
+        let (pem, key) = csr(id);
+        let (chain, meta) = pki.issue_csr(id, "user", "normal", &pem).unwrap();
+        (crate::pem_to_cert_ders(&chain).unwrap(), key, meta.serial)
+    }
+
+    /// TLS handshake in memory between `server` and a client presenting `cert`.
+    fn handshake(
+        server: &Pki,
+        cert: Option<(
+            Vec<rustls::pki_types::CertificateDer<'static>>,
+            &rcgen::KeyPair,
+        )>,
+    ) -> rustls::ServerConnection {
+        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+        crate::install_crypto_provider();
+        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        server.ensure_server_sans(&[ip]).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        for c in crate::pem_to_cert_ders(&server.ca_pem().unwrap()).unwrap() {
+            roots.add(c).unwrap();
+        }
+        let b = rustls::ClientConfig::builder().with_root_certificates(roots);
+        let cfg = match cert {
+            Some((chain, key)) => {
+                let der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
+                b.with_client_auth_cert(chain, der).unwrap()
+            }
+            None => b.with_no_client_auth(),
+        };
+        let mut c = rustls::ClientConnection::new(
+            std::sync::Arc::new(cfg),
+            ServerName::IpAddress(ip.into()),
+        )
+        .unwrap();
+        let mut s = rustls::ServerConnection::new(server.server_config().unwrap()).unwrap();
+        for _ in 0..20 {
+            let mut buf = vec![];
+            while c.wants_write() {
+                c.write_tls(&mut buf).unwrap();
+            }
+            if !buf.is_empty() {
+                s.read_tls(&mut buf.as_slice()).unwrap();
+                s.process_new_packets()
+                    .expect("server accepts the handshake");
+            }
+            let mut buf = vec![];
+            while s.wants_write() {
+                s.write_tls(&mut buf).unwrap();
+            }
+            if !buf.is_empty() {
+                c.read_tls(&mut buf.as_slice()).unwrap();
+                c.process_new_packets()
+                    .expect("client accepts the handshake");
+            }
+            if !c.is_handshaking() && !s.is_handshaking() && !c.wants_write() {
+                break;
+            }
+        }
+        assert!(!s.is_handshaking(), "handshake did not finish");
+        s
+    }
+
+    #[test]
+    fn foreign_client_cert_passes_tls_and_is_refused_by_check_client() {
+        let (a, dir_a) = temp_pki("cc-a");
+        let (b, dir_b) = temp_pki("cc-b");
+
+        let (own, own_key, own_serial) = client_of(&a, "alice");
+        let s = handshake(&a, Some((own.clone(), &own_key)));
+        let id = a.check_client(s.peer_certificates()).unwrap().unwrap();
+        assert_eq!(id.identity, "alice");
+
+        // another bia's certificate (same CA name): handshake succeeds, check_client says why
+        let (foreign, foreign_key, _) = client_of(&b, "bob");
+        let s = handshake(&a, Some((foreign, &foreign_key)));
+        let p = a.check_client(s.peer_certificates()).unwrap_err();
+        assert_eq!((p.kind, p.identity.as_str()), ("other_ca", "Identity: bob"));
+
+        let s = handshake(&a, None);
+        assert!(a.check_client(s.peer_certificates()).unwrap().is_none());
+
+        assert!(a.revoke(&own_serial).unwrap());
+        let s = handshake(&a, Some((own, &own_key)));
+        assert_eq!(
+            a.check_client(s.peer_certificates()).unwrap_err().kind,
+            "revoked"
+        );
+
+        let _ = fs::remove_dir_all(dir_a);
+        let _ = fs::remove_dir_all(dir_b);
     }
 }

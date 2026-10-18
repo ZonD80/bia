@@ -494,6 +494,52 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"outpu
     }
 
     #[test]
+    fn responses_stream_reasoning_summaries() {
+        let sse = r#"data: {"type":"response.reasoning_summary_part.added","summary_index":0}
+data: {"type":"response.reasoning_summary_text.delta","delta":"First"}
+data: {"type":"response.reasoning_summary_part.added","summary_index":1}
+data: {"type":"response.reasoning_summary_text.delta","delta":"Second"}
+data: {"type":"response.output_text.delta","delta":"OK"}
+data: {"type":"response.completed","response":{"usage":{}}}
+"#;
+        let mut thought = String::new();
+        let r = Remote::read_responses_stream(sse.as_bytes(), &mut |t, p| {
+            if t {
+                thought.push_str(p);
+            }
+            true
+        })
+        .unwrap();
+        assert_eq!(thought, "First\n\nSecond");
+        assert_eq!(r.text, "OK");
+    }
+
+    #[test]
+    fn anthropic_thinking_by_model() {
+        assert_eq!(
+            anthropic_thinking("claude-opus-4-6").unwrap()["type"],
+            "adaptive"
+        );
+        assert!(anthropic_thinking("claude-opus-4-6")
+            .unwrap()
+            .get("display")
+            .is_none());
+        for m in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-fable-5-1",
+            "claude-opus-4-8",
+        ] {
+            assert_eq!(
+                anthropic_thinking(m).unwrap()["display"],
+                "summarized",
+                "{m}"
+            );
+        }
+        assert!(anthropic_thinking("claude-haiku-4-5").is_none());
+    }
+
+    #[test]
     fn responses_input_shapes() {
         let mut a = Msg::user("x".into());
         a.role = Role::Assistant;
@@ -589,9 +635,35 @@ pub fn default_model(provider: &str) -> &'static str {
     }
 }
 
+/// Thinking config that streams readable reasoning. Opus/Sonnet 4.6 summarize by default;
+/// later models think by default but omit the text unless `display` asks for it. Older
+/// models (budget_tokens only) are left as they are.
+fn anthropic_thinking(model: &str) -> Option<Value> {
+    let m = model.strip_prefix("anthropic.").unwrap_or(model);
+    if m.starts_with("claude-opus-4-6") || m.starts_with("claude-sonnet-4-6") {
+        return Some(json!({"type": "adaptive"}));
+    }
+    let current = [
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-haiku-5",
+        "claude-fable",
+        "claude-mythos",
+    ];
+    current
+        .iter()
+        .any(|p| m.starts_with(p))
+        .then(|| json!({"type": "adaptive", "display": "summarized"}))
+}
+
 /// Function tools on the ChatGPT-plan route go in a namespace; set once the route has refused
 /// that shape and plain top-level function tools worked instead.
 static RESPONSES_FLAT_TOOLS: AtomicBool = AtomicBool::new(false);
+/// Set once the Responses route has refused `reasoning` (a non-reasoning model, or an API org
+/// not verified for summaries); replies then go without streamed thoughts.
+static RESPONSES_NO_REASONING: AtomicBool = AtomicBool::new(false);
 const RESPONSES_NS: &str = "bia";
 
 impl Remote {
@@ -727,6 +799,9 @@ impl Remote {
             "stream": true,
             "stream_options": {"include_usage": true},
         });
+        if self.provider == "openrouter" {
+            body["reasoning"] = json!({"enabled": true});
+        }
         if !tools.is_empty() {
             body["tools"] = Value::Array(
                 tools
@@ -796,24 +871,25 @@ impl Remote {
             let Some(delta) = choice.get("delta") else {
                 continue;
             };
-            for key in ["reasoning_content", "reasoning", "thinking"] {
-                if let Some(c) = delta.get(key) {
-                    let piece = c.as_str().map(|s| s.to_string()).or_else(|| {
-                        c.get("text")
-                            .or_else(|| c.get("content"))
-                            .and_then(|x| x.as_str())
-                            .map(|s| s.to_string())
-                    });
-                    if let Some(c) = piece {
-                        if !c.is_empty() && !on_piece(true, &c) {
-                            stop = "interrupted".into();
-                            break;
-                        }
-                    }
+            // Servers may carry the same text under two of these keys (vLLM sends both
+            // `reasoning` and `reasoning_content`); only the first one present is shown.
+            let thought = ["reasoning_content", "reasoning", "thinking"]
+                .iter()
+                .filter_map(|key| delta.get(*key))
+                .find_map(|c| {
+                    c.as_str()
+                        .or_else(|| {
+                            c.get("text")
+                                .or_else(|| c.get("content"))
+                                .and_then(|x| x.as_str())
+                        })
+                        .filter(|t| !t.is_empty())
+                });
+            if let Some(t) = thought {
+                if !on_piece(true, t) {
+                    stop = "interrupted".into();
+                    break;
                 }
-            }
-            if stop == "interrupted" {
-                break;
             }
             if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
                 if !c.is_empty() {
@@ -918,6 +994,7 @@ impl Remote {
         let mut forced = false;
         loop {
             let namespaced = !tools.is_empty() && !RESPONSES_FLAT_TOOLS.load(Ordering::Relaxed);
+            let reasoning = !RESPONSES_NO_REASONING.load(Ordering::Relaxed);
             let token = match &self.store {
                 Some(p) => chatgpt_token(p, forced)?,
                 None => self.api_key.clone(),
@@ -930,6 +1007,10 @@ impl Remote {
                 "store": false,
                 "stream": true,
             });
+            // Reasoning summaries are only streamed when asked for; they feed the gray thoughts.
+            if reasoning {
+                body["reasoning"] = json!({"summary": "auto"});
+            }
             if !tools.is_empty() {
                 let fns: Vec<Value> = tools
                     .iter()
@@ -964,6 +1045,13 @@ impl Remote {
                     && (msg.contains("namespace") || code.contains("unsupported"))
                 {
                     RESPONSES_FLAT_TOOLS.store(true, Ordering::Relaxed);
+                    continue;
+                }
+                if status == 400
+                    && reasoning
+                    && (msg.contains("reasoning") || msg.contains("summar"))
+                {
+                    RESPONSES_NO_REASONING.store(true, Ordering::Relaxed);
                     continue;
                 }
                 bail!("HTTP {status}: {}", chatgpt_plan_error(&code, &msg, &text));
@@ -1001,6 +1089,12 @@ impl Remote {
                             stop = "interrupted".into();
                             break;
                         }
+                    }
+                }
+                "response.reasoning_summary_part.added" => {
+                    if v["summary_index"].as_u64().unwrap_or(0) > 0 && !on_piece(true, "\n\n") {
+                        stop = "interrupted".into();
+                        break;
                     }
                 }
                 "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
@@ -1153,24 +1247,35 @@ impl Remote {
         if with_fallbacks {
             body["fallbacks"] = json!("default");
         }
+        if let Some(t) = anthropic_thinking(&self.model) {
+            body["thinking"] = t;
+        }
         let agent = self.agent(timeout);
-        let mut req = agent
-            .post(&format!("{}/v1/messages", self.base_url))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("Content-Type", "application/json");
-        if with_fallbacks {
-            req = req.header("anthropic-beta", "server-side-fallback-2026-07-01");
-        }
-        let resp = req.send_json(&body).context("request")?;
-        let status = resp.status().as_u16();
-        if status >= 400 {
-            let text = resp.into_body().read_to_string().unwrap_or_default();
-            bail!(
-                "HTTP {status}: {}",
-                text.chars().take(400).collect::<String>()
-            );
-        }
+        let resp = loop {
+            let mut req = agent
+                .post(&format!("{}/v1/messages", self.base_url))
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("Content-Type", "application/json");
+            if with_fallbacks {
+                req = req.header("anthropic-beta", "server-side-fallback-2026-07-01");
+            }
+            let resp = req.send_json(&body).context("request")?;
+            let status = resp.status().as_u16();
+            if status >= 400 {
+                let text = resp.into_body().read_to_string().unwrap_or_default();
+                // A model or proxy that refuses the thinking config: answer without it.
+                if status == 400 && text.contains("thinking") && body.get("thinking").is_some() {
+                    body.as_object_mut().unwrap().remove("thinking");
+                    continue;
+                }
+                bail!(
+                    "HTTP {status}: {}",
+                    text.chars().take(400).collect::<String>()
+                );
+            }
+            break resp;
+        };
         let reader = BufReader::new(resp.into_body().into_reader());
         let mut text = String::new();
         let mut blocks: Vec<(String, String, String, String)> = vec![]; // (type, id, name, partial json)
