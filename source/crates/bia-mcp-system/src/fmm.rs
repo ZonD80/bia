@@ -124,6 +124,61 @@ fn default_model(provider: &str) -> &'static str {
     }
 }
 
+/// Model the ChatGPT plan uses when none is named (same default as fmm_chatgpt).
+const CHATGPT_DEFAULT_MODEL: &str = "gpt-6.1-sol";
+
+/// The ChatGPT sign-in kept in fmm.json, with the model it last used. It stays there while
+/// another provider is active, so switching back needs no new browser sign-in.
+fn saved_chatgpt(prev: Option<&Value>) -> Option<Value> {
+    let prev = prev?;
+    let mut auth = prev.get("chatgpt").filter(|a| a.is_object())?.clone();
+    if prev["provider"] == "chatgpt" {
+        if let Some(m) = prev["model"].as_str().filter(|m| !m.is_empty()) {
+            auth["model"] = json!(m);
+        }
+    }
+    Some(auth)
+}
+
+/// Switch back to the saved ChatGPT sign-in (provider=chatgpt, no key).
+fn configure_chatgpt(prev: Option<&Value>, model: &str, ctx: Option<u32>) -> Result<String> {
+    let Some(auth) = saved_chatgpt(prev) else {
+        bail!("no saved ChatGPT sign-in; use fmm_chatgpt to sign in");
+    };
+    let access = auth["access_token"].as_str().unwrap_or("").to_string();
+    if access.is_empty() || auth["refresh_token"].as_str().unwrap_or("").is_empty() {
+        bail!("the saved ChatGPT sign-in is incomplete; use fmm_chatgpt to sign in again");
+    }
+    let model = match model.trim() {
+        "" => auth["model"]
+            .as_str()
+            .filter(|m| !m.is_empty())
+            .unwrap_or(CHATGPT_DEFAULT_MODEL)
+            .to_string(),
+        m => m.to_string(),
+    };
+    let same = prev.is_some_and(|p| p["provider"] == "chatgpt" && p["model"] == model.as_str());
+    let ctx_val = ctx
+        .map(|n| n.clamp(512, 2_000_000))
+        .or_else(|| {
+            same.then(|| prev.and_then(|c| c["ctx"].as_u64()).map(|n| n as u32))
+                .flatten()
+        })
+        .unwrap_or(131072);
+    save(&json!({
+        "provider": "chatgpt",
+        "api_key": access,
+        "model": model,
+        "base_url": "",
+        "enabled": true,
+        "ctx": ctx_val,
+        "chatgpt": auth,
+    }))?;
+    Ok(format!(
+        "FMM configured: the saved ChatGPT sign-in, model {model}, context {ctx_val} tokens. You now test it with this conversation and switch to it if it answers; the previous settings stay if it does not."
+    ))
+}
+
 pub fn configure(
     provider: &str,
     api_key: &str,
@@ -131,12 +186,16 @@ pub fn configure(
     base_url: Option<&str>,
     ctx: Option<u32>,
 ) -> Result<String> {
-    if api_key.trim().is_empty() {
-        bail!("api_key is required");
-    }
     let mut provider = provider.trim().to_lowercase();
     if provider == "claude" {
         provider = "anthropic".into();
+    }
+    let prev = load();
+    if provider == "chatgpt" && api_key.trim().is_empty() {
+        return configure_chatgpt(prev.as_ref(), model, ctx);
+    }
+    if api_key.trim().is_empty() {
+        bail!("api_key is required");
     }
     let mut base_url = base_url.unwrap_or("").trim().to_string();
     if provider.is_empty() {
@@ -161,15 +220,23 @@ pub fn configure(
         "" => default_model(&provider),
         m => m,
     };
-    let prev = load();
+    // Keep the context only for the same provider and model: a window sized for another
+    // model (e.g. a ChatGPT plan's) can exceed this one's, and every real request then fails.
+    let same = prev
+        .as_ref()
+        .is_some_and(|p| p["provider"] == provider.as_str() && p["model"] == model);
     let ctx_val = ctx
-        .map(|n| n.max(512).min(2_000_000))
+        .map(|n| n.clamp(512, 2_000_000))
         .or_else(|| {
-            prev.as_ref()
-                .and_then(|c| c["ctx"].as_u64().map(|n| n as u32))
+            same.then(|| {
+                prev.as_ref()
+                    .and_then(|c| c["ctx"].as_u64())
+                    .map(|n| n as u32)
+            })
+            .flatten()
         })
         .unwrap_or(131072);
-    let cfg = json!({
+    let mut cfg = json!({
         "provider": provider,
         "api_key": api_key.trim(),
         "model": model,
@@ -177,9 +244,12 @@ pub fn configure(
         "enabled": true,
         "ctx": ctx_val,
     });
+    if let Some(auth) = saved_chatgpt(prev.as_ref()) {
+        cfg["chatgpt"] = auth;
+    }
     save(&cfg)?;
     Ok(format!(
-        "FMM configured: provider {}, model {}, key {}, context {} tokens. You now test the provider and switch to it if it answers; conversation history continues (streamed). Previous settings are restored if the switch fails. It is enabled again after every boot once the network is up.",
+        "FMM configured: provider {}, model {}, key {}, context {} tokens. You now test it with this conversation and switch to it if it answers; the previous settings stay if it does not, and come back if its first real reply fails. It is enabled again after every boot once the network is up.",
         provider, model, mask(api_key.trim()), ctx_val
     ))
 }
@@ -201,45 +271,131 @@ pub fn set_enabled(on: bool) -> Result<String> {
 pub fn status() -> String {
     match load() {
         None => "FMM not configured (local model only)".into(),
-        Some(c) => format!(
-            "FMM {}: provider {}, model {}, key {}, context {} tokens, base_url {}",
-            if c["enabled"].as_bool().unwrap_or(false) {
-                "enabled"
+        Some(c) => {
+            format!(
+                "FMM {}: provider {}, model {}, key {}, context {} tokens, base_url {}",
+                if c["enabled"].as_bool().unwrap_or(false) {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                c["provider"].as_str().unwrap_or("?"),
+                {
+                    let m = c["model"].as_str().unwrap_or("");
+                    if m.is_empty() {
+                        "(provider default)"
+                    } else {
+                        m
+                    }
+                },
+                mask(c["api_key"].as_str().unwrap_or("")),
+                {
+                    let n = c["ctx"].as_u64().unwrap_or(0);
+                    if n == 0 {
+                        131072
+                    } else {
+                        n
+                    }
+                },
+                {
+                    let b = c["base_url"].as_str().unwrap_or("");
+                    if b.is_empty() {
+                        "(default)"
+                    } else {
+                        b
+                    }
+                },
+            ) + if c["provider"] != "chatgpt" && c["chatgpt"].is_object() {
+                "; a ChatGPT sign-in is saved (fmm_configure provider=chatgpt switches back to it)"
             } else {
-                "disabled"
-            },
-            c["provider"].as_str().unwrap_or("?"),
-            {
-                let m = c["model"].as_str().unwrap_or("");
-                if m.is_empty() {
-                    "(provider default)"
-                } else {
-                    m
-                }
-            },
-            mask(c["api_key"].as_str().unwrap_or("")),
-            {
-                let n = c["ctx"].as_u64().unwrap_or(0);
-                if n == 0 {
-                    131072
-                } else {
-                    n
-                }
-            },
-            {
-                let b = c["base_url"].as_str().unwrap_or("");
-                if b.is_empty() {
-                    "(default)"
-                } else {
-                    b
-                }
-            },
-        ),
+                ""
+            }
+        }
     }
+}
+
+/// Swap in the settings from before the last switch (the agent saves them as fmm.prev.json);
+/// the current ones become the previous ones, so calling it again swaps back.
+pub fn back() -> Result<String> {
+    let cur_path = state_file();
+    let prev_path = cur_path.with_file_name("fmm.prev.json");
+    let Ok(prev) = fs::read(&prev_path) else {
+        bail!("no previous FMM settings saved")
+    };
+    let prev_v: Value = serde_json::from_slice(&prev)?;
+    if let Ok(cur) = fs::read(&cur_path) {
+        fs::write(&prev_path, cur)?;
+    }
+    save(&prev_v)?;
+    Ok(format!(
+        "FMM settings from before the last switch are back: provider {}, model {}. You now test them with this conversation and switch if they answer.",
+        prev_v["provider"].as_str().unwrap_or("?"),
+        prev_v["model"].as_str().unwrap_or("(default)")
+    ))
 }
 
 pub fn forget() -> String {
     let _ = fs::remove_file(state_file());
     unsafe { libc::sync() };
     "FMM configuration removed; local model only".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switches_keep_the_chatgpt_sign_in_and_go_back() {
+        let dir = std::env::temp_dir().join(format!("bia-fmm-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        std::env::set_var("BIA_FILES", &dir);
+        save(&json!({
+            "provider": "chatgpt", "api_key": "at1", "model": "gpt-6.1-sol", "base_url": "",
+            "enabled": true, "ctx": 400000,
+            "chatgpt": {"client_id": "c", "host_id": "h", "access_token": "at1",
+                        "refresh_token": "rt1", "expires_at": 9}
+        }))
+        .unwrap();
+
+        // to DeepSeek on OpenRouter: the sign-in stays, the ChatGPT window does not carry over
+        configure(
+            "openrouter",
+            "sk-or-v1-abc",
+            "deepseek/deepseek-chat",
+            None,
+            None,
+        )
+        .unwrap();
+        let c = load().unwrap();
+        assert_eq!(c["provider"], "openrouter");
+        assert_eq!(c["ctx"], 131072);
+        assert_eq!(c["chatgpt"]["refresh_token"], "rt1");
+        assert_eq!(c["chatgpt"]["model"], "gpt-6.1-sol");
+        assert!(status().contains("ChatGPT sign-in is saved"));
+
+        // back to the plan without a key or a new sign-in
+        configure("chatgpt", "", "", None, None).unwrap();
+        let c = load().unwrap();
+        assert_eq!(
+            (c["provider"].as_str(), c["model"].as_str()),
+            (Some("chatgpt"), Some("gpt-6.1-sol"))
+        );
+        assert_eq!(c["api_key"], "at1");
+
+        // fmm_back swaps with the agent's fmm.prev.json, both ways
+        assert!(back().is_err());
+        fs::write(
+            state_file().with_file_name("fmm.prev.json"),
+            br#"{"provider":"deepseek","api_key":"sk-x","model":"deepseek-chat","ctx":65536}"#,
+        )
+        .unwrap();
+        back().unwrap();
+        assert_eq!(load().unwrap()["provider"], "deepseek");
+        back().unwrap();
+        assert_eq!(load().unwrap()["provider"], "chatgpt");
+
+        forget();
+        assert!(configure("chatgpt", "", "", None, None).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

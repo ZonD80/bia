@@ -582,6 +582,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         memory: crate::memory::Store::open(&paths.files.join("state")),
         fmm_ctx_used: 0,
         fmm_backups: Default::default(),
+        fmm_probation: None,
     };
     for m in &mut repl.history {
         if m.id.is_empty() {

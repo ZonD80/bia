@@ -742,6 +742,25 @@ impl Remote {
         ))
     }
 
+    /// The real request shape (system prompt, tools, conversation) plus a short check message.
+    /// A key can pass `test` while every real request fails: a context too long for this
+    /// model, or a history or tool shape the provider refuses.
+    pub fn probe(&self, system: &str, tools: &[ToolSpec], history: &[Msg]) -> Result<()> {
+        let mut h = history.to_vec();
+        h.push(Msg::user(
+            "[FMM switch check] Reply with the single word OK. Call no tools.".into(),
+        ));
+        self.generate(
+            system,
+            tools,
+            &h,
+            &mut |_, _| true,
+            false,
+            Duration::from_secs(180),
+        )?;
+        Ok(())
+    }
+
     /// Stream a completion. `on_piece(thought, text)` — thought=true is reasoning; return false to stop.
     pub fn generate(
         &self,

@@ -2398,7 +2398,7 @@ impl Tools {
     }
 
     /// Read /home/bia/MCPs into `catalog`. Does not spawn.
-    fn rescan_mcps(&mut self) -> Vec<String> {
+    pub(crate) fn rescan_mcps(&mut self) -> Vec<String> {
         let mut notes = vec![];
         let mut seen = std::collections::HashSet::new();
         let mut listed = vec![];

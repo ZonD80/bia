@@ -9,6 +9,7 @@ use crate::tools::{
     envelope, human, normalize_history, Msg, Role, ToolCall, ToolFormat, Tools, CH_CONSOLE,
     ID_SYSTEM,
 };
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -49,6 +50,85 @@ fn run_bia_update(args: &[&str], mut on_line: impl FnMut(&str)) -> Result<(), St
     } else {
         Err(format!("exit {}", status.code().unwrap_or(-1)))
     }
+}
+
+/// MCP functions that change fmm.json; the agent reloads (and tests) the model after them.
+fn is_fmm_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "system_fmm_configure"
+            | "system_fmm_chatgpt"
+            | "system_fmm_back"
+            | "system_fmm_enable"
+            | "system_fmm_disable"
+            | "system_fmm_forget"
+    )
+}
+
+/// Argument names whose values are never echoed or written to the conversation.
+fn secret_arg(name: &str) -> bool {
+    let n = name.to_lowercase();
+    ["key", "token", "password", "secret", "passphrase"]
+        .iter()
+        .any(|w| n.contains(w))
+}
+
+/// `args` as JSON with secret values masked, for the console and the conversation.
+fn masked_args(args: &Value) -> String {
+    let mut a = args.clone();
+    if let Some(o) = a.as_object_mut() {
+        for (k, v) in o.iter_mut() {
+            if secret_arg(k) {
+                *v = Value::String("…".into());
+            }
+        }
+    }
+    a.to_string()
+}
+
+/// Parse one typed answer for a schema property. `Ok(None)` = left out.
+fn parse_arg(line: &str, prop: &Value) -> Result<Option<Value>, String> {
+    let t = line.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let ty = prop["type"].as_str().unwrap_or("string");
+    let v = match ty {
+        "integer" => Value::from(
+            t.parse::<i64>()
+                .map_err(|_| "a whole number, please".to_string())?,
+        ),
+        "number" => Value::from(
+            t.parse::<f64>()
+                .map_err(|_| "a number, please".to_string())?,
+        ),
+        "boolean" => match t.to_lowercase().as_str() {
+            "y" | "yes" | "true" | "1" | "on" => Value::Bool(true),
+            "n" | "no" | "false" | "0" | "off" => Value::Bool(false),
+            _ => return Err("yes or no, please".into()),
+        },
+        "array" | "object" => serde_json::from_str(t)
+            .ok()
+            .filter(|v: &Value| {
+                if ty == "array" {
+                    v.is_array()
+                } else {
+                    v.is_object()
+                }
+            })
+            .or_else(|| {
+                (ty == "array")
+                    .then(|| Value::from(t.split(',').map(|x| x.trim()).collect::<Vec<_>>()))
+            })
+            .ok_or_else(|| format!("JSON {ty}, please"))?,
+        _ => Value::String(line.to_string()),
+    };
+    if let Some(choices) = prop["enum"].as_array() {
+        if !choices.contains(&v) {
+            return Err(format!("one of {}", Value::Array(choices.clone())));
+        }
+    }
+    Ok(Some(v))
 }
 
 /// Slash command typed on the physical console, without the leading `/`.
@@ -142,6 +222,9 @@ pub struct Repl {
     /// last known FMM prompt+completion tokens (header ctx meter; 0 until the first remote reply)
     pub fmm_ctx_used: usize,
     pub fmm_backups: std::collections::HashMap<String, Vec<u8>>,
+    /// FMM settings from before the last switch, kept until the new provider's first real
+    /// reply succeeds; if that reply fails they are restored and the turn runs again.
+    pub fmm_probation: Option<Vec<u8>>,
 }
 
 pub enum Exit {
@@ -285,6 +368,70 @@ impl Repl {
             .iter()
             .map(|m| m.content.chars().count().div_ceil(4))
             .sum()
+    }
+
+    /// Where the settings from before the last FMM switch are kept (`/fmm back`).
+    fn fmm_prev_path(&self) -> PathBuf {
+        self.fmm_path.with_file_name("fmm.prev.json")
+    }
+
+    fn save_prev_fmm(&self, backup: &[u8]) {
+        let p = self.fmm_prev_path();
+        if std::fs::write(&p, backup).is_ok() {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+            unsafe { libc::sync() };
+        }
+    }
+
+    /// Put back FMM settings saved before a switch and reload them (tested). A ChatGPT
+    /// sign-in renewed since the backup is taken from the current file: its tokens rotate,
+    /// so the one in the backup may no longer work.
+    fn restore_fmm(&mut self, backup: &[u8]) -> String {
+        let mut bytes = backup.to_vec();
+        if let (Ok(mut old), Some(cur)) = (
+            serde_json::from_slice::<FmmConfig>(backup),
+            FmmConfig::load(&self.fmm_path),
+        ) {
+            if let (Some(o), Some(c)) = (&old.chatgpt, &cur.chatgpt) {
+                if c.expires_at > o.expires_at {
+                    if old.provider == "chatgpt" {
+                        old.api_key = c.access_token.clone();
+                    }
+                    old.chatgpt = cur.chatgpt.clone();
+                    bytes = serde_json::to_vec_pretty(&old).unwrap_or(bytes);
+                }
+            }
+        }
+        let _ = std::fs::write(&self.fmm_path, &bytes);
+        unsafe { libc::sync() };
+        self.reload_fmm(true)
+    }
+
+    /// Send the new remote what the next turn would send (the conversation's tail that fits
+    /// half its window, from a user message on) plus a check message.
+    fn probe_remote(&self) -> anyhow::Result<()> {
+        let Some(r) = &self.remote else {
+            return Ok(());
+        };
+        let history = self
+            .tools
+            .fold_invoke_for_remote(normalize_history(self.format, &self.history));
+        let budget = (r.ctx as usize / 2).max(1);
+        let mut used = 0;
+        let mut start = history.len();
+        while start > 0 {
+            let n = history[start - 1].content.chars().count().div_ceil(4);
+            if used + n > budget {
+                break;
+            }
+            used += n;
+            start -= 1;
+        }
+        while start < history.len() && history[start].role != Role::User {
+            start += 1;
+        }
+        r.probe(&self.system, &self.tools.prompt_specs(), &history[start..])
     }
 
     /// Read files/state/fmm.json and switch brains accordingly. Returns a status line.
@@ -905,7 +1052,7 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/fmm [on|off]  Frontier Model Mode status / switch (configured via the system MCP)\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
             "tools" => {
                 let visible: Vec<String> = self.tools.visible_specs().iter().map(|t| t.name.clone()).collect();
@@ -985,6 +1132,7 @@ impl Repl {
                     },
                 }
             }
+            "call" => self.console_call(it.next().unwrap_or("")),
             "fmm" => {
                 let sub = it.next().unwrap_or("");
                 let line = match sub {
@@ -995,6 +1143,18 @@ impl Repl {
                         }
                         self.reload_fmm(true)
                     }
+                    "back" => match std::fs::read(self.fmm_prev_path()) {
+                        Ok(prev) => {
+                            let cur = std::fs::read(&self.fmm_path).ok();
+                            let line = self.restore_fmm(&prev);
+                            if let Some(c) = cur {
+                                self.save_prev_fmm(&c);
+                            }
+                            self.fmm_probation = None;
+                            format!("{line} (settings before the last switch; /fmm back again swaps them)")
+                        }
+                        Err(_) => "FMM: no previous settings saved".to_string(),
+                    },
                     "off" => {
                         if let Some(mut c) = FmmConfig::load(&self.fmm_path) {
                             c.enabled = false;
@@ -1281,24 +1441,8 @@ impl Repl {
                 continue;
             }
             if self.tools.is_mcp(&name) {
-                let fmm = matches!(
-                    name.as_str(),
-                    "system_fmm_configure"
-                        | "system_fmm_chatgpt"
-                        | "system_fmm_enable"
-                        | "system_fmm_disable"
-                        | "system_fmm_forget"
-                );
-                let backup = if fmm {
-                    std::fs::read(&self.fmm_path).ok()
-                } else {
-                    None
-                };
-                match self.tools.fire_mcp(&name, &args, &c.id) {
+                match self.fire_mcp_job(&name, &args, &c.id) {
                     Ok(jid) => {
-                        if let Some(b) = backup {
-                            self.fmm_backups.insert(jid.clone(), b);
-                        }
                         let stub = note_body(format!("accepted job:{jid}; result will arrive as system|job:{jid}|issued|delivered||…"));
                         self.con.writeln(&self.con.c(GRAY, &format!("     {stub}")));
                         self.log(&format!("tool {name}"), &stub);
@@ -1367,6 +1511,183 @@ impl Repl {
         }
     }
 
+    /// Fire an MCP function as a job. FMM calls keep the current fmm.json, restored when the
+    /// new settings fail their test.
+    fn fire_mcp_job(&mut self, name: &str, args: &Value, call_id: &str) -> Result<String, String> {
+        let backup = if is_fmm_tool(name) {
+            std::fs::read(&self.fmm_path).ok()
+        } else {
+            None
+        };
+        let jid = self.tools.fire_mcp(name, args, call_id)?;
+        if let Some(b) = backup {
+            self.fmm_backups.insert(jid.clone(), b);
+        }
+        Ok(jid)
+    }
+
+    /// `/call <function>`: ask for each argument on the console, then run the function the
+    /// way a model call runs (MCP functions as jobs, with FMM backup and test). Lets the
+    /// person at the machine fix things, such as a cloud model that stopped answering,
+    /// without the model.
+    fn console_call(&mut self, name: &str) {
+        let say = |con: &Console, color: &str, s: &str| con.writeln(&con.c(color, s));
+        if name.is_empty() {
+            say(&self.con, GRAY, "  /call <function> asks for its arguments, then runs it. /tools lists functions, e.g. /call system_fmm_configure or /call system_fmm_back.");
+            return;
+        }
+        if matches!(name, "discover" | "use_mcp" | "invoke" | "say" | "react") {
+            say(
+                &self.con,
+                RED,
+                &format!("  {name} is for the model; call the function itself"),
+            );
+            return;
+        }
+        if !self.tools.specs.iter().any(|s| s.name == name) {
+            self.tools.rescan_mcps(); // an MCP installed since boot
+        }
+        let Some(spec) = self.tools.specs.iter().find(|s| s.name == name).cloned() else {
+            let near: Vec<&str> = self
+                .tools
+                .specs
+                .iter()
+                .map(|s| s.name.as_str())
+                .filter(|n| n.contains(name))
+                .take(12)
+                .collect();
+            say(&self.con, RED, &format!("  unknown function {name}"));
+            if !near.is_empty() {
+                say(
+                    &self.con,
+                    GRAY,
+                    &format!("  did you mean: {}", near.join(", ")),
+                );
+            }
+            return;
+        };
+        say(&self.con, GRAY, &format!("  {name} — {}", spec.description));
+        let props = spec.parameters["properties"]
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        let required: Vec<String> = spec.parameters["required"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut order: Vec<&String> = props.keys().filter(|k| required.contains(k)).collect();
+        order.extend(props.keys().filter(|k| !required.contains(k)));
+        if !order.is_empty() {
+            say(&self.con, GRAY, "  Type each value and press Enter. Empty skips an optional one; a single . cancels.");
+        }
+        let mut args = serde_json::Map::new();
+        for key in order {
+            let prop = &props[key];
+            let need = required.contains(key);
+            let ty = prop["type"].as_str().unwrap_or("string");
+            let mut hint = format!("{ty}, {}", if need { "required" } else { "optional" });
+            if let Some(e) = prop["enum"].as_array() {
+                hint = format!("{hint}, one of {}", Value::Array(e.clone()));
+            }
+            if secret_arg(key) {
+                hint.push_str(", shown while typed");
+            }
+            say(
+                &self.con,
+                GRAY,
+                &format!(
+                    "  {key} ({hint}): {}",
+                    prop["description"].as_str().unwrap_or("")
+                ),
+            );
+            loop {
+                self.con.write(&format!("  {key}> "));
+                let Some(line) = self.con.read_line() else {
+                    return;
+                };
+                if line.trim() == "." {
+                    say(&self.con, GRAY, "  cancelled");
+                    return;
+                }
+                match parse_arg(&line, prop) {
+                    Ok(Some(v)) => {
+                        args.insert(key.clone(), v);
+                        break;
+                    }
+                    Ok(None) if !need => break,
+                    Ok(None) => say(&self.con, RED, "  required (. cancels)"),
+                    Err(e) => say(&self.con, RED, &format!("  {e}")),
+                }
+            }
+        }
+        let args = Value::Object(args);
+        let shown = masked_args(&args);
+        self.con.write(
+            &self
+                .con
+                .c(YELLOW, &format!("  run {name}({shown})? [Y/n] ")),
+        );
+        let yes = self
+            .con
+            .read_line()
+            .map(|l| matches!(l.trim().to_lowercase().as_str(), "" | "y" | "yes"))
+            .unwrap_or(false);
+        if !yes {
+            say(&self.con, GRAY, "  cancelled");
+            return;
+        }
+        let call_id = format!("console-{}", crate::console::mint_msg_id());
+        let fired = if name == "bash" {
+            Some(self.tools.fire_bash(&args, &call_id))
+        } else if self.tools.is_mcp(name) {
+            Some(self.fire_mcp_job(name, &args, &call_id))
+        } else {
+            None
+        };
+        match fired {
+            Some(Ok(jid)) => {
+                say(
+                    &self.con,
+                    GRAY,
+                    &format!("  started job:{jid}; its result follows"),
+                );
+                self.system_message(&format!(
+                    "root ran {name}({shown}) on the console as job:{jid}; its result arrives as system|job:{jid}. You did not call it."
+                ));
+            }
+            Some(Err(e)) => say(&self.con, RED, &format!("  ! {e}")),
+            None => {
+                let con = self.con.clone();
+                let (result, is_err) = self.tools.call(name, &args, &mut |l| {
+                    con.writeln(&con.c(GRAY, &format!("     {l}")))
+                });
+                for l in result.lines() {
+                    say(
+                        &self.con,
+                        if is_err { RED } else { GRAY },
+                        &format!("     {l}"),
+                    );
+                }
+                self.system_message(&format!(
+                    "root ran {name}({shown}) on the console: {}",
+                    trunc_bytes(&result, 2000)
+                ));
+                if name == "set_context" {
+                    if let Some(n) = self.tools.pending_ctx.take() {
+                        let line = self.apply_context(n);
+                        say(&self.con, GRAY, &format!("  {line}"));
+                        self.system_message(&line);
+                    }
+                }
+            }
+        }
+        self.save_state(false);
+    }
+
     fn on_job_envelope(&mut self, ib: &Inbound) {
         let Some(id) = ib.channel.strip_prefix(crate::jobs::PREFIX) else {
             return;
@@ -1384,27 +1705,33 @@ impl Repl {
             return;
         }
         let ok = job.state == "ok";
-        if matches!(
-            job.tool.as_str(),
-            "system_fmm_configure"
-                | "system_fmm_chatgpt"
-                | "system_fmm_enable"
-                | "system_fmm_disable"
-                | "system_fmm_forget"
-        ) {
+        if is_fmm_tool(&job.tool) {
             let want_on = matches!(
                 job.tool.as_str(),
-                "system_fmm_configure" | "system_fmm_chatgpt" | "system_fmm_enable"
+                "system_fmm_configure"
+                    | "system_fmm_chatgpt"
+                    | "system_fmm_back"
+                    | "system_fmm_enable"
             );
             let backup = self.fmm_backups.remove(id);
             if ok {
-                let line = self.reload_fmm(true);
+                let mut line = self.reload_fmm(true);
+                if want_on {
+                    if let Some(label) = self.remote.as_ref().map(|r| r.label()) {
+                        self.con.writeln(&self.con.c(
+                            GRAY,
+                            &format!("  FMM: checking {label} with this conversation…"),
+                        ));
+                        if let Err(e) = self.probe_remote() {
+                            line = format!("FMM: {label} answers a short test but fails with this conversation ({e:#})");
+                            self.remote = None;
+                        }
+                    }
+                }
                 let line = if want_on && self.remote.is_none() {
                     match backup {
                         Some(b) => {
-                            let _ = std::fs::write(&self.fmm_path, &b);
-                            unsafe { libc::sync() };
-                            let restored = self.reload_fmm(false);
+                            let restored = self.restore_fmm(&b);
                             format!("{line} — restored previous FMM settings ({restored})")
                         }
                         None => {
@@ -1415,6 +1742,10 @@ impl Repl {
                         }
                     }
                 } else {
+                    if let Some(b) = backup.filter(|_| want_on) {
+                        self.save_prev_fmm(&b);
+                        self.fmm_probation = Some(b);
+                    }
                     line
                 };
                 self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
@@ -1865,10 +2196,21 @@ impl Repl {
             }
             if self.remote.is_some() {
                 match self.remote_step() {
-                    Ok(()) => {}
+                    Ok(()) => self.fmm_probation = None,
                     Err(e) => {
                         self.con
                             .writeln(&self.con.c(RED, &format!("\n[FMM error: {e:#}]")));
+                        // First real reply after a switch failed: go back and run the turn again.
+                        if let Some(b) = self.fmm_probation.take() {
+                            let label = self.remote.as_ref().map(|r| r.label()).unwrap_or_default();
+                            let restored = self.restore_fmm(&b);
+                            let line = format!("FMM {label} failed on its first real reply ({e:#}); restored previous FMM settings ({restored})");
+                            self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
+                            self.system_message(&line);
+                            if self.remote.is_some() || self.llm.is_some() {
+                                continue;
+                            }
+                        }
                         self.save_state(false);
                         self.set_state("idle");
                         return;
@@ -2508,6 +2850,36 @@ mod channel_tests {
         for ch in ["web", "web:trip", "telegram:1", "whatsapp:420", "schedule"] {
             assert!(!local_channel(ch), "{ch}");
         }
+    }
+
+    #[test]
+    fn console_call_arguments() {
+        let int = serde_json::json!({"type": "integer"});
+        assert_eq!(parse_arg("  ", &int), Ok(None));
+        assert_eq!(parse_arg("4096", &int), Ok(Some(Value::from(4096))));
+        assert!(parse_arg("lots", &int).is_err());
+        let b = serde_json::json!({"type": "boolean"});
+        assert_eq!(parse_arg("yes", &b), Ok(Some(Value::Bool(true))));
+        let s = serde_json::json!({"type": "string"});
+        assert_eq!(
+            parse_arg(" sk-or-1 ", &s),
+            Ok(Some(Value::from(" sk-or-1 ")))
+        );
+        let e = serde_json::json!({"type": "string", "enum": ["user", "agent"]});
+        assert!(parse_arg("root", &e).is_err());
+        let arr = serde_json::json!({"type": "array"});
+        assert_eq!(
+            parse_arg("a, b", &arr),
+            Ok(Some(serde_json::json!(["a", "b"])))
+        );
+        assert_eq!(
+            parse_arg("[1,2]", &arr),
+            Ok(Some(serde_json::json!([1, 2])))
+        );
+        let m =
+            masked_args(&serde_json::json!({"provider": "openrouter", "api_key": "sk-or-secret"}));
+        assert!(m.contains("openrouter") && !m.contains("secret"), "{m}");
+        assert!(is_fmm_tool("system_fmm_back") && !is_fmm_tool("system_share_file"));
     }
 
     #[test]
