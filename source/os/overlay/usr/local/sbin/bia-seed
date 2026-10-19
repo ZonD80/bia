@@ -1,0 +1,54 @@
+#!/bin/bash
+# First boot after a takeover (bia-flash takeover): move what the deployment put on
+# the ESP under EFI/bia/seed/ into place, then delete it from the ESP (it holds the CA
+# key, and FAT has no permissions).
+#
+#   pki/        → /home/bia/files/state/pki   (only while that has no CA yet)
+#   setup.md    → /home/bia/files/state/setup.md  (the agent hands it to the model once)
+#   net/        → /etc/bia/net                (bia-net: interfaces by MAC address)
+#   land/secret → /etc/bia/land.secret + /etc/bia-land-mode (takeover --land: wait for
+#                 another bia to fly here over the internet; bia-land, carry)
+#
+# FMM keys (EFI/bia/fmm.json) and the language (EFI/bia/lang.json) stay where they are:
+# the agent seeds those itself, as on a flashed stick.
+set -u
+SEED=${BIA_SEED_DIR:-/boot/EFI/bia/seed}
+FILES=${BIA_SEED_FILES:-/home/bia/files}
+ETC=${BIA_SEED_ETC:-/etc/bia}
+
+[ -d "$SEED" ] || exit 0
+say() { echo "bia-seed: $*"; }
+
+if [ -d "$SEED/pki" ]; then
+  if [ -f "$FILES/state/pki/ca.crt" ]; then
+    say "a CA already exists in $FILES/state/pki; the seeded one is not used"
+  else
+    mkdir -p "$FILES/state"
+    rm -rf "$FILES/state/pki.seed"
+    cp -r "$SEED/pki" "$FILES/state/pki.seed" && mv "$FILES/state/pki.seed" "$FILES/state/pki"
+    chmod -R go-rwx "$FILES/state/pki"
+    say "certificate authority, server and root certificates are in place"
+  fi
+fi
+if [ -s "$SEED/setup.md" ]; then
+  mkdir -p "$FILES/state"
+  cp "$SEED/setup.md" "$FILES/state/setup.md"
+  chmod 600 "$FILES/state/setup.md"
+  say "setup instructions for bia are in place"
+fi
+if [ -d "$SEED/net" ]; then
+  mkdir -p "$ETC"
+  rm -rf "$ETC/net"
+  cp -r "$SEED/net" "$ETC/net"
+  say "network configuration for $(ls "$ETC/net" | grep -c '\.conf$') interface(s) is in place"
+fi
+if [ -s "$SEED/land/secret" ]; then
+  mkdir -p "$ETC"
+  install -m 600 "$SEED/land/secret" "$ETC/land.secret"
+  printf 'wait\n' > "${BIA_SEED_LANDMODE:-/etc/bia-land-mode}"
+  say "land mode: this machine waits for another bia to fly here with the land secret"
+fi
+sync
+rm -rf "$SEED"
+sync
+exit 0

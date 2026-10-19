@@ -1,7 +1,7 @@
 [Unit]
 Description=bia land installer
 ConditionPathExists=/etc/bia-land-mode
-After=systemd-user-sessions.service networking.service
+After=systemd-user-sessions.service networking.service bia-seed.service bia-net.service
 
 [Service]
 Type=idle

@@ -34,9 +34,10 @@ pub fn issue(ctx: &Ctx, args: Value) -> Result<String, String> {
     } else {
         "normal"
     });
+    let from = cidrs(&args, "from")?;
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     let (token, meta) = pki
-        .issue_pickup(&identity, role, trust)
+        .issue_pickup_from(&identity, role, trust, &from)
         .map_err(|e| format!("issue: {e:#}"))?;
     let port = web_port();
     let urls = crate::listen::pickup_urls(port, &token);
@@ -75,13 +76,18 @@ pub fn list(_: &Ctx, _: Value) -> Result<String, String> {
             String::new()
         };
         lines.push(format!(
-            "{}  {}  role={}  trust={}{}{}",
+            "{}  {}  role={}  trust={}{}{}{}",
             m.serial,
             m.identity,
             m.role,
             m.trust,
             if m.revoked { "  REVOKED" } else { "" },
-            exp
+            exp,
+            if m.from.is_empty() {
+                String::new()
+            } else {
+                format!("  only from {}", m.from.join(","))
+            }
         ));
     }
     Ok(lines.join("\n"))
@@ -113,12 +119,16 @@ pub fn requests(_: &Ctx, _: Value) -> Result<String, String> {
                 format!("  note (untrusted): \"{}\"", r.note)
             };
             format!(
-                "{}  {}  identity={} role={} from {}{note}",
+                "{}  {}  identity={} role={} from IP {}{note}{}",
                 r.short(),
                 r.status.as_str(),
                 r.identity,
                 r.role,
-                r.source
+                r.source,
+                match &r.grant {
+                    Some(g) => format!("  mutual: a bia that says it is at {}", g.url),
+                    None => String::new(),
+                }
             )
         })
         .collect::<Vec<_>>()
@@ -137,9 +147,18 @@ pub fn decide(ctx: &Ctx, args: Value, approve: bool) -> Result<String, String> {
     let reason = bia_mcp::arg_str_opt(&args, "reason")
         .or_else(|| bia_mcp::arg_str_opt(&args, "message"))
         .unwrap_or_default();
+    let bind_ip = approve && args.get("bind_ip").and_then(|x| x.as_bool()).unwrap_or(false);
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let from = if bind_ip {
+        let src = pki.find_request(&id).map_err(|e| format!("{e:#}"))?.source;
+        vec![bia_pki::parse_ip(&src)
+            .map(bia_pki::Cidr::single)
+            .map_err(|e| format!("request source {src}: {e:#}"))?]
+    } else {
+        vec![]
+    };
     let r = pki
-        .decide_request(&id, approve, "root@agent", reason)
+        .decide_request_opts(&id, approve, "root@agent", reason, &from)
         .map_err(|e| format!("{e:#}"))?;
     ctx.log(format!(
         "certificate request {} for {}: {}",
@@ -149,12 +168,106 @@ pub fn decide(ctx: &Ctx, args: Value, approve: bool) -> Result<String, String> {
     ));
     Ok(if approve {
         format!(
-            "approved request {} for {}. It downloads its certificate itself on its next check (it polls by request id){}",
+            "approved request {} for {}. It downloads its certificate itself on its next check (it polls by request id){}{}",
             r.short(),
             r.identity,
-            if r.reason.is_empty() { "; nothing to send.".to_string() } else { format!(" and reads your message with it: \"{}\"", r.reason) }
+            if r.reason.is_empty() { "; nothing to send.".to_string() } else { format!(" and reads your message with it: \"{}\"", r.reason) },
+            if r.grant.is_some() {
+                format!(" Trust is now set up both ways: {0} is a peer, call it with web_peer_call(peer=\"{0}\", …).", r.identity)
+            } else {
+                String::new()
+            }
         )
     } else {
         format!("denied request {} for {}.", r.short(), r.identity)
     })
+}
+
+/// `args[key]`: a list (or one comma-separated string) of addresses / CIDR networks.
+fn cidrs(args: &Value, key: &str) -> Result<Vec<bia_pki::Cidr>, String> {
+    let items: Vec<String> = match args.get(key) {
+        Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect(),
+        Some(Value::String(s)) => s.split(',').map(str::to_string).collect(),
+        _ => vec![],
+    };
+    items
+        .iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| bia_pki::Cidr::parse(s).map_err(|e| format!("{key}: {e:#}")))
+        .collect()
+}
+
+pub fn peer_connect(ctx: &Ctx, args: Value) -> Result<String, String> {
+    let url = bia_mcp::arg_str(&args, "url")?.trim().to_string();
+    let pin = bia_mcp::arg_str_opt(&args, "ca_sha256");
+    let note = bia_mcp::arg_str_opt(&args, "note").unwrap_or_default();
+    let my_url = bia_mcp::arg_str_opt(&args, "my_url").filter(|s| !s.trim().is_empty());
+    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let p = pki
+        .peer_connect(&url, pin, my_url, web_port(), note)
+        .map_err(|e| format!("{e:#}"))?;
+    ctx.log(format!("asked {} at {} for mutual trust (request {})", p.name, p.url, &p.request[..8.min(p.request.len())]));
+    Ok(format!(
+        "Asked {name} at {url} (CA {ca}). It already holds a certificate from this bia; once its root approves, this bia gets its certificate too and a [peer {name}] notice arrives. Pending until then (its request lives 3 days).",
+        name = p.name,
+        url = p.url,
+        ca = &p.ca_sha256[..16]
+    ))
+}
+
+pub fn peer_list(_: &Ctx, _: Value) -> Result<String, String> {
+    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let peers = pki.peers();
+    if peers.is_empty() {
+        return Ok(format!(
+            "(no peers) This bia is {} to other bias; web_peer_connect sets up trust with one.",
+            pki.agent_name()
+        ));
+    }
+    let mut out = vec![format!("This bia is {} to other bias.", pki.agent_name())];
+    for p in peers {
+        out.push(p.describe());
+        if p.status == "active" {
+            if let Ok((ca, cert, key)) = pki.peer_files(&p.name) {
+                out.push(format!(
+                    "  curl --cert {} --key {} --cacert {} {}/v1/status   (server name is not in its certificate: add --resolve or -k only if curl refuses the address)",
+                    cert.display(),
+                    key.display(),
+                    ca.display(),
+                    p.url
+                ));
+            }
+        }
+    }
+    Ok(out.join("\n"))
+}
+
+pub fn peer_call(_: &Ctx, args: Value) -> Result<String, String> {
+    let name = bia_mcp::arg_str(&args, "peer")?.trim().to_string();
+    let method = bia_mcp::arg_str(&args, "method")?.trim().to_ascii_uppercase();
+    let path = bia_mcp::arg_str(&args, "path")?.trim().to_string();
+    let body = args.get("body").filter(|b| !b.is_null());
+    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let r = pki
+        .peer_call(&name, &method, &path, body)
+        .map_err(|e| format!("{e:#}"))?;
+    let text = r.text();
+    let cut: String = text.chars().take(8000).collect();
+    Ok(format!(
+        "HTTP {}\n{}{}",
+        r.status,
+        cut,
+        if cut.len() < text.len() { "\n… (cut)" } else { "" }
+    ))
+}
+
+pub fn peer_remove(ctx: &Ctx, args: Value) -> Result<String, String> {
+    let name = bia_mcp::arg_str(&args, "peer")?.trim().to_string();
+    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let p = pki.peer_remove(&name).map_err(|e| format!("{e:#}"))?;
+    ctx.log(format!("removed peer {} ({})", p.name, p.url));
+    Ok(format!(
+        "Removed {}. The certificate this bia gave it is revoked; its certificate for this bia is forgotten here.",
+        p.name
+    ))
 }

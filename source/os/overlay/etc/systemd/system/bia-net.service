@@ -1,0 +1,14 @@
+[Unit]
+Description=Network configuration carried over by a takeover (interfaces by MAC address)
+DefaultDependencies=no
+After=local-fs.target bia-seed.service systemd-udev-trigger.service
+Before=networking.service network-pre.target
+ConditionPathIsDirectory=/etc/bia/net
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-net
+
+[Install]
+WantedBy=multi-user.target

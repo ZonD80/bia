@@ -149,6 +149,93 @@ enum Cmd {
         #[arg(long)]
         lang: Option<String>,
     },
+    /// Print a new land secret (140 bits) for `takeover --land --land-secret`: make it
+    /// before the takeover, so whoever sets the server up knows it for the flight.
+    LandSecret,
+    /// Replace THIS running Linux (a VPS or server) with bia: keys, a new PKI whose root
+    /// certificate you download first, the network carried over by MAC address, and
+    /// optional setup instructions for bia. Asks for whatever the configs and flags leave
+    /// open; nothing changes before you confirm. Run as root on the machine itself.
+    Takeover {
+        /// Deployment config (JSON file or https:// URL); repeatable, later ones win.
+        /// Partial configs are fine, e.g. only {"fmm": {"key": "…"}}.
+        #[arg(long)]
+        config: Vec<String>,
+        /// sha256 of the config at the same position (pins a URL).
+        #[arg(long)]
+        config_sha256: Vec<String>,
+        /// Disk to replace (default: the one holding /).
+        #[arg(long)]
+        disk: Option<String>,
+        /// Confirm without asking: must name the same disk.
+        #[arg(long)]
+        wipe: Option<String>,
+        /// `latest`, a release tag, or an https:// directory with bia-os.json.
+        #[arg(long)]
+        os: Option<String>,
+        /// Local bia image (`.img.xz`) instead of a release (tests).
+        #[arg(long)]
+        os_image: Option<PathBuf>,
+        /// FMM JSON file (provider, api_key, model, …).
+        #[arg(long)]
+        fmm: Option<PathBuf>,
+        /// FMM API key (provider from its format).
+        #[arg(long)]
+        key: Option<String>,
+        /// Model id for the key's provider.
+        #[arg(long)]
+        model: Option<String>,
+        /// Setup instructions for bia's model (read once at its first boot).
+        #[arg(long)]
+        setup: Option<String>,
+        #[arg(long)]
+        setup_file: Option<PathBuf>,
+        /// The owner's language (code or name).
+        #[arg(long)]
+        lang: Option<String>,
+        /// DNS name for bia's HTTPS certificate (repeatable).
+        #[arg(long)]
+        name: Vec<String>,
+        /// Extra address for it, e.g. the public one behind NAT (repeatable).
+        #[arg(long)]
+        ip: Vec<String>,
+        /// Your own CSR (PEM) for root's certificate instead of a .p12 made here.
+        #[arg(long)]
+        root_csr: Option<PathBuf>,
+        /// The name other bias know this one by.
+        #[arg(long)]
+        agent_name: Option<String>,
+        /// Port of the one-time page that hands out root's certificate.
+        #[arg(long)]
+        gate_port: Option<u16>,
+        /// Where to stage the takeover files (default /boot/bia-takeover or /bia-takeover).
+        #[arg(long)]
+        staging: Option<PathBuf>,
+        /// Ask nothing: missing required values are errors, optional ones stay empty.
+        #[arg(long)]
+        yes: bool,
+        /// Reboot into the takeover at the end without asking.
+        #[arg(long)]
+        reboot: bool,
+        /// Detect and resolve everything, print the config (secrets masked), change nothing.
+        #[arg(long)]
+        dump_config: bool,
+        #[arg(long)]
+        show_secrets: bool,
+        /// Skip the model check.
+        #[arg(long)]
+        no_test: bool,
+        /// Stage everything but add no boot entry.
+        #[arg(long)]
+        dry_run: bool,
+        /// Land mode: bia waits for one of your bias to fly its agent here over the
+        /// internet (no keys or certificates are made here). Prints a land secret.
+        #[arg(long)]
+        land: bool,
+        /// Land mode with this secret instead of a new one.
+        #[arg(long)]
+        land_secret: Option<String>,
+    },
 }
 
 fn main() {
@@ -342,6 +429,119 @@ fn run() -> Result<()> {
                 println!("{}", f.path.display());
             }
             Ok(())
+        }
+        Cmd::LandSecret => {
+            println!("{}", bia_flash::takeover::land_secret());
+            Ok(())
+        }
+        Cmd::Takeover {
+            config,
+            config_sha256,
+            disk,
+            wipe,
+            os,
+            os_image,
+            fmm,
+            key,
+            model,
+            setup,
+            setup_file,
+            lang,
+            name,
+            ip,
+            root_csr,
+            agent_name,
+            gate_port,
+            staging,
+            yes,
+            reboot,
+            dump_config,
+            show_secrets,
+            no_test,
+            dry_run,
+            land,
+            land_secret,
+        } => {
+            // flags are the last config layer
+            let mut f = serde_json::Map::new();
+            let mut put = |k: &str, v: serde_json::Value| {
+                f.insert(k.to_string(), v);
+            };
+            if let Some(d) = disk {
+                put("disk", d.into());
+            }
+            if let Some(w) = wipe {
+                put("wipe", w.into());
+            }
+            if let Some(o) = os {
+                put("os", o.into());
+            }
+            let mut fm = serde_json::Map::new();
+            if let Some(p) = fmm {
+                let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&p).with_context(|| format!("read {}", p.display()))?)
+                    .with_context(|| format!("parse {}", p.display()))?;
+                if let Some(o) = v.as_object() {
+                    fm.extend(o.clone());
+                }
+            }
+            if let Some(k) = key {
+                fm.insert("api_key".into(), k.into());
+            }
+            if let Some(m) = model {
+                fm.insert("model".into(), m.into());
+            }
+            if !fm.is_empty() {
+                put("fmm", fm.into());
+            }
+            if let Some(t) = setup {
+                put("setup", t.into());
+            }
+            if let Some(p) = setup_file {
+                put("setup", std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?.into());
+            }
+            if let Some(l) = lang {
+                put("lang", l.into());
+            }
+            let mut pk = serde_json::Map::new();
+            if !name.is_empty() {
+                pk.insert("names".into(), name.into());
+            }
+            if !ip.is_empty() {
+                pk.insert("ips".into(), ip.into());
+            }
+            if let Some(p) = root_csr {
+                let csr = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+                pk.insert("root".into(), serde_json::json!({"csr": csr}));
+            }
+            if let Some(n) = agent_name {
+                pk.insert("agent_name".into(), n.into());
+            }
+            if !pk.is_empty() {
+                put("pki", pk.into());
+            }
+            if let Some(p) = gate_port {
+                put("gate_port", p.into());
+            }
+            if reboot {
+                put("reboot", true.into());
+            }
+            if let Some(sec) = land_secret {
+                put("land", serde_json::json!({"secret": sec}));
+            } else if land {
+                put("land", true.into());
+            }
+            bia_flash::takeover::run(bia_flash::takeover::Args {
+                configs: config,
+                config_sha256,
+                flags: serde_json::Value::Object(f),
+                os_image,
+                yes,
+                dump_config,
+                show_secrets,
+                no_test,
+                dry_run,
+                staging,
+            })
         }
         Cmd::Image { root, esp, kern, arch, out } => {
             let kern_dir = kern.unwrap_or_else(|| root.parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf()));

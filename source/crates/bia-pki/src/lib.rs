@@ -19,9 +19,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
+pub mod client;
+mod net;
 mod p12;
+mod peers;
 mod requests;
+mod seed;
+pub use net::{parse_ip, Cidr};
+pub use peers::{Grant, Peer};
 pub use requests::{CertRequest, Status as RequestStatus, POLL_SECS, REQUEST_TTL_SECS};
+pub use seed::{seed, RootSeed, SeedOptions, Seeded};
 
 const CA_NAME: &str = "bia agent CA";
 /// Client cert CN prefix so leaf identities are distinct from the CA subject.
@@ -46,6 +53,9 @@ pub struct IssuedMeta {
     #[serde(default)]
     pub not_after: u64,
     pub revoked: bool,
+    /// Networks the certificate works from (empty = anywhere). Checked per connection.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub from: Vec<String>,
 }
 
 pub struct Pki {
@@ -130,7 +140,58 @@ impl Pki {
         Ok((issuer, key, ca_pem))
     }
 
-    /// Reissue the HTTPS server certificate. `extra_ips` are additional SANs (LAN IPs).
+    fn server_extra_path(&self) -> PathBuf {
+        self.dir.join("server_extra.json")
+    }
+
+    /// Names and addresses the server certificate always carries besides the LAN ones
+    /// (a public NAT address, a DNS name), from the deployment config or root.
+    pub fn server_extra(&self) -> (Vec<String>, Vec<std::net::IpAddr>) {
+        let v: serde_json::Value = fs::read(self.server_extra_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let list = |k: &str| -> Vec<String> {
+            v.get(k)
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let names = list("names")
+            .into_iter()
+            .filter(|n| valid_dns_name(n))
+            .collect();
+        let ips = list("ips")
+            .into_iter()
+            .filter_map(|i| parse_ip(&i).ok())
+            .collect();
+        (names, ips)
+    }
+
+    /// Replace the extra server names and addresses (takes effect at the next
+    /// `ensure_server_sans`).
+    pub fn set_server_extra(&self, names: &[String], ips: &[std::net::IpAddr]) -> Result<()> {
+        for n in names {
+            if !valid_dns_name(n) {
+                bail!("{n:?} is not a DNS name");
+            }
+        }
+        let v = serde_json::json!({
+            "names": names,
+            "ips": ips.iter().map(|i| i.to_string()).collect::<Vec<_>>(),
+        });
+        fs::write(self.server_extra_path(), serde_json::to_vec_pretty(&v)?)
+            .context("write server_extra.json")?;
+        Ok(())
+    }
+
+    /// Reissue the HTTPS server certificate. `extra_ips` are additional SANs (LAN IPs);
+    /// the names and addresses of `server_extra` are always added.
     pub fn reissue_server(&self, extra_ips: &[std::net::IpAddr]) -> Result<()> {
         let (ca_cert, ca_key, _) = self.load_ca_issuer()?;
         let mut params = CertificateParams::new(vec!["bia".into(), "localhost".into()])?;
@@ -153,8 +214,17 @@ impl Pki {
             SanType::DnsName("localhost".try_into().unwrap()),
             SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         ];
-        for ip in extra_ips {
-            sans.push(SanType::IpAddress(*ip));
+        let (names, fixed) = self.server_extra();
+        for n in names {
+            if let Ok(n) = n.as_str().try_into() {
+                sans.push(SanType::DnsName(n));
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for ip in extra_ips.iter().chain(fixed.iter()) {
+            if seen.insert(*ip) && !ip.is_loopback() {
+                sans.push(SanType::IpAddress(*ip));
+            }
         }
         params.subject_alt_names = sans;
         let key = KeyPair::generate()?;
@@ -177,7 +247,11 @@ impl Pki {
 
     /// Reissue when LAN SANs change or the server cert is within `SERVER_RENEW_WITHIN_DAYS` of expiry.
     pub fn ensure_server_sans(&self, ips: &[std::net::IpAddr]) -> Result<bool> {
-        let want: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
+        let mut want: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
+        // the fixed extras are part of what the current certificate must carry
+        let (names, fixed) = self.server_extra();
+        want.extend(names.iter().map(|n| format!("dns:{n}")));
+        want.extend(fixed.iter().map(|i| format!("fixed:{i}")));
         let marker = self.dir.join("server.sans");
         let cur = fs::read_to_string(&marker).unwrap_or_default();
         let cur_list: Vec<&str> = cur.lines().filter(|l| !l.is_empty()).collect();
@@ -238,8 +312,19 @@ impl Pki {
     /// `P12_PASSWORD`) and metadata. For people importing into a browser; agents send a CSR
     /// instead (`issue_csr`) so their key never leaves them.
     pub fn issue(&self, identity: &str, role: &str, trust: &str) -> Result<(Vec<u8>, IssuedMeta)> {
+        self.issue_from(identity, role, trust, &[])
+    }
+
+    /// `issue`, limited to connections from `from` (networks; empty = anywhere).
+    pub fn issue_from(
+        &self,
+        identity: &str,
+        role: &str,
+        trust: &str,
+        from: &[Cidr],
+    ) -> Result<(Vec<u8>, IssuedMeta)> {
         let key = KeyPair::generate()?;
-        let (cert, meta, ca_pem) = self.sign_client(identity, role, trust, &key)?;
+        let (cert, meta, ca_pem) = self.sign_client(identity, role, trust, &key, from)?;
         let ca_der = pem_to_cert_ders(&ca_pem)?
             .into_iter()
             .next()
@@ -265,8 +350,21 @@ impl Pki {
         trust: &str,
         csr_pem: &str,
     ) -> Result<(String, IssuedMeta)> {
+        self.issue_csr_from(identity, role, trust, csr_pem, &[])
+    }
+
+    /// `issue_csr`, limited to connections from `from` (empty = anywhere).
+    pub fn issue_csr_from(
+        &self,
+        identity: &str,
+        role: &str,
+        trust: &str,
+        csr_pem: &str,
+        from: &[Cidr],
+    ) -> Result<(String, IssuedMeta)> {
         let csr = check_csr(csr_pem)?;
-        let (cert, meta, ca_pem) = self.sign_client(identity, role, trust, &csr.public_key)?;
+        let (cert, meta, ca_pem) =
+            self.sign_client(identity, role, trust, &csr.public_key, from)?;
         Ok((format!("{}{}", cert.pem(), ca_pem), meta))
     }
 
@@ -276,6 +374,7 @@ impl Pki {
         role: &str,
         trust: &str,
         public_key: &impl rcgen::PublicKeyData,
+        from: &[Cidr],
     ) -> Result<(rcgen::Certificate, IssuedMeta, String)> {
         let identity = sanitize_id(identity)?;
         let role = match role {
@@ -301,6 +400,13 @@ impl Pki {
         params.use_authority_key_identifier_extension = true;
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        // Single addresses also go in as IP SANs so anyone looking at the certificate
+        // sees where it works; the networks in the metadata are what is enforced.
+        params.subject_alt_names = from
+            .iter()
+            .filter(|c| c.is_single())
+            .map(|c| SanType::IpAddress(c.addr))
+            .collect();
         params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
         let not_after = OffsetDateTime::now_utc() + Duration::days(LEAF_DAYS);
         params.not_after = not_after;
@@ -314,6 +420,7 @@ impl Pki {
             created: now_secs(),
             not_after: not_after.unix_timestamp().max(0) as u64,
             revoked: false,
+            from: from.iter().map(|c| c.to_string()).collect(),
         };
         let meta_path = self.dir.join("issued").join(format!("{serial}.json"));
         fs::write(
@@ -378,6 +485,16 @@ impl Pki {
         &self,
         certs: Option<&[CertificateDer<'_>]>,
     ) -> std::result::Result<Option<ClientId>, CertProblem> {
+        self.check_client_from(certs, None)
+    }
+
+    /// `check_client` for a connection from `peer`: a certificate limited to some
+    /// networks (`IssuedMeta::from`) is refused from anywhere else ("wrong_source").
+    pub fn check_client_from(
+        &self,
+        certs: Option<&[CertificateDer<'_>]>,
+        peer: Option<std::net::IpAddr>,
+    ) -> std::result::Result<Option<ClientId>, CertProblem> {
         let Some((end, rest)) = certs.and_then(|c| c.split_first()) else {
             return Ok(None);
         };
@@ -401,7 +518,28 @@ impl Pki {
         if self.is_revoked(&id.serial_hint) {
             return Err(problem("revoked"));
         }
+        if let Some(m) = self.issued_meta(&id.serial_hint) {
+            if !m.from.is_empty() {
+                let ok = peer.is_some_and(|ip| {
+                    m.from
+                        .iter()
+                        .filter_map(|c| Cidr::parse(c).ok())
+                        .any(|c| c.contains(ip))
+                });
+                if !ok {
+                    return Err(problem("wrong_source"));
+                }
+            }
+        }
         Ok(Some(id))
+    }
+
+    /// Metadata of the issued certificate `serial_hint` names.
+    pub fn issued_meta(&self, serial_hint: &str) -> Option<IssuedMeta> {
+        self.list_issued()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|m| m.serial == serial_hint || serial_hint.starts_with(&m.serial))
     }
 
     pub fn is_revoked(&self, serial_hint: &str) -> bool {
@@ -472,7 +610,18 @@ impl Pki {
         role: &str,
         trust: &str,
     ) -> Result<(String, IssuedMeta)> {
-        let (p12, meta) = self.issue(identity, role, trust)?;
+        self.issue_pickup_from(identity, role, trust, &[])
+    }
+
+    /// `issue_pickup`, limited to connections from `from` (empty = anywhere).
+    pub fn issue_pickup_from(
+        &self,
+        identity: &str,
+        role: &str,
+        trust: &str,
+        from: &[Cidr],
+    ) -> Result<(String, IssuedMeta)> {
+        let (p12, meta) = self.issue_from(identity, role, trust, from)?;
         let token = self.store_pickup(&p12, &meta.identity)?;
         Ok((token, meta))
     }
@@ -488,8 +637,18 @@ impl Pki {
         if current.not_after <= now {
             bail!("certificate is expired; ask root for a new one");
         }
-        let (pem, meta) =
-            self.issue_csr(&current.identity, &current.role, &current.trust, csr_pem)?;
+        // a certificate bound to some networks stays bound after renewal
+        let from: Vec<Cidr> = self
+            .issued_meta(&current.serial_hint)
+            .map(|m| m.from.iter().filter_map(|c| Cidr::parse(c).ok()).collect())
+            .unwrap_or_default();
+        let (pem, meta) = self.issue_csr_from(
+            &current.identity,
+            &current.role,
+            &current.trust,
+            csr_pem,
+            &from,
+        )?;
         let _ = self.revoke(&current.serial_hint);
         Ok((pem, meta))
     }
@@ -732,6 +891,18 @@ fn sanitize_id(s: &str) -> Result<String> {
         bail!("identity has invalid characters");
     }
     Ok(s.to_string())
+}
+
+fn valid_dns_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.len() <= 253
+        && n.split('.').all(|l| {
+            !l.is_empty()
+                && l.len() <= 63
+                && !l.starts_with('-')
+                && !l.ends_with('-')
+                && l.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '*')
+        })
 }
 
 fn sanitize_serial(s: &str) -> Result<String> {

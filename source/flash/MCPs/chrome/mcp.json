@@ -1,6 +1,6 @@
 {
   "name": "chrome",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Google Chrome on the bia profile (/home/bia/.config/bia-chrome \u2014 non-default so remote debugging works on Chrome 136+). Lifecycle: chrome_install / chrome_start / chrome_restart / chrome_stop / chrome_status. Page automation is Google chrome-devtools-mcp over remote debugging (same profile data): chrome_take_snapshot (accessibility tree with uids), chrome_click / chrome_fill / chrome_fill_form / chrome_press_key / chrome_type_text / chrome_hover, chrome_navigate_page / chrome_new_page / chrome_list_pages, chrome_take_screenshot, chrome_evaluate_script, chrome_list_network_requests, etc. For file inputs use CDP DOM.setFileInputFiles. Tab/window open and close arrive as system|chrome|[tab opened|closed] title/url (no need to poll). Passkeys are handled by the bia Chrome add-on via the secrets store. If Chrome is not installed, chrome_install says how to install the official Google Chrome (Google's .deb; it is not in Debian's sources). This is the browser, not the whole desktop \u2014 use mcp/screen for captchas that need OS-level clicks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",

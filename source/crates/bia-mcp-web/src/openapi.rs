@@ -122,7 +122,12 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                         "csr": {"type": "string", "description": "PEM certificate signing request for your key (EC P-256/P-384, Ed25519 or RSA >= 2048). Its subject is ignored."},
                         "identity": {"type": "string", "description": "letters, digits, - _ . @ (not root)"},
                         "role": {"type": "string", "enum": ["agent", "user"]},
-                        "note": {"type": "string", "description": "who you are and why (shown to the approver)"}
+                        "note": {"type": "string", "description": "who you are and why (shown to the approver)"},
+                        "grant": {"type": "object", "description": "another bia only (mutual trust): a certificate for THIS bia's agent key (from GET /v1/pki/agent) signed by your CA, your CA, and your https address. Checked on arrival; on approval this bia keeps you as a peer it can call.", "properties": {
+                            "cert": {"type": "string", "description": "PEM client certificate for this bia's agent key"},
+                            "ca": {"type": "string", "description": "PEM of your CA"},
+                            "url": {"type": "string", "description": "https://address[:port] of your web API"}
+                        }}
                     }}}}},
                     "responses": {
                         "202": {"description": "{id (UUID, secret), status: pending, poll, cert, retry_after, expires_at, ca_sha256}"},
@@ -135,6 +140,13 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "summary": "All certificate requests (root)",
                     "security": [{"mtls": []}],
                     "responses": {"200": {"description": "{requests: [{id, identity, role, status, created, expires_at?}]}"}}
+                }
+            },
+            "/v1/pki/agent": {
+                "get": {
+                    "tags": ["pki"],
+                    "summary": "This bia's agent name and a CSR for its agent key (public). Another bia signs the CSR with its own CA and sends that certificate as the grant of its certificate request: one approval then gives trust both ways.",
+                    "responses": {"200": {"description": "{name, csr (PEM), ca_sha256, requests}"}}
                 }
             },
             "/v1/pki/requests/{id}": {
@@ -417,6 +429,14 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["chat"],
                     "summary": "Live voice call with bia on a web chat (?chat=<id>, ?ring=<id> to answer bia's call). Binary 16 kHz mono s16le frames in; JSON {t:played|mute|hangup} in; bia's speech as binary [gen u32][rate u32][s16le] plus JSON ready/say/say_end/stop/caption/end out.",
+                    "security": [{"mtls": []}],
+                    "responses": {"101": {"description": "Switching Protocols"}}
+                }
+            },
+            "/ws/term": {
+                "get": {
+                    "tags": ["root"],
+                    "summary": "Live agent console (raw bytes, status header included); {t:line,v} types a console line (empty interrupts the model), {t:resize} (root)",
                     "security": [{"mtls": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }

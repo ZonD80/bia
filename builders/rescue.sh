@@ -22,6 +22,7 @@ BINS=(
   bash rsync mount umount mountpoint blkid lsblk findmnt e2fsck chattr efibootmgr setsid
   sync sleep cat cp mv rm mkdir ln ls chmod stat df du date tr head tail wc sort cut
   awk sed grep cmp dirname basename readlink tee uname dmesg insmod
+  xz dd sha256sum blockdev partx
 )
 
 rm -rf "$STAGE"
@@ -79,6 +80,7 @@ for m in "${WANT[@]}"; do add_mod "${m//-/_}"; done
 
 install -m 0755 "$SRC/init" "$STAGE/bia-rescue/init"
 install -m 0755 "$SRC/rescue" "$STAGE/bia-rescue/rescue"
+install -m 0644 "$SRC/takeover" "$STAGE/bia-rescue/takeover"
 install -m 0755 "$ROOT/usr/local/sbin/bia-rescue-hook" "$STAGE/bia-rescue/bia-rescue-hook"
 printf '%s kernel %s\n' "$(date -u +%Y%m%d%H%M%S)" "$kver" > "$STAGE/bia-rescue/version"
 

@@ -76,6 +76,10 @@ pub struct CertRequest {
     /// Signed certificate + CA (PEM), set on approval.
     #[serde(default)]
     pub cert: String,
+    /// A requesting bia's certificate for this bia's agent key (mutual trust); checked
+    /// when filed, kept as a peer on approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<crate::Grant>,
 }
 
 impl CertRequest {
@@ -200,6 +204,23 @@ impl Pki {
         source: &str,
         csr: &str,
     ) -> Result<CertRequest> {
+        self.create_request_grant(identity, role, note, source, csr, None)
+    }
+
+    /// `create_request` from another bia that also offers a certificate for this bia's
+    /// agent key (`grant`); a grant that does not check out refuses the request.
+    pub fn create_request_grant(
+        &self,
+        identity: &str,
+        role: &str,
+        note: &str,
+        source: &str,
+        csr: &str,
+        grant: Option<crate::Grant>,
+    ) -> Result<CertRequest> {
+        if let Some(g) = &grant {
+            self.check_grant(g)?;
+        }
         let identity = sanitize_id(identity)?;
         if identity == "root" {
             bail!("root certificates are not requested; root issues them on this machine");
@@ -240,6 +261,7 @@ impl Pki {
             serial: String::new(),
             csr: csr.trim().to_string() + "\n",
             cert: String::new(),
+            grant,
         };
         self.save_request(&r)?;
         Ok(r)
@@ -253,14 +275,33 @@ impl Pki {
         by: &str,
         reason: &str,
     ) -> Result<CertRequest> {
+        self.decide_request_opts(id_or_prefix, approve, by, reason, &[])
+    }
+
+    /// `decide_request`; an approved certificate only works from `from` (empty = anywhere).
+    pub fn decide_request_opts(
+        &self,
+        id_or_prefix: &str,
+        approve: bool,
+        by: &str,
+        reason: &str,
+        from: &[crate::Cidr],
+    ) -> Result<CertRequest> {
         let mut r = self.find_request(id_or_prefix)?;
         if r.status != Status::Pending {
             bail!("request {} is already {}", r.short(), r.status.as_str());
         }
         if approve {
-            let (pem, meta) = self.issue_csr(&r.identity, &r.role, "normal", &r.csr)?;
+            let (pem, meta) = self.issue_csr_from(&r.identity, &r.role, "normal", &r.csr, from)?;
             r.cert = pem;
             r.serial = meta.serial;
+            if let Some(g) = r.grant.clone() {
+                // the requester's certificate for us: it is a peer from now on
+                if let Err(e) = self.accept_grant(&r, &g) {
+                    let _ = self.revoke(&r.serial);
+                    return Err(e.context("the requester's certificate for this bia no longer checks out"));
+                }
+            }
         }
         r.status = if approve {
             Status::Approved
@@ -625,6 +666,40 @@ mod tests {
         }
         assert!(!s.is_handshaking(), "handshake did not finish");
         s
+    }
+
+    #[test]
+    fn bound_certificate_works_only_from_its_address() {
+        let (pki, dir) = temp_pki("bind");
+        let (pem, key) = csr("x");
+        let from = [crate::Cidr::parse("10.0.0.1").unwrap()];
+        let (chain, meta) = pki.issue_csr_from("bob", "agent", "normal", &pem, &from).unwrap();
+        assert_eq!(meta.from, vec!["10.0.0.1".to_string()]);
+        let chain = crate::pem_to_cert_ders(&chain).unwrap();
+        let s = handshake(&pki, Some((chain.clone(), &key)));
+        let here: std::net::IpAddr = "10.0.0.1".parse().unwrap();
+        let there: std::net::IpAddr = "10.0.0.2".parse().unwrap();
+        assert_eq!(
+            pki.check_client_from(s.peer_certificates(), Some(here)).unwrap().unwrap().identity,
+            "bob"
+        );
+        assert_eq!(
+            pki.check_client_from(s.peer_certificates(), Some(there)).unwrap_err().kind,
+            "wrong_source"
+        );
+        assert_eq!(pki.check_client_from(s.peer_certificates(), None).unwrap_err().kind, "wrong_source");
+        // renewal keeps the binding
+        let me = crate::ClientId {
+            identity: "bob".into(),
+            role: "agent".into(),
+            trust: "normal".into(),
+            serial_hint: meta.serial.clone(),
+            not_after: meta.not_after as i64,
+        };
+        let (next, _) = csr("y");
+        let (_, renewed) = pki.renew_csr(&me, &next).unwrap();
+        assert_eq!(renewed.from, vec!["10.0.0.1".to_string()]);
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

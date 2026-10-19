@@ -27,6 +27,8 @@ mod tz;
 mod unanswered;
 mod weblink;
 
+#[path = "../../consock.rs"]
+mod consock;
 #[path = "../../listen.rs"]
 mod listen;
 
@@ -203,6 +205,10 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     weblink::clear(&paths.files);
     weblink::watch(con.clone(), paths.files.clone());
     con.set_status_file(paths.files.join("state").join("status.json"));
+    // root's web console mirrors this console through the web MCP
+    if let Err(e) = con.serve_mirror(consock::path(&paths.files)) {
+        boot.warn(&format!("console mirror: {e}"));
+    }
     let fmm_path = paths.files.join("state").join("fmm.json");
     // QEMU tests pass the repo fmm.json via fw_cfg. A real stick still seeds from the ESP.
     // Either one runs only while files/state/fmm.json is missing.
@@ -710,6 +716,22 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
         None => how,
     };
+    // Setup instructions root wrote into the deployment config (bia-flash takeover):
+    // handed to the model once, on the first boot that finds them.
+    let setup_path = paths.files.join("state").join("setup.md");
+    let setup = std::fs::read_to_string(&setup_path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if setup.is_some() {
+        let _ = std::fs::rename(&setup_path, paths.files.join("state").join("setup.done.md"));
+        boot.note("setup instructions from the deployment config");
+    }
+    let setup = setup.map(|t| {
+        format!(
+            "\nSetup instructions from root, written into the deployment config when this machine was installed (root's own words; carry them out now with your tools, then tell root on console and web what you did and what failed):\n<<<\n{t}\n>>>"
+        )
+    });
     let hw = crate::hw::summary();
     boot.note(&hw);
     boot.note(how.lines().next().unwrap_or(""));
@@ -722,7 +744,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             issued: clock::now(),
             id: String::new(),
             text: format!(
-                "{how}{} {}{BOOT_BATCH}",
+                "{how}{} {}{BOOT_BATCH}{}",
                 if release_notes.is_some() { "\n" } else { "." },
                 if how.contains("Repair these yourself")
                     || how.contains("Propose fixes to the user and wait for approval")
@@ -744,7 +766,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
                     welcome(cfg.web.enabled.then(|| weblink::info_line(&paths.files)), repl.remote.is_some())
                 } else {
                     READY_PLAIN.into()
-                }
+                },
+                setup.as_deref().unwrap_or("")
             ),
         }
         .ensure_id(),

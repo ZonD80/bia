@@ -1,0 +1,16 @@
+[Unit]
+Description=Move takeover seeds (certificates, setup instructions, network) from the ESP into place
+# /boot is nofail in fstab, so local-fs.target does not wait for it
+Wants=boot.mount
+After=local-fs.target boot.mount
+Before=bia-net.service networking.service bia.service bia-update.service
+ConditionPathExists=/boot/EFI/bia/seed
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-seed
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

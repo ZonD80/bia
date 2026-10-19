@@ -29,6 +29,7 @@
         <NuxtLink to="/use-cases">Use cases</NuxtLink>
         <NuxtLink to="/how-it-works">How it works</NuxtLink>
         <NuxtLink to="/why-bia">Why bia</NuxtLink>
+        <NuxtLink to="/fred">Fred’s story</NuxtLink>
         <NuxtLink to="/faq">FAQ</NuxtLink>
         <NuxtLink to="/download">Get bia</NuxtLink>
         <NuxtLink to="/servers">Servers and VMs</NuxtLink>

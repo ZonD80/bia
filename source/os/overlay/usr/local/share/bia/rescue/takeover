@@ -1,0 +1,141 @@
+# bia rescue, takeover mode (sourced by /bia-rescue/rescue when bia.takeover=1).
+#
+# The old system's boot loader started this rescue with the bia image in RAM:
+# GRUB loaded /bia-takeover/bia.img.xz (newc:) and /bia-takeover/{info,esp/} (a small
+# cpio) next to the rescue overlay. Nothing on the disk depends on the old system any
+# more. This writes the image over the whole disk, checks it, puts the seeds on the new
+# ESP and boots bia. Until the write starts, a failure leaves the old system as it was:
+# the one-shot boot entry is used up, so a reboot starts it again.
+TK=/bia-takeover
+NEWESP_MNT=/mnt/newesp
+wrote=0
+
+tdie() {
+  result "$1" FAIL
+  shift
+  local l
+  for l in "$@"; do say "$l"; done
+  if [ "$wrote" = 0 ]; then
+    say "nothing was written: rebooting starts the old system again"
+  else
+    say "the disk was being written: the old system is gone; run the takeover again from the provider's rescue system or console"
+  fi
+  say "opening a shell; exit it to reboot"
+  setsid -c bash -i </dev/console >/dev/console 2>&1 || bash -i
+  reboot_now
+}
+
+say "takeover: replacing this machine's system with bia"
+[ -f "$TK/info" ] || tdie "takeover" "no $TK/info: the boot loader did not load the takeover files"
+# info: DISK_PTUUID DISK_SIZE RAW_SIZE RAW_SHA256 XZ_SHA256 ARCH, and on legacy BIOS
+# IMG_FS_UUID IMG_PATH (hex, digits, a plain path; written by bia-flash takeover)
+IMG_FS_UUID= IMG_PATH=
+. "$TK/info"
+if [ ! -f "$TK/bia.img.xz" ] && [ -n "$IMG_FS_UUID" ]; then
+  # Legacy BIOS GRUB keeps initrds in low memory, too little for the image: read it
+  # from the old system's filesystem (read-only) into RAM here.
+  say "loading the image from the old system's disk into memory"
+  imgdev=$(dev_of "UUID=$IMG_FS_UUID") || tdie "image" "no filesystem with UUID $IMG_FS_UUID"
+  mkdir -p /mnt/oldfs
+  mount -o ro,noload "$imgdev" /mnt/oldfs 2>/dev/null || mount -o ro "$imgdev" /mnt/oldfs \
+    || tdie "image" "cannot mount $imgdev (the old system's filesystem) read-only"
+  cp "/mnt/oldfs$IMG_PATH" "$TK/bia.img.xz" || { umount /mnt/oldfs; tdie "image" "cannot copy $IMG_PATH into memory (not enough RAM?)"; }
+  umount /mnt/oldfs || tdie "image" "cannot unmount the old system's filesystem"
+fi
+[ -f "$TK/bia.img.xz" ] || tdie "takeover" "no $TK/bia.img.xz: the boot loader did not load the image (not enough RAM?)"
+
+say "checking the image in memory"
+got=$(sha256sum "$TK/bia.img.xz" | awk '{ print $1 }')
+[ "$got" = "$XZ_SHA256" ] || tdie "image" "bia.img.xz in memory has sha256 $got, expected $XZ_SHA256"
+ok "image"
+
+# The disk: same partition table id and size as when the takeover was prepared.
+disk=
+i=0
+while [ "$i" -lt 120 ]; do
+  for d in /sys/block/*; do
+    b=$(basename "$d")
+    case $b in loop*|ram*|sr*|zram*|fd*) continue ;; esac
+    [ -b "/dev/$b" ] || continue
+    pt=$(blkid -p -s PTUUID -o value "/dev/$b" 2>/dev/null | tr 'A-F' 'a-f')
+    size=$(( $(cat "$d/size" 2>/dev/null || echo 0) * 512 ))
+    if [ -n "$pt" ] && [ "$pt" = "$DISK_PTUUID" ] && [ "$size" = "$DISK_SIZE" ]; then
+      disk=/dev/$b
+      break 2
+    fi
+  done
+  [ "$i" -eq 10 ] && say "waiting for the disk with partition table $DISK_PTUUID"
+  sleep 0.5
+  i=$((i + 1))
+done
+[ -n "$disk" ] || tdie "disk" "no disk with partition table id $DISK_PTUUID and $DISK_SIZE bytes"
+[ "$RAW_SIZE" -le "$DISK_SIZE" ] || tdie "disk" "$disk is smaller than the image"
+say "disk $disk ($((DISK_SIZE >> 30)) GiB)"
+for p in /sys/block/"$(basename "$disk")"/"$(basename "$disk")"*; do
+  [ -e "$p/partition" ] || continue
+  n=/dev/$(basename "$p")
+  if grep -q "^$n " /proc/mounts; then umount "$n" 2>/dev/null; fi
+done
+
+say "writing bia onto $disk"
+wrote=1
+xz -dc "$TK/bia.img.xz" | dd of="$disk" bs=4M iflag=fullblock oflag=direct conv=fsync status=progress
+rc=$?
+[ "$rc" -eq 0 ] || tdie "writing" "writing the image exited $rc"
+sync
+ok "writing"
+
+say "verifying what is on the disk"
+blockdev --flushbufs "$disk" 2>/dev/null
+echo 3 > /proc/sys/vm/drop_caches
+got=$(head -c "$RAW_SIZE" "$disk" | sha256sum | awk '{ print $1 }')
+[ "$got" = "$RAW_SHA256" ] || tdie "verifying" "the disk reads back sha256 $got, expected $RAW_SHA256"
+ok "verifying"
+rm -f "$TK/bia.img.xz"
+
+# The new ESP is partition 1 of the image.
+blockdev --rereadpt "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null
+udevadm settle --timeout=10 >/dev/null 2>&1
+esp=
+i=0
+while [ "$i" -lt 40 ] && [ -z "$esp" ]; do
+  for p in /sys/block/"$(basename "$disk")"/"$(basename "$disk")"*; do
+    [ "$(cat "$p/partition" 2>/dev/null)" = 1 ] && esp=/dev/$(basename "$p")
+  done
+  [ -n "$esp" ] && [ -b "$esp" ] && break
+  esp=
+  sleep 0.25
+  i=$((i + 1))
+done
+[ -n "$esp" ] || tdie "seeds" "the new ESP (partition 1 of $disk) did not appear"
+mkdir -p "$NEWESP_MNT"
+mount -t vfat "$esp" "$NEWESP_MNT" || tdie "seeds" "cannot mount the new ESP $esp"
+if [ -d "$TK/esp" ]; then
+  cp -r "$TK/esp/." "$NEWESP_MNT/" || tdie "seeds" "cannot copy the seeds onto $esp (ESP full?)"
+fi
+sync
+umount "$NEWESP_MNT"
+ok "keys, certificates and network settings"
+
+# UEFI: the old boot entries point at an ESP that is gone; boot bia's next, and first.
+if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null 2>&1; then
+  for id in $(efibootmgr 2>/dev/null | awk '/^Boot[0-9A-Fa-f]{4}/ && /bia takeover/ { print substr($1, 5, 4) }'); do
+    efibootmgr -q -b "$id" -B >/dev/null 2>&1
+  done
+  case $(uname -m) in aarch64) loader='\EFI\BOOT\BOOTAA64.EFI' ;; *) loader='\EFI\BOOT\BOOTX64.EFI' ;; esac
+  order=$(efibootmgr 2>/dev/null | awk '/^BootOrder:/ { print $2; exit }')
+  if efibootmgr -q -c -d "$disk" -p 1 -l "$loader" -L "bia" >/dev/null 2>&1; then
+    new=$(efibootmgr 2>/dev/null | awk '/^Boot[0-9A-Fa-f]{4}/ { l = $0; sub(/^Boot[0-9A-Fa-f]{4}\*? */, "", l); if (index(l, "bia") == 1) id = substr($1, 5, 4) } END { print id }')
+    if [ -n "$new" ]; then
+      rest=$(printf '%s\n' "$order" | awk -F, -v n="$new" '{ for (i = 1; i <= NF; i++) if (toupper($i) != toupper(n)) o = o (o == "" ? "" : ",") $i; print o }')
+      efibootmgr -q -o "$new${rest:+,$rest}" >/dev/null 2>&1
+      efibootmgr -q -n "$new" >/dev/null 2>&1
+      say "next boot: Boot$new (bia)"
+    fi
+  else
+    say "could not add a boot entry; the firmware falls back to $loader on $disk"
+  fi
+fi
+
+ok "takeover done: booting bia"
+reboot_now

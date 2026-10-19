@@ -38,12 +38,13 @@ while [ "$i" -lt 150 ] && ! ls /dev/dri/card* >/dev/null 2>&1; do
   i=$((i + 1))
 done
 
+# start_x [Xorg args…]: one try at :0; the socket shows whether it came up.
 start_x() {
   cookie=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
   rm -f "$XAUTHORITY"
   xauth -f "$XAUTHORITY" add :0 . "$cookie"
   chmod 600 "$XAUTHORITY"
-  Xorg :0 -nolisten tcp -noreset -auth "$XAUTHORITY" vt1 >>/var/log/Xorg.bia.log 2>&1 &
+  Xorg :0 -nolisten tcp -noreset -auth "$XAUTHORITY" "$@" vt1 >>/var/log/Xorg.bia.log 2>&1 &
   i=0
   while [ "$i" -lt 50 ] && [ ! -S /tmp/.X11-unix/X0 ]; do
     sleep 0.1
@@ -51,16 +52,31 @@ start_x() {
   done
 }
 
+# No display device at all (cloud VMs such as EC2): a virtual 1920x1080 screen
+# (xserver-xorg-video-dummy), so x11vnc and the web display still work.
+DUMMY_CONF=/usr/local/share/bia/xorg-dummy.conf
+start_dummy() {
+  [ -f "$DUMMY_CONF" ] || return 0
+  echo "bia-session: no usable display device, using a virtual screen" >&2
+  pkill -x Xorg 2>/dev/null || true
+  sleep 1
+  install -d -m 755 /run/bia/xorg-none
+  start_x -config "$DUMMY_CONF" -configdir /run/bia/xorg-none
+}
+
 if [ ! -S /tmp/.X11-unix/X0 ]; then
   : >/var/log/Xorg.bia.log
-  start_x
-  # one retry: the DRM node can appear before the driver is fully ready
-  if [ ! -S /tmp/.X11-unix/X0 ]; then
-    echo "bia-session: Xorg did not start, retrying in 5s" >&2
-    pkill -x Xorg 2>/dev/null || true
-    sleep 5
+  if ls /dev/dri/card* >/dev/null 2>&1; then
     start_x
+    # one retry: the DRM node can appear before the driver is fully ready
+    if [ ! -S /tmp/.X11-unix/X0 ]; then
+      echo "bia-session: Xorg did not start, retrying in 5s" >&2
+      pkill -x Xorg 2>/dev/null || true
+      sleep 5
+      start_x
+    fi
   fi
+  [ -S /tmp/.X11-unix/X0 ] || start_dummy
 fi
 
 if [ ! -S /tmp/.X11-unix/X0 ]; then

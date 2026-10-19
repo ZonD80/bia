@@ -153,6 +153,41 @@ parent_disk() {
 
 say "bia rescue image $(cat /bia-rescue/version 2>/dev/null) on $(uname -r)"
 
+# ---- drivers -----------------------------------------------------------------
+start_drivers() {
+  say "starting udev"
+  UDEVD=$(command -v systemd-udevd || command -v udevd || true)
+  if [ -n "$UDEVD" ]; then
+    "$UDEVD" --daemon --resolve-names=never >/dev/null 2>&1
+    udevadm trigger --type=subsystems --action=add >/dev/null 2>&1
+    udevadm trigger --type=devices --action=add >/dev/null 2>&1
+    udevadm settle --timeout=30 >/dev/null 2>&1
+  fi
+  # Our own modules (built for this kernel), in dependency order; built-ins and
+  # already loaded ones just fail quietly.
+  if [ "$(cat /bia-rescue/version 2>/dev/null | awk '{ print $3 }')" = "$(uname -r)" ]; then
+    while read -r ko; do
+      [ -n "$ko" ] && insmod "/bia-rescue/mod/$ko" 2>/dev/null
+    done < /bia-rescue/mod/order
+  else
+    say "warning: rescue modules are for $(awk '{ print $3 }' /bia-rescue/version), kernel is $(uname -r)"
+  fi
+  for m in ext4 vfat nls_cp437 nls_ascii nls_utf8 efivarfs; do
+    modprobe -q "$m" 2>/dev/null
+  done
+  if [ -d /sys/firmware/efi/efivars ]; then
+    mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null
+  fi
+  ok "drivers"
+}
+
+# A takeover (bia-flash takeover on another Linux) writes a whole bia image instead.
+if arg bia.takeover >/dev/null; then
+  start_drivers
+  . /bia-rescue/takeover
+  reboot_now
+fi
+
 SRC=$(arg bia.src) || die "arguments" "no bia.src= on the kernel command line"
 DST=$(arg bia.dst) || die "arguments" "no bia.dst= on the kernel command line"
 SRCESP=$(arg bia.srcesp) || die "arguments" "no bia.srcesp= on the kernel command line"
@@ -160,31 +195,7 @@ DSTESP=$(arg bia.dstesp) || die "arguments" "no bia.dstesp= on the kernel comman
 MARKESP=$(arg bia.markesp) || die "arguments" "no bia.markesp= on the kernel command line"
 MARK=$(arg bia.mark) || die "arguments" "no bia.mark= on the kernel command line"
 
-# ---- drivers -----------------------------------------------------------------
-say "starting udev"
-UDEVD=$(command -v systemd-udevd || command -v udevd || true)
-if [ -n "$UDEVD" ]; then
-  "$UDEVD" --daemon --resolve-names=never >/dev/null 2>&1
-  udevadm trigger --type=subsystems --action=add >/dev/null 2>&1
-  udevadm trigger --type=devices --action=add >/dev/null 2>&1
-  udevadm settle --timeout=30 >/dev/null 2>&1
-fi
-# Our own modules (built for this kernel), in dependency order; built-ins and
-# already loaded ones just fail quietly.
-if [ "$(cat /bia-rescue/version 2>/dev/null | awk '{ print $3 }')" = "$(uname -r)" ]; then
-  while read -r ko; do
-    [ -n "$ko" ] && insmod "/bia-rescue/mod/$ko" 2>/dev/null
-  done < /bia-rescue/mod/order
-else
-  say "warning: rescue modules are for $(awk '{ print $3 }' /bia-rescue/version), kernel is $(uname -r)"
-fi
-for m in ext4 vfat nls_cp437 nls_ascii nls_utf8 efivarfs; do
-  modprobe -q "$m" 2>/dev/null
-done
-if [ -d /sys/firmware/efi/efivars ]; then
-  mount -t efivarfs efivarfs /sys/firmware/efi/efivars 2>/dev/null
-fi
-ok "drivers"
+start_drivers
 
 # DIR=<path>: a directory on the destination root (an internet release), not a device
 src_dir=
@@ -337,6 +348,7 @@ EXCLUDES=(
   --exclude=/etc/systemd/timesyncd.conf.d --exclude=/var/lib/systemd/timesync
   --exclude=/var/lib/systemd/clock --exclude=/var/lib/fake-hwclock
   --exclude=/home/bia/files
+  --exclude=/etc/bia
 )
 RSYNC=(rsync -aHAX --numeric-ids --delete --delete-delay --no-inc-recursive)
 say "copying ${src_dev:-$src_dir} onto $dst_dev"

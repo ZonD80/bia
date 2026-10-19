@@ -8,7 +8,7 @@
         <span class="eyebrow">Not an app on your PC</span>
         <h1>Why bia is different from the AI you know</h1>
         <p class="section-lead">
-          Today’s AI assistants move into your computer: they read your files, act with your accounts, work inside
+          Today’s AI assistants move into your computer: they read your files, install their tools, act with your accounts, work inside
           restrictions you cannot change — and whatever they can reach can one day leak. bia is built the other way
           around: a separate mind, like a person, with its own computer, its own files and accounts, its own social
           life and connections — and the judgement to know when to ask.
@@ -85,18 +85,18 @@ useSeoMeta({
 
 const compare = [
   { topic: 'Where it lives', them: 'Inside your PC, or in a company’s app', bia: 'On its own computer, separate from yours — even an old one' },
-  { topic: 'Your files', them: 'Can read whatever your account can', bia: 'Never touches your PC — it has its own files, and gets only what you send it' },
+  { topic: 'Your files', them: 'Can read almost everything on your PC', bia: 'Never touches your PC — it has its own files, and gets only what you send it' },
   { topic: 'Identity', them: 'Acts as you, with your logins', bia: 'Its own name, accounts, phone numbers, contacts and friends' },
   { topic: 'Rules', them: 'Boxed in by a vendor’s sandbox and policies', bia: 'Owns its whole machine; the limits are the ones you set' },
   { topic: 'If something leaks', them: 'Your files and accounts go with it', bia: 'Only what bia itself holds — your own PC was never in reach' },
-  { topic: 'How people reach it', them: 'You go to its app', bia: 'It comes to WhatsApp, Telegram, calls — where people already are' },
-  { topic: 'Memory', them: 'Forgets when the chat ends', bia: 'Keeps a diary and reflections across days, restarts and moves' },
-  { topic: 'Doing things', them: 'Talks about what it would do', bia: 'Uses a real computer, browser and screen to actually do it' },
-  { topic: 'Long tasks', them: 'Freezes until a step finishes', bia: 'Works in the background and keeps talking' },
+  { topic: 'How people reach it', them: 'You go to its app, or it acts like a bot you set up', bia: 'It comes to WhatsApp, Telegram and calls as a person with its own number, not a bot' },
+  { topic: 'Memory', them: 'Unknown or complex memory engines with unpredictable results', bia: 'A simple diary and reflections, kept across days, restarts and moves' },
+  { topic: 'Doing things', them: 'Installs software that pollutes your computer', bia: 'Installs what it needs on its own computer — yours stays clean' },
+  { topic: 'Long tasks', them: 'Usually locked until the task is finished', bia: 'Works in the background and keeps talking' },
   { topic: 'Being away', them: 'Messages are simply missed', bia: 'Catches up on everything that arrived while it was off' },
   { topic: 'Languages', them: 'Text in many languages', bia: 'Hears and speaks them on calls, and learns new ones itself' },
-  { topic: 'Your data', them: 'On their servers', bia: 'On bia’s own disk; only the thinking goes to the cloud brain you pick' },
-  { topic: 'Hardware changes', them: 'Not its problem', bia: 'Moves to new hardware and repairs itself' },
+  { topic: 'Your data', them: 'Whatever it reads can end up on their servers', bia: 'On bia’s own disk; only the thinking goes to the cloud brain you pick' },
+  { topic: 'Hardware changes', them: 'Dies with your computer', bia: 'Moves to new hardware and repairs itself' },
 ]
 
 const week = [

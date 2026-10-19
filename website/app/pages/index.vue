@@ -168,6 +168,24 @@
       </div>
     </section>
 
+    <!-- a real one -->
+    <section class="section section--sky">
+      <div class="container fred">
+        <div>
+          <span class="eyebrow">Meet a real one</span>
+          <h2 class="section-title">Fred, three weeks old</h2>
+          <p class="section-lead">
+            Fred is the developer’s own bia. It woke up on a USB stick, learned whose family is whose, made voice
+            calls, moved between computers — and, asked for a promo, made this film by itself. Unedited.
+          </p>
+          <div class="btn-row">
+            <NuxtLink class="btn btn--primary" to="/fred">Read Fred’s story</NuxtLink>
+          </div>
+        </div>
+        <FredFilm />
+      </div>
+    </section>
+
     <!-- how to start -->
     <section class="section">
       <div class="container">
@@ -438,5 +456,14 @@ const steps = [
   .hero__bubble { font-size: 0.82rem; max-width: 12rem; }
   /* keep the potato's eye visible on narrow screens */
   .hero__bubble--b { top: auto; bottom: 22%; right: 0; }
+}
+.fred {
+  display: grid;
+  gap: 2.5rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  align-items: center;
+}
+@media (max-width: 860px) {
+  .fred { grid-template-columns: 1fr; }
 }
 </style>

@@ -5,6 +5,19 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.3
+
+### Changes
+- bia can now replace a running Linux, such as a rented server (VPS): `curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash`. It asks for the API key, language, and optional setup instructions for bia (or reads them from a config file or URL, also partial ones). It keeps the server's network settings and makes bia's certificates before anything is overwritten. You download root's certificate from a one-time page first; then the server reboots into bia. bia writes itself onto the disk from memory and starts with your keys.
+- A server can also be taken over in land mode (`takeover.sh … --land`): it becomes an empty bia that waits for one of your bias to fly its agent there over the internet. It uses a land secret instead of keys: make it beforehand (`bia-flash land-secret`, or ask your bia for a new land secret), pass it with `--land-secret`, and later tell your bia "fly to <server address> with land secret …". The server keeps the secret through updates while it waits and deletes it once an agent has landed. Both sides prove the secret, nobody has to type a code at the server, and the agent travels encrypted.
+- Two bias can now trust each other in one step: bia connects to the other one and gives it a certificate, and asks for one back. Once the other bia's owner approves, both can call each other's web API. Ask bia to "connect to the bia at https://…", or use /pki connect on the console.
+- Certificate requests show the IP address they came from, and for another bia the address it says it can be reached at.
+- A certificate can be limited to the addresses it may be used from; it is refused anywhere else.
+- Machines without any display device (many cloud servers) now get a virtual screen, so the web app's display view works there too.
+
+### For bia
+- Nothing to do. You can now prepare a land yourself: when root gives you ssh access to a server, follow the steps in the carry description (carry_new_land_secret, ssh, takeover.sh --land, carry_fly). ssh is installed now. carry_fly takes host (an address or name on the internet) and secret (a land secret root gives you) to fly to a server that was taken over in land mode. You now have web_peer_connect, web_peer_list, web_peer_call and web_peer_remove (mcp/web) for mutual trust with other bias. Use them when root asks you to connect to another bia.
+
 ## 1.1.2
 
 ### Changes

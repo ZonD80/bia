@@ -1,0 +1,13 @@
+[Unit]
+Description=DHCP on every wired interface when the carried-over network has no default route
+After=networking.service
+ConditionPathIsDirectory=/etc/bia/net
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-net --fallback
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

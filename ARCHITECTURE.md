@@ -240,6 +240,24 @@ per address. Certificates root issues for people (`web_pki_issue`, pickup URL) a
 root certificate are still made here as PKCS#12, since browsers import those.
 `tests/e2e/peer-e2e.sh` (`make peer-e2e`) runs this between two QEMU agents.
 
+Two bias set up trust both ways in one approval (`bia-pki` `peers.rs`). Every bia
+has one agent key (`pki/agent.key`) and publishes its name (`bia-<CA fingerprint>`
+unless set) and a CSR for that key at the public `GET /v1/pki/agent`.
+`web_peer_connect(url, ca_sha256?)` on bia A fetches B's CA (pinned when a
+fingerprint is given), signs B's agent CSR with A's CA and files a request at B
+with A's own CSR plus a `grant`: that certificate, A's CA and A's address (the
+local address of the connection unless `my_url` is given). B checks the grant on
+arrival: it must be for B's agent key and verify against the CA that comes with it.
+When B's root approves, B keeps A as a peer (`pki/peers/<name>/`: `peer.json`,
+`ca.pem`, `cert.pem`); A's `web-peers` thread polls, collects its certificate and
+keeps B. Each side now calls the other with its agent key and the other's
+certificate (`web_peer_call`, or curl with the files `web_peer_list` prints). The
+server name is not checked (addresses change); the pinned CA is. A denied or
+expired request revokes the certificate A made for B. Requests show the source IP
+and, for a bia, the address it claims. Any certificate can also be limited to
+networks (`IssuedMeta.from`, IP SANs for single addresses): `check_client_from`
+refuses it from elsewhere (`wrong_source`); renewals keep the limit.
+
 The page (`web/index.html`, `app.js`, `app.css`, `term.js`, `emoji.js`) is a
 Telegram-style app. `chat.rs` keeps each identity's chats in
 `files/state/web/<identity>/`. Messages carry replies, forwards, attachments (uploads go to
@@ -455,6 +473,74 @@ it in its cache (`~/Library/Caches/bia-flash`, `%LOCALAPPDATA%\bia-flash\cache`,
 serves a local release over HTTP and has `bia-flash` write it with keys and a
 real Hugging Face model; `MODE=dd` decodes the `.img.xz` onto a bigger disk
 and adds the keys by hand. `FIRMWARE=bios` boots x86_64 under SeaBIOS.
+
+## Taking over a running Linux
+
+`tools/takeover.sh` (a release asset) downloads `bia-flash-linux-<arch>.tar.gz`,
+checks it against `bia-os.json` `tools` and runs `bia-flash takeover`
+(`installers/bia-flash/src/takeover/`). Its inputs are partial JSON configs
+(`--config` file or https URL, repeatable, `--config-sha256` pins; objects merge,
+lists replace, later wins), then flags, then detection, then questions on
+`/dev/tty` (none with `--yes`). Fields: `fmm` (`key` alone is enough), `lang`,
+`setup` (free text the model gets once at first boot), `pki` (`names`, `ips`,
+`root`: `generate` or `{csr}`, `root_from`, `agent_name`), `network` (`auto` or
+`{interfaces: […]}`), `disk`, `wipe`, `os`, `reboot`, `gate_port`.
+`--dump-config` prints the resolved config with secrets masked.
+
+Everything is checked before anything changes: architecture, firmware (UEFI,
+Secure Boot, BIOS with GRUB 2 reading `custom.cfg`), the disk holding `/` (no
+RAID, crypt or multi-disk LVM unless `--disk`), RAM (`2 × (image + boot files) +
+768 MiB + 512 MiB`, because the image goes through the initrd), a staging
+directory on a filesystem GRUB reads (`/boot/bia-takeover` or `/bia-takeover`, as
+GRUB sees it on btrfs subvolumes). The network is read from `ip -j` (DHCP,
+static, on-link gateways, IPv6 static or SLAAC) and stored per MAC (without colons:
+the ESP is FAT) as ifupdown stanzas with `@IF@`. After the operator types the disk name, the model answers once,
+the image is downloaded and checked, and `bia_pki::seed` makes the CA, the server
+certificate (fixed names and addresses in `server_extra.json`, kept across
+reissues), root's certificate (an active root closes `/v1/pki/bootstrap/root`) and
+the agent key. A one-time HTTPS page served with the new server certificate
+hands out `bia-root.p12` (also saved to `/root/bia-root.p12`); the operator
+confirms having it.
+
+The boot entry is one-shot: UEFI copies bia's shim and GRUB into
+`EFI/bia-takeover/` on the old ESP, adds an entry and sets `BootNext` (works under
+Secure Boot; a Debian `EFI/debian/grub.cfg` there gets a hook in front); BIOS adds
+a `custom.cfg` entry and runs `grub-reboot`. The entry boots only when every initrd
+loaded; otherwise it reboots into the old system (the one-shot entry is used up), and
+the kernel gets `panic=30`, so a failure never leaves the server hanging. GRUB loads bia's kernel, initramfs,
+rescue overlay, `seed.cpio` (`/bia-takeover/info` + the ESP seeds) and the image
+with `newc:bia-takeover/bia.img.xz:…`. The rescue (`bia.takeover=1`, `rescue/takeover`)
+checks the image in RAM, finds the disk by partition-table id and size, writes it,
+reads it back against `raw_sha256`, copies the seeds onto the new ESP, adds a UEFI
+entry for bia first in BootOrder and reboots. Until the write starts a failure
+leaves the old system bootable.
+
+On first boot `bia-seed` moves `EFI/bia/seed/{pki,setup.md,net}` into
+`files/state/pki`, `files/state/setup.md` and `/etc/bia/net`, then deletes it from
+the ESP. `bia-net` writes `/etc/network/interfaces` on every boot from those
+stanzas, matching MACs (names differ: `net.ifnames=0`), with DHCP on any other
+wired interface; `bia-net-fallback` runs DHCP everywhere when there is no default
+route after 120 s. The agent hands `setup.md` to the model in the boot notice once
+(then `setup.done.md`). Without a display device `bia-session` starts Xorg with
+the dummy driver (`xorg-dummy.conf`), so x11vnc and the web display work.
+
+`--land` (config `land: true` or `{secret}`) takes a server over into land mode
+instead: no keys, PKI or setup are made; the seed carries a land secret that
+`bia-seed` writes to `/etc/bia/land.secret` with `/etc/bia-land-mode` = `wait`. The
+secret is made before the installation (`bia-flash land-secret`, `carry_new_land_secret`:
+28 symbols, 140 bits; supplied ones need 26 letters and digits), so a bia that sets a
+server up over ssh (`takeover.sh … --land --land-secret <S> --yes --wipe <disk>
+--reboot`) knows it for the flight. It survives updates while the server waits (the
+rescue never touches `/etc/bia`, which also keeps the carried-over network) and is
+deleted when an agent has landed. `bia-land` keeps the carried-over network and runs
+`bia-mcp-carry --land`, which with a secret speaks only `BIA2`: X25519, then both
+sides prove the secret with HMAC-SHA256 over the handshake (no code to type at the
+server), and the archive moves in ChaCha20-Poly1305 frames keyed from the handshake
+and the secret. Wrong proofs are logged and the server keeps waiting (with a growing
+delay); a `BIA1` flight is refused. The flyer calls `carry_fly(host=<address or
+name>, secret=…)`; TCP 4791 must be reachable (`timeout_secs` lets the flyer wait
+for a server that is still installing). A successful landing removes the secret and
+the land mode, as on a LAN.
 
 ## Land mode and the ISO
 

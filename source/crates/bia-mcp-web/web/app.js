@@ -417,6 +417,7 @@ async function showBoot() {
     other_ca: 'was issued by another bia, not by this machine',
     expired: 'has expired',
     revoked: 'was revoked on this machine',
+    wrong_source: 'only works from another address than this browser’s',
   }[bad.kind] || 'is not valid here');
   const problemStep = bad ? h('div', { class: 'step problem' },
     h('h2', null, ic('shield'), 'Wrong certificate selected'),
@@ -705,9 +706,10 @@ function route() {
     if (innerWidth > 760) { go('chat/main'); return; }
     viewKey = 'empty';
   }
-  if (!S.root && ['shell', 'files', 'tasks', 'task', 'display'].includes(viewKey)) { go('chat/main'); return; }
+  if (!S.root && ['console', 'shell', 'files', 'tasks', 'task', 'display'].includes(viewKey)) { go('chat/main'); return; }
   switch (viewKey) {
     case 'chat': openChat(r.slice(5) || 'main'); break;
+    case 'console': showView('console', buildConsole); break;
     case 'shell': showView('shell', buildShell); break;
     case 'files': showView('files', buildFiles); filesNavigate(r.startsWith('files=') ? r.slice(6) : null); break;
     case 'tasks': showView('tasks', buildTasks); renderTasks(); break;
@@ -752,6 +754,7 @@ function sideMenu(e) {
   const light = document.documentElement.classList.contains('light');
   menu(r.left, r.bottom + 4, [
     { icon: 'edit', text: 'New chat', onClick: newChat },
+    S.root && { icon: 'console', text: 'Console', onClick: () => go('console') },
     S.root && { icon: 'terminal', text: 'Root shell', onClick: () => go('shell') },
     S.root && { icon: 'folder', text: 'Files', onClick: () => go('files') },
     S.root && { icon: 'tasks', text: 'Human tasks', onClick: () => go('tasks') },
@@ -803,6 +806,7 @@ function renderChatList() {
     const st = S.status;
     set(tools, 
       h('div', { class: 'side-label' }, 'Machine'),
+      tool('console', 'console', 'Console', st && st.model ? `${/^(thinking|tool|talking)/.test(st.state || '') ? st.state.split(' ')[0] : 'idle'} · ${st.model}` : 'live agent console'),
       tool('shell', 'terminal', 'Root shell', 'bash on this machine'),
       tool('files', 'folder', 'Files', 'browse, upload, edit'),
       tool('tasks', 'hand', 'Human tasks', S.tasks.length ? S.tasks.map(t => t.title).join(', ') : 'nothing waiting', S.tasks.length || null),
@@ -1981,6 +1985,39 @@ function openViewer(items, idx) {
 // ======================================================================
 // root: live console
 // ======================================================================
+const CON = { term: null, ws: null, hist: [], hi: -1 };
+function buildConsole() {
+  const state = h('span', { class: 'conn-state' }, 'connecting');
+  const host = h('div', { class: 'term' });
+  const inp = h('input', { placeholder: 'Type to the agent console (slash commands work: /help, /status…)', autocomplete: 'off', spellcheck: false });
+  const v = h('section', { class: 'view' },
+    h('div', { class: 'vhead' }, backBtn(), h('div', { class: 'avatar xs tool' }, ic('console')),
+      h('div', { class: 'tbox' }, h('div', { class: 'title' }, 'Console'), h('div', { class: 'subtitle' }, 'live agent console · same as the machine screen')),
+      state,
+      iconBtn('fontDown', 'Smaller', () => termFont(-1)), iconBtn('fontUp', 'Larger', () => termFont(1)),
+      iconBtn('copy', 'Copy all', () => copyText(CON.term.text(), 'Console')),
+      iconBtn('eraser', 'Clear scrollback', () => CON.term.clear()),
+      iconBtn('refresh', 'Reconnect', () => { if (CON.ws) CON.ws.close(); else conConnect(); })),
+    host,
+    h('div', { class: 'termbar' }, h('span', { class: 'prompt' }, '->'), inp,
+      h('button', { class: 'btn danger small', title: 'Interrupt the model (like Enter on an empty line)', onclick: () => conSend('') }, ic('stop'), 'Stop'),
+      h('button', { class: 'btn small', onclick: () => { conSend(inp.value); inp.value = ''; } }, 'Send')));
+  CON.state = state;
+  CON.term = new BiaTerm(host, {
+    pinTop: 3,
+    convertEol: true,
+    onResize: (rows, cols) => { if (CON.ws && CON.ws.readyState === 1) CON.ws.send(JSON.stringify({ t: 'resize', rows, cols })); },
+  });
+  CON.term.setFontSize(S.prefs.termFs);
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); conSend(inp.value); inp.value = ''; }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); if (CON.hist.length) { CON.hi = CON.hi < 0 ? CON.hist.length - 1 : Math.max(0, CON.hi - 1); inp.value = CON.hist[CON.hi]; } }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); if (CON.hi >= 0) { CON.hi++; if (CON.hi >= CON.hist.length) { CON.hi = -1; inp.value = ''; } else inp.value = CON.hist[CON.hi]; } }
+  });
+  whenSized(CON.term, conConnect);
+  setTimeout(() => inp.focus(), 50);
+  return v;
+}
 // connect once the terminal has its real size, so the replay wraps at the right width
 function whenSized(t, fn) {
   const tick = () => { if (t.host.clientWidth > 0) { t.fit(); fn(); } else requestAnimationFrame(tick); };
@@ -1988,7 +2025,29 @@ function whenSized(t, fn) {
 }
 function termFont(d) {
   S.prefs.termFs = Math.max(9, Math.min(24, S.prefs.termFs + d)); savePrefs();
+  if (CON.term) CON.term.setFontSize(S.prefs.termFs);
   if (SH.term) SH.term.setFontSize(S.prefs.termFs);
+}
+function conConnect() {
+  const t = CON.term;
+  t.reset();
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/term?rows=${t.rows}&cols=${t.cols}`);
+  ws.binaryType = 'arraybuffer';
+  CON.ws = ws;
+  CON.state.textContent = 'connecting'; CON.state.className = 'conn-state';
+  ws.onopen = () => { CON.state.textContent = 'live'; CON.state.className = 'conn-state ok'; };
+  ws.onmessage = e => t.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+  ws.onclose = () => {
+    CON.state.textContent = 'disconnected'; CON.state.className = 'conn-state bad';
+    if (CON.ws === ws) { CON.ws = null; setTimeout(() => { if (!CON.ws) conConnect(); }, 3000); }
+  };
+}
+function conSend(line) {
+  if (!CON.ws || CON.ws.readyState !== 1) { toast('Console not connected', true); return; }
+  if (line.trim()) { CON.hist.push(line); if (CON.hist.length > 200) CON.hist.shift(); }
+  CON.hi = -1;
+  CON.term.follow = true;
+  CON.ws.send(JSON.stringify({ t: 'line', v: line }));
 }
 // ======================================================================
 // root: shell
@@ -2640,7 +2699,8 @@ async function loadRequests() {
     set(box, h('table', { class: 'certs' },
       h('thead', null, h('tr', null, h('th', null, 'Identity'), h('th', null, 'Asked'), h('th', null, 'Status'), h('th'))),
       h('tbody', null, [...live, ...old].map(r => h('tr', null,
-        h('td', null, h('b', null, r.identity), ` · ${r.role}`, h('div', { class: 'muted mono', style: 'font-size:11px' }, `${r.id.slice(0, 8)} · ${r.source || ''}`),
+        h('td', null, h('b', null, r.identity), ` · ${r.role}`, h('div', { class: 'muted mono', style: 'font-size:11px' }, `${r.id.slice(0, 8)} · from IP ${r.source || '?'}`),
+          r.peer_url ? h('div', { class: 'muted', style: 'font-size:12px' }, h('span', { class: 'tag acc' }, 'mutual'), ` a bia at ${r.peer_url}; approving also lets this bia call it`) : null,
           r.note ? h('div', { class: 'muted', style: 'font-size:12px' }, `“${r.note}”`) : null),
         h('td', null, new Date(r.created * 1000).toLocaleString()),
         h('td', null, h('span', { class: 'tag ' + (tag[r.status] || '') }, r.status)),

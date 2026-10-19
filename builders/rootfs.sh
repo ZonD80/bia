@@ -107,13 +107,14 @@ in_chroot apt-get install -y --no-install-recommends \
   e2fsprogs dosfstools exfatprogs ntfs-3g \
   util-linux fdisk parted mount procps rsync \
   efibootmgr \
-  bash ca-certificates wget curl bzip2 xz-utils \
+  bash ca-certificates wget curl bzip2 xz-utils openssh-client \
   python3-minimal \
   wpasupplicant iw \
   tzdata adduser passwd login \
   kbd kexec-tools \
   alsa-utils \
-  xserver-xorg-core xserver-xorg-input-libinput xauth x11-xserver-utils x11-utils \
+  xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-dummy xauth x11-xserver-utils x11-utils \
+  libgl1-mesa-dri \
   xdotool scrot \
   openbox tint2 x11vnc novnc kitty fonts-dejavu-core fonts-noto-color-emoji fontconfig \
   fonts-noto-cjk fonts-noto-core \
@@ -140,6 +141,9 @@ install -m 0755 "$AGENT" "$ROOT/usr/local/sbin/bia-agent"
 
 echo "== systemd enable"
 in_chroot systemctl enable bia-grow.service
+in_chroot systemctl enable bia-seed.service
+in_chroot systemctl enable bia-net.service
+in_chroot systemctl enable bia-net-fallback.service
 in_chroot systemctl enable bia-update.service
 in_chroot systemctl enable bia.service
 in_chroot systemctl enable getty@tty2.service

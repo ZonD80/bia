@@ -447,13 +447,18 @@ online() {
 
 wait_land() {
   local bin have i
-  say "bia land: bringing up $IFACE"
-  write_net /
-  ifup -a || true
+  if [ -d /etc/bia/net ]; then
+    # a takeover carried the server's own network over (bia-net); keep it
+    say "bia land: network from the takeover"
+  else
+    say "bia land: bringing up $IFACE"
+    write_net /
+    ifup -a || true
+  fi
   have=0
   i=0
   while [ "$i" -lt 90 ]; do
-    if ip -4 -o addr show scope global | grep -q .; then
+    if ip -o addr show scope global | grep -q .; then
       have=1
       break
     fi
@@ -480,8 +485,13 @@ wait_land() {
   say "Internet reachable."
   bin=$(carry_bin)
   [ -x "$bin" ] || { say "Missing $bin"; exit 1; }
-  say "Waiting for another bia to fly here."
-  say "When both sides show the same code, type those digits and press enter."
+  if [ -s /etc/bia/land.secret ]; then
+    say "Waiting for another bia to fly here over the internet (TCP 4791) with this machine's land secret."
+    say "Tell that bia: fly to this machine's address with the land secret. No code is shown here."
+  else
+    say "Waiting for another bia to fly here."
+    say "When both sides show the same code, type those digits and press enter."
+  fi
   set +e
   "$bin" --land 2>&1 | while IFS= read -r line; do
     say "$line"

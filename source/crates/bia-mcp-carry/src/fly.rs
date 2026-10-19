@@ -1,13 +1,22 @@
 //! Land announces on UDP. Fly discovers those hosts, then both sides confirm a code
 //! derived from an X25519 handshake before any archive bytes move.
+//!
+//! Over the internet (a server taken over in land mode, `bia-flash takeover --land`)
+//! nobody sits at the landing machine and there is no shared LAN: the flyer connects
+//! to its address and both prove they know the land secret (`/etc/bia/land.secret`)
+//! with an HMAC over the X25519 handshake instead of comparing a code (protocol
+//! `BIA2`). The archive then travels encrypted (ChaCha20-Poly1305, keys from the
+//! handshake and the secret). A machine waiting with a secret refuses `BIA1` flights.
 use bia_mcp::Ctx;
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use ring::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, X25519};
+use ring::hmac;
 use ring::rand::SystemRandom;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
 use std::sync::{Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -17,6 +26,29 @@ const DISC_PORT: u16 = 4791;
 // On the root disk: /run is a RAM tmpfs, usually smaller than /home/bia.
 const ARCHIVE_OUT: &str = "/var/tmp/bia-carry-out.tar.gz";
 const ARCHIVE_IN: &str = "/var/tmp/bia-carry-in.tar.gz";
+/// The land secret of a machine that waits for a flight over the internet.
+const LAND_SECRET: &str = "/etc/bia/land.secret";
+const FRAME: usize = 64 * 1024;
+/// Letters and digits a land secret needs at least (26 from 32 symbols: 130 bits).
+pub const MIN_SECRET: usize = 26;
+const SECRET_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/// A new land secret: 28 symbols without look-alikes (140 bits), in groups of 4.
+pub fn new_secret() -> Result<String, String> {
+    let mut b = [0u8; 28];
+    ring::rand::SecureRandom::fill(&SystemRandom::new(), &mut b).map_err(|_| "no randomness".to_string())?;
+    let s: Vec<char> = b.iter().map(|x| SECRET_ALPHABET[(*x as usize) % 32] as char).collect();
+    Ok(s.chunks(4).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("-"))
+}
+
+fn land_secret_path() -> PathBuf {
+    std::env::var_os("BIA_LAND_SECRET_FILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(LAND_SECRET))
+}
+
+/// Letters and digits only, upper case: `abcd-efgh` and `ABCDEFGH` are the same secret.
+pub fn normalize_secret(s: &str) -> String {
+    s.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect()
+}
 
 struct Gate {
     inner: Mutex<GateInner>,
@@ -172,6 +204,13 @@ pub fn discover(ctx: &Ctx, wait: Duration) -> Vec<LandHost> {
 
 pub fn land(ctx: &Ctx, port: u16, timeout: Duration) -> Result<String, String> {
     let _hold = acquire()?;
+    if let Ok(raw) = std::fs::read_to_string(land_secret_path()) {
+        let secret = normalize_secret(&raw);
+        if secret.len() >= MIN_SECRET {
+            return land_with_secret(ctx, port, timeout, &secret);
+        }
+        ctx.log(format!("land: the land secret has fewer than {MIN_SECRET} letters and digits; ignoring it and waiting for a flight on this network"));
+    }
     let listener = TcpListener::bind(("0.0.0.0", port)).map_err(|e| format!("tcp {port}: {e}"))?;
     listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let udp = UdpSocket::bind(("0.0.0.0", DISC_PORT)).map_err(|e| format!("udp {DISC_PORT}: {e}"))?;
@@ -221,13 +260,35 @@ pub fn land(ctx: &Ctx, port: u16, timeout: Duration) -> Result<String, String> {
     crate::archive::unfold_file(ctx, &path, crate::archive::Mode::Land)
 }
 
-pub fn fly(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration) -> Result<String, String> {
+/// Fold this agent and send it to a landing machine (on this network by default); with `secret` (the landing machine's land secret) the flight is `BIA2`:
+/// mutual proof instead of a code, and the archive encrypted.
+pub fn fly_with(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration, secret: Option<&str>) -> Result<String, String> {
+    let mut secret = secret.map(normalize_secret).filter(|s| !s.is_empty());
+    if secret.is_none() {
+        // a server this agent made a land secret for (carry_new_land_secret(host=…))
+        if let Some(saved) = host.filter(|h| !h.trim().is_empty()).and_then(saved_secret) {
+            ctx.log(format!("fly: using the land secret saved for {}", host_key(host.unwrap_or(""))));
+            secret = Some(normalize_secret(&saved));
+        }
+    }
+    if secret.as_ref().is_some_and(|s| s.len() < MIN_SECRET) {
+        return Err(format!("a land secret has at least {MIN_SECRET} letters and digits; this one is shorter"));
+    }
+    if secret.is_some() && host.map(str::trim).unwrap_or("").is_empty() {
+        return Err("a flight with a land secret needs host: the address of the machine waiting for it".into());
+    }
     let _hold = acquire()?;
     // Fold before looking for the other machine: a fold that fails (no space) must
     // not leave it holding a confirmed code and a dropped connection.
     let archive = PathBuf::from(ARCHIVE_OUT);
     let len = crate::archive::fold_into(ctx, &archive)?;
-    let result = fly_archive(ctx, host, port, timeout, &archive, len);
+    let result = match &secret {
+        Some(sec) => fly_archive_secret(ctx, host.unwrap_or(""), port.unwrap_or(TCP_PORT), timeout, &archive, len, sec).map(|ok| {
+            forget_secret(host.unwrap_or(""));
+            ok
+        }),
+        None => fly_archive(ctx, host, port, timeout, &archive, len),
+    };
     let _ = std::fs::remove_file(&archive);
     result
 }
@@ -235,8 +296,8 @@ pub fn fly(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration) 
 fn fly_archive(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration, archive: &std::path::Path, len: u64) -> Result<String, String> {
     let (ip, port) = match host.map(str::trim).filter(|s| !s.is_empty()) {
         Some(h) => {
-            let ip: Ipv4Addr = h.parse().map_err(|_| format!("host must be an IPv4 address, got {h}"))?;
-            (ip, port.unwrap_or(TCP_PORT))
+            let addr = resolve(h, port.unwrap_or(TCP_PORT))?;
+            (addr.ip(), addr.port())
         }
         None => {
             ctx.log("fly: looking for a machine that is landing");
@@ -245,7 +306,7 @@ fn fly_archive(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Durati
                 0 => return Err("no machine is landing on this network".into()),
                 1 => {
                     ctx.log(format!("fly: found {}", hosts[0].label()));
-                    (hosts[0].ip, if port.is_some() { port.unwrap() } else { hosts[0].port })
+                    (std::net::IpAddr::V4(hosts[0].ip), if port.is_some() { port.unwrap() } else { hosts[0].port })
                 }
                 _ => {
                     let list = hosts.iter().map(|h| h.label()).collect::<Vec<_>>().join("\n");
@@ -255,10 +316,16 @@ fn fly_archive(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Durati
         }
     };
     ctx.log(format!("fly: connecting to {ip}:{port}"));
-    let mut stream = connect_cancel(ctx, ip, port, timeout)?;
+    let mut stream = connect_cancel(ctx, SocketAddr::new(ip, port), timeout)?;
     prepare_stream(&stream)?;
     ctx.log(format!("fly: connected to {ip}:{port}"));
-    let code = handshake(ctx, &mut stream, true)?;
+    let code = handshake(ctx, &mut stream, true).map_err(|e| {
+        if e.contains("not a carry session") {
+            format!("{e}: that machine waits for a flight with its land secret; pass secret")
+        } else {
+            e
+        }
+    })?;
     publish_code(ctx, &code);
     let decision = wait_decision(ctx, Duration::from_secs(180));
     finish_confirm(ctx, &mut stream, decision)?;
@@ -412,20 +479,356 @@ fn recv_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path) -> Re
     Ok(())
 }
 
-fn connect_cancel(ctx: &Ctx, ip: Ipv4Addr, port: u16, timeout: Duration) -> Result<TcpStream, String> {
+fn connect_cancel(ctx: &Ctx, addr: SocketAddr, timeout: Duration) -> Result<TcpStream, String> {
     let start = Instant::now();
-    let addr = std::net::SocketAddrV4::new(ip, port);
     loop {
         ctx.check_cancel()?;
         if start.elapsed() > timeout {
-            return Err(format!("timed out connecting to {ip}:{port}"));
+            return Err(format!("timed out connecting to {addr}"));
         }
-        match TcpStream::connect_timeout(&std::net::SocketAddr::V4(addr), Duration::from_secs(2)) {
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(5)) {
             Ok(s) => return Ok(s),
             Err(_) if start.elapsed() < timeout => std::thread::sleep(Duration::from_millis(200)),
-            Err(e) => return Err(format!("connect {ip}:{port}: {e}")),
+            Err(e) => return Err(format!("connect {addr}: {e}")),
         }
     }
+}
+
+/// `host` is an IPv4 or IPv6 address (brackets optional) or a name.
+fn resolve(host: &str, port: u16) -> Result<SocketAddr, String> {
+    let (h, port) = split_host_port(host, port);
+    let h = h.as_str();
+    if let Ok(ip) = h.parse::<std::net::IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    (h, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("cannot resolve {h}: {e}"))?
+        .next()
+        .ok_or_else(|| format!("{h} has no address"))
+}
+
+/// `host` may carry its port: `203.0.113.7:14791`, `[2001:db8::1]:14791`, `name:14791`
+/// (a bare IPv6 address has several colons and no port). Brackets are dropped.
+fn split_host_port(host: &str, port: u16) -> (String, u16) {
+    let h = host.trim();
+    if let Some(rest) = h.strip_prefix('[') {
+        if let Some((ip, tail)) = rest.split_once(']') {
+            let p = tail.strip_prefix(':').and_then(|p| p.parse().ok()).unwrap_or(port);
+            return (ip.to_string(), p);
+        }
+    }
+    if h.matches(':').count() == 1 {
+        if let Some((name, p)) = h.rsplit_once(':') {
+            if let Ok(p) = p.parse() {
+                return (name.to_string(), p);
+            }
+        }
+    }
+    (h.to_string(), port)
+}
+
+// ---- land secrets this agent made, by host (carry_new_land_secret(host=…)) -------
+
+fn secrets_path() -> PathBuf {
+    std::env::var_os("BIA_LAND_SECRETS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/home/bia/files/state/land-secrets.json"))
+}
+
+/// The host part only (no port, lower case): how secrets are filed.
+fn host_key(host: &str) -> String {
+    split_host_port(host, 0).0.to_ascii_lowercase()
+}
+
+/// A new land secret, filed under `host` when given, so carry_fly(host) finds it later.
+pub fn new_secret_for(host: Option<&str>) -> Result<String, String> {
+    let s = new_secret()?;
+    if let Some(h) = host.map(str::trim).filter(|h| !h.is_empty()) {
+        let p = secrets_path();
+        let mut all: serde_json::Map<String, serde_json::Value> = std::fs::read(&p)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        all.insert(host_key(h), serde_json::json!({"secret": s, "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)}));
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let tmp = p.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&all).unwrap_or_default()).map_err(|e| format!("save the land secret: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        std::fs::rename(&tmp, &p).map_err(|e| format!("save the land secret: {e}"))?;
+        return Ok(format!("{s}\n(saved for {}: carry_fly(host='{}') uses it without secret)", host_key(h), host_key(h)));
+    }
+    Ok(s)
+}
+
+/// Drop the secret filed for `host` (the server deletes its copy once an agent landed).
+fn forget_secret(host: &str) {
+    let p = secrets_path();
+    let Ok(b) = std::fs::read(&p) else { return };
+    let Ok(mut all) = serde_json::from_slice::<serde_json::Map<String, serde_json::Value>>(&b) else { return };
+    if all.remove(&host_key(host)).is_some() {
+        let _ = std::fs::write(&p, serde_json::to_vec_pretty(&all).unwrap_or_default());
+    }
+}
+
+/// The secret filed for `host`, if this agent made one for it.
+fn saved_secret(host: &str) -> Option<String> {
+    let all: serde_json::Value = serde_json::from_slice(&std::fs::read(secrets_path()).ok()?).ok()?;
+    all.get(host_key(host))?.get("secret")?.as_str().map(str::to_string)
+}
+
+// ---- BIA2: land secret, mutual proof, encrypted archive ------------------------
+
+/// Both directions of an encrypted flight.
+struct Secure {
+    tx: LessSafeKey,
+    rx: LessSafeKey,
+    n_tx: u64,
+    n_rx: u64,
+}
+
+fn derive(k: &[u8], label: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(k);
+    h.update(label);
+    h.finalize().into()
+}
+
+fn nonce(n: u64) -> Nonce {
+    let mut b = [0u8; 12];
+    b[4..].copy_from_slice(&n.to_be_bytes());
+    Nonce::assume_unique_for_key(b)
+}
+
+impl Secure {
+    fn send(&mut self, stream: &mut TcpStream, data: &[u8]) -> Result<(), String> {
+        let mut buf = data.to_vec();
+        self.tx
+            .seal_in_place_append_tag(nonce(self.n_tx), Aad::empty(), &mut buf)
+            .map_err(|_| "encrypt".to_string())?;
+        self.n_tx += 1;
+        stream.write_all(&(buf.len() as u32).to_be_bytes()).map_err(|e| e.to_string())?;
+        stream.write_all(&buf).map_err(|e| e.to_string())
+    }
+
+    fn recv(&mut self, ctx: &Ctx, stream: &TcpStream, timeout: Duration) -> Result<Vec<u8>, String> {
+        let mut len = [0u8; 4];
+        read_full(ctx, stream, &mut len, timeout)?;
+        let len = u32::from_be_bytes(len) as usize;
+        if len < 16 || len > FRAME + 64 {
+            return Err("bad frame from the peer".into());
+        }
+        let mut buf = vec![0u8; len];
+        read_full(ctx, stream, &mut buf, timeout)?;
+        let plain = self
+            .rx
+            .open_in_place(nonce(self.n_rx), Aad::empty(), &mut buf)
+            .map_err(|_| "the data from the peer did not decrypt (tampered with?)".to_string())?
+            .len();
+        self.n_rx += 1;
+        buf.truncate(plain);
+        Ok(buf)
+    }
+}
+
+/// X25519 with `BIA2`, then each side proves it knows `secret`. Returns the channel.
+fn handshake_secret(ctx: &Ctx, stream: &mut TcpStream, fly_side: bool, secret: &str) -> Result<Secure, String> {
+    let rng = SystemRandom::new();
+    let mine = EphemeralPrivateKey::generate(&X25519, &rng).map_err(|_| "x25519".to_string())?;
+    let mine_pub = mine.compute_public_key().map_err(|_| "x25519".to_string())?.as_ref().to_vec();
+    let mut hello = Vec::with_capacity(36);
+    hello.extend_from_slice(b"BIA2");
+    hello.extend_from_slice(&mine_pub);
+    let mut peer = [0u8; 36];
+    if fly_side {
+        stream.write_all(&hello).map_err(|e| e.to_string())?;
+        read_full(ctx, stream, &mut peer, Duration::from_secs(60))?;
+    } else {
+        read_full(ctx, stream, &mut peer, Duration::from_secs(60))?;
+        if &peer[..4] == b"BIA1" {
+            return Err("a flight without this machine's land secret (an older bia, or no secret given); refused".into());
+        }
+        stream.write_all(&hello).map_err(|e| e.to_string())?;
+    }
+    if &peer[..4] != b"BIA2" {
+        return Err(if fly_side {
+            "that machine does not wait with a land secret; fly without secret on its network instead".into()
+        } else {
+            "peer is not a carry session".into()
+        });
+    }
+    let peer_pub = peer[4..].to_vec();
+    let shared = agreement::agree_ephemeral(mine, &UnparsedPublicKey::new(&X25519, &peer_pub), |km| km.to_vec())
+        .map_err(|_| "key agreement failed".to_string())?;
+    let (fly_pub, land_pub) = if fly_side { (&mine_pub, &peer_pub) } else { (&peer_pub, &mine_pub) };
+    let mut h = Sha256::new();
+    h.update(b"bia-carry-v2");
+    h.update(&shared);
+    h.update(fly_pub);
+    h.update(land_pub);
+    h.update(secret.as_bytes());
+    let k: [u8; 32] = h.finalize().into();
+    let mac = hmac::Key::new(hmac::HMAC_SHA256, &k);
+    let (mine_label, peer_label): (&[u8], &[u8]) = if fly_side { (b"proof fly", b"proof land") } else { (b"proof land", b"proof fly") };
+    let mut theirs = [0u8; 32];
+    if fly_side {
+        stream.write_all(hmac::sign(&mac, mine_label).as_ref()).map_err(|e| e.to_string())?;
+        read_full(ctx, stream, &mut theirs, Duration::from_secs(60)).map_err(|_| "the landing machine refused the land secret".to_string())?;
+    } else {
+        read_full(ctx, stream, &mut theirs, Duration::from_secs(60))?;
+        if hmac::verify(&mac, peer_label, &theirs).is_err() {
+            return Err("the flyer does not know this machine's land secret; refused".into());
+        }
+        stream.write_all(hmac::sign(&mac, mine_label).as_ref()).map_err(|e| e.to_string())?;
+    }
+    if fly_side && hmac::verify(&mac, peer_label, &theirs).is_err() {
+        return Err("the landing machine does not know the land secret; not sending".into());
+    }
+    let key = |label: &[u8]| LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, &derive(&k, label)).expect("32-byte key"));
+    let (tx, rx) = if fly_side { (key(b"fly to land"), key(b"land to fly")) } else { (key(b"land to fly"), key(b"fly to land")) };
+    Ok(Secure { tx, rx, n_tx: 0, n_rx: 0 })
+}
+
+fn send_archive_secret(ctx: &Ctx, stream: &mut TcpStream, ch: &mut Secure, path: &std::path::Path, len: u64) -> Result<(), String> {
+    ch.send(stream, &len.to_be_bytes())?;
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let (mut left, mut sent) = (len, 0u64);
+    let mut buf = vec![0u8; FRAME];
+    let mut last = Instant::now();
+    while left > 0 {
+        ctx.check_cancel()?;
+        let n = buf.len().min(left as usize);
+        file.read_exact(&mut buf[..n]).map_err(|e| e.to_string())?;
+        ch.send(stream, &buf[..n])?;
+        hasher.update(&buf[..n]);
+        left -= n as u64;
+        sent += n as u64;
+        if last.elapsed() >= Duration::from_secs(1) {
+            ctx.log(format!("fly: sent {sent} / {len} bytes"));
+            last = Instant::now();
+        }
+    }
+    ch.send(stream, &hasher.finalize())?;
+    ctx.log(format!("fly: sent {len} bytes (encrypted)"));
+    Ok(())
+}
+
+fn recv_archive_secret(ctx: &Ctx, stream: &TcpStream, ch: &mut Secure, path: &std::path::Path) -> Result<(), String> {
+    let first = ch.recv(ctx, stream, Duration::from_secs(120))?;
+    let len = u64::from_be_bytes(first.as_slice().try_into().map_err(|_| "bad archive header".to_string())?);
+    if len == 0 {
+        return Err("archive is empty".into());
+    }
+    let mut file = File::create(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let (mut got, mut last) = (0u64, Instant::now());
+    while got < len {
+        ctx.check_cancel()?;
+        let chunk = ch.recv(ctx, stream, Duration::from_secs(120))?;
+        if got + chunk.len() as u64 > len {
+            return Err("the archive is longer than announced".into());
+        }
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        hasher.update(&chunk);
+        got += chunk.len() as u64;
+        if last.elapsed() >= Duration::from_secs(1) {
+            ctx.log(format!("land: received {got} / {len} bytes"));
+            last = Instant::now();
+        }
+    }
+    let dig = ch.recv(ctx, stream, Duration::from_secs(60))?;
+    if dig[..] != hasher.finalize()[..] {
+        let _ = std::fs::remove_file(path);
+        return Err("archive checksum did not match".into());
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    ctx.log(format!("land: received {len} bytes"));
+    Ok(())
+}
+
+/// The landing side of one encrypted flight: proof, archive into `path`, ack.
+fn land_session_secret(ctx: &Ctx, stream: &mut TcpStream, secret: &str, path: &std::path::Path) -> Result<(), String> {
+    let mut ch = handshake_secret(ctx, stream, false, secret)?;
+    ctx.log("land: the flyer knows the land secret; receiving its archive");
+    recv_archive_secret(ctx, stream, &mut ch, path)?;
+    ch.send(stream, &[1u8])
+}
+
+/// The flying side of one encrypted flight.
+fn fly_session_secret(ctx: &Ctx, stream: &mut TcpStream, secret: &str, archive: &std::path::Path, len: u64) -> Result<(), String> {
+    let mut ch = handshake_secret(ctx, stream, true, secret)?;
+    ctx.log("fly: the landing machine knows the land secret");
+    send_archive_secret(ctx, stream, &mut ch, archive, len)?;
+    let ack = ch.recv(ctx, stream, Duration::from_secs(300))?;
+    if ack != [1u8] {
+        return Err("the landing machine rejected the archive".into());
+    }
+    Ok(())
+}
+
+fn fly_archive_secret(ctx: &Ctx, host: &str, port: u16, timeout: Duration, archive: &std::path::Path, len: u64, secret: &str) -> Result<String, String> {
+    let addr = resolve(host, port)?;
+    ctx.log(format!("fly: connecting to {addr} (land secret, encrypted)"));
+    let mut stream = connect_cancel(ctx, addr, timeout)?;
+    prepare_stream(&stream)?;
+    fly_session_secret(ctx, &mut stream, secret, archive, len)?;
+    Ok(format!("archive accepted by {addr}. That machine unfolds and reboots as this agent. This machine stays as it is."))
+}
+
+/// Wait for a flight that proves it knows `secret`; anything else is logged and
+/// dropped, and the machine keeps waiting.
+fn land_with_secret(ctx: &Ctx, port: u16, timeout: Duration, secret: &str) -> Result<String, String> {
+    let listener = TcpListener::bind(("::", port))
+        .or_else(|_| TcpListener::bind(("0.0.0.0", port)))
+        .map_err(|e| format!("tcp {port}: {e}"))?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    ctx.log(format!("land: waiting on TCP {port} for a flight that knows this machine's land secret"));
+    let start = Instant::now();
+    let path = PathBuf::from(ARCHIVE_IN);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut failures = 0u32;
+    loop {
+        ctx.check_cancel()?;
+        if start.elapsed() > timeout {
+            return Err("timed out waiting for a machine to fly here".into());
+        }
+        let (mut stream, addr) = match listener.accept() {
+            Ok(pair) => pair,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(200));
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        ctx.log(format!("land: flyer connected from {addr}"));
+        if prepare_stream(&stream).is_err() {
+            continue;
+        }
+        match land_session_secret(ctx, &mut stream, secret, &path) {
+            Ok(()) => break,
+            Err(e) => {
+                failures += 1;
+                ctx.log(format!("land: {e}"));
+                let _ = std::fs::remove_file(&path);
+                // slow down guessing; the secret is long enough that it cannot work anyway
+                std::thread::sleep(Duration::from_secs(failures.min(30) as u64));
+            }
+        }
+    }
+    // The secret is only for land mode: once an agent has landed it is gone. (While the
+    // server still waits, updates keep it: the rescue leaves /etc/bia alone.)
+    let _ = std::fs::remove_file(land_secret_path());
+    ctx.log("land: archive accepted, unfolding");
+    crate::archive::unfold_file(ctx, &path, crate::archive::Mode::Land)
 }
 
 fn prepare_stream(stream: &TcpStream) -> Result<(), String> {
@@ -558,5 +961,96 @@ fn ipv4_of(sa: *const libc::sockaddr) -> Option<Ipv4Addr> {
         }
         let sin = &*(sa as *const libc::sockaddr_in);
         Some(Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pair() -> (TcpStream, TcpStream) {
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let (b, _) = l.accept().unwrap();
+        prepare_stream(&a).unwrap();
+        prepare_stream(&b).unwrap();
+        (a, b)
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("bia-fly-{name}-{}", std::process::id()))
+    }
+
+    #[test]
+    fn secret_flight_moves_the_archive_encrypted() {
+        let src = tmp("src");
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        std::fs::write(&src, &data).unwrap();
+        let dst = tmp("dst");
+        let (mut fly_s, mut land_s) = pair();
+        let d2 = dst.clone();
+        let t = std::thread::spawn(move || land_session_secret(&Ctx::console(), &mut land_s, "ABCDEFGHJKLMNPQRSTUVWXYZ2345", &d2));
+        fly_session_secret(&Ctx::console(), &mut fly_s, &normalize_secret("abcd-efgh-jklm-npqr-stuv-wxyz-2345"), &src, data.len() as u64).unwrap();
+        t.join().unwrap().unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), data);
+        let _ = std::fs::remove_file(&src);
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    #[test]
+    fn wrong_secret_or_old_flyer_is_refused() {
+        let src = tmp("src2");
+        std::fs::write(&src, b"agent").unwrap();
+        let dst = tmp("dst2");
+        let (mut fly_s, mut land_s) = pair();
+        let d2 = dst.clone();
+        let t = std::thread::spawn(move || land_session_secret(&Ctx::console(), &mut land_s, "RIGHTSECRET123RIGHTSECRET12", &d2));
+        assert!(fly_session_secret(&Ctx::console(), &mut fly_s, "WRONGSECRET123WRONGSECRET12", &src, 5).is_err());
+        assert!(t.join().unwrap().unwrap_err().contains("does not know"));
+        assert!(!dst.exists(), "nothing received");
+        // a BIA1 (code) flyer
+        let (mut fly_s, mut land_s) = pair();
+        let d3 = dst.clone();
+        let t = std::thread::spawn(move || land_session_secret(&Ctx::console(), &mut land_s, "RIGHTSECRET123RIGHTSECRET12", &d3));
+        let _ = handshake(&Ctx::console(), &mut fly_s, true);
+        assert!(t.join().unwrap().unwrap_err().contains("without this machine's land secret"));
+        let _ = std::fs::remove_file(&src);
+    }
+
+    #[test]
+    fn new_secrets_are_long_and_readable() {
+        let a = new_secret().unwrap();
+        assert_eq!(a.len(), 34, "{a}");
+        assert_eq!(normalize_secret(&a).len(), 28);
+        assert!(normalize_secret(&a).len() >= MIN_SECRET);
+        assert!(!a.contains(['0', '1', 'I', 'O']));
+        assert_ne!(a, new_secret().unwrap());
+    }
+
+    #[test]
+    fn host_with_port_and_saved_secrets() {
+        assert_eq!(split_host_port("10.0.2.2:14791", 4791), ("10.0.2.2".to_string(), 14791));
+        assert_eq!(split_host_port("[2001:db8::1]:14791", 4791), ("2001:db8::1".to_string(), 14791));
+        assert_eq!(split_host_port("2001:db8::1", 4791), ("2001:db8::1".to_string(), 4791));
+        assert_eq!(split_host_port("vps.example.com:99", 4791), ("vps.example.com".to_string(), 99));
+        assert_eq!(resolve("10.0.2.2:14791", 4791).unwrap().to_string(), "10.0.2.2:14791");
+        let f = tmp("secrets.json");
+        std::env::set_var("BIA_LAND_SECRETS", &f);
+        let out = new_secret_for(Some("VPS.example.com:14791")).unwrap();
+        let s = out.lines().next().unwrap().to_string();
+        assert_eq!(saved_secret("vps.example.com").as_deref(), Some(s.as_str()));
+        assert_eq!(saved_secret("vps.example.com:4791").as_deref(), Some(s.as_str()), "the port does not matter");
+        assert!(saved_secret("other").is_none());
+        forget_secret("vps.example.com");
+        assert!(saved_secret("vps.example.com").is_none(), "forgotten after the landing");
+        let _ = std::fs::remove_file(f);
+    }
+
+    #[test]
+    fn hosts_resolve() {
+        assert_eq!(resolve("203.0.113.7", 4791).unwrap().to_string(), "203.0.113.7:4791");
+        assert_eq!(resolve("[2001:db8::1]", 4791).unwrap().to_string(), "[2001:db8::1]:4791");
+        assert_eq!(resolve("localhost", 1).unwrap().port(), 1);
+        assert_eq!(normalize_secret(" abcd-EFGH 12 "), "ABCDEFGH12");
     }
 }

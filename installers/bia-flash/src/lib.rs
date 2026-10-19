@@ -20,6 +20,7 @@ pub mod lang;
 pub mod image;
 mod local_files;
 pub mod release;
+pub mod takeover;
 mod write;
 
 pub use check::{test_model, Greeting};

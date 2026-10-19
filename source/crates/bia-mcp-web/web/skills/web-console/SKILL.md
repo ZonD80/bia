@@ -42,6 +42,8 @@ curl -s --cacert ca.pem --cert peer.crt --key peer.key https://<host>/v1/whoami
 
 The owner sees the request on the console (`/pki requests`, `/pki approve <id>`, `/pki deny <id>`), in the web UI (Settings → Certificates), or hears about it from bia and answers there.
 
+**Another bia (mutual trust in one approval):** a bia does all of this with one tool, `web_peer_connect(url)`. It reads `GET /v1/pki/agent` (`{name, csr}`: this bia's agent name and a CSR for its agent key), signs that CSR with its own CA, and files its request with `"grant": {"cert": <that certificate>, "ca": <its CA>, "url": <its https address>}`. The grant is checked on arrival (it must be for this bia's agent key and signed by that CA). When the owner approves, the requester gets its certificate as above and this bia keeps the requester as a peer: both can now call each other (`web_peer_call`). The requester's IP address is in the request (`source`) and the notice; the grant's `url` is where it says it can be reached.
+
 ## Chats
 
 Each identity has chats like Telegram: `main` is channel `web`, other chats are `web:<chat>`. Messages have ids (the same `b…` id bia sees in its envelope), replies, forwards, attachments, reactions, edits, pins, read marks, inline buttons and polls.
@@ -64,6 +66,7 @@ What bia receives: your text with `[reply to <id> from <who>: "…"]` / `[forwar
 ## Root only
 
 - `GET /v1/call?chat=<id>[&ring=<id>]` — WebSocket voice call with bia. Send binary frames of 16 kHz mono s16le (20 ms), and JSON `{t:"played", gen}` after an utterance finished playing, `{t:"mute", on}`, `{t:"hangup"}`. You receive `{t:"ready"}`, `{t:"say", gen, text}`, binary `[gen u32 LE][rate u32 LE][s16le…]` audio, `{t:"say_end", gen}`, `{t:"stop", gen}` (drop queued audio), `{t:"caption", who, text}` and `{t:"end", reason}`. The chat WebSocket announces bia's calls as `{t:"ring", chat, id}` (answer by opening the call with `ring=<id>`, decline with the action `call_decline`) and `{t:"ring_end", chat}`.
+- `GET /ws/term?rows=&cols=` — the live agent console (raw terminal bytes, status header included). Send `{t:"line", v}` to type a console line (an empty line interrupts the model), `{t:"resize", rows, cols}`.
 - `GET /ws/shell?rows=&cols=` — a root login shell on a PTY: binary frames are keystrokes and output; `{t:"resize", rows, cols}` as text.
 - Files (absolute paths): `GET /v1/fs/list?path=`, `GET /v1/fs/get?path=[&dl=1]` (folders stream as tar), `POST /v1/fs/put?path=&overwrite=1` (raw body), `POST /v1/fs/op {op: mkdir|touch|rename|move|copy|delete|chmod|du, …}`. Legacy `/v1/files`, `/v1/file` are relative to `/home/bia/files`.
 - Certificates: `GET /v1/pki/certs`, `POST /v1/pki/issue`, `POST /v1/pki/revoke {serial}`. Requests from other agents: `GET /v1/pki/requests`, `POST /v1/pki/requests/<id>/approve`, `POST /v1/pki/requests/<id>/deny {reason?}`. Status: `GET /v1/status`.

@@ -1,0 +1,103 @@
+#!/bin/bash
+# Network configuration a takeover carried over, by MAC address (/etc/bia/net):
+#   <mac>.conf    ifupdown stanzas with @IF@ for the interface name; the MAC without
+#                 colons (525400123456.conf: they come from the FAT ESP)
+#   resolv.conf   name servers (for static configurations)
+# Interface names differ between the old system and bia (net.ifnames=0), the MAC does
+# not. Writes /etc/network/interfaces on every boot: the matched interfaces, and DHCP
+# on every other wired interface. Without /etc/bia/net nothing changes.
+#
+#   bia-net             before networking.service
+#   bia-net --fallback  after it: no default route within 120 s → DHCP everywhere
+set -u
+NET=${BIA_NET_DIR:-/etc/bia/net}
+SYS=${BIA_NET_SYS:-/sys/class/net}
+OUT=${BIA_NET_OUT:-/etc/network/interfaces}
+[ -d "$NET" ] || exit 0
+
+wired() { # names of wired (Ethernet, not wireless, not virtual) interfaces
+  local d n
+  for d in "$SYS"/*; do
+    n=$(basename "$d")
+    [ "$n" = lo ] && continue
+    [ "$(cat "$d/type" 2>/dev/null)" = 1 ] || continue
+    [ -e "$d/wireless" ] && continue
+    [ -e "$d/device" ] || [ -n "${BIA_NET_SYS:-}" ] || continue
+    echo "$n"
+  done
+}
+
+if [ "${1:-}" = --fallback ]; then
+  i=0
+  while [ "$i" -lt 120 ]; do
+    if ip route show default 2>/dev/null | grep -q . || ip -6 route show default 2>/dev/null | grep -q .; then
+      exit 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  echo "bia-net: no default route with the configuration from the takeover; trying DHCP on every wired interface" >/dev/console 2>/dev/null
+  for n in $(wired); do
+    dhcpcd -b "$n" >/dev/null 2>&1 || true
+  done
+  exit 0
+fi
+
+# NIC drivers may still be loading: wait up to 15 s for every configured address
+have_mac() {
+  local d
+  for d in "$SYS"/*; do
+    [ -r "$d/address" ] && [ "$(tr -d ':' < "$d/address" | tr 'A-F' 'a-f')" = "$1" ] && return 0
+  done
+  return 1
+}
+i=0
+while [ "$i" -lt 30 ]; do
+  missing=0
+  for f in "$NET"/*.conf; do
+    [ -f "$f" ] || continue
+    have_mac "$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')" || missing=1
+  done
+  [ "$missing" = 0 ] && break
+  sleep 0.5
+  i=$((i + 1))
+done
+
+[ -f "$OUT.bia-orig" ] || { [ -f "$OUT" ] && cp "$OUT" "$OUT.bia-orig"; }
+tmp=$OUT.tmp
+{
+  echo "# written by bia-net from $NET (takeover); the original is $OUT.bia-orig"
+  echo "auto lo"
+  echo "iface lo inet loopback"
+  matched=" "
+  for f in "$NET"/*.conf; do
+    [ -f "$f" ] || continue
+    mac=$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')
+    name=
+    for d in "$SYS"/*; do
+      if [ -r "$d/address" ] && [ "$(tr -d ':' < "$d/address" | tr 'A-F' 'a-f')" = "$mac" ]; then
+        name=$(basename "$d")
+        break
+      fi
+    done
+    if [ -z "$name" ]; then
+      echo "# $mac: no interface with this address on this machine"
+      continue
+    fi
+    matched+="$name "
+    echo
+    echo "# $mac"
+    sed "s/@IF@/$name/g" "$f"
+  done
+  for n in $(wired); do
+    case $matched in *" $n "*) continue ;; esac
+    echo
+    echo "allow-hotplug $n"
+    echo "iface $n inet dhcp"
+  done
+} > "$tmp"
+mv "$tmp" "$OUT"
+if [ -s "$NET/resolv.conf" ] && [ -z "${BIA_NET_SYS:-}" ]; then
+  cp "$NET/resolv.conf" /etc/resolv.conf
+fi
+exit 0

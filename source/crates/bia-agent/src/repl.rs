@@ -1052,7 +1052,7 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
             "tools" => {
                 let visible: Vec<String> = self.tools.visible_specs().iter().map(|t| t.name.clone()).collect();
@@ -1237,8 +1237,39 @@ impl Repl {
                             Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
                         }
                     }
+                    Some("peers") => match self.pki() {
+                        Ok(p) => {
+                            self.con.writeln(&self.con.c(GRAY, &format!("  this bia is {} to other bias", p.agent_name())));
+                            let list = p.peers();
+                            if list.is_empty() {
+                                self.con.writeln(&self.con.c(GRAY, "  (no peers; /pki connect https://<address> sets up trust with another bia)"));
+                            }
+                            for peer in list {
+                                self.con.writeln(&format!("  {}", peer.describe()));
+                            }
+                        }
+                        Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
+                    },
+                    Some("connect") => {
+                        let url = it.next().unwrap_or("");
+                        let pin = it.next();
+                        let port = crate::weblink::read(&self.tools.files_dir)
+                            .map(|l| l.port)
+                            .filter(|p| *p > 0)
+                            .unwrap_or(443);
+                        match self.pki().and_then(|p| {
+                            p.peer_connect(url, pin, None, port, "connected by root on the console")
+                                .map_err(|e| format!("{e:#}"))
+                        }) {
+                            Ok(peer) => self.con.writeln(&self.con.c(
+                                GRAY,
+                                &format!("  asked {} at {} (CA {}); waiting for its root to approve", peer.name, peer.url, &peer.ca_sha256[..16]),
+                            )),
+                            Err(e) => self.con.writeln(&self.con.c(RED, &format!("  pki: {e}"))),
+                        }
+                    }
                     _ => self.con.writeln(
-                        "usage: /pki issue <identity> [user|agent] [root|normal] | /pki requests | /pki approve <id> | /pki deny <id> [reason]",
+                        "usage: /pki issue <identity> [user|agent] [root|normal] | /pki requests | /pki approve <id> | /pki deny <id> [reason] | /pki peers | /pki connect https://<address> [ca-sha256]",
                     ),
                 }
             }

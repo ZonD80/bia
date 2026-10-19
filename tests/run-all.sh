@@ -7,8 +7,11 @@
 #     integration  tests/integration: web MCP over HTTPS + mTLS, bia-update internet staging
 #     e2e          QEMU on $ARCH (default arm64): update (internet disk flash rescue), peer,
 #                  land, img (UEFI)
-#     bios         QEMU legacy BIOS on x86_64: img (BIOS), bios install, bios update
-#     (no stage = unit integration e2e)
+#     takeover     QEMU on $ARCH: an Ubuntu cloud VM taken over by takeover.sh (DHCP, a static /32
+#                  with an on-link gateway, land mode with a second bia flying in, and a bia that
+#                  takes the server over itself over ssh and flies there)
+#     bios         QEMU on x86_64: img (BIOS), bios install, bios update, takeover (UEFI, BIOS)
+#     (no stage = unit integration e2e takeover)
 #
 # Needs a current build for the QEMU stages: make build img iso ARCH=… (and for bios:
 # ARCH=x86_64). ./fmm.json gives the test agents a cloud model (peer and land need one).
@@ -20,7 +23,7 @@ ARCH=${ARCH:-arm64}
 LOGS=$ROOT/dist/test-logs
 mkdir -p "$LOGS"
 case $ARCH in arm64) PLATFORM=linux/arm64 ;; x86_64) PLATFORM=linux/amd64 ;; *) echo "ARCH=$ARCH" >&2; exit 2 ;; esac
-[ $# -gt 0 ] || set -- unit integration e2e
+[ $# -gt 0 ] || set -- unit integration e2e takeover
 
 RESULTS=()
 run() {
@@ -72,11 +75,18 @@ for stage in "$@"; do
       run peer-e2e env ARCH="$ARCH" tests/e2e/peer-e2e.sh all
       run land-e2e env ARCH="$ARCH" tests/e2e/land-e2e.sh all
       run img-e2e-uefi env ARCH="$ARCH" FIRMWARE=uefi tests/e2e/img-e2e.sh all ;;
+    takeover)
+      run takeover-e2e env ARCH="$ARCH" tests/e2e/takeover-e2e.sh all
+      run takeover-onlink env ARCH="$ARCH" NET=onlink tests/e2e/takeover-e2e.sh run
+      run takeover-land env ARCH="$ARCH" LAND=1 tests/e2e/takeover-e2e.sh all
+      run takeover-agent env ARCH="$ARCH" LAND=agent tests/e2e/takeover-e2e.sh all ;;
     bios)
       run img-e2e-bios env ARCH=x86_64 FIRMWARE=bios tests/e2e/img-e2e.sh all
       run bios-e2e env ARCH=x86_64 tests/e2e/bios-e2e.sh all
-      run bios-update-e2e env ARCH=x86_64 bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && python3 tests/e2e/bios-update-e2e.py' ;;
-    *) echo "unknown stage $stage (unit integration e2e bios)" >&2; exit 2 ;;
+      run bios-update-e2e env ARCH=x86_64 bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && python3 tests/e2e/bios-update-e2e.py'
+      run takeover-x86-uefi env ARCH=x86_64 MEM=6G tests/e2e/takeover-e2e.sh all
+      run takeover-x86-bios env ARCH=x86_64 MEM=6G FIRMWARE=bios tests/e2e/takeover-e2e.sh run ;;
+    *) echo "unknown stage $stage (unit integration e2e takeover bios)" >&2; exit 2 ;;
   esac
 done
 

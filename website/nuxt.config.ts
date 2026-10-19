@@ -1,5 +1,6 @@
 import { features } from './app/data/features'
 import { useCaseGroups } from './app/data/usecases'
+import { FRED_FILM } from './app/data/fred'
 
 const siteUrl = (
   process.env.NUXT_PUBLIC_SITE_URL ||
@@ -14,6 +15,7 @@ const prerenderRoutes = [
   '/use-cases',
   '/how-it-works',
   '/why-bia',
+  '/fred',
   '/faq',
   '/download',
   '/servers',
@@ -59,6 +61,7 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 - [Use cases](${siteUrl}/use-cases): ${useCaseGroups.map((g) => g.title.toLowerCase()).join('; ')}
 - [How it works](${siteUrl}/how-it-works): plain-language overview
 - [Why bia](${siteUrl}/why-bia): compared with typical AI assistants
+- [Fred's story](${siteUrl}/fred): a real bia's first three weeks in its own words, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
 - [Get bia](${siteUrl}/download): the USB stick writer
 

@@ -5,7 +5,8 @@
 #   tools/release.sh [-n NOTES] [--only PKG,…]  (NOTES default: this version's Changes in RELEASE_NOTES.md) [--dry-run] [--build-only] [--allow-dirty] [--rebuild-os] [--force]
 #
 #   --only        packages and/or groups, comma-separated:
-#                   flashers = flash-macos,flash-linux,flash-windows   os = os-x86_64,os-arm64
+#                   flashers = flash-macos,flash-linux,flash-linux-arm64,flash-windows
+#                   os = os-x86_64,os-arm64
 #                   land = land-x86_64,land-arm64
 #                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
@@ -22,6 +23,9 @@
 #   flash-macos    bia-flash-macos-universal.dmg + bia-flash-cli-macos-universal.zip
 #                  (Developer ID signed + notarized; credentials in .env)
 #   flash-linux    bia-flash-linux-x86_64.tar.gz  (built in bia-build:x86_64)
+#   flash-linux-arm64  bia-flash-linux-arm64.tar.gz  (built in bia-build:arm64)
+#   takeover       takeover.sh  replaces a running Linux (a VPS) with bia; downloads the
+#                  Linux flasher for its architecture, checked against bia-os.json "tools"
 #   flash-windows  bia-flash-windows-x86_64.zip   (cross-built with MinGW in bia-build:x86_64)
 #   land-x86_64    bia-land-x86_64.iso.xz  installer ISO that installs bia and waits to land
 #   land-arm64     bia-land-arm64.iso.xz   (xz: the raw ISO is over GitHub's 2 GiB file limit;
@@ -36,7 +40,7 @@ SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$SELF")/.."
 ROOT=$(pwd)
 REPO=zond80/bia
-ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-windows)
+ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover)
 
 NOTES="" ONLY="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -64,7 +68,7 @@ if [[ -n "$ONLY" ]]; then
     i=${i//[[:space:]]/}
     case $i in
       "") ;;
-      flashers|flash) want+="flash-macos flash-linux flash-windows " ;;
+      flashers|flash) want+="flash-macos flash-linux flash-linux-arm64 flash-windows " ;;
       os) want+="os-x86_64 os-arm64 " ;;
       land) want+="land-x86_64 land-arm64 " ;;
       *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land)"
@@ -101,6 +105,11 @@ if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
   HAVE=$(gh release view "$TAG" -R "$REPO" --json assets -q '.assets[].name')
 fi
 has() { grep -qx "$1" <<<"$HAVE"; }
+manifest_has_tool() {
+  has bia-os.json || return 1
+  gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
+    | python3 -c "import json,sys; sys.exit(0 if '$1' in json.load(sys.stdin).get('tools', {}) else 1)"
+}
 manifest_has_arch() {
   has bia-os.json || return 1
   gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
@@ -110,7 +119,9 @@ complete() { # pkg
   case $1 in
     os-*) local a=${1#os-}; has "bia-$a.img.xz" && manifest_has_arch "$a" ;;
     flash-macos) has bia-flash-macos-universal.dmg && has bia-flash-cli-macos-universal.zip ;;
-    flash-linux) has bia-flash-linux-x86_64.tar.gz ;;
+    flash-linux) has bia-flash-linux-x86_64.tar.gz && manifest_has_tool bia-flash-linux-x86_64.tar.gz ;;
+    flash-linux-arm64) has bia-flash-linux-arm64.tar.gz && manifest_has_tool bia-flash-linux-arm64.tar.gz ;;
+    takeover) has takeover.sh ;;
     flash-windows) has bia-flash-windows-x86_64.zip ;;
     land-*) has "bia-land-${1#land-}.iso.xz" ;;
     *) die "unknown package $1" ;;
@@ -183,6 +194,7 @@ scan() { # files…  (raw binaries, before they are packed)
 
 UPLOAD=()
 OS_BUILT=()
+TOOLS_BUILT=()
 
 SYSTEM_READY=" "
 system() { # arch — build dist/<arch> (root.img and binaries) at most once per run
@@ -231,34 +243,64 @@ build_macos() {
   UPLOAD+=("$OUT/bia-flash-macos-universal.dmg" "$OUT/bia-flash-cli-macos-universal.zip")
 }
 
-# Linux and Windows flashers: built in the x86_64 builder (paths remapped, no debuginfo).
-docker_flash() { # target features…
-  docker run --rm --platform linux/amd64 -v "$ROOT":/work -v bia-cache-x86_64:/cache -w /work \
+# Linux and Windows flashers: built in the builder of their architecture (paths remapped,
+# no debuginfo). BUILDER_ARCH picks it (default x86_64).
+docker_flash() { # command
+  local ba=${BUILDER_ARCH:-x86_64} plat=linux/amd64
+  [[ $ba == arm64 ]] && plat=linux/arm64
+  docker run --rm --platform "$plat" -v "$ROOT":/work -v "bia-cache-$ba":/cache -w /work \
     -e CARGO_TARGET_DIR=/cache/flash-target -e CARGO_PROFILE_RELEASE_DEBUG=0 -e CARGO_PROFILE_RELEASE_STRIP=debuginfo \
     -e RUSTFLAGS="--remap-path-prefix=/work=/bia --remap-path-prefix=/cache/cargo=/cargo --remap-path-prefix=/root=/home" \
-    bia-build:x86_64 bash -lc "export CARGO_HOME=\${CARGO_HOME:-/cache/cargo}; $1"
+    "bia-build:$ba" bash -lc "export CARGO_HOME=\${CARGO_HOME:-/cache/cargo}; $1"
 }
 
-build_linux() {
-  echo "== Linux flasher (x86_64)"
-  docker_flash "cargo build --release -p bia-flash --features gui && mkdir -p /work/dist/release/.linux && cp /cache/flash-target/release/bia-flash /cache/flash-target/release/bia-flash-gui /work/dist/release/.linux/"
-  local s="$ROOT/dist/release/.linux" st
+# A file takeover.sh downloads: size + sha256 into bia-os.json "tools".
+tool_entry() { # file
+  local f=$1 name
+  name=$(basename "$f")
+  python3 - "$f" "$OUT/tool-$name.json" <<'PY'
+import hashlib, json, os, sys
+f, out = sys.argv[1], sys.argv[2]
+h = hashlib.sha256()
+with open(f, "rb") as fh:
+    for b in iter(lambda: fh.read(1 << 20), b""):
+        h.update(b)
+json.dump({"file": os.path.basename(f), "size": os.path.getsize(f), "sha256": h.hexdigest()}, open(out, "w"))
+PY
+  TOOLS_BUILT+=("$name")
+}
+
+build_linux() { # arch (x86_64 | arm64)
+  local a=${1:-x86_64} s="$ROOT/dist/release/.linux-${1:-x86_64}" st tgz
+  echo "== Linux flasher ($a)"
+  BUILDER_ARCH=$a docker_flash "cargo build --release -p bia-flash --features gui && mkdir -p /work/dist/release/.linux-$a && cp /cache/flash-target/release/bia-flash /cache/flash-target/release/bia-flash-gui /work/dist/release/.linux-$a/"
   scan "$s/bia-flash" "$s/bia-flash-gui"
   st=$(mktemp -d)
   mkdir -p "$st/bia-flash"
   cp "$s/bia-flash" "$s/bia-flash-gui" installers/bia-flash/assets/icon-256.png "$st/bia-flash/"
   cat >"$st/bia-flash/README.txt" <<EOF
-bia flash $VERSION — write a bootable bia USB stick (Linux x86_64)
+bia flash $VERSION — write a bootable bia USB stick (Linux $a)
 
   sudo ./bia-flash-gui        window app (needs root to write the stick)
   sudo ./bia-flash list
   sudo ./bia-flash write --disk /dev/sdX --yes   # downloads the bia system from GitHub
+  sudo ./bia-flash takeover   # replace this running Linux (e.g. a VPS) with bia
 
 https://github.com/$REPO
 EOF
-  tar -C "$st" -czf "$OUT/bia-flash-linux-x86_64.tar.gz" bia-flash
+  tgz="$OUT/bia-flash-linux-$a.tar.gz"
+  tar -C "$st" -czf "$tgz" bia-flash
   rm -rf "$st" "$s"
-  UPLOAD+=("$OUT/bia-flash-linux-x86_64.tar.gz")
+  tool_entry "$tgz"
+  UPLOAD+=("$tgz")
+}
+
+build_takeover() {
+  echo "== takeover.sh"
+  bash -n tools/takeover.sh
+  scan tools/takeover.sh
+  cp -f tools/takeover.sh "$OUT/takeover.sh"
+  UPLOAD+=("$OUT/takeover.sh")
 }
 
 build_windows() {
@@ -281,19 +323,24 @@ for p in "${TODO[@]}"; do
     os-*) build_os "${p#os-}" ;;
     land-*) build_land "${p#land-}" ;;
     flash-macos) build_macos ;;
-    flash-linux) build_linux ;;
+    flash-linux) build_linux x86_64 ;;
+    flash-linux-arm64) build_linux arm64 ;;
+    takeover) build_takeover ;;
     flash-windows) build_windows ;;
   esac
 done
 
 # ---- manifest: the existing one plus the architectures built now ----
-if [[ ${#OS_BUILT[@]} -gt 0 ]]; then
+if [[ ${#OS_BUILT[@]} -gt 0 || ${#TOOLS_BUILT[@]} -gt 0 ]]; then
   old="$OUT/bia-os.old.json"
   rm -f "$old"
   [[ $EXISTS -eq 1 ]] && has bia-os.json && gh release download "$TAG" -R "$REPO" -p bia-os.json -O "$old"
-  python3 - "$OUT" "$VERSION" "$TAG" "$old" "${OS_BUILT[@]}" <<'PY'
+  python3 - "$OUT" "$VERSION" "$TAG" "$old" ${OS_BUILT[@]+"${OS_BUILT[@]}"} -- ${TOOLS_BUILT[@]+"${TOOLS_BUILT[@]}"} <<'PY'
 import json, os, sys
-out, version, tag, old, arches = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+out, version, tag, old = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+rest = sys.argv[5:]
+sep = rest.index("--")
+arches, tools = rest[:sep], rest[sep + 1:]
 m = json.load(open(old)) if os.path.isfile(old) else {}
 m.update({"version": version, "tag": tag})
 m.setdefault("os", {})
@@ -301,8 +348,11 @@ m.setdefault("os", {})
 m["os"] = {a: e for a, e in m["os"].items() if "image" in e}
 for a in arches:
     m["os"][a] = json.load(open(f"{out}/os-{a}.json"))
+m.setdefault("tools", {})
+for t in tools:
+    m["tools"][t] = json.load(open(f"{out}/tool-{t}.json"))
 json.dump(m, open(f"{out}/bia-os.json", "w"), indent=2)
-print("== bia-os.json:", ", ".join(sorted(m["os"])))
+print("== bia-os.json:", ", ".join(sorted(m["os"])), "| tools:", ", ".join(sorted(m["tools"])) or "-")
 PY
   UPLOAD+=("$OUT/bia-os.json")
 fi

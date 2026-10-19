@@ -111,13 +111,34 @@ pub const HEADER_BG: &str = "\x1b[97;44m"; // white on blue
 const HEADER_LINES: u16 = 3;
 
 struct Out {
+    /// 0 for the machine's own outputs; root's web console mirrors get their own id.
+    id: usize,
     w: Box<dyn Write + Send>,
-    /// Tty fd for `TIOCGWINSZ`. `None` when output is not a terminal.
+    /// Tty fd for `TIOCGWINSZ`. `None` when output is not a terminal, or a mirror.
     fd: Option<i32>,
     rows: u16,
     cols: u16,
     tty: bool,
 }
+
+/// Writer that forwards bytes to a console mirror client.
+struct ChannelWriter {
+    tx: Sender<Vec<u8>>,
+}
+impl Write for ChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tx
+            .send(buf.to_vec())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "mirror gone"))?;
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Recent console output replayed to a mirror when it connects.
+const REPLAY_BYTES: usize = 256 * 1024;
 
 #[derive(Default, Clone)]
 pub struct StatusData {
@@ -171,6 +192,8 @@ pub struct Console {
     last_drawn: Mutex<Vec<String>>,
     /// files/state/status.json and what was last written there
     status_file: Mutex<Option<(std::path::PathBuf, String)>>,
+    next_id: Mutex<usize>,
+    recent: Mutex<VecDeque<u8>>,
 }
 
 fn winsize(fd: i32) -> (u16, u16) {
@@ -199,6 +222,8 @@ impl Console {
             status: Mutex::new(StatusData::default()),
             last_drawn: Mutex::new(vec![]),
             status_file: Mutex::new(None),
+            next_id: Mutex::new(0),
+            recent: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -216,6 +241,7 @@ impl Console {
                     let fd = f.as_raw_fd();
                     let (rows, cols) = winsize(fd);
                     outs.push(Out {
+                        id: 0,
                         w: Box::new(f),
                         fd: Some(fd),
                         rows,
@@ -237,6 +263,7 @@ impl Console {
             let tty = unsafe { libc::isatty(1) } == 1;
             let (rows, cols) = if tty { winsize(1) } else { (0, 0) };
             outs.push(Out {
+                id: 0,
                 w: Box::new(std::io::stdout()),
                 fd: tty.then_some(1),
                 rows,
@@ -264,6 +291,8 @@ impl Console {
             status: Mutex::new(StatusData::default()),
             last_drawn: Mutex::new(vec![]),
             status_file: Mutex::new(None),
+            next_id: Mutex::new(0),
+            recent: Mutex::new(VecDeque::with_capacity(REPLAY_BYTES)),
         });
         con.init_screen();
         let c = con.clone();
@@ -322,11 +351,150 @@ impl Console {
     }
 
     pub fn write(&self, s: &str) {
+        // outs before recent, as in add_mirror: a new mirror sees each write exactly once
         let mut outs = self.outs.lock().unwrap();
+        {
+            let mut r = self.recent.lock().unwrap();
+            let b = s.as_bytes();
+            let b = &b[b.len().saturating_sub(REPLAY_BYTES)..];
+            let extra = (r.len() + b.len()).saturating_sub(REPLAY_BYTES);
+            r.drain(..extra);
+            r.extend(b);
+        }
         for o in outs.iter_mut() {
             let _ = o.w.write_all(s.as_bytes());
             let _ = o.w.flush();
         }
+    }
+
+    // ---- console mirrors (root's web console, via the web MCP) ----
+
+    /// Serve console mirrors on a Unix socket (protocol in `consock.rs`); root-only (0600).
+    pub fn serve_mirror(self: &Arc<Self>, path: std::path::PathBuf) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+            if dir.starts_with("/run") {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let con = self.clone();
+        std::thread::Builder::new()
+            .name("console-mirror".into())
+            .spawn(move || {
+                for s in listener.incoming().flatten() {
+                    let c = con.clone();
+                    let _ = std::thread::Builder::new()
+                        .name("console-mirror-client".into())
+                        .spawn(move || c.mirror_client(s));
+                }
+            })?;
+        Ok(())
+    }
+
+    fn mirror_client(&self, s: std::os::unix::net::UnixStream) {
+        let Ok(r) = s.try_clone() else { return };
+        let mut lines = BufReader::new(r).lines();
+        let Some(Ok(first)) = lines.next() else {
+            return;
+        };
+        let dim = |v: &serde_json::Value, k: &str, d: u64| {
+            v.get(k).and_then(|x| x.as_u64()).unwrap_or(d).min(1000) as u16
+        };
+        let v: serde_json::Value = serde_json::from_str(&first).unwrap_or_default();
+        let (id, rx) = self.add_mirror(dim(&v, "rows", 30), dim(&v, "cols", 100));
+        let mut out = s;
+        let writer = std::thread::spawn(move || {
+            while let Ok(bytes) = rx.recv() {
+                if out.write_all(&bytes).is_err() {
+                    break;
+                }
+            }
+            let _ = out.shutdown(std::net::Shutdown::Both);
+        });
+        for line in lines {
+            let Ok(line) = line else { break };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            match v.get("t").and_then(|t| t.as_str()) {
+                Some("line") => {
+                    let text = v.get("v").and_then(|x| x.as_str()).unwrap_or("");
+                    self.mirror_line(&text.replace(['\r', '\n'], " "));
+                }
+                Some("resize") => self.resize_mirror(id, dim(&v, "rows", 30), dim(&v, "cols", 100)),
+                _ => {}
+            }
+        }
+        self.remove_mirror(id);
+        let _ = writer.join();
+    }
+
+    /// A full console stream like a physical TTY (status header, scroll region, colors),
+    /// starting with a replay of recent output.
+    fn add_mirror(&self, rows: u16, cols: u16) -> (usize, Receiver<Vec<u8>>) {
+        let (tx, rx) = channel::<Vec<u8>>();
+        let id = {
+            let mut n = self.next_id.lock().unwrap();
+            *n += 1;
+            *n
+        };
+        let rows = rows.max(HEADER_LINES + 2);
+        let cols = cols.max(20);
+        let mut w = ChannelWriter { tx };
+        let _ = write!(
+            w,
+            "\x1b[0m\x1b[2J\x1b[{};{}r\x1b[{};1H",
+            HEADER_LINES + 1,
+            rows,
+            HEADER_LINES + 1
+        );
+        {
+            // hold outs while replaying so no write lands between the replay and the sink
+            let mut outs = self.outs.lock().unwrap();
+            let replay: Vec<u8> = self.recent.lock().unwrap().iter().copied().collect();
+            let _ = w.write_all(&replay);
+            outs.push(Out {
+                id,
+                w: Box::new(w),
+                fd: None,
+                rows,
+                cols,
+                tty: true,
+            });
+        }
+        self.last_drawn.lock().unwrap().clear();
+        self.draw_status(true);
+        (id, rx)
+    }
+
+    fn remove_mirror(&self, id: usize) {
+        self.outs.lock().unwrap().retain(|o| o.id != id);
+        self.last_drawn.lock().unwrap().clear();
+    }
+
+    fn resize_mirror(&self, id: usize, rows: u16, cols: u16) {
+        {
+            let mut outs = self.outs.lock().unwrap();
+            let Some(o) = outs.iter_mut().find(|o| o.id == id) else {
+                return;
+            };
+            o.rows = rows.max(HEADER_LINES + 2);
+            o.cols = cols.max(20);
+            let _ = write!(o.w, "\x1b[{};{}r", HEADER_LINES + 1, o.rows);
+        }
+        self.last_drawn.lock().unwrap().clear();
+        self.draw_status(true);
+    }
+
+    /// A line typed on root's web console: echoed on every output, then queued like a
+    /// line typed on the machine (an empty line interrupts the model).
+    fn mirror_line(&self, line: &str) {
+        self.writeln(&self.c(GREEN, line));
+        self.push_inbound(Inbound::console(line));
     }
 
     pub fn push_inbound(&self, ib: Inbound) {
@@ -1271,5 +1439,48 @@ mod line_tests {
         let n = master.read(&mut buf).unwrap();
         // no kernel echo: only ours, two cells erased for 文
         assert_eq!(&buf[..n], "中文\x08 \x08\x08 \x08ok\r\n".as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod mirror_tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn mirror_replays_streams_and_types() {
+        let dir = std::env::temp_dir().join(format!("bia-mirror-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("console.sock");
+        let con = Console::for_test();
+        con.write("before connect\n");
+        con.serve_mirror(path.clone()).unwrap();
+        let mut s = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        writeln!(s, r#"{{"rows":24,"cols":80}}"#).unwrap();
+        let mut got = Vec::new();
+        let mut buf = [0u8; 4096];
+        let mut wait_for = |s: &mut std::os::unix::net::UnixStream, needle: &str| {
+            while !String::from_utf8_lossy(&got).contains(needle) {
+                let n = s.read(&mut buf).expect("mirror output");
+                assert!(n > 0, "mirror closed");
+                got.extend_from_slice(&buf[..n]);
+            }
+        };
+        wait_for(&mut s, "before connect");
+        con.write("after connect\n");
+        wait_for(&mut s, "after connect");
+        writeln!(s, r#"{{"t":"line","v":"/status"}}"#).unwrap();
+        wait_for(&mut s, "/status");
+        let ib = con
+            .read_inbound_timeout(Duration::from_secs(5))
+            .unwrap()
+            .expect("typed line");
+        assert_eq!(
+            (ib.identity.as_str(), ib.channel.as_str(), ib.text.as_str()),
+            (crate::tools::ID_ROOT, crate::tools::CH_CONSOLE, "/status")
+        );
+        drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
