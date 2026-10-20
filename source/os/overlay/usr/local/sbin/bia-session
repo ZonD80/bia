@@ -27,7 +27,9 @@ install -d -o bia -g bia -m 700 /home/bia/.local
 install -d -o bia -g bia -m 700 /home/bia/.local/share
 uid=$(id -u bia)
 install -d -o bia -g bia -m 700 "/run/user/$uid"
+# install -d sets the mode only when it creates the directory; user bia needs to reach in
 install -d -m 755 /run/bia
+chmod 755 /run/bia
 install -d -m 1777 /tmp/.X11-unix
 
 # Xorg started before the GPU driver (e.g. i915) has created a DRM node exits

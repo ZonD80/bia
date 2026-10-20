@@ -295,8 +295,16 @@ impl Pki {
     pub fn server_config(&self) -> Result<Arc<ServerConfig>> {
         let cert_pem = fs::read(self.server_cert_path()).context("read server.crt")?;
         let key_pem = fs::read(self.server_key_path()).context("read server.key")?;
-        let certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
+        let mut certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
         let key = pem_to_key_der(std::str::from_utf8(&key_pem)?)?;
+        // The full chain: the CA after the server certificate. Browsers trust it only once it
+        // is trusted locally, but they (and `openssl s_client -showcerts`) can show and export
+        // it from the connection; bia hands out no separate CA download, it is in every .p12.
+        for ca in pem_to_cert_ders(&self.ca_pem()?)? {
+            if !certs.iter().any(|c| c.as_ref() == ca.as_ref()) {
+                certs.push(ca);
+            }
+        }
 
         let verifier = Arc::new(AnyClientCert(self.client_verifier()?));
 

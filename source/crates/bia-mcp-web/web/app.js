@@ -363,22 +363,6 @@ async function showBoot() {
   const fp = (info.ca_sha256 || '').toUpperCase().match(/.{1,2}/g);
   let p12 = null;
 
-  const caStep = h('div', { class: 'step' },
-    h('h2', null, h('span', { class: 'num' }, '1'), 'Trust this machine'),
-    h('p', null, 'Download the bia certificate authority and trust it, so your browser recognises this machine without warnings. Check that the fingerprint matches the one shown on the machine (/web on its console).'),
-    fp ? h('div', { class: 'fp' }, 'SHA-256 ' + fp.join(':')) : null,
-    h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => { download('/v1/pki/ca', 'bia-ca.crt'); caStep.classList.add('done'); } }, ic('download'), 'CA certificate (.crt)'),
-      h('button', { class: 'btn ghost', onclick: () => { download('/v1/pki/ca?format=der', 'bia-ca.cer'); caStep.classList.add('done'); } }, 'DER (.cer)')),
-    howto('How to trust it', [
-      ['macOS', 'Open bia-ca.crt → Keychain Access adds it to “login” → double-click “bia agent CA” → Trust → “Always Trust”.'],
-      ['Windows', 'Open bia-ca.cer → Install Certificate → Current User → “Trusted Root Certification Authorities”.'],
-      ['Linux (Chrome)', 'chrome://settings/certificates → Authorities → Import → bia-ca.crt → trust for websites. System-wide: copy to /usr/local/share/ca-certificates/ and run update-ca-certificates.'],
-      ['Firefox', 'Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import.'],
-      ['iPhone / iPad', 'Open the .crt in Safari → Settings → Profile Downloaded → Install, then Settings → General → About → Certificate Trust Settings → enable bia agent CA.'],
-      ['Android', 'Settings → Security → Encryption & credentials → Install a certificate → CA certificate.'],
-    ]));
-
   const issueBtn = h('button', { class: 'btn' }, ic('key'), 'Issue root certificate');
   const dlBtn = h('button', { class: 'btn', hidden: true }, ic('download'), 'Download root.p12');
   issueBtn.onclick = async () => {
@@ -422,11 +406,11 @@ async function showBoot() {
   const problemStep = bad ? h('div', { class: 'step problem' },
     h('h2', null, ic('shield'), 'Wrong certificate selected'),
     h('p', null, `The certificate “${bad.identity || 'unnamed'}” you picked ${why}.`),
-    h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 1.'),
+    h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 2.'),
     bad.kind === 'other_ca' ? h('p', null, 'Every bia names its CA “bia agent CA”, so certificates of other machines are offered too. Removing the ones you no longer use from your keychain or certificate store avoids picking them again.') : null) : null;
 
   const certStep = h('div', { class: 'step' },
-    h('h2', null, h('span', { class: 'num' }, '2'), 'Get your certificate'),
+    h('h2', null, h('span', { class: 'num' }, '1'), 'Get your certificate'),
     info.root_issued
       ? h('p', null, 'Access needs a personal client certificate. Ask root (or bia on the machine: /pki issue <name>) for a one-time pickup link, valid 15 minutes.')
       : h('p', null, 'First-time setup: no root certificate exists yet. Issue it here — the file stays only in this tab until you download it. Its password is 12345678.'),
@@ -434,22 +418,24 @@ async function showBoot() {
     h('div', { class: 'row', style: 'margin-top:10px' }, pickIn, pickBtn));
 
   const importStep = h('div', { class: 'step' },
-    h('h2', null, h('span', { class: 'num' }, '3'), 'Import it and reload'),
-    h('p', null, 'Import the .p12 file into your browser or OS (password 12345678), then reload this page and pick the certificate when asked.'),
-    howto('How to import', [
-      ['macOS', 'Double-click the .p12 → login keychain → password 12345678. Chrome and Safari use it; Firefox: Settings → Certificates → Your Certificates → Import.'],
-      ['Windows', 'Double-click the .p12 → Current User → password 12345678 → automatic store.'],
-      ['Linux (Chrome)', 'chrome://settings/certificates → Your certificates → Import.'],
-      ['iPhone / iPad', 'Open the .p12 → Settings → Profile Downloaded → Install.'],
-      ['Android', 'Settings → Security → Encryption & credentials → Install a certificate → VPN & app user certificate.'],
+    h('h2', null, h('span', { class: 'num' }, '2'), 'Import it, trust bia, reload'),
+    h('p', null, 'Import the .p12 file into your browser or OS (password 12345678). It also holds this machine’s certificate authority, “bia agent CA”: trust it, so your browser recognises this machine without warnings. Check first that its fingerprint matches the one shown on the machine (/web on its console). Then reload this page and pick your certificate when asked.'),
+    fp ? h('div', { class: 'fp' }, 'SHA-256 ' + fp.join(':')) : null,
+    howto('How to import and trust', [
+      ['macOS', 'Double-click the .p12 → login keychain → password 12345678. In Keychain Access double-click “bia agent CA” → Trust → “Always Trust”. Chrome and Safari use both.'],
+      ['Windows', 'Double-click the .p12 → Current User → password 12345678 → automatic store; confirm the security warning that installs “bia agent CA”.'],
+      ['Linux (Chrome)', 'chrome://settings/certificates → Your certificates → Import the .p12; then Authorities → “bia agent CA” → Edit → trust it for websites.'],
+      ['Firefox', 'Settings → Privacy & Security → Certificates → View Certificates → Your Certificates → Import; then Authorities → “bia agent CA” → Edit Trust → identify websites.'],
+      ['iPhone / iPad', 'Open the .p12 in Safari → Settings → Profile Downloaded → Install; then Settings → General → About → Certificate Trust Settings → enable “bia agent CA”.'],
+      ['Android', 'Settings → Security → Encryption & credentials → Install a certificate → VPN & app user certificate → the .p12 (it installs “bia agent CA” too).'],
     ]),
     h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => location.reload() }, ic('refresh'), 'Reload')));
 
   set(box, h('div', { class: 'wrap' },
     h('img', { class: 'logo', src: '/icon.svg', alt: '' }),
     h('h1', null, 'bia'),
-    h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Three steps to get in.'),
-    problemStep, caStep, certStep, importStep, err,
+    h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Two steps to get in.'),
+    problemStep, certStep, importStep, err,
     h('p', { class: 'muted', style: 'text-align:center;font-size:13px' },
       h('a', { href: '/openapi.yaml', target: '_blank' }, 'OpenAPI'), ' · ',
       h('a', { href: '/skills/web-console/SKILL.md', target: '_blank' }, 'Skill for agents'), ' · ',
@@ -1498,82 +1484,8 @@ function openPathInFiles(p) {
   go('files=' + dir);
 }
 
-// ---- markdown ----
-function md(src) {
-  const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
-  const out = [];
-  let i = 0;
-  const isFence = l => /^\s*```/.test(l);
-  const isList = l => /^\s*([-*+•]|\d+[.)])\s+/.test(l);
-  const isTable = (l, n) => /^\s*\|.*\|\s*$/.test(l) && n !== undefined && /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(n);
-  const special = (k) => isFence(lines[k]) || /^#{1,6}\s/.test(lines[k]) || isList(lines[k]) || /^\s*>/.test(lines[k]) || /^\s*(---|\*\*\*|___)\s*$/.test(lines[k]) || isTable(lines[k], lines[k + 1]);
-  while (i < lines.length) {
-    const l = lines[i];
-    const fence = /^\s*```\s*([\w+#.-]*)/.exec(l);
-    if (fence) {
-      const buf = []; i++;
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
-      i++;
-      out.push(`<pre><span class="lang" title="Copy">${esc(fence[1] || 'copy')}</span><code>${esc(buf.join('\n'))}</code></pre>`);
-      continue;
-    }
-    if (/^\s*(---|\*\*\*|___)\s*$/.test(l)) { out.push('<hr>'); i++; continue; }
-    const hd = /^(#{1,6})\s+(.*)$/.exec(l);
-    if (hd) { out.push(`<h3>${inline(hd[2])}</h3>`); i++; continue; }
-    if (/^\s*>/.test(l)) {
-      const buf = [];
-      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ''));
-      out.push(`<blockquote>${md(buf.join('\n'))}</blockquote>`);
-      continue;
-    }
-    if (isTable(l, lines[i + 1])) {
-      const row = s => s.trim().replace(/^\||\|$/g, '').split('|').map(x => x.trim());
-      const head = row(l); i += 2;
-      const body = [];
-      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
-      out.push(`<table><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
-      continue;
-    }
-    if (isList(l)) {
-      const ordered = /^\s*\d/.test(l);
-      const start = ordered ? parseInt(l, 10) : 1;
-      const items = [];
-      while (i < lines.length) {
-        const m = /^\s*([-*+•]|\d+[.)])\s+(.*)$/.exec(lines[i]);
-        if (m) { items.push(m[2]); i++; continue; }
-        if (items.length && /^\s{2,}\S/.test(lines[i])) { items[items.length - 1] += '\n' + lines[i].trim(); i++; continue; }
-        break;
-      }
-      const tag = ordered ? 'ol' : 'ul';
-      out.push(`<${tag}${ordered && start !== 1 ? ` start="${start}"` : ''}>${items.map(x => `<li>${x.split('\n').map(inline).join('<br>')}</li>`).join('')}</${tag}>`);
-      continue;
-    }
-    if (!l.trim()) { i++; continue; }
-    const buf = [l]; i++;
-    while (i < lines.length && lines[i].trim() && !special(i)) buf.push(lines[i++]);
-    out.push(`<p>${buf.map(inline).join('<br>')}</p>`);
-  }
-  return out.join('');
-}
-function inline(s) {
-  return s.split(/(`[^`\n]+`)/g).map(p => {
-    if (p.length > 1 && p[0] === '`' && p.endsWith('`')) return `<code>${esc(p.slice(1, -1))}</code>`;
-    const hold = [];
-    const keep = x => { hold.push(x); return `\u0000${hold.length - 1}\u0000`; };
-    let t = p.replace(/\[([^\]\n]+)\]\(((?:https?:\/\/|\/)[^)\s]*)\)/g, (m, a, u) => keep(`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(a)}</a>`));
-    t = t.replace(/\bhttps?:\/\/[^\s<>"'`]*[^\s<>"'`.,;:!?)\]]/g, u => keep(`<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`));
-    if (S.root) t = t.replace(/(^|[\s(])(\/(?:home|tmp|etc|var|root|usr|opt|srv|mnt|media|run)\/[^\s<>"'`)]*[^\s<>"'`.,;:!?)\]])/g,
-      (m, pre, pth) => pre + keep(`<a href="#" class="plink" data-path="${esc(pth)}">${esc(pth)}</a>`));
-    t = esc(t)
-      .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<b>$1</b>')
-      .replace(/__(?=\S)([\s\S]*?\S)__/g, '<u>$1</u>')
-      .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<s>$1</s>')
-      .replace(/\|\|(?=\S)([\s\S]*?\S)\|\|/g, '<span class="spoiler">$1</span>')
-      .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, '$1<i>$2</i>')
-      .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1<i>$2</i>');
-    return t.replace(/\u0000(\d+)\u0000/g, (m, n) => hold[n]);
-  }).join('');
-}
+// ---- markdown (web/md.js) ----
+const md = src => BiaMd.md(src, { paths: S.root });
 
 // ---- context menu / actions ----
 function msgMenu(e, m) {
@@ -2599,9 +2511,7 @@ async function renderSettings() {
       h('div', null, 'Certificate'), h('div', { class: 'mono' }, me.serial || '—'),
       h('div', null, 'Expires'), h('div', null, fmtDate(me.not_after), ' ', h('span', { class: 'tag ' + (me.days_left < 30 ? 'bad' : 'ok') }, `${me.days_left} days left`))),
     h('div', { class: 'row', style: 'margin-top:12px;flex-wrap:wrap' },
-      h('button', { class: 'btn', onclick: renewCert }, ic('refresh'), 'Renew my certificate'),
-      h('button', { class: 'btn ghost', onclick: () => download('/v1/pki/ca', 'bia-ca.crt') }, ic('download'), 'CA (.crt)'),
-      h('button', { class: 'btn ghost', onclick: () => download('/v1/pki/ca?format=der', 'bia-ca.cer') }, 'CA (.cer)')));
+      h('button', { class: 'btn', onclick: renewCert }, ic('refresh'), 'Renew my certificate')));
 
   const appearance = h('div', { class: 'card' }, h('h3', null, ic('moon'), 'Appearance'),
     h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Theme'), seg([['auto', 'Auto'], ['light', 'Day'], ['dark', 'Night']], S.prefs.theme, v => { S.prefs.theme = v; savePrefs(); renderSettings(); })),

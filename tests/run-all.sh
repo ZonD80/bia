@@ -4,7 +4,8 @@
 #
 #   tests/run-all.sh [stage…]
 #     unit         cargo test for the whole workspace (in bia-build:$ARCH)
-#     integration  tests/integration: web MCP over HTTPS + mTLS, bia-update internet staging
+#     integration  tests/integration: web MCP over HTTPS + mTLS, web markdown (node, on the host),
+#                  bia-update internet staging
 #     e2e          QEMU on $ARCH (default arm64): update (internet disk flash rescue), peer,
 #                  land, img (UEFI)
 #     takeover     QEMU on $ARCH: an Ubuntu cloud VM taken over by takeover.sh (DHCP, a static /32
@@ -69,6 +70,7 @@ for stage in "$@"; do
       run unit-cargo unit ;;
     integration)
       run web-mcp-https web_mcp
+      run web-markdown node tests/integration/web-md-test.js
       run update-internet-stage env ARCH="$ARCH" tests/integration/update-net-test.sh ;;
     e2e)
       run update-e2e env ARCH="$ARCH" bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && tests/e2e/update-e2e.sh all internet disk flash rescue'

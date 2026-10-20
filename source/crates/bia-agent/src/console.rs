@@ -374,7 +374,9 @@ impl Console {
         use std::os::unix::fs::PermissionsExt;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
-            if dir.starts_with("/run") {
+            // only the socket's own directory (/run/bia/root), never /run/bia: user bia's
+            // sockets live there (the Chrome passkey bridge broke when it was 0700)
+            if dir.starts_with("/run/bia/") {
                 std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
             }
         }

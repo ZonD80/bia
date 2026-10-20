@@ -168,8 +168,8 @@ impl Tg {
         self.inner.lock().unwrap().ctx = Some(ctx.clone());
         // messages that arrived before the agent link existed
         let held: Vec<_> = held_inbound().lock().map(|mut h| std::mem::take(&mut *h)).unwrap_or_default();
-        for (identity, channel, id, text) in held {
-            ctx.inbound(&identity, &channel, &id, &text);
+        for (identity, channel, id, text, issued) in held {
+            ctx.inbound_at(&identity, &channel, &id, &text, issued);
         }
     }
 
@@ -575,7 +575,7 @@ impl Tg {
             if text.is_empty() {
                 return Ok(false);
             }
-            tg.inbound(&identity, chat_id, &msg_id, &text);
+            tg.inbound_at(&identity, chat_id, &msg_id, &text, msg.date() as i64);
             texts().put(&format!("{chat_id}:{mid}"), msg.date() as i64, msg.text().unwrap_or(""));
             mark_delivered_read(client, &msg, chat_id).await;
             return Ok(true);
@@ -620,7 +620,7 @@ impl Tg {
             // No bare "(media)" — skip empty media failures.
             return Ok(false);
         }
-        tg.inbound(&identity, chat_id, &msg_id, &text);
+        tg.inbound_at(&identity, chat_id, &msg_id, &text, msg.date() as i64);
         // The text as sent (no file notes), so an edit can show what it was.
         texts().put(&format!("{chat_id}:{mid}"), msg.date() as i64, msg.text().unwrap_or(""));
         mark_delivered_read(client, &msg, chat_id).await;
@@ -628,10 +628,15 @@ impl Tg {
     }
 
     pub fn inbound(&self, identity: &str, chat_id: i64, id: &str, text: &str) {
+        self.inbound_at(identity, chat_id, id, text, 0);
+    }
+
+    /// [`Tg::inbound`] with when it was written (Telegram's date, Unix seconds; 0 = now).
+    pub fn inbound_at(&self, identity: &str, chat_id: i64, id: &str, text: &str, issued: i64) {
         let channel = format!("telegram:{chat_id}");
         match self.ctx_clone() {
-            Some(ctx) => ctx.inbound(identity, &channel, id, text),
-            None => hold_inbound(identity, &channel, id, text),
+            Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
+            None => hold_inbound(identity, &channel, id, text, issued),
         }
     }
 
@@ -929,10 +934,11 @@ impl Tg {
         let (chat_id, title, username) = self.resolve_target(target)?;
         let work = async {
             if files.is_empty() {
-                let m = client
-                    .send_message(chat_id, InputMessage::text(text))
-                    .await
-                    .map_err(|e| format!("send: {e}"))?;
+                let m = match client.send_message(chat_id, formatted(text)).await {
+                    Err(e) if entities_refused(&e.to_string()) => client.send_message(chat_id, InputMessage::text(text)).await,
+                    r => r,
+                }
+                .map_err(|e| format!("send: {e}"))?;
                 return Ok(format!(
                     "sent{} → {}",
                     id_note(&[m.id()]),
@@ -950,7 +956,7 @@ impl Tg {
                     .await
                     .map_err(|e| format!("upload {}: {e}", path.display()))?;
                 let caption = if n == 0 { text } else { "" };
-                let msg = InputMessage::text(caption);
+                let msg = formatted(caption);
                 // OGG/Opus goes out as a voice message, not as a file.
                 let media = if is_voice_file(&path) {
                     let (secs, wave) = voice_meta(&path);
@@ -959,10 +965,11 @@ impl Tg {
                 } else {
                     uploaded.into()
                 };
-                let m = client
-                    .send_file(chat_id, media, &msg)
-                    .await
-                    .map_err(|e| format!("send_file: {e}"))?;
+                let m = match client.send_file(chat_id, media.clone(), &msg).await {
+                    Err(e) if entities_refused(&e.to_string()) => client.send_file(chat_id, media, &InputMessage::text(caption)).await,
+                    r => r,
+                }
+                .map_err(|e| format!("send_file: {e}"))?;
                 ids.push(m.id());
                 n += 1;
             }
@@ -1186,7 +1193,7 @@ impl Tg {
                         .map(|u| u.to_string())
                         .unwrap_or_else(|| "?".into())
                 };
-                lines.push(format!("{id}  [{who}]  {body}"));
+                lines.push(format!("{id}  {}  [{who}]  {body}", bia_mcp::share::rfc3339(m.date() as i64)));
             }
             Ok((chat_id, title, username, lines))
         })
@@ -1204,10 +1211,11 @@ impl Tg {
             .filter(|i| *i > 0)
             .ok_or_else(|| format!("bad message id: {message_id}"))?;
         self.block_on(async {
-            client
-                .edit_message(chat_id, msg_id, InputMessage::text(text))
-                .await
-                .map_err(|e| format!("edit: {e}"))?;
+            match client.edit_message(chat_id, msg_id, formatted(text)).await {
+                Err(e) if entities_refused(&e.to_string()) => client.edit_message(chat_id, msg_id, InputMessage::text(text)).await,
+                r => r,
+            }
+            .map_err(|e| format!("edit: {e}"))?;
             Ok(format!(
                 "edited message {msg_id} → {}",
                 Self::format_chat(chat_id, &title, &username)
@@ -1702,6 +1710,36 @@ fn live() -> &'static bia_mcp::share::LiveTracker {
     T.get_or_init(|| bia_mcp::share::LiveTracker::open(Tg::files_dir().join("state").join("telegram-live.json")))
 }
 
+/// The model's markdown as Telegram shows it: plain text with formatting entities.
+fn formatted(md: &str) -> InputMessage {
+    use bia_mcp::md::Style;
+    let r = bia_mcp::md::rich(md);
+    let ents: Vec<tl::enums::MessageEntity> = r
+        .spans
+        .iter()
+        .map(|sp| {
+            let (offset, length) = (sp.offset as i32, sp.len as i32);
+            match &sp.style {
+                Style::Bold => tl::enums::MessageEntity::Bold(tl::types::MessageEntityBold { offset, length }),
+                Style::Italic => tl::enums::MessageEntity::Italic(tl::types::MessageEntityItalic { offset, length }),
+                Style::Strike => tl::enums::MessageEntity::Strike(tl::types::MessageEntityStrike { offset, length }),
+                Style::Code => tl::enums::MessageEntity::Code(tl::types::MessageEntityCode { offset, length }),
+                Style::Pre(language) => tl::enums::MessageEntity::Pre(tl::types::MessageEntityPre { offset, length, language: language.clone() }),
+                Style::Link(url) => tl::enums::MessageEntity::TextUrl(tl::types::MessageEntityTextUrl { offset, length, url: url.clone() }),
+                Style::Quote => tl::enums::MessageEntity::Blockquote(tl::types::MessageEntityBlockquote { collapsed: false, offset, length }),
+            }
+        })
+        .collect();
+    let m = InputMessage::text(r.text);
+    if ents.is_empty() { m } else { m.entities(ents) }
+}
+
+/// Telegram refused the formatting (ENTITY_BOUNDS_INVALID, ENTITY_TEXTURL_INVALID, …):
+/// the message goes again as the markdown it was, so it is never lost over formatting.
+fn entities_refused(err: &str) -> bool {
+    err.contains("ENTIT")
+}
+
 fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -1762,7 +1800,7 @@ async fn handle_edit(client: &Client, msg: ferogram::update::IncomingMessage) {
     let sent = old.as_ref().map(|(s, _)| *s).or(Some(msg.date() as i64));
     let text = bia_mcp::share::edit_text(&mid.to_string(), sent, edited as i64, old.as_ref().map(|(_, t)| t.as_str()), &new);
     texts().put(&key, msg.date() as i64, &new);
-    Tg::global().inbound(&who, chat_id, &format!("{mid}-edit-{edited}"), &text);
+    Tg::global().inbound_at(&who, chat_id, &format!("{mid}-edit-{edited}"), &text, edited as i64);
 }
 
 /// A live location moved: record the point; tell the model only when the share was
@@ -2286,17 +2324,19 @@ fn _keep_arc() {
 
 /// Inbound messages that arrived before the agent link (`set_ctx`) existed; delivered
 /// when it is set instead of being lost (at most 500 kept).
-type Held = (String, String, String, String);
+type Held = (String, String, String, String, i64);
 
 fn held_inbound() -> &'static Mutex<Vec<Held>> {
     static H: OnceLock<Mutex<Vec<Held>>> = OnceLock::new();
     H.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str) {
+fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str, issued: i64) {
+    // held ones reach the agent later: keep when they came even without Telegram's date
+    let issued = if issued > 0 { issued } else { now_secs() as i64 };
     if let Ok(mut h) = held_inbound().lock() {
         if h.len() < 500 {
-            h.push((identity.to_string(), channel.to_string(), id.to_string(), text.to_string()));
+            h.push((identity.to_string(), channel.to_string(), id.to_string(), text.to_string(), issued));
         }
     }
 }

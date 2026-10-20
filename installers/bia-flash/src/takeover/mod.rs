@@ -129,6 +129,14 @@ fn version_tuple(v: &str) -> (u32, u32, u32) {
     (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
 }
 
+/// Files every bia root holds (builders/rootfs.sh). Taking over a bia would erase its agent,
+/// e.g. when a misquoted `ssh root@host curl … | bash` runs the pipe on bia itself.
+const BIA_MARKERS: [&str; 2] = ["etc/bia-release", "etc/bia-shipped"];
+
+fn bia_marker(root: &Path) -> Option<PathBuf> {
+    BIA_MARKERS.iter().map(|m| root.join(m)).find(|p| p.exists())
+}
+
 fn mib(b: u64) -> String {
     format!("{} MiB", b >> 20)
 }
@@ -311,6 +319,15 @@ pub fn run(a: Args) -> Result<()> {
     }
     if run_cmd("id", &["-u"]).unwrap_or_default() != "0" && !a.dump_config {
         bail!("run as root (sudo)");
+    }
+    if let Some(p) = bia_marker(Path::new("/")) {
+        bail!(
+            "this machine already runs bia ({}); a takeover would erase it. Nothing was changed.\n  \
+             To update bia: carry_update (or /update on the console).\n  \
+             To take over another server, run takeover.sh on that server, with the whole pipe inside the quotes:\n  \
+             ssh root@<server> 'curl -fsSL …/takeover.sh | bash -s -- …'",
+            p.display()
+        );
     }
     let mut ask = Ask::new(!a.yes && !a.dump_config);
     let mut rows: Vec<Row> = vec![];
@@ -941,5 +958,17 @@ mod tests {
         assert_eq!(l.len(), 34, "{l}");
         assert!(l.split('-').all(|g| g.len() == 4 && g.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())));
         assert!(!l.contains(['0', '1', 'I', 'O']), "no look-alikes");
+    }
+
+    #[test]
+    fn refuses_bia_itself() {
+        let d = std::env::temp_dir().join(format!("bia-takeover-marker-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("etc")).unwrap();
+        assert_eq!(super::bia_marker(&d), None, "plain Linux");
+        std::fs::write(d.join("etc/bia-shipped"), "").unwrap();
+        assert_eq!(super::bia_marker(&d), Some(d.join("etc/bia-shipped")));
+        std::fs::write(d.join("etc/bia-release"), "20261020000000\n").unwrap();
+        assert_eq!(super::bia_marker(&d), Some(d.join("etc/bia-release")));
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

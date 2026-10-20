@@ -2,7 +2,7 @@
 
 Starts the MCP like the agent does (JSON-RPC on stdin/stdout, BIA_FILES in a temp dir, HTTPS on 8443),
 takes the root certificate like a first visitor, then checks both directions of a web chat, the
-identity rules (never bia, identity required) and that the console stream is gone.
+identity rules (never bia, identity required), the removed stop action and root's console mirror.
 
   docker run --rm --platform linux/arm64 -v $PWD:/work -v bia-cache-arm64:/cache -w /work \
     -e CARGO_TARGET_DIR=/cache/target-arm64-test bia-build:arm64 bash -lc \
@@ -62,6 +62,7 @@ subprocess.run(["openssl", "pkcs12", "-in", f"{d}/root.p12", "-passin", "pass:12
 ctx = ssl.create_default_context(cafile=f"{d}/ca.pem"); ctx.check_hostname = False
 ctx.load_cert_chain(f"{d}/root.pem")
 s, b = req("GET", "/v1/whoami", ctx=ctx); check(s == 200 and json.loads(b)["identity"] == "root", "mTLS as root")
+s, b = req("GET", "/md.js"); check(s == 200 and b"const BiaMd" in b, f"markdown renderer served before sign-in ({s})")
 
 # a person writes on web -> the agent gets an inbound notification on channel web
 s, b = req("POST", "/v1/chats/action", {"t": "send", "chat": "main", "text": "hello bia"}, ctx=ctx)
@@ -83,13 +84,13 @@ txt, err = tool("send", identity="bia", channel="web", text="x"); check(err and 
 txt, err = tool("send", channel="web", text="x"); check(err and "identity is required" in txt, "identity required")
 txt, err = tool("read", identity="root", channel="web", message_id=ib[0]["id"]); check(not err, "read mark")
 
-# the console stream is gone, the stop action too
+# the stop action is gone; root's console mirror (/ws/term) is back since 1.1.3
 s, b = req("POST", "/v1/chats/action", {"t": "stop", "chat": "main"}, ctx=ctx)
 check(s != 200 or b"unknown action" in b, f"stop action removed ({s} {b[:60]!r})")
 c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
 k = base64.b64encode(os.urandom(16)).decode()
 c.request("GET", "/ws/term", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": k, "Sec-WebSocket-Version": "13"})
-r = c.getresponse(); check(r.status != 101, f"/ws/term is not a websocket any more ({r.status})")
+r = c.getresponse(); check(r.status == 101, f"/ws/term is root's console mirror again since 1.1.3 ({r.status})")
 
 p.stdin.close(); p.wait(timeout=10)
 print("RESULT", "FAILED" if check.failed else "PASSED")

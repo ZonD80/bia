@@ -5,6 +5,7 @@
 //! progress. tools/call runs on a worker thread so a second request can arrive
 //! (and be cancelled) while a long handler is running.
 
+pub mod md;
 pub mod share;
 
 use serde_json::{json, Value};
@@ -75,13 +76,23 @@ impl Ctx {
     /// A message that arrived on a bus/channel. The agent queues it as
     /// `identity|channel|issued|delivered|id|message`. Pass `id` empty when the bus has none.
     pub fn inbound(&self, identity: &str, channel: &str, id: &str, message: &str) {
-        self.note(json!({
+        self.inbound_at(identity, channel, id, message, 0);
+    }
+    /// [`Ctx::inbound`] with when the message was written (Unix seconds, from the
+    /// platform), so the envelope's `issued` is not the time bia received it — e.g.
+    /// for messages that came while bia was off. 0: issued is when the agent gets it.
+    pub fn inbound_at(&self, identity: &str, channel: &str, id: &str, message: &str, issued: i64) {
+        let mut v = json!({
             "t": "inbound",
             "identity": identity,
             "channel": channel,
             "id": id,
             "message": message
-        }));
+        });
+        if issued > 0 {
+            v["issued"] = json!(issued);
+        }
+        self.note(v);
     }
     /// Progress in percent for long operations.
     pub fn progress(&self, pct: u32, msg: impl AsRef<str>) {

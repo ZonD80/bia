@@ -19,6 +19,7 @@ const APP_CSS: &str = include_str!("../web/app.css");
 const TERM_JS: &str = include_str!("../web/term.js");
 const EMOJI_JS: &str = include_str!("../web/emoji.js");
 const PKI_JS: &str = include_str!("../web/pki.js");
+const MD_JS: &str = include_str!("../web/md.js");
 const ICON: &str = include_str!("../web/icon.svg");
 const GUI: &str = include_str!("../web/gui.html");
 const SKILL: &str = include_str!("../web/skills/web-console/SKILL.md");
@@ -273,6 +274,7 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/term.js"
             | "/emoji.js"
             | "/pki.js"
+            | "/md.js"
             | "/icon.svg"
             | "/favicon.ico"
             | "/.well-known/bia.json"
@@ -741,6 +743,7 @@ impl Web {
             ("GET", "/term.js") => asset(stream, "text/javascript; charset=utf-8", TERM_JS),
             ("GET", "/emoji.js") => asset(stream, "text/javascript; charset=utf-8", EMOJI_JS),
             ("GET", "/pki.js") => asset(stream, "text/javascript; charset=utf-8", PKI_JS),
+            ("GET", "/md.js") => asset(stream, "text/javascript; charset=utf-8", MD_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
             ("GET", "/icon.svg" | "/favicon.ico") => asset(stream, "image/svg+xml", ICON),
             ("GET", "/.well-known/bia.json") => respond_json(

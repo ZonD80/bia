@@ -487,6 +487,11 @@ lists replace, later wins), then flags, then detection, then questions on
 `{interfaces: […]}`), `disk`, `wipe`, `os`, `reboot`, `gate_port`.
 `--dump-config` prints the resolved config with secrets masked.
 
+Both `takeover.sh` and `bia-flash takeover` refuse to run on bia itself
+(`/etc/bia-release` or `/etc/bia-shipped` exists), with no override: a misquoted
+`ssh root@host curl … | bash` runs the pipe on the bia that typed it, and updating a
+bia is `carry_update`'s job.
+
 Everything is checked before anything changes: architecture, firmware (UEFI,
 Secure Boot, BIOS with GRUB 2 reading `custom.cfg`), the disk holding `/` (no
 RAID, crypt or multi-disk LVM unless `--disk`), RAM (`2 × (image + boot files) +

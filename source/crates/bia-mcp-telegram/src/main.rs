@@ -389,7 +389,7 @@ fn main() {
         )
         .tool(
             "history",
-            "List recent messages in a chat, newest first. Each line starts with the message id (same id field as live inbound envelopes) for telegram_delete_messages / telegram_react. chat_id is a chat number or @username. Pass before as the last id from the previous page to go further back.",
+            "List recent messages in a chat, newest first. Each line is the message id (same id field as live inbound envelopes, for telegram_delete_messages / telegram_react), when it was written (RFC 3339 UTC), the sender and the text. chat_id is a chat number or @username. Pass before as the last id from the previous page to go further back.",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "chat number from telegram_search, or @username"},
                 "limit": {"type": "integer", "description": "how many messages. Default 30, at most 100."},

@@ -807,8 +807,8 @@ impl Wa {
         ensure_live_sweeper();
         // messages that arrived before the agent link existed
         let held: Vec<_> = held_inbound().lock().map(|mut h| std::mem::take(&mut *h)).unwrap_or_default();
-        for (identity, channel, id, text) in held {
-            ctx.inbound(&identity, &channel, &id, &text);
+        for (identity, channel, id, text, issued) in held {
+            ctx.inbound_at(&identity, &channel, &id, &text, issued);
         }
     }
 
@@ -893,10 +893,15 @@ impl Wa {
 
     /// A message for the model on channel `whatsapp:<key>`.
     pub fn inbound(&self, identity: &str, key: &str, id: &str, text: &str) {
+        self.inbound_at(identity, key, id, text, 0);
+    }
+
+    /// [`Wa::inbound`] with when it was written (WhatsApp's timestamp, Unix seconds; 0 = now).
+    pub fn inbound_at(&self, identity: &str, key: &str, id: &str, text: &str, issued: i64) {
         let channel = format!("whatsapp:{key}");
         match self.ctx_clone() {
-            Some(ctx) => ctx.inbound(identity, &channel, id, text),
-            None => hold_inbound(identity, &channel, id, text),
+            Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
+            None => hold_inbound(identity, &channel, id, text, issued),
         }
     }
 
@@ -1670,6 +1675,8 @@ impl Wa {
         let client = self.require_ready()?;
         let t = self.resolve_target(target)?;
         self.note_chat(&t.key, &t.jid, None, now_secs());
+        // the model writes markdown; WhatsApp has its own *bold* syntax
+        let text = &bia_mcp::md::to_whatsapp(text);
         self.block_on(async {
             tokio::select! {
                 r = self.send_async(&client, &t, text, files) => r,
@@ -1997,7 +2004,7 @@ impl Wa {
                 } else {
                     l.text.replace('\n', " ")
                 };
-                format!("{}  [{who}]  {body}", l.id)
+                format!("{}  {}  [{who}]  {body}", l.id, bia_mcp::share::rfc3339(l.ts))
             })
             .collect();
         Ok((t.key, t.title, lines))
@@ -2020,6 +2027,7 @@ impl Wa {
                 return Err("you can only edit your own messages".into());
             }
         }
+        let text = &bia_mcp::md::to_whatsapp(text);
         let content = wa::Message {
             conversation: Some(text.to_string()),
             ..Default::default()
@@ -2250,7 +2258,7 @@ impl Wa {
         };
         self.note_chat(&key, &chat, title.as_deref(), ts);
         self.hist.lock().unwrap().delete_ids(&key, &[deleted_id.clone()]);
-        self.inbound("system", &key, &deleted_id, &format!("[deleted] {deleted_id}"));
+        self.inbound_at("system", &key, &deleted_id, &format!("[deleted] {deleted_id}"), ts);
         let read_sender = if chat.is_group() {
             Some(&info.source.sender)
         } else {
@@ -2317,7 +2325,7 @@ impl Wa {
                 },
             );
         }
-        self.inbound(&label, &key, &info.id, &text);
+        self.inbound_at(&label, &key, &info.id, &text, edited);
         let read_sender = if chat.is_group() { Some(&info.source.sender) } else { None };
         let _ = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await;
         Ok(())
@@ -2381,7 +2389,7 @@ impl Wa {
             format!("[reaction] {emoji}")
         };
         // Envelope id is the reacted-to message (what react/delete tools need).
-        self.inbound(&label, &key, &target_id, &body);
+        self.inbound_at(&label, &key, &target_id, &body, ts);
 
         let read_sender = if chat.is_group() {
             Some(&info.source.sender)
@@ -2546,7 +2554,7 @@ impl Wa {
         if deliver.is_empty() {
             return Ok(());
         }
-        self.inbound(&label, &key, &info.id, &deliver);
+        self.inbound_at(&label, &key, &info.id, &deliver, ts);
         if let Err(e) = client
             .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
             .await
@@ -2651,17 +2659,19 @@ fn write_bans(ids: &[String]) -> Result<(), String> {
 
 /// Inbound messages that arrived before the agent link (`set_ctx`) existed; delivered
 /// when it is set instead of being lost (at most 500 kept).
-type Held = (String, String, String, String);
+type Held = (String, String, String, String, i64);
 
 fn held_inbound() -> &'static Mutex<Vec<Held>> {
     static H: OnceLock<Mutex<Vec<Held>>> = OnceLock::new();
     H.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str) {
+fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str, issued: i64) {
+    // held ones reach the agent later: keep when they came even without WhatsApp's timestamp
+    let issued = if issued > 0 { issued } else { now_secs() };
     if let Ok(mut h) = held_inbound().lock() {
         if h.len() < 500 {
-            h.push((identity.to_string(), channel.to_string(), id.to_string(), text.to_string()));
+            h.push((identity.to_string(), channel.to_string(), id.to_string(), text.to_string(), issued));
         }
     }
 }

@@ -657,6 +657,16 @@ fn json_id(v: Option<&Value>) -> Option<u64> {
         .or_else(|| v.as_str()?.parse().ok())
 }
 
+/// When the message was written: the platform's time from the MCP (`issued`, Unix
+/// seconds) when it sent one, never in the future; else now.
+fn issued_of(v: Option<&Value>) -> std::time::SystemTime {
+    let now = std::time::SystemTime::now();
+    match v.and_then(|x| x.as_i64()) {
+        Some(s) if s > 0 => (std::time::UNIX_EPOCH + std::time::Duration::from_secs(s as u64)).min(now),
+        _ => now,
+    }
+}
+
 fn inbound_from_notification(v: &Value) -> Option<Inbound> {
     if v.get("method").and_then(|m| m.as_str()) != Some("notifications/message") {
         return None;
@@ -674,7 +684,7 @@ fn inbound_from_notification(v: &Value) -> Option<Inbound> {
                 .unwrap_or("unknown")
                 .to_string(),
             channel: obj.get("channel").and_then(|x| x.as_str())?.to_string(),
-            issued: std::time::SystemTime::now(),
+            issued: issued_of(obj.get("issued")),
             id: obj
                 .get("id")
                 .and_then(|x| x.as_str())
@@ -767,5 +777,20 @@ mod log_tests {
                 < 100
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inbound_issued_is_the_platform_time() {
+        use serde_json::{json, Value};
+        let n = |d: Value| super::inbound_from_notification(&json!({"method": "notifications/message", "params": {"data": d}})).unwrap();
+        let base = json!({"t": "inbound", "identity": "a", "channel": "telegram:1", "id": "5", "message": "hi"});
+        let mut sent = base.clone();
+        sent["issued"] = json!(1_791_900_000);
+        assert_eq!(n(sent).issued, std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_791_900_000));
+        let now = std::time::SystemTime::now();
+        assert!(n(base.clone()).issued >= now, "no issued: when the agent gets it");
+        let mut future = base;
+        future["issued"] = json!(4_000_000_000i64);
+        assert!(n(future).issued <= std::time::SystemTime::now(), "never in the future");
     }
 }

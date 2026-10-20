@@ -26,6 +26,14 @@ case $(uname -m) in
   aarch64|arm64) ARCH=arm64 ;;
   *) die "bia runs on x86_64 and arm64, not $(uname -m)" ;;
 esac
+# Never on bia itself: it would erase this agent. A misquoted `ssh root@host curl … | bash`
+# runs the pipe here, not on the server. bia-flash takeover checks the same files.
+for f in /etc/bia-release /etc/bia-shipped; do
+  [ -e "$f" ] && die "this machine already runs bia ($f); a takeover would erase it. Nothing was changed.
+  To update bia: carry_update (or /update on the console).
+  To take over another server, run this on that server, with the whole pipe inside the quotes:
+  ssh root@<server> 'curl -fsSL …/takeover.sh | bash -s -- …'"
+done
 
 fetch() { # url out
   if command -v curl >/dev/null 2>&1; then

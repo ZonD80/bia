@@ -70,6 +70,9 @@ Thumbs.db
 __pycache__/
 *.pyc
 
+# --- Local only (film project, decks, other non-repo material) ----------
+/untracked/
+
 # --- Scratch ------------------------------------------------------------
 *.log
 *.tmp

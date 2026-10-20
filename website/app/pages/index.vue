@@ -15,7 +15,7 @@
             <NuxtLink class="btn btn--primary" to="/download">Get bia — it’s free</NuxtLink>
             <NuxtLink class="btn btn--ghost" to="/features">See everything it does</NuxtLink>
           </div>
-          <p class="hero__small">Runs on a USB stick · old laptops welcome · your data stays with you</p>
+          <p class="hero__small">Its own computer: a USB stick, an old laptop or a server · your data stays with it, not a cloud</p>
         </div>
         <div class="hero__art" aria-hidden="true">
           <div class="hero__glow" />

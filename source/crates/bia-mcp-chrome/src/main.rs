@@ -49,6 +49,7 @@ fn main() {
     };
 
     let b_status = bridge.clone();
+    let dir_status = dir.clone();
     let b_install = bridge.clone();
     let dir_install = dir.clone();
     let updates_install = updates.clone();
@@ -96,6 +97,9 @@ fn main() {
             move |_, _| {
                 let mut v = proc::status()?;
                 v["connected"] = json!(b_status.connected());
+                if let Some(p) = b_status.problem(&dir_status) {
+                    v["not_connected_because"] = json!(p);
+                }
                 Ok(v.to_string())
             },
         )

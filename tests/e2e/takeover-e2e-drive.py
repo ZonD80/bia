@@ -6,9 +6,10 @@ instructions. The driver downloads root.p12 from the gate page (hostfwd), lets t
 reboot, watches bia's rescue write the disk, waits for bia's web app and checks it
 with that certificate: identity root, the CA the takeover printed, the bootstrap route
 closed, seeds moved into place, bia-net's interfaces, setup instructions handed over,
-the virtual screen.
+the virtual screen. Then takeover.sh and bia-flash takeover, run on that bia through
+root's shell (/ws/shell), must refuse: a misquoted `ssh host curl … | bash` runs them there.
 """
-import hashlib, http.server, json, os, re, shutil, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, urllib.request
+import base64, hashlib, http.server, json, os, re, shutil, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, urllib.request
 
 ARCH = os.environ.get("ARCH", "arm64")
 TE = os.environ["TE"]
@@ -331,13 +332,26 @@ try:
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     p12 = urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/root.p12", context=ctx, timeout=30).read()
-    ca_pem = urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/ca.crt", context=ctx, timeout=30).read()
     open(f"{TE}/root.p12", "wb").write(p12)
+    # the gate offers no separate CA: root.p12 carries it
+    ca = subprocess.run(["openssl", "pkcs12", "-in", f"{TE}/root.p12", "-passin", "pass:12345678", "-cacerts", "-nokeys"],
+                        capture_output=True, text=True)
+    m_ca = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", ca.stdout, re.S)
+    if not m_ca:
+        die("root.p12 holds no CA certificate: " + ca.stderr)
+    ca_pem = (m_ca.group(0) + "\n").encode()
     open(f"{TE}/ca.pem", "wb").write(ca_pem)
+    st404 = 0
+    try:
+        urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/ca.crt", context=ctx, timeout=30)
+    except urllib.error.HTTPError as e:
+        st404 = e.code
+    if st404 != 404:
+        die(f"the gate still serves a separate CA (HTTP {st404 or 200})")
     der = ssl.PEM_cert_to_DER_cert(ca_pem.decode())
     if hashlib.sha256(der).hexdigest() != fp:
         die("the gate's CA does not match the fingerprint the terminal showed")
-    say(f"root.p12 downloaded from the gate ({len(p12)} bytes), CA matches")
+    say(f"root.p12 downloaded from the gate ({len(p12)} bytes); the CA inside it matches")
     wait_for(r"takeover-e2e: takeover exit 0", 120)
     open(f"{WWW}/go", "w").write("go\n")
     mark = len(ANSI.sub("", serial()))
@@ -389,6 +403,11 @@ try:
     want(st == 409, f"first-time root certificate route is closed (HTTP {st})")
     st, ca_now = get("/v1/pki/ca", ctx=nctx)
     want(hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca_now.decode())).hexdigest() == fp, "bia serves the CA the takeover made")
+    sc = subprocess.run(["openssl", "s_client", "-connect", f"127.0.0.1:{WEB_PORT}", "-showcerts"],
+                        input="", capture_output=True, text=True, timeout=30)
+    chain = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", sc.stdout, re.S)
+    want(len(chain) == 2 and hashlib.sha256(ssl.PEM_cert_to_DER_cert(chain[1])).hexdigest() == fp,
+         f"the web app sends the full chain: server certificate, then the CA ({len(chain)} certificate(s))")
     st, agent = get("/v1/pki/agent", ctx=nctx)
     want(st == 200 and json.loads(agent).get("name") == "te-bia", "agent name from the config, agent CSR published")
 
@@ -420,6 +439,74 @@ try:
     want(st == 200 and b"Takeover e2e" in s, "setup instructions handed to the model once (setup.done.md)")
     st, xlog = fsget("/var/log/Xorg.bia.log")
     want(st == 200 and b"dummy" in xlog.lower(), "no display device: Xorg runs on the virtual screen")
+
+    def shell(line, timeout=180):
+        """Type line into root's shell (/ws/shell); its output and exit status."""
+        s = cctx.wrap_socket(socket.create_connection(("127.0.0.1", WEB_PORT), timeout=30))
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall(f"GET /ws/shell?rows=50&cols=400 HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            c = s.recv(4096)
+            if not c:
+                die("/ws/shell closed during the handshake")
+            buf += c
+        head, buf = buf.split(b"\r\n\r\n", 1)
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            die("/ws/shell: " + head.decode(errors="replace")[:200])
+        data = (line + "; echo TE-END-$?\n").encode()
+        mask = os.urandom(4)
+        n = len(data)
+        hdr = bytes([0x82, 0x80 | n]) if n < 126 else bytes([0x82, 0x80 | 126]) + n.to_bytes(2, "big")
+        s.sendall(hdr + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+        out, end = b"", time.time() + timeout * SCALE
+        while time.time() < end:
+            while len(buf) >= 2:
+                ln, off = buf[1] & 0x7F, 2
+                if ln == 126:
+                    ln, off = int.from_bytes(buf[2:4], "big"), 4
+                elif ln == 127:
+                    ln, off = int.from_bytes(buf[2:10], "big"), 10
+                if len(buf) < off + ln:
+                    break
+                op, payload, buf = buf[0] & 0x0F, buf[off:off + ln], buf[off + ln:]
+                if op == 8:
+                    die("/ws/shell closed: " + ANSI.sub("", out.decode(errors="replace"))[-500:])
+                if op in (1, 2):
+                    out += payload
+            # no \r: a line can start with one (bracketed paste off), which hides ^ matches
+            text = ANSI.sub("", out.decode(errors="replace")).replace("\r", "")
+            m = re.search(r"TE-END-(\d+)", text)
+            if m:
+                s.close()
+                return text, int(m.group(1))
+            try:
+                c = s.recv(65536)
+            except socket.timeout:
+                continue
+            if not c:
+                break
+            buf += c
+        die("no end of the shell command: " + ANSI.sub("", out.decode(errors="replace"))[-500:])
+
+    # user bia (Chrome's passkey native host) must reach /run/bia; the agent once made it 0700
+    out, rc = shell("stat -c 'mode %a %U' /run/bia /run/bia/root; ls /run/bia/root")
+    modes = re.findall(r"(?m)^mode (\d+) (\w+)", out)
+    print(f"  ..   /run/bia, /run/bia/root: {modes}", flush=True)
+    want(rc == 0 and modes == [("755", "root"), ("700", "root")] and re.search(r"(?m)^console\.sock", out),
+         "/run/bia stays 0755 after the agent started; root's console socket is in /run/bia/root (0700)")
+    out, rc = shell("runuser -u bia -- test -x /run/bia && echo bia-can''-enter")
+    want(re.search(r"(?m)^bia-can-enter", out), "user bia can enter /run/bia")
+
+    refused = "this machine already runs bia"
+    out, rc = shell(f"curl -fsS {host}/takeover.sh | BIA_RELEASE_URL={host}/rel bash -s -- --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")
+    want(rc != 0 and refused in out, f"takeover.sh refuses on bia itself (exit {rc})")
+    out, rc = shell(f"rm -rf /tmp/te-tool && mkdir /tmp/te-tool && curl -fsS {host}/rel/bia-flash-linux-{ARCH}.tar.gz | tar -C /tmp/te-tool -xz && "
+                    f"/tmp/te-tool/bia-flash/bia-flash takeover --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")
+    want(rc != 0 and refused in out, f"bia-flash takeover refuses on bia itself (exit {rc})")
+    st, _ = get("/v1/whoami")
+    want(st == 200, "bia still runs after both refusals")
     if errs:
         die(f"{len(errs)} check(s) failed")
     say("PASS takeover e2e")

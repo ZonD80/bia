@@ -357,7 +357,7 @@ fn main() {
         )
         .tool(
             "history",
-            "List recent messages in a chat, newest first, from the local cache of messages seen while linked. Each line starts with the message id (same id field as live inbound envelopes) for whatsapp_delete_messages / whatsapp_react. Pass before as the last id from the previous page to go further back.",
+            "List recent messages in a chat, newest first, from the local cache of messages seen while linked. Each line is the message id (same id field as live inbound envelopes, for whatsapp_delete_messages / whatsapp_react), when it was written (RFC 3339 UTC), the sender and the text. Pass before as the last id from the previous page to go further back.",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "chat id from whatsapp_search"},
                 "limit": {"type": "integer", "description": "how many messages. Default 30, at most 100."},

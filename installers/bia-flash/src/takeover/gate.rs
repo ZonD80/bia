@@ -20,7 +20,6 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
     bia_pki::install_crypto_provider();
     let pki = Pki::load_or_create(files)?;
     let cfg = pki.server_config()?;
-    let ca_pem = pki.ca_pem()?;
     let listener = TcpListener::bind(("0.0.0.0", port))
         .or_else(|_| TcpListener::bind(("::", port)))
         .with_context(|| format!("port {port} is taken; pass --gate-port"))?;
@@ -32,8 +31,8 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
     let (tok, done) = (token.clone(), downloaded.clone());
     std::thread::spawn(move || {
         for tcp in listener.incoming().flatten() {
-            let (cfg, tok, done, p12, ca_pem, ca_sha) =
-                (cfg.clone(), tok.clone(), done.clone(), p12.clone(), ca_pem.clone(), ca_sha256.clone());
+            let (cfg, tok, done, p12, ca_sha) =
+                (cfg.clone(), tok.clone(), done.clone(), p12.clone(), ca_sha256.clone());
             std::thread::spawn(move || {
                 let mut tcp = tcp;
                 let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)));
@@ -64,8 +63,6 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
                 } else if path == format!("{base}/root.p12") {
                     done.store(true, Ordering::SeqCst);
                     (200, "application/x-pkcs12", "Content-Disposition: attachment; filename=\"bia-root.p12\"\r\n".into(), p12)
-                } else if path == format!("{base}/ca.crt") {
-                    (200, "application/x-pem-file", "Content-Disposition: attachment; filename=\"bia-ca.crt\"\r\n".into(), ca_pem.into_bytes())
                 } else {
                     (404, "text/plain", String::new(), b"not found".to_vec())
                 };
@@ -91,8 +88,9 @@ fn page(tok: &str, ca_sha: &str) -> String {
 <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#222}}code{{background:#f2f2f2;padding:.1rem .3rem;border-radius:4px;word-break:break-all}}a.b{{display:inline-block;margin:.3rem .5rem .3rem 0;padding:.6rem 1rem;background:#2d6cdf;color:#fff;border-radius:8px;text-decoration:none}}</style>
 <h1>Your key to bia</h1>
 <p>This machine is about to become a bia. Afterwards the only way in is its web app on HTTPS, with this certificate.</p>
-<p><a class="b" href="/{tok}/root.p12">Download bia-root.p12</a><a class="b" href="/{tok}/ca.crt">Download the CA</a></p>
-<p>Import <b>bia-root.p12</b> into your browser or system (password <code>12345678</code>), and trust the CA if you like.
+<p><a class="b" href="/{tok}/root.p12">Download bia-root.p12</a></p>
+<p>Import <b>bia-root.p12</b> into your browser or system (password <code>12345678</code>). It also holds bia's
+certificate authority, <b>bia agent CA</b>; trust it so your browser knows bia without warnings.
 Its fingerprint (SHA-256) must match what the terminal shows:</p>
 <p><code>{}</code></p>
 <p>Then go back to the terminal and confirm.</p>

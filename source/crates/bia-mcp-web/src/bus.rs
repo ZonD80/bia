@@ -32,8 +32,9 @@ struct Sink {
 
 pub struct Bus {
     ctx: Mutex<Option<Ctx>>,
-    /// Messages that arrived before the MCP session was up (or in tests).
-    held: Mutex<VecDeque<Inbound>>,
+    /// Messages that arrived before the MCP session was up (or in tests), with when
+    /// they came (Unix seconds) so the envelope's issued is not the later delivery.
+    held: Mutex<VecDeque<(Inbound, i64)>>,
     sinks: Mutex<Vec<Sink>>,
     next: AtomicUsize,
     started: Instant,
@@ -54,9 +55,9 @@ impl Bus {
 
     /// The MCP session is up: deliver what was held, then send directly.
     pub fn attach(&self, ctx: Ctx) {
-        let held: Vec<Inbound> = self.held.lock().unwrap().drain(..).collect();
-        for ib in &held {
-            ctx.inbound(&ib.identity, &ib.channel, &ib.id, &ib.text);
+        let held: Vec<(Inbound, i64)> = self.held.lock().unwrap().drain(..).collect();
+        for (ib, issued) in &held {
+            ctx.inbound_at(&ib.identity, &ib.channel, &ib.id, &ib.text, *issued);
         }
         *self.ctx.lock().unwrap() = Some(ctx);
     }
@@ -64,7 +65,10 @@ impl Bus {
     pub fn push_inbound(&self, ib: Inbound) {
         match self.ctx.lock().unwrap().as_ref() {
             Some(ctx) => ctx.inbound(&ib.identity, &ib.channel, &ib.id, &ib.text),
-            None => self.held.lock().unwrap().push_back(ib),
+            None => {
+                let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+                self.held.lock().unwrap().push_back((ib, now))
+            }
         }
     }
 
@@ -72,7 +76,7 @@ impl Bus {
     pub fn next_held(&self, timeout: std::time::Duration) -> Option<Inbound> {
         let end = Instant::now() + timeout;
         loop {
-            if let Some(ib) = self.held.lock().unwrap().pop_front() {
+            if let Some((ib, _)) = self.held.lock().unwrap().pop_front() {
                 return Some(ib);
             }
             if Instant::now() >= end {
@@ -84,7 +88,7 @@ impl Bus {
 
     /// Messages not delivered to an agent yet (tests read them here).
     pub fn take_held(&self) -> Vec<Inbound> {
-        self.held.lock().unwrap().drain(..).collect()
+        self.held.lock().unwrap().drain(..).map(|(ib, _)| ib).collect()
     }
 
     /// A log line for the agent's MCP log.

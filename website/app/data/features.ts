@@ -456,6 +456,7 @@ export const features: Feature[] = [
       { title: 'Old and new machines', text: 'Works on ordinary Intel and AMD PCs, new and old, with modern or classic start-up and with Secure Boot switched on — and on ARM computers that start the standard (UEFI) way. You make the stick for the kind of computer you have.' },
       { title: 'Next to Windows, or alone', text: 'Keep it on the stick, move it onto the computer’s own disk, or install it beside Windows and choose at startup.' },
       { title: 'No desktop needed', text: 'bia does not need a screen or keyboard once it runs — talk to it from your phone. A computer in a cupboard is enough.' },
+      { title: 'Or a server on the internet', text: 'A rented server (VPS) with Linux becomes bia with one command. It keeps the server’s network settings and asks for your key, language and optional instructions for bia first. Machines without any screen get a virtual one, so you can still watch bia work in the web app.' },
     ],
     chat: [
       { from: 'you', where: 'console', text: 'This laptop is yours now. Move yourself onto its disk.' },
@@ -465,6 +466,7 @@ export const features: Feature[] = [
       'Give a second life to the laptop that was going to the recycling bin.',
       'A tiny, silent mini-PC on a shelf as the family’s always-on assistant.',
       'Bring bia on a stick to a friend’s computer for the weekend.',
+      'Rent a small server and have bia answer customers around the clock, without a computer at home.',
     ],
     good_to_know:
       'An 8 GB stick or bigger is needed; more if you want the brain on the stick. Ordinary and old computers use the cloud brain — thinking with no internet needs a high-end graphics card or unified memory with at least 64 GB of video memory.',
@@ -481,6 +483,8 @@ export const features: Feature[] = [
     points: [
       { title: 'Fold and unfold', text: 'bia folds its whole life into a single backup file, and unfolds it on any computer — logins, memories and all. It even remembers the extra programs it installed and puts them back.' },
       { title: 'Fly to another computer', text: 'Put a new machine in “waiting” mode, and bia flies over the network to it. Both screens show the same six-digit code; you confirm they match, and the move happens.' },
+      { title: 'Fly across the internet', text: 'A server far away can wait for bia with a land secret, a long code made beforehand. Tell bia “fly to 203.0.113.7 with land secret …”: both sides prove the secret, nobody has to type anything at the server, and bia travels encrypted. Once bia has landed, the secret is deleted.' },
+      { title: 'Prepares its own new home', text: 'Give bia ssh access to a rented Linux server, and it sets the server up as a land, waits for it to restart and flies there by itself.' },
       { title: 'Morph from stick to disk', text: 'Started from a stick? bia can take over a computer’s internal disk — or come back from the disk onto a stick — in one sentence.' },
       { title: 'Changes body, keeps its mind', text: 'Moved from an Intel laptop to an ARM mini-PC? bia notices the new hardware, fixes what needs fixing, and carries on.' },
     ],
@@ -495,6 +499,7 @@ export const features: Feature[] = [
       'Keep a backup of bia on a drive in a drawer — a full “resurrection” if anything happens.',
       'Move a shop’s assistant from the old till PC to a new one over lunch.',
       'Swap an old Intel laptop for a quiet ARM mini-PC: make an ARM stick for the mini-PC, start it, and bia flies over with everything it knows.',
+      'Hand bia the login of a new cloud server and let it move a copy of itself there.',
     ],
     good_to_know:
       'A backup contains private things (passwords, chats). Store it as carefully as you would store the computer itself. When bia moves, the new computer needs the internet, so bia can reinstall its extra programs for that machine.',
@@ -540,12 +545,15 @@ export const features: Feature[] = [
     points: [
       { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own key from you, and then chat with bia like any member of the household — with their own chats and history.' },
       { title: 'bia to bia', text: 'Two bias can be contacts of each other on Telegram, WhatsApp or the web app: one at home, one at the shop, sharing work and passing messages.' },
+      { title: 'Trust in one handshake', text: 'Ask bia to connect to another bia: it hands the other one a certificate and asks for one back. When the other owner approves, both can call each other’s web app. Every request shows the address it came from, and a certificate can be limited to the addresses it may be used from.' },
       { title: 'A computer inside a computer', text: 'bia can set up a virtual computer, boot a second bia in it and drive it — handy for testing, teaching or giving a helper its own room.' },
       { title: 'Same rules for everyone', text: 'Agents get trust levels like people do: a guest agent can ask and chat, only a trusted one can give serious orders.' },
     ],
     chat: [
       { from: 'them', where: 'web app · agent “shop-bia”', text: 'Stock alert: oat flour below 5 kg. Can home-bia add it to Saturday’s market list?' },
       { from: 'bia', where: 'web app', text: 'Added “oat flour, 10 kg” to Saturday’s list and told the owner.' },
+      { from: 'you', where: 'Telegram', text: 'Connect to the new bia on the server at https://203.0.113.7.' },
+      { from: 'bia', where: 'Telegram', text: 'Asked it for a certificate and gave it one of mine. Its owner approved — we trust each other now.' },
     ],
     examples: [
       'A home bia and an office bia that coordinate your calendar.',
@@ -587,7 +595,7 @@ export const features: Feature[] = [
     name: 'Yours, not a cloud’s',
     group: 'life',
     icon: 'shield',
-    tagline: 'Your chats, keys and memories live on your machine — locked, signed and yours.',
+    tagline: 'Your chats, keys and memories live on bia’s own computer — locked, signed and yours.',
     lead:
       'Most assistants live inside your own computer, or keep your life on someone else’s servers. bia lives on a separate computer of its own: in your home, your shop, your bag. Its private app is locked with keys only you hand out, and the system it runs on is verified from the very first moment it starts.',
     points: [

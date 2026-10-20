@@ -5,10 +5,12 @@
 //! (`{"t":"resize","rows","cols"}`, `{"t":"line","v"}`); the agent answers with raw console bytes.
 use std::path::{Path, PathBuf};
 
-/// `/run/bia/console.sock` when running as root, else `<files>/state/console.sock` (dev, tests).
+/// `/run/bia/root/console.sock` when running as root, else `<files>/state/console.sock` (dev,
+/// tests). Its own 0700 directory: `/run/bia` itself must stay 0755, since user bia (Chrome's
+/// native host, the X session) uses sockets there.
 pub fn path(files: &Path) -> PathBuf {
     if unsafe { libc::geteuid() } == 0 && Path::new("/run").is_dir() {
-        PathBuf::from("/run/bia/console.sock")
+        PathBuf::from("/run/bia/root/console.sock")
     } else {
         files.join("state").join("console.sock")
     }

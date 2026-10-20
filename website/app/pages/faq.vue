@@ -29,7 +29,7 @@
 <script setup lang="ts">
 useSeoMeta({
   title: 'FAQ — questions about bia',
-  description: 'Answers about bia: what it is, what it costs, privacy, the internet, old computers, languages, messengers and using it responsibly.',
+  description: 'Answers about bia: what it is, what it costs, privacy, the internet, old computers, servers, languages, messengers and using it responsibly.',
 })
 
 const sections = [
@@ -49,6 +49,8 @@ const sections = [
       { q: 'Does it delete Windows?', a: 'No. Starting from the stick changes nothing on the computer. If you later want bia on the computer’s disk, you can choose an empty disk or install it beside Windows.' },
       { q: 'Does it need the internet?', a: 'Normally, yes: messengers and the cloud brain need the internet. If you need bia to work with no internet at all, the brain on the stick is an option — it needs a computer with a high-end graphics card or unified memory with at least 64 GB of video memory (VRAM).' },
       { q: 'Do I need a screen?', a: 'Only for the first minutes. After that you can reach bia from your phone through its private app, and the computer can live in a cupboard.' },
+      { q: 'Can bia live on a rented server?', a: 'Yes. Log in to a Linux server (a VPS, for example with Ubuntu) and run one command: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash. It asks for your key and language, keeps the server’s network settings, gives you your personal key for bia’s web app, and replaces the system with bia. The server needs about 4 GB of memory. See the server guide on this site.' },
+      { q: 'Can my bia move to a server by itself?', a: 'Yes. Give it ssh access to a Linux server and ask it to fly there. It makes a land secret, turns the server into a land that waits for it, and flies there over the internet, encrypted. Or prepare the server yourself with takeover.sh --land and tell bia the land secret.' },
     ],
   },
   {

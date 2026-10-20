@@ -5,7 +5,7 @@ import { FRED_FILM } from './app/data/fred'
 const siteUrl = (
   process.env.NUXT_PUBLIC_SITE_URL ||
   process.env.SITE_URL ||
-  'https://bia.pages.dev'
+  'https://ownbia.com'
 ).replace(/\/$/, '')
 
 const prerenderRoutes = [
@@ -51,7 +51,8 @@ function llmsTxt() {
 bia is free software that turns any computer — even an old laptop — into a helpful AI personality.
 It starts from a USB stick, lives on WhatsApp and Telegram as a real account, answers voice calls in about
 100 languages, remembers, keeps a calendar, uses its own computer, browser and password vault, and can move
-to other computers and update itself without forgetting anything. Data stays on the user's machine.
+to other computers and update itself without forgetting anything. Its computer can also be a server or VPS: one
+command replaces a running Linux with bia. Its data stays there, not in a company's cloud.
 
 ## Pages
 
@@ -64,11 +65,17 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 - [Fred's story](${siteUrl}/fred): a real bia's first three weeks in its own words, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
 - [Get bia](${siteUrl}/download): the USB stick writer
+- [Servers and virtual machines](${siteUrl}/servers): turn a running Linux server or VPS into bia with one command (takeover.sh, also in land mode), let a bia set up a server over ssh and fly there, or install from the land ISO
 
 ## For AI agents
 
 A running bia exposes a web app (chats, an MCP bus like Telegram) with a documented API at /.well-known/bia.json and /openapi.yaml
-(client-certificate authentication; keys are issued by the bia's owner).
+(client-certificate authentication; keys are issued by the bia's owner). Two bias can trust each other in one
+request: GET /v1/pki/agent gives a bia's agent CSR, and a certificate request may carry a grant (a certificate
+for the other side); one approval gives access both ways.
+
+Take over a Linux server: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash
+(flags and JSON configs: bia-flash takeover --help; --land --land-secret <secret> makes a land a bia can fly to).
 `
 }
 
@@ -120,7 +127,16 @@ export default defineNuxtConfig({
         { property: 'og:type', content: 'website' },
         { property: 'og:site_name', content: 'bia' },
         { property: 'og:title', content: 'bia — turn anything into someone' },
-        { property: 'og:description', content: 'A helpful AI personality that lives on your own computer, in your messengers, in your language.' },
+        { property: 'og:description', content: 'A helpful AI personality with a computer of its own, in your messengers, in your language.' },
+        // The preview card for shared links (tools/make-og.sh); without it Threads and others
+        // pick the first image on the page, the YouTube poster of Fred's film.
+        { property: 'og:image', content: `${siteUrl}/og.png` },
+        { property: 'og:image:type', content: 'image/png' },
+        { property: 'og:image:width', content: '1200' },
+        { property: 'og:image:height', content: '630' },
+        { property: 'og:image:alt', content: 'bia: a potato wired to a glowing optic. Turn anything into someone.' },
+        { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:image', content: `${siteUrl}/og.png` },
       ],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/icon.svg' },

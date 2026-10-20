@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Image side of tests/e2e/img-e2e.sh. Runs in the bia-build:<arch> container.
 
-  patch          /ie/root.img: overlay scripts, agent and carry/system MCPs from the work tree
+  patch          /ie/root.img: overlay scripts and tmpfiles, agent and the MCPs in dist/<arch> from the work tree
   keys           /ie/stick.img (MODE=dd): ./fmm.json onto the ESP as EFI/bia/fmm.json, the way
                  a user who wrote the image with Etcher would add their keys
   check [MODEL]  /ie/stick.img after the boot: GPT over the whole disk, ext4 filling BIAROOT,
@@ -70,12 +70,13 @@ def patch():
         out = f"/work/dist/{ARCH}"
         if os.path.exists(f"{out}/bia-agent"):
             shutil.copy2(f"{out}/bia-agent", f"{r}/usr/local/sbin/bia-agent")
-        for mcp in ("carry", "system"):
+        for mcp in ("carry", "system", "web", "chrome", "telegram", "whatsapp", "secrets", "screen", "lang"):
             dst = f"{r}/home/bia/MCPs/{mcp}/bin/{FILEARCH}/bia-mcp-{mcp}"
             if os.path.exists(f"{out}/bia-mcp-{mcp}") and os.path.isdir(os.path.dirname(dst)):
                 shutil.copy2(f"{out}/bia-mcp-{mcp}", dst)
         sh("cp", "-a", "/work/source/os/overlay/usr/local/sbin/.", f"{r}/usr/local/sbin/")
         sh("cp", "-a", "/work/source/os/overlay/usr/local/share/bia/.", f"{r}/usr/local/share/bia/")
+        sh("cp", "-a", "/work/source/os/overlay/etc/tmpfiles.d/.", f"{r}/etc/tmpfiles.d/")
         # unit files too (ordering fixes such as bia-grow after /boot); enablement links stay as built
         units = "/work/source/os/overlay/etc/systemd/system"
         for n in os.listdir(units):
@@ -85,7 +86,7 @@ def patch():
         leaked = [n for n in os.listdir(state) if n == "fmm.json"] if os.path.isdir(state) else []
         if leaked:
             sys.exit("root.img holds files/state/fmm.json; keys must never be in the image")
-        print("root.img: agent + carry/system MCP + overlay scripts from the work tree")
+        print("root.img: agent + MCPs + overlay scripts from the work tree")
     finally:
         subprocess.run(["umount", "/mnt/ie-root"])
         subprocess.run(["losetup", "-d", dev])

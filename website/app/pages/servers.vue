@@ -9,16 +9,163 @@
         <span class="eyebrow">For servers, clouds and virtual machines</span>
         <h1>bia on a server or a virtual machine</h1>
         <p class="section-lead">
-          The bia land installer puts bia onto a machine’s disk and then waits. A bia you already have flies over the
-          network, and the new machine wakes up as its copy, with the same settings, accounts and memory. Use it
-          wherever a USB stick is awkward: a server in a rack, a machine in a cloud, or your own virtual machines.
+          A rented server, a machine in a rack or a virtual machine can become bia too. It answers on the internet
+          day and night, and you reach it from anywhere through its private web app. Pick the way that fits:
+        </p>
+        <div class="grid grid--3 ways">
+          <a v-for="w in ways" :key="w.id" class="card way" :href="`#${w.id}`">
+            <span class="way__tag">{{ w.tag }}</span>
+            <h3>{{ w.title }}</h3>
+            <p>{{ w.text }}</p>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── takeover ───────────── -->
+    <section id="takeover" class="section anchor">
+      <div class="container">
+        <span class="eyebrow">Way 1 · one command</span>
+        <h2 class="h2 h2--top">Turn a running Linux server into bia</h2>
+        <p class="section-lead">
+          Have a server with Ubuntu, Debian or another Linux, for example a VPS from a hosting provider? Log in over
+          ssh and run one command. It asks a few questions, checks everything, and only then replaces the system
+          with bia. The server keeps its network settings, so it comes back at the same address.
+        </p>
+        <pre class="screen screen--cmd">curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash</pre>
+
+        <h3 class="h3">What happens</h3>
+        <ol class="flow">
+          <li v-for="(s, i) in takeoverSteps" :key="i" class="flow__item">
+            <span class="flow__n">{{ i + 1 }}</span>
+            <div>
+              <h3>{{ s.title }}</h3>
+              <p>{{ s.text }}</p>
+              <pre v-if="s.screen" class="screen">{{ s.screen }}</pre>
+            </div>
+          </li>
+        </ol>
+
+        <h3 class="h3">What the server needs</h3>
+        <ul class="list-check">
+          <li>
+            <strong>Linux on Intel or AMD (x86_64) or ARM (arm64)</strong>, with root access. Modern (UEFI) and
+            classic (BIOS) start-up both work on Intel and AMD; ARM servers need UEFI. Classic machines need GRUB 2,
+            which almost every Linux uses.
+          </li>
+          <li>
+            <strong>About 4 GB of memory</strong> (3 GB with classic start-up): bia is loaded into memory before
+            the disk is written. The command measures this first and stops with a clear message if it is not enough.
+          </li>
+          <li><strong>A disk of at least 8 GB</strong>, and about 1.5 GB free on it for the download. The whole disk is replaced.</li>
+          <li><strong>Internet access</strong>, and an API key for bia’s cloud brain (not needed in land mode).</li>
+          <li>
+            <strong>Open ports:</strong> 443 for bia’s web app, 8443 for a few minutes for the certificate page,
+            and 4791 in land mode. Check the provider’s firewall too.
+          </li>
+          <li>
+            <strong>The provider’s console, just in case.</strong> You will not need it if all goes well, but it
+            is your way back in if the network does not come up.
+          </li>
+        </ul>
+        <p class="aside">
+          Before you confirm, nothing on the server changes. If you change your mind afterwards but before the
+          restart, the command tells you which two things to remove.
+        </p>
+
+        <h3 class="h3">Answers from a file or a link</h3>
+        <p>
+          For several servers, or to run the command without questions, put the answers into a small JSON file and
+          pass it with <code>--config</code>: a file on the server or an <code>https://</code> link. Give as many as
+          you like; later ones win, and each may hold only part of the answers, for example only the key. Whatever is
+          still missing is asked for, or, with <code>--yes</code>, left empty when it is optional.
+        </p>
+        <div class="grid grid--2 cfg">
+          <div>
+            <pre class="screen">{{ configExample }}</pre>
+          </div>
+          <div>
+            <pre class="screen">{{ configCommand }}</pre>
+            <ul class="cfg__list">
+              <li><code>setup</code>: instructions for bia, read once when it first wakes up.</li>
+              <li><code>pki.names</code> and <code>pki.ips</code>: names and addresses for bia’s web certificate, for example the public address behind NAT.</li>
+              <li><code>--config-sha256</code> pins a link to exactly that file.</li>
+              <li><code>--dump-config</code> shows the plan without changing anything; <code>bia-flash takeover --help</code> lists every option.</li>
+            </ul>
+          </div>
+        </div>
+
+        <h3 class="h3">Or: a land, waiting for your bia</h3>
+        <p>
+          Already have a bia, with its memory, accounts and skills? Then the server does not need its own setup.
+          Add <code>--land</code>: the server becomes an empty bia that waits for one of yours to fly its mind there
+          over the internet. No key, language or certificate is asked for; the arriving bia brings all of that.
+        </p>
+        <ol class="flow">
+          <li v-for="(s, i) in landSteps" :key="i" class="flow__item">
+            <span class="flow__n">{{ i + 1 }}</span>
+            <div>
+              <h3>{{ s.title }}</h3>
+              <p>{{ s.text }}</p>
+              <pre v-if="s.screen" class="screen">{{ s.screen }}</pre>
+            </div>
+          </li>
+        </ol>
+        <p class="aside">
+          The land secret stays on the server through restarts and updates while it waits, and is deleted as soon as
+          a bia has landed. Make it with enough letters: at least 26, which is what bia makes for you.
         </p>
       </div>
     </section>
 
-    <section class="section">
+    <!-- ───────────── agent does it ───────────── -->
+    <section id="by-bia" class="section section--tint anchor">
       <div class="container">
-        <h2 class="h2">1. Download the installer</h2>
+        <span class="eyebrow">Way 2 · in one sentence</span>
+        <h2 class="h2 h2--top">Let your bia set up the server itself</h2>
+        <p class="section-lead">
+          bia knows how to do all of the above on its own. Give it ssh access to a server, ask, and it makes the land
+          secret, takes the server over in land mode, waits for it to restart and flies there. You only watch.
+        </p>
+        <div class="grid grid--2">
+          <div class="chat card">
+            <p v-for="(l, i) in agentChat" :key="i" class="chat__line" :class="`chat__line--${l.from}`">
+              <span v-if="l.from !== 'note'" class="chat__who">{{ l.from === 'you' ? 'You' : 'bia' }}</span>
+              {{ l.text }}
+            </p>
+          </div>
+          <ul class="list-check">
+            <li>
+              <strong>ssh access</strong>: a key bia can use, or a password you tell it. bia has ssh installed.
+            </li>
+            <li>
+              <strong>Another bia’s body.</strong> The server starts as a copy of the bia that flew there. If only one
+              of them should answer your messages, tell the other one to stay quiet, or switch it off.
+            </li>
+            <li>
+              <strong>The same rules</strong> as above: about 4 GB of memory, port 4791 open, internet access.
+            </li>
+            <li>
+              <strong>Many servers.</strong> Give bia several addresses, and it prepares and flies to each in turn,
+              with a separate land secret for every server.
+            </li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ───────────── installer ───────────── -->
+    <section id="installer" class="section anchor">
+      <div class="container">
+        <span class="eyebrow">Way 3 · from an installer image</span>
+        <h2 class="h2 h2--top">Install on an empty machine</h2>
+        <p class="section-lead">
+          For a new virtual machine, a server in a rack, or a computer with no system on it yet: the land installer
+          puts bia onto the disk and then waits. A bia you already have flies over the network, and the new machine
+          wakes up as its copy, with the same settings, accounts and memory.
+        </p>
+
+        <h3 class="h3">1. Download the installer</h3>
         <div class="grid grid--2">
           <div v-for="a in arches" :key="a.id" class="card dl">
             <h3>{{ a.label }}</h3>
@@ -56,10 +203,11 @@
           </ul>
         </div>
 
-        <h2 class="h2">2. What the machine needs</h2>
+        <h3 class="h3">2. What the machine needs</h3>
         <ul class="list-check">
           <li>
-            <strong>Modern (UEFI) start-up.</strong> The installer does not start the classic (BIOS) way. Pick the
+            <strong>Modern (UEFI) start-up.</strong> The installer does not start the classic (BIOS) way; for a
+            classic machine that already runs Linux, use <a href="#takeover">the one command</a> instead. Pick the
             download that matches the machine: Intel or AMD, or ARM.
           </li>
           <li>
@@ -69,7 +217,7 @@
           <li><strong>Memory and processor:</strong> we test with 4 GB of memory and 4 cores.</li>
           <li>
             <strong>A console for the first minutes</strong>: the machine’s screen, the console of your virtual
-            machine, or a serial console. You answer a few questions there and type one code.
+            machine, or a serial console. You answer a few questions there.
           </li>
           <li>
             <strong>Internet access.</strong> After installing, the machine waits until it can reach the internet,
@@ -84,9 +232,9 @@
           The server gets no AI model of its own: it thinks with the cloud brain of the bia that flies to it.
         </p>
 
-        <h2 class="h2">3. Install, then let bia fly in</h2>
+        <h3 class="h3">3. Install, then let bia fly in</h3>
         <ol class="flow">
-          <li v-for="(s, i) in steps" :key="i" class="flow__item">
+          <li v-for="(s, i) in isoSteps" :key="i" class="flow__item">
             <span class="flow__n">{{ i + 1 }}</span>
             <div>
               <h3>{{ s.title }}</h3>
@@ -103,7 +251,8 @@
         <h2 class="h2">Virtual machine settings</h2>
         <p class="section-lead">
           Any hypervisor works if the virtual machine starts the UEFI way. Attach the unpacked <code>.iso</code> as
-          its CD or DVD drive and give it an empty disk.
+          its CD or DVD drive and give it an empty disk. A virtual machine that already runs Linux can also use
+          <a href="#takeover">the one command</a>.
         </p>
         <div class="grid grid--3">
           <div v-for="h in hypervisors" :key="h.name" class="card">
@@ -112,8 +261,8 @@
           </div>
         </div>
         <p class="aside">
-          Our automated tests run the installer in QEMU. The other hypervisors follow the same UEFI standard, but we
-          do not test them ourselves.
+          Our automated tests run the installer and the takeover in QEMU, on Intel and ARM, with modern and classic
+          start-up. The other hypervisors follow the same standards, but we do not test them ourselves.
         </p>
 
         <h2 class="h2">Physical servers and clouds</h2>
@@ -130,20 +279,8 @@
       <div class="container">
         <h2 class="h2">Good to know</h2>
         <ul class="list-check">
-          <li>
-            <strong>Flying copies.</strong> The bia that flies keeps running, and the server starts as its copy. If
-            only one of them should answer your messages, switch the other one off.
-          </li>
-          <li>
-            <strong>Many servers, one setup.</strong> Prepare one bia the way every server should be, then fly it to
-            each waiting machine in turn.
-          </li>
-          <li>
-            <strong>The server keeps its own address.</strong> Its network address and computer name stay the ones
-            you chose during installation.
-          </li>
-          <li>
-            <strong>A waiting server keeps waiting</strong>, even after a restart, until a bia flies in.
+          <li v-for="g in goodToKnow" :key="g.title">
+            <strong>{{ g.title }}</strong> {{ g.text }}
           </li>
         </ul>
       </div>
@@ -157,17 +294,96 @@
 import { LAND_ASSETS, type LandArch } from '~/composables/useLatestRelease'
 
 useSeoMeta({
-  title: 'bia on servers and virtual machines',
+  title: 'bia on servers, VPS and virtual machines',
   description:
-    'Download the bia land installer for Intel/AMD or ARM, install it on a server, cloud machine or virtual machine, and let an existing bia fly in.',
+    'Turn a running Linux server or VPS into bia with one command, let your bia set up a server over ssh and fly there, or install from the land installer on an empty machine.',
 })
+
+const ways = [
+  {
+    id: 'takeover',
+    tag: 'Running Linux',
+    title: 'One command',
+    text: 'Run it on a rented server or any Linux machine. It becomes a new bia, or a land that waits for yours.',
+  },
+  {
+    id: 'by-bia',
+    tag: 'You have a bia',
+    title: 'Ask your bia',
+    text: 'Give it ssh access to a server. It sets the server up by itself and flies there.',
+  },
+  {
+    id: 'installer',
+    tag: 'Empty machine',
+    title: 'Installer image',
+    text: 'Start a new virtual machine or a bare server from the ISO, then let a bia fly in.',
+  },
+]
+
+const takeoverSteps = [
+  {
+    title: 'Answer a few questions',
+    text: 'The API key for bia’s cloud brain, your language, and optional setup instructions for bia. The command finds the disk, the network (with each card’s hardware address) and how the server starts, and wakes bia’s brain once to check the key.',
+    screen: '== this machine: x86_64, UEFI, 4096 MiB RAM\nAPI key for bia\'s model (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek, Qwen): sk-…\nOwner\'s language (code or name) [en]:\nSetup instructions for bia (optional): bia\'s model reads them once at its first boot\n> Connect to the bia at https://203.0.113.5 and set up trust with it.\n>\nPublic address or DNS name of this machine, if it is behind NAT or has a name (optional):',
+  },
+  {
+    title: 'Check the plan and confirm',
+    text: 'You see everything that will happen, and where each value came from. To go on, type the name of the disk that will be replaced. Until then, nothing has changed.',
+  },
+  {
+    title: 'Download your personal key',
+    text: 'The command makes bia’s certificates right there and opens a one-time page on port 8443 with your personal key (root’s certificate, password 12345678). Download it and add it to your browser. Without it you cannot open bia’s web app later. You can also copy /root/bia-root.p12 over ssh.',
+  },
+  {
+    title: 'The server restarts into bia',
+    text: 'bia writes itself onto the disk from memory, checks every byte, and starts with your key, language and network. This takes a few minutes; the provider’s console shows the progress.',
+  },
+  {
+    title: 'Open bia',
+    text: 'Go to https://<the server’s address>/ and choose your certificate. bia greets you there, reads your setup instructions once, and gets to work. Telegram, WhatsApp and everything else are set up from the chat, like on any bia.',
+  },
+]
+
+const landSteps = [
+  {
+    title: 'Get a land secret',
+    text: 'Ask your bia for a new land secret for that server, or run bia-flash land-secret. It is a long code that only you and your bia know.',
+  },
+  {
+    title: 'Take the server over in land mode',
+    text: 'The secret goes along. The server writes it down for when bia arrives, and asks nothing else.',
+    screen: 'curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh \\\n  | sudo bash -s -- --land --land-secret 4XKP-9W2M-…',
+  },
+  {
+    title: 'Tell your bia to fly',
+    text: '“Fly to 203.0.113.7 with land secret 4XKP-9W2M-…” Both sides prove they know the secret, so nobody has to type a code at the server, and bia travels encrypted. The server wakes up as your bia, with everything it knows.',
+  },
+]
+
+const agentChat = [
+  { from: 'you', text: 'Here is a new server: root@203.0.113.7, the ssh key is in your files. Make it a land and fly there.' },
+  { from: 'bia', text: 'Made a land secret for 203.0.113.7. The disk is /dev/vda, 40 GB, 4 GB of memory. Taking it over in land mode now…' },
+  { from: 'note', text: 'Five minutes later.' },
+  { from: 'bia', text: 'The server restarted and is waiting. Flying… Landed. My copy on 203.0.113.7 is awake and has my memory. Should it answer Telegram, or should I?' },
+]
+
+const configExample = `{
+  "fmm": { "key": "sk-…" },
+  "lang": "de",
+  "setup": "Connect to the bia at https://203.0.113.5 and set up trust with it.",
+  "pki": { "names": ["bia.example.com"] }
+}`
+
+const configCommand = `curl -fsSL …/takeover.sh | sudo bash -s -- \\
+  --config https://example.com/bia.json \\
+  --wipe /dev/vda --yes --reboot`
 
 const arches: { id: LandArch; label: string; note: string }[] = [
   { id: 'x86_64', label: 'Intel and AMD (x86_64)', note: 'Most servers, cloud machines and virtual machines.' },
   { id: 'arm64', label: 'ARM (arm64)', note: 'ARM servers and cloud machines, and virtual machines on Apple Silicon Macs.' },
 ]
 
-const steps = [
+const isoSteps = [
   {
     title: 'Start the machine from the installer',
     text: 'Attach the ISO as the virtual machine’s CD drive, mount it through the server’s management console, or start from a USB stick. The installer explains what it is about to do.',
@@ -224,16 +440,43 @@ const hypervisors = [
 
 const places = [
   {
+    name: 'Rented server (VPS)',
+    text: 'Order it with Ubuntu or Debian, log in over ssh and run the one command. Most providers have no screen at all; bia gets a virtual one, so the web app’s screen view still works.',
+  },
+  {
     name: 'Server with a management console',
-    text: 'Mount the unpacked ISO as virtual media through iDRAC, iLO, IPMI or a similar console, and answer the installer in its remote screen.',
+    text: 'Run the one command if it already has Linux, or mount the unpacked ISO as virtual media through iDRAC, iLO, IPMI or a similar console and answer the installer in its remote screen.',
   },
   {
-    name: 'Server without one',
-    text: 'Write the installer to a USB stick with balenaEtcher or Raspberry Pi Imager, start the server from it, and keep a screen and keyboard attached for the first steps.',
+    name: 'Cloud machine with your own ISO',
+    text: 'Any provider that lets you start your own ISO and gives you a console (VNC or serial) works with the installer. On ARM machines, switch Secure Boot off if it does not start.',
+  },
+]
+
+const goodToKnow = [
+  {
+    title: 'The network comes along.',
+    text: 'The one command copies the server’s addresses, gateway and DNS, tied to each network card’s hardware address, including static addresses and gateways outside the server’s own network, as many providers use. If they do not work after the restart, bia falls back to DHCP after two minutes.',
   },
   {
-    name: 'Cloud machine',
-    text: 'Any provider that lets you start your own ISO and gives you a console (VNC or serial) works. On ARM machines, switch Secure Boot off if the installer does not start.',
+    title: 'Your key is the only way in.',
+    text: 'bia has no password login. Its web app opens only with a certificate that bia issued. Keep root’s certificate safe, and ask bia for more keys for other people later.',
+  },
+  {
+    title: 'Two bias, one handshake.',
+    text: 'Setup instructions can tell a new bia to connect to another one. It gives the other bia a certificate and asks for one back; when the other bia’s owner approves the request (which shows the address it came from), both can work with each other.',
+  },
+  {
+    title: 'Flying copies.',
+    text: 'The bia that flies keeps running, and the server starts as its copy. If only one of them should answer your messages, switch the other one off.',
+  },
+  {
+    title: 'Many servers, one setup.',
+    text: 'Prepare one bia the way every server should be, then fly it to each waiting machine in turn, or let it prepare the servers itself.',
+  },
+  {
+    title: 'A waiting server keeps waiting,',
+    text: 'even after a restart or an update, until a bia flies in.',
   },
 ]
 
@@ -255,7 +498,15 @@ function mib(bytes: number): string {
   font-size: clamp(1.4rem, 3vw, 1.9rem);
   margin: 2.5rem 0 1rem;
 }
-.h2:first-child { margin-top: 0; }
+.h2:first-child, .h2--top { margin-top: 0.3rem; }
+.h3 { font-size: 1.25rem; margin: 2rem 0 0.75rem; }
+.anchor { scroll-margin-top: 4.5rem; }
+.ways { margin-top: 1.5rem; }
+.way { display: block; color: inherit; text-decoration: none; transition: transform 0.15s ease, border-color 0.15s ease; }
+.way:hover { transform: translateY(-2px); border-color: var(--accent); }
+.way h3 { font-size: 1.25rem; margin: 0.3rem 0; }
+.way p { margin: 0; color: var(--ink-soft); }
+.way__tag { font-size: 0.8rem; font-weight: 700; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
 .dl h3 { font-size: 1.3rem; margin-bottom: 0.2rem; }
 .dl__note { color: var(--mute); }
 .dl { display: flex; flex-direction: column; }
@@ -267,6 +518,17 @@ function mib(bytes: number): string {
 .tip ul { margin: 0.75rem 0 0; padding-left: 1.2rem; }
 .tip li + li { margin-top: 0.35rem; }
 .aside { margin: 1rem 0 0; color: var(--mute); }
+.cfg { align-items: start; }
+.cfg > div, .grid > * { min-width: 0; }
+code { overflow-wrap: anywhere; }
+.cfg .screen { margin-top: 0; }
+.cfg__list { margin: 0.75rem 0 0; padding-left: 1.2rem; color: var(--ink-soft); }
+.cfg__list li + li { margin-top: 0.35rem; }
+.chat { display: grid; gap: 0.6rem; align-content: start; }
+.chat__line { margin: 0; padding: 0.6rem 0.8rem; border-radius: 0.75rem; background: var(--bg, #fff); border: 1px solid var(--line); }
+.chat__line--you { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.chat__line--note { background: none; border: none; text-align: center; font-size: 0.85rem; color: var(--mute); font-style: italic; }
+.chat__who { display: block; font-size: 0.75rem; font-weight: 700; color: var(--mute); margin-bottom: 0.15rem; }
 .flow {
   list-style: none;
   margin: 1rem 0 0;
@@ -311,6 +573,7 @@ function mib(bytes: number): string {
   line-height: 1.5;
   overflow-x: auto;
 }
+.screen--cmd { margin: 1.25rem 0 0; font-size: 0.9rem; }
 @media (max-width: 560px) {
   .flow__item { grid-template-columns: 1fr; }
 }

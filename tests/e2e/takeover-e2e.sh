@@ -67,7 +67,7 @@ def sha(p):
             h.update(c)
     return h.hexdigest()
 img, xz, tool = f"{d}/bia-{arch}.img", f"{d}/bia-{arch}.img.xz", f"{d}/bia-flash-linux-{arch}.tar.gz"
-json.dump({"version": "1.1.3", "tag": "e2e", "os": {arch: {"image": {
+json.dump({"version": "1.1.4", "tag": "e2e", "os": {arch: {"image": {
     "file": os.path.basename(xz), "size": os.path.getsize(xz), "sha256": sha(xz),
     "raw_size": os.path.getsize(img), "raw_sha256": sha(img)}}},
     "tools": {os.path.basename(tool): {"file": os.path.basename(tool), "size": os.path.getsize(tool), "sha256": sha(tool)}}},

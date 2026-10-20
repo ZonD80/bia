@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.4
+
+### Changes
+- takeover.sh (and bia-flash takeover) now refuse to run on a machine that already runs bia, and change nothing there. Before, a takeover command meant for another server could erase bia itself when it ran on bia by mistake, for example through ssh with missing quotes. To update bia, use the update (carry_update, or /update on the console).
+- Telegram and WhatsApp messages now reach bia with the time they were written. Before, bia saw when it received them, so messages from while it was off all looked as if they had just arrived. Their message history now shows the time of each message too.
+- bia's messages on Telegram and WhatsApp now show their formatting: bold, italic, strikethrough, code, code blocks, links, headings, lists and quotes. Before, people saw the raw markdown, such as `**bold**`. If Telegram refuses the formatting, the message is sent as plain text, so it still arrives.
+- Passkeys in Chrome work reliably again. bia itself made a folder for its internal connections private when it started, so Chrome's passkey helper could not reach bia and sites reported an error. That folder now stays open to Chrome, and bia repairs the connection by itself if it ever breaks. chrome_status now says why the passkey add-on is not connected.
+- The web app no longer offers a separate CA download: every certificate file (.p12) bia hands out already contains bia's certificate authority, “bia agent CA”. Import the .p12 and trust that CA in the same place (the sign-in page shows how for each system). The takeover page offers only bia-root.p12 now, and the web app sends its full certificate chain.
+- In the web app, bold and italic text that contains code (for example **quota `drive/v3/about`:**) now shows formatted instead of with raw asterisks.
+
+### For bia
+- When you take over a server over ssh, first check with `ssh root@<address> 'hostname; cat /etc/os-release'` that you reach that server, then put the whole takeover command, the pipe into bash too, inside single quotes: `ssh root@<address> 'curl -fsSL …/takeover.sh | bash -s -- …'`. If it answers "this machine already runs bia", it ran on you: fix the quoting or the address. Never use takeover to update a bia; use carry_update.
+- If you made your own fix for the passkey bridge (for example /etc/tmpfiles.d/bia-chrome.conf or a chmod of /run/bia), remove it: this version ships /etc/tmpfiles.d/bia.conf. When chrome_status shows connected false, read not_connected_because before changing anything.
+
 ## 1.1.3
 
 ### Changes

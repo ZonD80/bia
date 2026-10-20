@@ -12,6 +12,7 @@ Connect to this BIA over HTTPS with a client certificate issued by its CA. The w
 
 1. `GET /v1/pki/ca` → PEM (`?format=der` for a `.cer`); trust it for this host (fingerprint must match `ca_sha256`). From then on verify every request against it (`curl --cacert ca.pem`); do not use `-k`. The server certificate names this host's addresses.
 2. The CA download does not grant access and does not issue a client certificate.
+3. People get the CA inside their `.p12` (the web UI has no separate CA download), and the server sends it after its own certificate in the TLS handshake. Either way, check the fingerprint against `ca_sha256` before trusting it.
 
 ## Get a client certificate
 

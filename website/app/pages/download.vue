@@ -112,8 +112,8 @@
           </div>
           <div class="card">
             <h3>Servers and virtual machines</h3>
-            <p>For servers, cloud machines and virtual machines, or computers you set up in bulk: start from the installer image, connect to a network, and the computer installs bia on its disk and waits for its mind to “fly” over from another bia.</p>
-            <p><NuxtLink to="/servers">Download the installer and read the guide</NuxtLink></p>
+            <p>A rented server or any machine running Linux becomes bia with one command over ssh: <code>curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash</code>. It can start as a new bia, or wait for yours to fly there. Your bia can even set a server up by itself. Empty machines start from the installer image.</p>
+            <p><NuxtLink to="/servers">Read the server guide</NuxtLink></p>
           </div>
           <div class="card">
             <h3>For developers</h3>
@@ -172,4 +172,5 @@ function buttonText(host: Host): string {
 .kinds ul { margin: 0.75rem 0; padding-left: 1.2rem; }
 .kinds li + li { margin-top: 0.4rem; }
 .other-ways { scroll-margin-top: 4.5rem; }
+.other-ways code { overflow-wrap: anywhere; font-size: 0.85em; }
 </style>
