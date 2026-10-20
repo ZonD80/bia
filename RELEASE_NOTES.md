@@ -5,6 +5,18 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.5
+
+### Changes
+- A takeover now waits until root's certificate (bia-root.p12) has left the server, from the one-time page or copied with scp, and only then continues and reboots by itself. Before, an unattended takeover could reboot right away and erase the only copy, leaving no way into the new bia. Its output says plainly what to fetch and how; `gate_wait` now only sets how long to wait before giving up without changing anything.
+- After a takeover, the server's carried-over network now always applies at the first boot. Before, the network card could come up with plain DHCP before the carried-over settings were in place: servers with a fixed address (for example a /32 with its gateway outside, as at OVH or Hetzner) ended up with only a 169.254.x.x address and an empty /etc/resolv.conf.
+- The network no longer waits 15 seconds at every boot after a takeover, and the DHCP fallback no longer mistakes a 169.254.x.x route for a working network.
+- The console's network messages show the real method (static, dhcp) instead of always "dhcp".
+
+### For bia
+- When you take over a server without --land, takeover.sh waits for root's certificate: in a second bash job run `scp root@<address>:/root/bia-root.p12 /home/bia/files/<address>-root.p12`, then the takeover continues by itself. Never cat or print that file: it holds root's key. Tell root where it is.
+- Nothing else to do.
+
 ## 1.1.4
 
 ### Changes
