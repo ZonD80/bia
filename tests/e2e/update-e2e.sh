@@ -7,12 +7,16 @@
 #   tests/e2e/update-e2e.sh check <scenario>  inspect the updated root
 #   tests/e2e/update-e2e.sh patch             push overlay scripts + dist binaries into
 #                                         both images, rebuild their rescue overlay
+#                                         and initramfs
 #   tests/e2e/update-e2e.sh all [scenario…]   prep+run+check (default: disk flash rescue)
 #
 # Scenarios (dst = the system that gets the new OS and keeps its agent):
 #   disk    running from the disk, update the disk from a newer flash   (/update)
 #   flash   running from the flash, update the flash from a newer disk  (/update)
 #   rescue  running from the flash, push the flash onto the disk         (carry_rescue)
+#   fsck    running from the disk: its root starts with a broken inode checksum
+#           (/usr/bin/df) and the "with errors" state; the boot check (initramfs)
+#           repairs it, then /fsck checks it offline in the rescue image  (carry_fsck)
 #   internet  running from the disk, update the disk from a release served over HTTP
 #             (real bia-<arch>.img stamped 9.9.9; the flash stays attached but is not
 #             newer; /update internet). Needs dist/$ARCH/bia-$ARCH.img (make img).
@@ -53,7 +57,7 @@ do_images() {
 }
 
 scenario_ok() {
-  case ${1:-} in disk|flash|rescue|internet) ;; *) echo "scenario: disk | flash | rescue | internet" >&2; exit 2 ;; esac
+  case ${1:-} in disk|flash|rescue|internet|fsck) ;; *) echo "scenario: disk | flash | rescue | internet | fsck" >&2; exit 2 ;; esac
 }
 
 do_prep() { scenario_ok "$1"; image_tool prep "$1"; }
@@ -62,7 +66,7 @@ do_check() { scenario_ok "$1"; image_tool check "$1"; }
 do_run() {
   scenario_ok "$1"
   local boot=disk
-  case $1 in disk|internet) ;; *) boot=flash ;; esac
+  case $1 in disk|internet|fsck) ;; *) boot=flash ;; esac
   local log=$UT/run-$1.log http=
   if [ "$1" = internet ]; then
     # the "GitHub release": the guest reaches the host's loopback as 10.0.2.2

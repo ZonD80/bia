@@ -1,7 +1,7 @@
 {
   "name": "carry",
-  "version": "1.1.6",
-  "description": "Move this agent: backups (carry_fold, carry_unfold), to another computer (carry_land / carry_fly on this network; a server on the internet: carry_new_land_secret), onto another disk or stick (carry_to_disk, carry_to_flash, carry_morph), OS updates (carry_update, carry_rescue). Choose devices with bash lsblk. force=true and anything that erases only after the user says yes.",
+  "version": "1.1.7",
+  "description": "Move this agent: backups (carry_fold, carry_unfold), to another computer (carry_land / carry_fly on this network; a server on the internet: carry_new_land_secret), onto another disk or stick (carry_to_disk, carry_to_flash, carry_morph), OS updates (carry_update, carry_rescue), an offline disk check and repair (carry_fsck). Choose devices with bash lsblk. force=true and anything that erases only after the user says yes.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-carry",
     "x86_64": "bin/x86_64/bia-mcp-carry"
@@ -35,7 +35,11 @@
     "vps",
     "remote",
     "takeover",
-    "secret"
+    "secret",
+    "fsck",
+    "disk check",
+    "filesystem",
+    "repair"
   ],
   "examples": [
     "root|console|<issued>|<delivered>|update from the stick -> carry_update()",
@@ -44,6 +48,7 @@
     "root|console|<issued>|<delivered>|the code on both screens is 482193 -> carry_confirm(code='482193')",
     "root|console|<issued>|<delivered>|install onto the Samsung disk beside Windows on sda5 -> bash lsblk; carry_to_disk(disk='/dev/sda', partition='/dev/sda5')",
     "root|console|<issued>|<delivered>|set up my VPS 203.0.113.7 (ssh key in ~/.ssh) as a land and fly there -> carry_new_land_secret(host='203.0.113.7'); bash ssh root@203.0.113.7 'hostname; findmnt -no SOURCE /; lsblk -d'; bash ssh root@203.0.113.7 'curl -fsSL …/takeover.sh | bash -s -- --land --land-secret <secret> --yes --wipe /dev/vda --reboot'; carry_fly(host='203.0.113.7', timeout_secs=1800)",
-    "root|console|<issued>|<delivered>|the server 198.51.100.9 waits in land mode, its secret is in land-198.51.100.9 -> secrets_get(name='land-198.51.100.9'); carry_fly(host='198.51.100.9', secret='<secret>')"
+    "root|console|<issued>|<delivered>|the server 198.51.100.9 waits in land mode, its secret is in land-198.51.100.9 -> secrets_get(name='land-198.51.100.9'); carry_fly(host='198.51.100.9', secret='<secret>')",
+    "root|console|<issued>|<delivered>|df says Bad message, dmesg shows EXT4 checksum errors -> tell root it reboots for a few minutes; carry_fsck()"
   ]
 }

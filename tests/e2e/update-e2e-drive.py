@@ -19,7 +19,7 @@ SOCK, MON = envs["SOCK"], envs["MON"]
 COPY_TIMEOUT = int(os.environ.get("TIMEOUT", "20")) * 60
 TRIGGER = os.environ.get("TRIGGER", "console")
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[78()][0-9A-B]?")
-SHOW = re.compile(r"bia-update:|bia-rescue:|unfold:|fold: done|Kernel panic|rescue \(update|update:|rescue:")
+SHOW = re.compile(r"bia-update:|bia-rescue:|unfold:|fold: done|Kernel panic|rescue \(update|update:|rescue:|root file system|FILE SYSTEM WAS MODIFIED")
 
 for p in (SOCK, MON):
     if os.path.exists(p):
@@ -140,9 +140,35 @@ FAIL_UPD = r"bia-update: [^\n]*\[ FAIL \]"
 FAIL_RESCUE = r"bia-rescue: [^\n]*\[ FAIL \]|Kernel panic"
 
 # 1. first boot, agent up
+if scen == "fsck":
+    # The initramfs checks the damaged root before mounting it and repairs it. Its output
+    # goes to /dev/console (the screen on arm64), but it leaves /run/initramfs/fsck-root
+    # only after a check that passed, and systemd then skips its own root check.
+    expect("boot check of the root (initramfs)", r"systemd-fsck-root\.service[^\n]*skipped[^\n]*/run/initramfs/fsck-root", 300,
+           fail=r"requires a manual fsck|Kernel panic")
 expect("first boot (bia-update.service)", BOOTED, 600, fail=FAIL_UPD)
 expect("agent console", r"->|Ready for commands|ready|FMM", 300)
 time.sleep(15)
+
+if scen == "fsck":
+    send("Check and repair this computer's disk now. Call carry_fsck." if TRIGGER == "agent" else "/fsck")
+    expect("disk check staged", r"rebooting into the rescue image", 600, fail=FAIL_UPD)
+    expect("rescue image boots", r"bia-rescue: bia rescue image", 600, fail=FAIL_RESCUE)
+    expect("offline e2fsck", r"bia-rescue: fsck \S+ \.+ \[ OK \]", COPY_TIMEOUT, fail=FAIL_RESCUE)
+    expect("back on the disk", r"bia-update: disk check: no errors", 600, fail=FAIL_UPD)
+    expect("idle after the check", r"bia-update: idle", 600, fail=FAIL_UPD)
+    if re.search(r"bia-rescue: bia rescue image", text()[cursor:]):
+        die("rescue image ran again")
+    expect("agent console after the check", r"->|Ready for commands|ready|FMM", 300)
+    time.sleep(10)
+    send("/poweroff")
+    try:
+        qemu.wait(180)
+    except subprocess.TimeoutExpired:
+        mon("quit")
+        qemu.wait(30)
+    print(f"{stamp()} scenario fsck: run finished", flush=True)
+    sys.exit(0)
 
 # 2. trigger
 if TRIGGER == "agent":

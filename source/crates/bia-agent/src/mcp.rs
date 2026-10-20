@@ -11,7 +11,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crate::console::{Console, Inbound, GRAY, RESET};
 use crate::jobs;
@@ -231,7 +231,6 @@ pub struct McpServer {
     next_id: Arc<AtomicU64>,
     slot: LinkSlot,
     spec: SpawnSpec,
-    started: SystemTime,
 }
 
 impl McpServer {
@@ -338,7 +337,6 @@ impl McpServer {
             next_id,
             slot,
             spec,
-            started: SystemTime::now(),
         };
         let init = match s.request(
             "initialize",
@@ -512,29 +510,6 @@ impl McpServer {
     pub fn relocate(&mut self, dir: PathBuf) -> Result<()> {
         self.spec.dir = dir;
         self.respawn()
-    }
-
-    /// True if mcp.json or the launch command on disk is newer than this process.
-    pub fn sources_stale(&self) -> bool {
-        let newer = |p: &Path| {
-            std::fs::metadata(p)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .map(|t| t > self.started)
-                .unwrap_or(false)
-        };
-        if newer(&self.spec.dir.join("mcp.json")) {
-            return true;
-        }
-        let Some(cmd) = self.spec.manifest.command_for(&self.spec.arch) else {
-            return false;
-        };
-        let exe = if Path::new(&cmd).is_absolute() {
-            PathBuf::from(&cmd)
-        } else {
-            self.spec.dir.join(&cmd)
-        };
-        newer(&exe)
     }
 
     pub fn ensure_alive(&mut self) -> Result<()> {

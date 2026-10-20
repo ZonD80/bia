@@ -21,6 +21,7 @@ ureq = { version = "3", default-features = false, features = [
 base64 = "0.22"
 anyhow.workspace = true
 regex = "1"
+sha2 = "0.10"
 unicode-width = "0.1"
 bia-pki = { path = "../bia-pki" }
 bia-speech = { path = "../bia-speech" }

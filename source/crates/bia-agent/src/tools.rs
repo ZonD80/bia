@@ -694,6 +694,64 @@ enum Kind {
     Mcp { server: usize, tool: String },
 }
 
+/// What `say` returns for a send held while its MCP starts.
+fn held_note(mcp: &str, job: &str) -> String {
+    format!("queued until mcp/{mcp} has started (job:{job}); it goes out then, in order with later sends. No local id yet. A failure arrives as system|outbox.")
+}
+
+/// An MCP server starting on its own thread (Tools::start_job), and its job.
+struct Starting {
+    job: String,
+    handle: std::thread::JoinHandle<Option<Started>>,
+}
+
+/// A send held while its MCP starts (Tools::outbox_submit); in order per MCP.
+struct Held {
+    mcp: String,
+    chat: String,
+    op: crate::outbox::Op,
+    bytes: u64,
+    what: String,
+}
+
+/// A started server, not yet part of Tools (attached on the main thread).
+struct Started {
+    srv: McpServer,
+    list: Vec<McpTool>,
+    m: crate::mcp::Manifest,
+}
+
+/// A start still running after this long gets the jobs' usual mid-job `stale?` notice.
+const START_STALE_SECS: u64 = 30;
+
+/// state/<this>: sha256 of each MCP block the model was given (Tools::sent_mcp).
+const MCP_BLOCKS: &str = "mcp_blocks.json";
+
+fn block_hash(block: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(block.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// What the model is told about an MCP, from its manifest; examples name its functions
+/// with the server prefix (`fold(` → `carry_fold(`).
+fn server_info(m: &crate::mcp::Manifest, list: &[McpTool]) -> ServerInfo {
+    let examples = m
+        .examples
+        .iter()
+        .map(|ex| {
+            list.iter().fold(ex.clone(), |e, t| {
+                e.replace(&format!(" {}(", t.name), &format!(" {}_{}(", m.name, t.name))
+            })
+        })
+        .collect();
+    ServerInfo {
+        name: m.name.clone(),
+        description: m.description.clone(),
+        keywords: m.keywords.clone(),
+        examples,
+    }
+}
+
 /// What the model is told about an MCP before its functions are loaded.
 pub struct ServerInfo {
     pub name: String,
@@ -718,6 +776,15 @@ pub struct Tools {
     enabled: std::collections::HashSet<String>,
     /// paths whose schemas were already returned to the model (`shell`, `mcp/system`, `tool:bash`)
     schemas_sent: std::collections::HashSet<String>,
+    /// per MCP server: sha256 of the block (description, examples, every function's full
+    /// definition) last sent to the model; kept in state/mcp_blocks.json across restarts
+    sent_mcp: HashMap<String, String>,
+    /// MCPs restarted by themselves (a crash, a preferred copy): their changed block, for the next tool result
+    reload_notes: Vec<String>,
+    /// MCP servers starting in the background (start_job), by name: attached when done
+    starting: HashMap<String, Starting>,
+    /// sends to a messenger MCP that is still starting: into the outbox once it is up
+    held: Vec<Held>,
     pub servers: Vec<McpServer>,
     pub infos: Vec<ServerInfo>,
     /// mcp.json entries seen on disk. Not started until that server is enabled.
@@ -847,6 +914,13 @@ impl Tools {
             groups: vec![],
             enabled: Default::default(),
             schemas_sent: Default::default(),
+            sent_mcp: std::fs::read(state.join(MCP_BLOCKS))
+                .ok()
+                .and_then(|b| serde_json::from_slice(&b).ok())
+                .unwrap_or_default(),
+            reload_notes: vec![],
+            starting: HashMap::new(),
+            held: vec![],
             servers: vec![],
             infos: vec![],
             catalog: vec![],
@@ -876,11 +950,12 @@ impl Tools {
             obj(json!({
                 "path": {"type": "string", "description": "branch, e.g. shell or mcp/telegram or mcp/whatsapp; empty lists the top"},
                 "enable": {"type": "boolean", "description": "append this branch's function schemas"},
+                "restart": {"type": "boolean", "description": "mcp/<server> only: start a new process of it from disk (after you updated or edited it); its functions are sent again only if they changed"},
                 "q": {"type": "string", "description": "search names, descriptions and keywords"},
                 "call": {"type": "string", "description": "function to run, e.g. bash or system_fmm_configure"},
                 "arguments": {"type": "object", "description": "arguments for call", "additionalProperties": true}
             }), &[]));
-        t.add_builtin("use_mcp", "Load an MCP server's functions so they become callable. Required before telegram_login / whatsapp_login / system_fmm_configure / etc. If a capability is listed in the system prompt, call this — do not say you lack the tool. MCPs live in /home/bia/MCPs. Restarts the process if run.sh or mcp.json is newer. Definitions are appended to the conversation; the frozen tool list is not rewritten. Then call those functions with invoke(name, arguments).",
+        t.add_builtin("use_mcp", "Load an MCP server's functions so they become callable. Required before telegram_login / whatsapp_login / system_fmm_configure / etc. If a capability is listed in the system prompt, call this — do not say you lack the tool. MCPs live in /home/bia/MCPs. A running server is not restarted when its files change: after updating or editing one, call discover(path=\"mcp/<name>\", restart=true); its definitions come again only if they changed. Definitions are appended to the conversation; the frozen tool list is not rewritten. Then call those functions with invoke(name, arguments).",
             obj(json!({"name": {"type": "string", "description": "MCP server name, e.g. system"}}), &["name"]));
         t.add_builtin("invoke", "Call a loaded MCP function (or any tool) by name. The frozen tool list never grows — after use_mcp, use this instead of expecting a new function in the API tool list. name is the prefixed function (e.g. telegram_login, whatsapp_login, system_fmm_status).",
             obj(json!({
@@ -1112,15 +1187,270 @@ impl Tools {
         self.groups.push(group.into());
     }
 
-    pub fn add_server(&mut self, server: McpServer, tools: Vec<McpTool>, info: ServerInfo) {
-        let idx = self.servers.len();
-        self.infos.push(info);
+    /// After a restart: the server's functions and description as they are now. When the
+    /// model already had this MCP's block and its hash changed, returns the new block to
+    /// send (as if it had run discover enable=false, then enable=true); the same block is
+    /// never sent twice.
+    fn reload_server(&mut self, idx: usize, m: &crate::mcp::Manifest) -> Result<Option<String>> {
+        let list = self.servers[idx].list_tools()?;
+        let name = self.servers[idx].name.clone();
+        let keep: Vec<bool> = self.kinds.iter().map(|k| !matches!(k, Kind::Mcp { server, .. } if *server == idx)).collect();
+        let mut it = keep.iter();
+        self.specs.retain(|_| *it.next().unwrap());
+        let mut it = keep.iter();
+        self.kinds.retain(|_| *it.next().unwrap());
+        let mut it = keep.iter();
+        self.groups.retain(|_| *it.next().unwrap());
+        self.infos[idx] = server_info(m, &list);
+        self.push_tools(idx, &name, list);
+        if self.schemas_sent.contains(&format!("mcp/{name}")) {
+            return Ok(self.changed_block(idx, true));
+        }
+        Ok(None)
+    }
+
+    /// The model has this MCP's block from earlier (this run, or a resumed conversation):
+    /// the new block when it hashes differently, else None. `unknown_sends`: also when no
+    /// hash was kept (a resume before this was recorded passes false and only records it).
+    fn changed_block(&mut self, idx: usize, unknown_sends: bool) -> Option<String> {
+        let name = self.servers[idx].name.clone();
+        let block = self.mcp_text(idx, true);
+        let hash = block_hash(&block);
+        let send = match self.sent_mcp.get(&name) {
+            Some(h) => *h != hash,
+            None => unknown_sends,
+        };
+        if self.sent_mcp.get(&name) != Some(&hash) {
+            self.remember_block(&name, hash);
+        }
+        send.then(|| format!(
+            "mcp/{name} changed (as discover enable=false, then enable=true). Its functions now (use these, not the earlier ones):\n{block}"
+        ))
+    }
+
+    /// discover(path="mcp/<name>", restart=true): a new process from disk, its functions
+    /// read again; the model gets the block only when it differs from the one it has.
+    fn restart_mcp(&mut self, name: &str) -> Result<String> {
+        let Some(i) = self.server_index(name) else {
+            // not running: as enable=true
+            self.refresh_named(name)?;
+            let idx = self.server_index(name).ok_or_else(|| anyhow::anyhow!("unknown MCP {name}; discover(path=\"mcp\") lists servers"))?;
+            return self.enable_mcp(name, idx);
+        };
+        let (dir, m) = self.find_on_disk(name).ok_or_else(|| anyhow::anyhow!("mcp/{name} is no longer on disk"))?;
+        if self.servers[i].dir != dir {
+            self.servers[i].relocate(dir)?;
+        } else {
+            self.servers[i].respawn()?;
+        }
+        self.loaded.insert(i);
+        self.schemas_sent.insert(format!("mcp/{name}"));
+        let names = self.mcp_fn_names(i);
+        Ok(match self.reload_server(i, &m)? {
+            Some(block) => format!("restarted mcp/{name}. {block}"),
+            None => format!("restarted mcp/{name}; its functions are unchanged. Call by name: {}", names.join(", ")),
+        })
+    }
+
+    fn remember_block(&mut self, name: &str, hash: String) {
+        self.sent_mcp.insert(name.to_string(), hash);
+        let state = self.files_dir.join("state");
+        let _ = std::fs::create_dir_all(&state);
+        let tmp = state.join(format!("{MCP_BLOCKS}.tmp"));
+        if std::fs::write(&tmp, serde_json::to_vec_pretty(&self.sent_mcp).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&tmp, state.join(MCP_BLOCKS));
+        }
+    }
+
+    /// Start an MCP server in the background as a job (boot: no waiting for slow ones,
+    /// such as a messenger restoring its session over the network). The result arrives as
+    /// system|job:<id>: started (with its boot step) or why not, plus its block when that
+    /// changed since the model last had it. A call to it meanwhile waits for the start.
+    pub fn start_job(&mut self, name: &str) -> Result<String> {
+        if let Some(msg) = self.start_status(name) {
+            return Ok(format!("already: {msg}"));
+        }
+        if self.server_index(name).is_some() {
+            return Ok(format!("mcp/{name} is already running"));
+        }
+        let (dir, m) = self.find_on_disk(name).ok_or_else(|| anyhow::anyhow!("unknown MCP {name}"))?;
+        let job = {
+            let mut st = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            st.alloc("mcp_start", name, "").map_err(|e| anyhow::anyhow!(e))?
+        };
+        let jid = job.id.clone();
+        let (arch, env, log_dir) = (self.mcp_arch.clone(), self.mcp_env.clone(), self.mcp_log_dir.clone());
+        let (con, jobs, srv_name) = (self.con.clone(), self.jobs.clone(), name.to_string());
+        let handle = std::thread::Builder::new().name(format!("mcp-start-{name}")).spawn(move || {
+            let note = |l: &str| jobs.lock().unwrap_or_else(|e| e.into_inner()).append_log(&jid, l);
+            note(&format!("starting mcp/{srv_name} from {}", dir.display()));
+            let r = (|| -> Result<(McpServer, Vec<McpTool>, String)> {
+                let mut srv = McpServer::spawn(&dir, &m, &arch, &env, &log_dir, con.clone(), jobs.clone())?;
+                note("process up; reading its functions");
+                let list = srv.list_tools()?;
+                note(&format!("{} functions", list.len()));
+                let mut boot = String::new();
+                if let Some(bt) = m.boot_tool.clone().filter(|bt| list.iter().any(|t| &t.name == bt)) {
+                    note(&format!("running its boot step {bt}"));
+                    boot = match srv.call(&bt, json!({}), &mut |_| {}) {
+                        Ok((t, _)) => format!("{bt}: {}", t.trim().replace('\n', "; ")),
+                        Err(e) => format!("{bt}: {e:#}"),
+                    };
+                    note(&boot);
+                }
+                Ok((srv, list, boot))
+            })();
+            let (state, body, started) = match r {
+                Ok((srv, list, boot)) => (
+                    "ok",
+                    format!("ok\nmcp/{srv_name} started: {} functions, callable now{}", list.len(), if boot.is_empty() { String::new() } else { format!("\n{boot}") }),
+                    Some(Started { srv, list, m }),
+                ),
+                Err(e) => (
+                    "error",
+                    format!("error\nmcp/{srv_name} did not start: {e:#} (its log: {}/mcp-{srv_name}.log). discover(path=\"mcp/{srv_name}\", enable=true) tries again.", log_dir.display()),
+                    None,
+                ),
+            };
+            let won = jobs.lock().unwrap_or_else(|e| e.into_inner()).finish(&jid, state, &body);
+            if !won {
+                // job_kill abandoned it while it started: do not keep the process
+                if let Some(mut s) = started {
+                    s.srv.kill();
+                }
+                return None;
+            }
+            con.push_inbound(crate::jobs::inbound(&jid, &body));
+            started
+        })?;
+        let (con, jobs, jid, srv_name) = (self.con.clone(), self.jobs.clone(), job.id.clone(), name.to_string());
+        let _ = std::thread::Builder::new().name(format!("mcp-start-stale-{name}")).spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(START_STALE_SECS));
+            let last = {
+                let st = jobs.lock().unwrap_or_else(|e| e.into_inner());
+                if st.get(&jid).map(|j| j.state.as_str()) != Some("running") {
+                    return;
+                }
+                st.logs(&jid, 1).unwrap_or_default()
+            };
+            con.push_inbound(crate::jobs::inbound(&jid, &format!(
+                "stale?\nmcp_start job:{jid} (mcp/{srv_name}) is still starting after {START_STALE_SECS}s; last step: {}.\nThis is not the job result. Its functions are not callable until it finishes (a call to them waits). job_logs(id) shows its progress, job_kill(id) gives it up. It takes no input.",
+                last.trim()
+            )));
+        });
+        self.starting.insert(name.to_string(), Starting { job: job.id.clone(), handle });
+        Ok(format!("mcp/{name} is starting as job:{}", job.id))
+    }
+
+    /// Join a background start (blocking while it runs) and attach the server; the model's
+    /// copy of its block counts as the one from before (a resumed conversation): the new
+    /// block when it changed.
+    fn finish_start(&mut self, name: &str) -> Option<String> {
+        let st = self.starting.remove(name)?;
+        let Some(Started { srv, list, m }) = st.handle.join().ok().flatten() else {
+            self.drop_held(name, &format!("mcp/{name} did not start (job:{})", st.job));
+            return None;
+        };
+        let info = server_info(&m, &list);
+        self.add_server(srv, list, info);
+        let idx = self.server_index(name)?;
+        self.loaded.insert(idx);
+        self.schemas_sent.insert(format!("mcp/{name}"));
+        let block = self.changed_block(idx, false);
+        self.flush_held(name);
+        block
+    }
+
+    /// Its MCP is up: the held sends go into the outbox, in order (outcomes as for any
+    /// slow send: a [sent …] note, or [send failed …] as system|outbox).
+    fn flush_held(&mut self, name: &str) {
+        let (mine, rest): (Vec<Held>, Vec<Held>) = std::mem::take(&mut self.held).into_iter().partition(|h| h.mcp == name);
+        self.held = rest;
+        for h in mine {
+            let label = format!("{}:{}", h.mcp, h.chat);
+            match self.outbox_submit(&h.mcp, &h.chat, h.op, h.bytes, &h.what, std::time::Duration::ZERO) {
+                Ok(crate::outbox::Outcome::Done(_, Err(e))) => self.outbox.report_failed(&format!("[send failed → {label}] {e}")),
+                Err(e) => self.outbox.report_failed(&format!("[send failed → {label}] {e:#}")),
+                Ok(_) => {}
+            }
+        }
+    }
+
+    /// Its MCP will not come up: every held send fails, each as system|outbox.
+    fn drop_held(&mut self, name: &str, why: &str) {
+        let (mine, rest): (Vec<Held>, Vec<Held>) = std::mem::take(&mut self.held).into_iter().partition(|h| h.mcp == name);
+        self.held = rest;
+        for h in mine {
+            self.outbox.report_failed(&format!("[send failed → {}:{}] {why}; not sent: {}", h.mcp, h.chat, if h.what.is_empty() { "an edit, reaction or delete" } else { &h.what }));
+        }
+    }
+
+    /// Before a model turn: attach the servers whose start finished; a changed block goes
+    /// with that start's job result in `batch` (or with the next tool result).
+    pub fn poll_starts(&mut self, batch: &mut [crate::console::Inbound]) {
+        let done: Vec<(String, String)> = self
+            .starting
+            .iter()
+            .filter(|(_, s)| s.handle.is_finished())
+            .map(|(n, s)| (n.clone(), s.job.clone()))
+            .collect();
+        for (name, job) in done {
+            let Some(block) = self.finish_start(&name) else { continue };
+            let ch = format!("{}{job}", crate::jobs::PREFIX);
+            match batch.iter_mut().find(|ib| ib.channel == ch && !ib.text.starts_with("stale?")) {
+                Some(ib) => ib.text = format!("{}\n{block}", ib.text),
+                None => self.reload_notes.push(block),
+            }
+        }
+    }
+
+    /// While `name` starts in the background: what to tell the model. A start that has
+    /// finished is attached (or dropped when it failed) and one given up with job_kill is
+    /// forgotten (its thread stops the process when its current step ends); then None,
+    /// and the caller goes on as for a server that is running or not started.
+    fn start_status(&mut self, name: &str) -> Option<String> {
+        let st = self.starting.get(name)?;
+        let job = st.job.clone();
+        if st.handle.is_finished() {
+            if let Some(block) = self.finish_start(name) {
+                self.reload_notes.push(block);
+            }
+            return None;
+        }
+        let running = {
+            let js = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            js.get(&job).map(|j| j.state == "running").unwrap_or(false)
+        };
+        if !running {
+            self.starting.remove(name);
+            self.drop_held(name, &format!("its start was given up (job_kill job:{job})"));
+            return None;
+        }
+        Some(format!(
+            "mcp/{name} is starting in job:{job}; its functions become callable when system|job:{job} arrives. job_logs(id=\"{job}\") shows its progress; job_kill(id=\"{job}\") gives the start up (then enable it again to start fresh)."
+        ))
+    }
+
+    /// bia's own sends (say to a messenger or web chat) right after boot: wait for a
+    /// background start of that bus, up to `secs`, instead of failing.
+    fn await_start(&mut self, name: &str, secs: u64) -> Result<()> {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while let Some(msg) = self.start_status(name) {
+            if std::time::Instant::now() >= end {
+                bail!("{msg}");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        Ok(())
+    }
+
+    fn push_tools(&mut self, idx: usize, server: &str, tools: Vec<McpTool>) {
         for t in tools {
-            if agent_only(&server.name, &t.name) {
+            if agent_only(server, &t.name) {
                 continue; // the agent calls these itself (web_invoke); the model uses say & co.
             }
             self.specs.push(ToolSpec {
-                name: format!("{}_{}", server.name, t.name),
+                name: format!("{}_{}", server, t.name),
                 description: t.description,
                 parameters: t.schema,
             });
@@ -1130,7 +1460,14 @@ impl Tools {
             });
             self.groups.push(String::new());
         }
+    }
+
+    pub fn add_server(&mut self, server: McpServer, tools: Vec<McpTool>, info: ServerInfo) {
+        let idx = self.servers.len();
+        self.infos.push(info);
+        let name = server.name.clone();
         self.servers.push(server);
+        self.push_tools(idx, &name, tools);
     }
 
     /// Only `discover`: the frozen system-prompt / FMM tools[] list. Other functions are appended to history when a branch is enabled.
@@ -1169,11 +1506,6 @@ impl Tools {
         self.servers.iter().position(|s| s.name == name)
     }
 
-    /// True when this MCP process is running (after load / ensure_loaded).
-    pub fn mcp_started(&self, name: &str) -> bool {
-        self.server_index(name).is_some()
-    }
-
     fn mcp_search_roots(&self) -> Vec<PathBuf> {
         let root = self
             .mcp_env
@@ -1197,8 +1529,13 @@ impl Tools {
         None
     }
 
-    /// Spawn from disk, or restart if a preferred copy exists / run.sh or mcp.json changed.
+    /// Spawn from disk, or restart from a preferred copy. A running server is never restarted
+    /// because its files changed: the model restarts it (discover restart=true) when it wants.
     fn refresh_named(&mut self, name: &str) -> Result<String> {
+        if let Some(msg) = self.start_status(name) {
+            // never wait for a background start here: it may hang (a network restore)
+            bail!("{msg}");
+        }
         let Some((dir, m)) = self.find_on_disk(name) else {
             return Ok(String::new());
         };
@@ -1206,17 +1543,13 @@ impl Tools {
             let old = self.servers[i].dir.clone();
             if old != dir {
                 self.servers[i].relocate(dir.clone())?;
+                if let Some(block) = self.reload_server(i, &m)? {
+                    self.reload_notes.push(block);
+                }
                 return Ok(format!(
                     "restarted from {} (was {})",
                     dir.display(),
                     old.display()
-                ));
-            }
-            if self.servers[i].sources_stale() {
-                self.servers[i].respawn()?;
-                return Ok(format!(
-                    "restarted {} (launcher or mcp.json changed)",
-                    dir.display()
                 ));
             }
             return Ok(String::new());
@@ -1238,17 +1571,7 @@ impl Tools {
             Ok(list) => {
                 let n = list.len();
                 let names: Vec<String> = list.iter().map(|t| t.name.clone()).collect();
-                let mut examples = vec![];
-                for ex in &m.examples {
-                    let mut e = ex.clone();
-                    for t in &list {
-                        e = e.replace(
-                            &format!(" {}(", t.name),
-                            &format!(" {}_{}(", m.name, t.name),
-                        );
-                    }
-                    examples.push(e);
-                }
+                let info = server_info(&m, &list);
                 let mut note = format!(
                     "MCP {} v{}: {n} tools ({})",
                     m.name,
@@ -1270,16 +1593,7 @@ impl Tools {
                         }
                     }
                 }
-                self.add_server(
-                    srv,
-                    list,
-                    ServerInfo {
-                        name: m.name.clone(),
-                        description: m.description.clone(),
-                        keywords: m.keywords.clone(),
-                        examples,
-                    },
-                );
+                self.add_server(srv, list, info);
                 Ok(note)
             }
             Err(e) => {
@@ -1342,7 +1656,12 @@ impl Tools {
         self.refresh_named(name)?;
         if let Some(idx) = self.server_index(name) {
             self.loaded.insert(idx);
-            self.schemas_sent.insert(format!("mcp/{name}"));
+            if self.schemas_sent.insert(format!("mcp/{name}")) {
+                // first time this run (a resumed conversation): the model's copy is from before
+                if let Some(block) = self.changed_block(idx, false) {
+                    self.reload_notes.push(block);
+                }
+            }
         }
         Ok(())
     }
@@ -1754,6 +2073,10 @@ impl Tools {
         }
         let msg = self.load(name)?.1;
         self.schemas_sent.insert(key);
+        if let Some(i) = self.server_index(name) {
+            let hash = block_hash(&self.mcp_text(i, true));
+            self.remember_block(name, hash);
+        }
         Ok(msg)
     }
 
@@ -1806,6 +2129,9 @@ impl Tools {
         }
         if let Some(rest) = path.strip_prefix("mcp/") {
             let name = rest.split('/').next().unwrap_or(rest);
+            if Self::flag(args, "restart") {
+                return self.restart_mcp(name);
+            }
             if enable && self.server_index(name).is_none() {
                 self.refresh_named(name)?;
             }
@@ -1856,6 +2182,37 @@ impl Tools {
         args: &Value,
         on_log: &mut dyn FnMut(&str),
     ) -> (String, bool) {
+        let (text, err) = self.call_inner(name, args, on_log);
+        (self.with_reload_notes(text), err)
+    }
+
+    /// Reloaded MCPs' new blocks (reload_server) in front of a tool result.
+    fn with_reload_notes(&mut self, text: String) -> String {
+        if self.reload_notes.is_empty() {
+            return text;
+        }
+        let notes = std::mem::take(&mut self.reload_notes).join("\n\n");
+        format!("{notes}\n\n{text}")
+    }
+
+    /// An unknown `<server>_<tool>` name: if that MCP was updated, a restart brings it.
+    fn unknown_hint(&mut self, name: &str) -> String {
+        let starting = self.starting.keys().find(|s| name.starts_with(&format!("{s}_"))).cloned();
+        if let Some(msg) = starting.and_then(|srv| self.start_status(&srv)) {
+            return format!(" ({msg})");
+        }
+        match self.servers.iter().map(|s| s.name.clone()).find(|s| name.starts_with(&format!("{s}_"))) {
+            Some(srv) => format!(" (if mcp/{srv} was updated or edited, discover(path=\"mcp/{srv}\", restart=true) loads its new functions)"),
+            None => String::new(),
+        }
+    }
+
+    fn call_inner(
+        &mut self,
+        name: &str,
+        args: &Value,
+        on_log: &mut dyn FnMut(&str),
+    ) -> (String, bool) {
         let (name_owned, args_owned) = Self::expand_call(name, args);
         let name = name_owned.as_str();
         let args = &args_owned;
@@ -1866,7 +2223,7 @@ impl Tools {
                     branch.id, branch.blurb
                 ), true);
             }
-            return (format!("unknown tool: {name}"), true);
+            return (format!("unknown tool: {name}{}", self.unknown_hint(name)), true);
         };
         if name == "discover" {
             return match self.discover_cmd(args) {
@@ -1946,9 +2303,16 @@ impl Tools {
                 if let Err(e) = self.prepare_mcp(server) {
                     return (format!("error: {e:#}"), true);
                 }
+                if !self.has_mcp_tool(server, &tool) {
+                    return (format!("error: {name} no longer exists: mcp/{} was updated", self.servers[server].name), true);
+                }
                 self.mcp_invoke(server, &tool, args.clone(), on_log)
             }
         }
+    }
+
+    fn has_mcp_tool(&self, idx: usize, name: &str) -> bool {
+        self.kinds.iter().any(|k| matches!(k, Kind::Mcp { server, tool } if *server == idx && tool == name))
     }
 
     fn prepare_mcp(&mut self, server: usize) -> Result<()> {
@@ -2295,11 +2659,19 @@ impl Tools {
     }
 
     pub fn fire_mcp(&mut self, name: &str, args: &Value, call_id: &str) -> Result<String, String> {
+        let r = self.fire_mcp_inner(name, args, call_id);
+        match r {
+            Ok(t) => Ok(self.with_reload_notes(t)),
+            Err(e) => Err(self.with_reload_notes(e)),
+        }
+    }
+
+    fn fire_mcp_inner(&mut self, name: &str, args: &Value, call_id: &str) -> Result<String, String> {
         let i = self
             .specs
             .iter()
             .position(|s| s.name == name)
-            .ok_or_else(|| format!("unknown tool: {name}"))?;
+            .ok_or_else(|| format!("unknown tool: {name}{}", self.unknown_hint(name)))?;
         let Kind::Mcp { server, tool } = &self.kinds[i] else {
             return Err("not an MCP tool".into());
         };
@@ -2308,6 +2680,9 @@ impl Tools {
         self.loaded.insert(server);
         if let Err(e) = self.prepare_mcp(server) {
             return Err(format!("{e:#}"));
+        }
+        if !self.has_mcp_tool(server, &tool) {
+            return Err(format!("{name} no longer exists: mcp/{} was updated", self.servers[server].name));
         }
         let mcp_name = self.servers[server].name.clone();
         let job = {
@@ -2435,6 +2810,10 @@ impl Tools {
     /// Describe a server, or start it when `enable` is set. None if the name is not on disk.
     fn open_mcp(&mut self, name: &str, enable: bool) -> Result<Option<String>> {
         if !enable {
+            if let Some(msg) = self.start_status(name) {
+                let desc = self.catalog.iter().find(|c| c.name == name).map(|c| c.description.clone()).unwrap_or_default();
+                return Ok(Some(format!("mcp/{name} — {desc}\n{msg}")));
+            }
             if let Some(idx) = self.server_index(name) {
                 return Ok(Some(self.mcp_text(idx, false)));
             }
@@ -2487,7 +2866,15 @@ impl Tools {
             let name = self.servers[i].name.clone();
             let r = match self.refresh_named(&name) {
                 Ok(s) if !s.is_empty() => Ok(()),
-                Ok(_) => self.servers[i].respawn(),
+                Ok(_) => self.servers[i].respawn().and_then(|()| {
+                    // the new process may bring other functions (it was updated, then it died)
+                    if let Some((_, m)) = self.find_on_disk(&name) {
+                        if let Some(block) = self.reload_server(i, &m)? {
+                            self.reload_notes.push(block);
+                        }
+                    }
+                    Ok(())
+                }),
                 Err(e) => Err(e),
             };
             match r {
@@ -2920,6 +3307,7 @@ impl Tools {
                     crate::outbox::Outcome::Done(id, Ok(t)) => format!("id {id}; {t}"),
                     crate::outbox::Outcome::Done(_, Err(e)) => bail!("{e}"),
                     crate::outbox::Outcome::Pending(id, ahead) => pending_note(&id, &what, ahead),
+                    crate::outbox::Outcome::Held(job) => held_note(mcp, &job),
                 }
             } else {
                 bail!("voice messages go to web, telegram or whatsapp chats, not {channel}");
@@ -3047,6 +3435,12 @@ impl Tools {
         what: &str,
         wait: std::time::Duration,
     ) -> Result<crate::outbox::Outcome> {
+        if self.start_status(mcp).is_some() {
+            // its MCP starts in the background: hold it (never block the turn on a start)
+            let job = self.starting.get(mcp).map(|s| s.job.clone()).unwrap_or_default();
+            self.held.push(Held { mcp: mcp.into(), chat: chat.into(), op, bytes, what: what.into() });
+            return Ok(crate::outbox::Outcome::Held(job));
+        }
         let _ = self.load(mcp);
         let idx = self
             .server_index(mcp)
@@ -3067,6 +3461,7 @@ impl Tools {
             crate::outbox::Outcome::Pending(_, ahead) => Ok(format!(
                 "queued behind {ahead} earlier send(s) on {mcp}:{chat}; it runs when they finish (a failure arrives as system|outbox)"
             )),
+            crate::outbox::Outcome::Held(job) => Ok(held_note(mcp, &job)),
         }
     }
 
@@ -3141,6 +3536,7 @@ impl Tools {
             Ok(crate::outbox::Outcome::Pending(id, ahead)) => {
                 (pending_note(&id, &what, ahead), false)
             }
+            Ok(crate::outbox::Outcome::Held(job)) => (held_note(mcp, &job), false),
             Err(e) => (format!("{e:#}"), true),
         };
         match not_spoken {
@@ -3238,6 +3634,7 @@ impl Tools {
 
     /// Call a web MCP tool (web chats are its bus); the MCP is started on first use.
     pub fn web_invoke(&mut self, tool: &str, args: Value) -> Result<String> {
+        self.await_start("web", 60)?;
         let _ = self.load("web");
         let idx = self
             .server_index("web")
@@ -3435,6 +3832,210 @@ while IFS= read -r line; do
   esac
 done
 "#;
+
+    /// A script MCP (`/bin/sh server.sh`): its tools as one tools/list JSON array.
+    fn script_mcp(tools: &str) -> String {
+        format!(
+            r#"while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"serverInfo":{{"name":"tun","version":"t"}}}}}}\n' "$id" ;;
+    *'"method":"tools/list"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":{tools}}}}}\n' "$id" ;;
+    *'"method":"tools/call"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"done"}}]}}}}\n' "$id" ;;
+  esac
+done
+"#
+        )
+    }
+
+    /// Rewrite the script with a later mtime (edits within one second must count too).
+    fn edit_script(path: &Path, text: &str, ahead: u64) {
+        std::fs::write(path, text).unwrap();
+        let t = std::time::SystemTime::now() + std::time::Duration::from_secs(ahead);
+        std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+    }
+
+    #[test]
+    fn script_mcp_restart_resends_only_changed_blocks() {
+        let dir = std::env::temp_dir().join(format!("bia-reload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mcp = dir.join("MCPs").join("tun");
+        std::fs::create_dir_all(&mcp).unwrap();
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let one = r#"[{"name":"status","description":"tunnel status","inputSchema":{"type":"object"}}]"#;
+        let two = r#"[{"name":"status","description":"tunnel status","inputSchema":{"type":"object"}},{"name":"route","description":"add a route","inputSchema":{"type":"object"}}]"#;
+        std::fs::write(mcp.join("server.sh"), script_mcp(one)).unwrap();
+        std::fs::write(mcp.join("mcp.json"), r#"{"name":"tun","command":"/bin/sh","args":["server.sh"]}"#).unwrap();
+        let new_tools = || {
+            let mut t = Tools::new(&dir.join("files"), Console::for_test());
+            t.mcp_env = vec![("BIA_MCPS".into(), dir.join("MCPs").to_string_lossy().into())];
+            t.mcp_log_dir = dir.clone();
+            t
+        };
+        let mut t = new_tools();
+        let mut log = |_: &str| {};
+        let restart = json!({"path": "mcp/tun", "restart": true});
+        let (r, err) = t.call("discover", &json!({"path": "mcp/tun", "enable": true}), &mut log);
+        assert!(!err && r.contains("tun_status") && !r.contains("tun_route"), "{r}");
+        let (r, err) = t.call("tun_status", &json!({}), &mut log);
+        assert!(!err && !r.contains("changed"), "{r}");
+
+        // the script gains a function: nothing restarts by itself
+        edit_script(&mcp.join("server.sh"), &script_mcp(two), 5);
+        let (r, err) = t.call("tun_status", &json!({}), &mut log);
+        assert!(!err && r == "done", "no automatic restart: {r}");
+        let (r, err) = t.call("tun_route", &json!({}), &mut log);
+        assert!(err && r.contains("unknown tool"), "{r}");
+        // the model restarts it: the new block, once
+        let (r, err) = t.call("discover", &restart, &mut log);
+        assert!(!err && r.contains("restarted mcp/tun") && r.contains("mcp/tun changed") && r.contains("tun_route"), "{r}");
+        let (r, err) = t.call("tun_route", &json!({}), &mut log);
+        assert!(!err && r == "done", "{r}");
+
+        // restarted again with the same functions (a newer build that changed nothing the model sees): no block
+        edit_script(&mcp.join("server.sh"), &format!("# v2\n{}", script_mcp(two)), 10);
+        let (r, err) = t.call("discover", &restart, &mut log);
+        assert!(!err && r.contains("functions are unchanged") && !r.contains("\"parameters\""), "{r}");
+
+        // a function goes away; the process dies and comes back by itself: its block comes with the next result
+        edit_script(&mcp.join("server.sh"), &script_mcp(one), 15);
+        t.servers[0].kill();
+        t.reap_dead_mcps();
+        let (r, err) = t.call("tun_status", &json!({}), &mut log);
+        assert!(!err && r.contains("mcp/tun changed") && !r.contains("tun_route") && r.ends_with("done"), "{r}");
+        let (r, err) = t.call("tun_route", &json!({}), &mut log);
+        assert!(err && r.contains("unknown tool"), "{r}");
+        for s in &mut t.servers {
+            s.kill();
+        }
+
+        // the agent restarts and resumes: the kept hash shows whether the model's copy is current
+        let mut t = new_tools();
+        t.ensure_loaded("tun").unwrap();
+        let (r, _) = t.call("tun_status", &json!({}), &mut log);
+        assert!(!r.contains("changed"), "unchanged since the last block: {r}");
+        for s in &mut t.servers {
+            s.kill();
+        }
+        edit_script(&mcp.join("server.sh"), &script_mcp(two), 20);
+        let mut t = new_tools();
+        t.ensure_loaded("tun").unwrap();
+        let (r, _) = t.call("tun_status", &json!({}), &mut log);
+        assert!(r.contains("mcp/tun changed") && r.contains("tun_route"), "changed while the agent was off: {r}");
+        for s in &mut t.servers {
+            s.kill();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fake script MCP, answering initialize only after `delay` seconds.
+    fn slow_mcp(delay: u32) -> String {
+        script_mcp(r#"[{"name":"status","description":"s","inputSchema":{"type":"object"}}]"#)
+            .replacen("*'\"method\":\"initialize\"'*) ", &format!("*'\"method\":\"initialize\"'*) sleep {delay}; "), 1)
+    }
+
+    fn wait_start_done(t: &mut Tools, name: &str) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while t.starting.get(name).is_some_and(|s| !s.handle.is_finished()) {
+            assert!(std::time::Instant::now() < end, "start of {name} did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    #[test]
+    fn background_start_job_answers_every_command_while_starting() {
+        let dir = std::env::temp_dir().join(format!("bia-startjob-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (name, cmd) in [("slow", r#""/bin/sh","args":["server.sh"]"#), ("broken", r#""/nonexistent/server""#)] {
+            let mcp = dir.join("MCPs").join(name);
+            std::fs::create_dir_all(&mcp).unwrap();
+            std::fs::write(mcp.join("server.sh"), slow_mcp(2).replace("\"tun\"", &format!("\"{name}\""))).unwrap();
+            std::fs::write(mcp.join("mcp.json"), format!(r#"{{"name":"{name}","command":{cmd}}}"#)).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        t.mcp_env = vec![("BIA_MCPS".into(), dir.join("MCPs").to_string_lossy().into())];
+        t.mcp_log_dir = dir.clone();
+        let mut log = |_: &str| {};
+
+        let r = t.start_job("slow").unwrap();
+        let job = r.rsplit("job:").next().unwrap().trim().to_string();
+        assert!(r.contains("is starting as job:") && job.len() == 4, "{r}");
+        // every command while it starts says so, with the job, and none of them waits
+        let t0 = std::time::Instant::now();
+        let again = t.start_job("slow").unwrap();
+        assert!(again.contains(&format!("already: mcp/slow is starting in job:{job}")), "{again}");
+        for args in [json!({"path": "mcp/slow", "enable": true}), json!({"path": "mcp/slow", "restart": true})] {
+            let (r, err) = t.call("discover", &args, &mut log);
+            assert!(err && r.contains(&format!("is starting in job:{job}")) && r.contains("job_kill"), "{args}: {r}");
+        }
+        let (r, err) = t.call("discover", &json!({"path": "mcp/slow"}), &mut log);
+        assert!(!err && r.contains(&format!("starting in job:{job}")), "describe: {r}");
+        let (r, err) = t.call("slow_status", &json!({}), &mut log);
+        assert!(err && r.contains(&format!("is starting in job:{job}")), "call: {r}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "a command waited for the start");
+
+        // a send to it meanwhile is held, not refused and not waited for
+        let op = crate::outbox::Op::Send { text: "hi".into(), files: vec![] };
+        match t.outbox_submit("slow", "c1", op, 0, "text, 2 chars", crate::outbox::WAIT).unwrap() {
+            crate::outbox::Outcome::Held(j) => assert_eq!(j, job),
+            _ => panic!("not held"),
+        }
+        assert!(held_note("slow", &job).contains(&format!("job:{job}")));
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1), "a command waited for the start");
+
+        // done: attached before the model reads its job result; callable; a new start says running
+        wait_start_done(&mut t, "slow");
+        let mut batch = vec![crate::jobs::inbound(&job, "ok\nmcp/slow started")];
+        t.poll_starts(&mut batch);
+        assert!(t.held.is_empty(), "the held send went into the outbox");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut notes = vec![];
+        while notes.is_empty() && std::time::Instant::now() < end {
+            notes = t.outbox.take_notes();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(notes.iter().any(|n| n.contains("slow:c1")), "the held send was sent: {notes:?}");
+        let (r, err) = t.call("slow_status", &json!({}), &mut log);
+        assert!(!err && r == "done", "{r}");
+        assert!(t.start_job("slow").unwrap().contains("already running"));
+        let (r, _) = t.call("discover", &json!({"path": "mcp/slow", "enable": true}), &mut log);
+        assert!(r.contains("already enabled"), "{r}");
+
+        // a start that fails: its job says why; the next enable tries again (and fails again)
+        let r = t.start_job("broken").unwrap();
+        let bjob = r.rsplit("job:").next().unwrap().trim().to_string();
+        let op = crate::outbox::Op::Send { text: "lost".into(), files: vec![] };
+        assert!(matches!(t.outbox_submit("broken", "c2", op, 0, "text, 4 chars", crate::outbox::WAIT).unwrap(), crate::outbox::Outcome::Held(_)));
+        wait_start_done(&mut t, "broken");
+        let (r, _) = t.call("discover", &json!({"path": "mcp/broken"}), &mut log);
+        assert!(!r.contains("is starting") && t.held.is_empty(), "the held send failed with its start: {r}");
+        let state = t.jobs.lock().unwrap().get(&bjob).map(|j| j.state.clone());
+        assert_eq!(state.as_deref(), Some("error"));
+        let (r, err) = t.call("discover", &json!({"path": "mcp/broken", "enable": true}), &mut log);
+        assert!(err && !r.contains("is starting"), "{r}");
+
+        // job_kill gives a start up: forgotten at once, and enable starts it fresh
+        for s in &mut t.servers {
+            s.kill();
+        }
+        let mut t2 = Tools::new(&dir.join("files"), Console::for_test());
+        t2.mcp_env = t.mcp_env.clone();
+        t2.mcp_log_dir = dir.clone();
+        let r = t2.start_job("slow").unwrap();
+        let kjob = r.rsplit("job:").next().unwrap().trim().to_string();
+        let k = t2.kill_job(&kjob).unwrap();
+        assert!(k.contains("killed"), "{k}");
+        let (r, err) = t2.call("discover", &json!({"path": "mcp/slow"}), &mut log);
+        assert!(!err && !r.contains("is starting"), "killed start is forgotten: {r}");
+        let (r, err) = t2.call("discover", &json!({"path": "mcp/slow", "enable": true}), &mut log);
+        assert!(!err && r.contains("slow_status"), "fresh start after job_kill: {r}");
+        wait_start_done(&mut t2, "slow");
+        for s in &mut t2.servers {
+            s.kill();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn tools_with_fake_web(tag: &str) -> (PathBuf, Tools) {
         let dir = std::env::temp_dir().join(format!("bia-webtools-{tag}-{}", std::process::id()));

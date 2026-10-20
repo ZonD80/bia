@@ -19,7 +19,9 @@ ESPLABEL = {"flash": "BIABOOT", "disk": "BIADBOOT"}
 # scenario -> (destination, source)
 SCEN = {"disk": ("disk", "flash"), "flash": ("flash", "disk"), "rescue": ("disk", "flash"),
         # the disk updates from GitHub-style release files; the flash stays attached (not newer)
-        "internet": ("disk", "flash")}
+        "internet": ("disk", "flash"),
+        # no update: the disk's root is damaged, checked at boot and by carry_fsck
+        "fsck": ("disk", "flash")}
 REL = f"{UT}/release"
 NET_VERSION = "9.9.9"
 # QEMU user networking: the host's loopback is 10.0.2.2 in the guest
@@ -192,6 +194,24 @@ def prep(scen):
                   + ("  <- source" if name == src and scen != "internet" else "  <- destination" if name == dst else ""))
     if scen == "internet":
         make_release()
+    if scen == "fsck":
+        damage_disk_root()
+
+
+def damage_disk_root():
+    """What the field showed: /usr/bin/df's inode fails its checksum (EFSBADCRC, "Bad
+    message") and the superblock says "clean with errors"."""
+    with Img("disk") as dk:
+        dev = dk.root_dev
+        sh("debugfs", "-w", "-R", "sif /usr/bin/df checksum 0xbad", dev)
+        sh("debugfs", "-w", "-R", "ssv state 3", dev)
+        sh("debugfs", "-w", "-R", "ssv error_count 9", dev)
+        state = sh("dumpe2fs", "-h", dev, capture=True)
+        print("disk root damaged: " + " ".join(l.strip() for l in state.splitlines()
+                                                 if l.startswith(("Filesystem state:", "FS Error count:"))))
+        bad = subprocess.run(["e2fsck", "-fn", dev], capture_output=True, text=True)
+        if bad.returncode == 0:
+            sys.exit("damage_disk_root: e2fsck -fn finds nothing wrong")
 
 
 def make_release():
@@ -253,6 +273,8 @@ def check(scen):
 
     if scen == "internet":
         return check_internet()
+    if scen == "fsck":
+        return check_fsck()
     with Img(dst, ro=True) as d, Img(src, ro=True) as s:
         d.mount(), s.mount()
         srel = rel(s.root)
@@ -291,6 +313,34 @@ def check(scen):
     if errs:
         sys.exit(f"CHECK {scen}: {len(errs)} failure(s)")
     print(f"CHECK {scen}: all good")
+
+
+def check_fsck():
+    errs = []
+
+    def want(cond, msg):
+        print(("  ok   " if cond else "  FAIL ") + msg)
+        if not cond:
+            errs.append(msg)
+
+    with Img("disk") as dk:
+        dev = dk.root_dev
+        r = subprocess.run(["e2fsck", "-fn", dev], capture_output=True, text=True)
+        want(r.returncode == 0, "e2fsck -fn finds the disk root clean" + ("" if r.returncode == 0 else ": " + r.stdout[-400:]))
+        head = sh("dumpe2fs", "-h", dev, capture=True)
+        state = next((l.split(":", 1)[1].strip() for l in head.splitlines() if l.startswith("Filesystem state:")), "?")
+        want(state == "clean", f"filesystem state is clean ({state})")
+        dk.mount()
+        d = dk.root
+        want(os.path.getsize(f"{d}/usr/bin/df") > 0 and open(f"{d}/usr/bin/df", "rb").read(4) == b"\x7fELF", "/usr/bin/df reads again")
+        log = f"{d}/var/log/bia-fsck.log"
+        want(os.path.exists(log) and "e2fsck" in open(log, errors="replace").read(), "the offline check left /var/log/bia-fsck.log")
+        want(not os.path.exists(f"{d}/bia-update"), "/bia-update cleaned up")
+        for rd in ("bia-rescue", "EFI/bia/bia-rescue"):
+            want(not os.path.exists(f"{dk.esp}/{rd}/next.cfg"), f"no rescue marker {rd}/next.cfg")
+    if errs:
+        sys.exit(f"CHECK fsck: {len(errs)} failure(s)")
+    print("CHECK fsck: all good")
 
 
 def check_internet():
@@ -340,6 +390,21 @@ def check_internet():
     print("CHECK internet: all good")
 
 
+def rebuild_initramfs(im):
+    """update-initramfs in the image (same architecture as this container), then the ESP copy."""
+    for m in ("proc", "sys", "dev"):
+        sh("mount", "--bind", f"/{m}", f"{im.root}/{m}")
+    try:
+        sh("chroot", im.root, "update-initramfs", "-u", "-k", "all")
+    finally:
+        for m in ("dev", "sys", "proc"):
+            subprocess.run(["umount", f"{im.root}/{m}"], capture_output=True)
+    initrd = sorted(p for p in os.listdir(f"{im.root}/boot") if p.startswith("initrd.img-") and not p.endswith(".old"))[-1]
+    for k in ("initramfs-lts", "EFI/bia/initramfs-lts"):
+        if os.path.exists(f"{im.esp}/{k}"):
+            shutil.copy2(f"{im.root}/boot/{initrd}", f"{im.esp}/{k}")
+
+
 def patch():
     arch = os.environ.get("ARCH", "arm64")
     out = f"/work/dist/{arch}"
@@ -359,6 +424,8 @@ def patch():
             carry = f"{im.root}/home/bia/MCPs/carry/bin/{farch}/bia-mcp-carry"
             if os.path.exists(f"{out}/bia-mcp-carry") and os.path.exists(os.path.dirname(carry)):
                 shutil.copy2(f"{out}/bia-mcp-carry", carry)
+            sh("cp", "-a", "/work/source/os/overlay/etc/initramfs-tools/.", f"{im.root}/etc/initramfs-tools/")
+            rebuild_initramfs(im)
             sh("/work/builders/rescue.sh", im.root, f"{im.root}/usr/local/share/bia/rescue.cpio.gz")
             sh(f"{im.root}/usr/local/sbin/bia-rescue-hook", im.esp, f"{im.root}/usr/local/share/bia/rescue.cpio.gz")
             print(f"patched {name}")

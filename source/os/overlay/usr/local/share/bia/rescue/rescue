@@ -13,6 +13,9 @@
 #                (or DIR=<path> on the destination: that release's boot files)
 #   bia.dstesp=  ESP that boots bia.dst: refreshed from bia.srcesp
 #   bia.markesp= ESP holding the marker, bia.mark= its path on that ESP
+#   bia.fsck=1   only check and repair bia.dst (bia-update fsck, carry_fsck): e2fsck -f -y
+#                while it is not mounted, result in <dst>/bia-update/fsck-result, then
+#                boot it again (src = dst there)
 #
 # On success: <dst>/bia-update/pending is set, the marker is removed, BootNext
 # points at the destination and the machine reboots. The destination's
@@ -213,10 +216,12 @@ if [ -z "$srcesp_dir" ]; then
 fi
 dstesp_dev=$(dev_of "$DSTESP") || die "destination ESP" "cannot find $DSTESP"
 markesp_dev=$(dev_of "$MARKESP") || die "marker ESP" "cannot find $MARKESP"
-if [ -n "$src_dev" ]; then
+fsck_only=
+arg bia.fsck >/dev/null && fsck_only=1
+if [ -n "$src_dev" ] && [ -z "$fsck_only" ]; then
   [ "$(readlink -f "$src_dev")" != "$(readlink -f "$dst_dev")" ] || die "arguments" "source and destination are the same device ($src_dev)"
   say "source      $src_dev ($(blkid -s LABEL -o value "$src_dev" 2>/dev/null)) ESP $srcesp_dev"
-else
+elif [ -z "$fsck_only" ]; then
   say "source      $src_dir on the destination (downloaded release) ESP files ${srcesp_dir:-$srcesp_dev}"
 fi
 say "destination $dst_dev ($(blkid -s LABEL -o value "$dst_dev" 2>/dev/null)) ESP $dstesp_dev"
@@ -294,6 +299,35 @@ boot_destination() {
     fi
   fi
 }
+
+# ---- fsck only: check and repair the destination root, then boot it again -----
+# Never stops at a shell: bia is often where nobody is at the console. Whatever the
+# result, the marker goes and the destination boots; bia-update boot tells the agent.
+if [ -n "$fsck_only" ]; then
+  mkdir -p "$DST_MNT" "$MARKESP_MNT"
+  say "checking and repairing $dst_dev (e2fsck -f -y); a large disk takes minutes"
+  e2fsck -f -y -C 0 "$dst_dev"
+  rc=$?
+  case $rc in
+    0) verdict="no errors" ;;
+    1|2|3) verdict="errors were found and repaired" ;;
+    *) verdict="errors remain that e2fsck could not repair (exit $rc)" ;;
+  esac
+  [ "$rc" -lt 4 ] && ok "fsck $dst_dev" || result "fsck $dst_dev" FAIL
+  say "$verdict"
+  if mount -o rw "$dst_dev" "$DST_MNT"; then
+    mkdir -p "$DST_MNT/bia-update"
+    printf '%s %s\n' "$rc" "$verdict" > "$DST_MNT/bia-update/fsck-result"
+    cp -f "$LOG" "$DST_MNT/bia-update/fsck.log" 2>/dev/null
+    sync
+    umount "$DST_MNT"
+  else
+    say "cannot mount $dst_dev to record the result"
+  fi
+  remove_marker || say "could not remove $MARK from $markesp_dev; GRUB may run this check again"
+  boot_destination
+  next_boot
+fi
 
 # ---- mount -------------------------------------------------------------------
 mkdir -p "$SRC_MNT" "$DST_MNT" "$SRCESP_MNT" "$DSTESP_MNT" "$MARKESP_MNT"

@@ -1632,6 +1632,7 @@ impl Web {
             .unwrap_or_default();
         self.con
             .log(&format!("  web: {peer} ({identity}) connected"));
+        self.con.web_opened(identity, &peer);
         let hello = crate::chat::hello(identity, root).to_string();
         let mut pkt = vec![0x1d];
         pkt.extend_from_slice(hello.as_bytes());
@@ -1675,6 +1676,7 @@ impl Web {
             }
         }
         self.con.remove_sink(sid);
+        Bus::web_closed(&self.con, identity);
         stream.shutdown();
         let _ = writer.join();
         self.con

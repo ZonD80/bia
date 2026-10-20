@@ -514,44 +514,26 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
     }
 
-    // Re-start MCPs that were loaded last session (runs boot_tool e.g. telegram restore).
+    // MCPs start in the background as jobs (boot does not wait for a messenger restoring its
+    // session over the network); each result arrives as system|job:<id>.
+    let start = |tools: &mut tools::Tools, name: &str, why: &str| match tools.start_job(name) {
+        Ok(m) => boot.note(&format!("MCP {name} ({why}): {m}; its functions are callable when that job finishes")),
+        Err(e) => boot.warn(&format!("MCP {name}: start failed: {e:#}")),
+    };
+    // the ones loaded last session (their boot_tool runs, e.g. telegram restore)
     for name in &resume_mcps {
-        match tools.ensure_loaded(name) {
-            Ok(()) => boot.note(&format!("MCP {name}: resumed")),
-            Err(e) => boot.warn(&format!("MCP {name}: resume failed: {e:#}")),
-        }
+        start(&mut tools, name, "loaded last session");
     }
-    // If a Telegram session file exists, ensure the MCP is up even when not in loaded_mcps.
-    let tg_session = paths.files.join("telegram").join("ferogram.session");
-    if tg_session.exists() && !tools.mcp_started("telegram") {
-        match tools.ensure_loaded("telegram") {
-            Ok(()) => boot.note("MCP telegram: session restored"),
-            Err(e) => boot.warn(&format!("MCP telegram: restore failed: {e:#}")),
-        }
+    // messenger sessions on disk: up even when not loaded last session
+    if paths.files.join("telegram").join("ferogram.session").exists() {
+        start(&mut tools, "telegram", "session on disk");
     }
-    // WhatsApp linked-device session (SQLite under files/whatsapp/).
-    let wa_session = paths.files.join("whatsapp").join("whatsapp.db");
-    if wa_session.exists() && !tools.mcp_started("whatsapp") {
-        match tools.ensure_loaded("whatsapp") {
-            Ok(()) => boot.note("MCP whatsapp: session restored"),
-            Err(e) => boot.warn(&format!("MCP whatsapp: restore failed: {e:#}")),
-        }
+    if paths.files.join("whatsapp").join("whatsapp.db").exists() {
+        start(&mut tools, "whatsapp", "session on disk");
     }
     // The web bus is always up when enabled (people reach bia there before any login).
-    if cfg.web.enabled && !tools.mcp_started("web") {
-        match tools.ensure_loaded("web") {
-            Ok(()) => {
-                // its address appears in web.json once it has bound
-                for _ in 0..30 {
-                    if weblink::read(&paths.files).is_some() {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
-                boot.note("MCP web: listening");
-            }
-            Err(e) => boot.warn(&format!("MCP web: start failed: {e:#}")),
-        }
+    if cfg.web.enabled {
+        start(&mut tools, "web", "web app");
     }
 
     let n_tools = tools.specs.len();

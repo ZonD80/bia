@@ -1052,7 +1052,7 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/fsck      check and repair this disk offline: reboots into the rescue image (e2fsck -f -y), then back here\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
             "tools" => {
                 let visible: Vec<String> = self.tools.visible_specs().iter().map(|t| t.name.clone()).collect();
@@ -1320,9 +1320,14 @@ impl Repl {
                 self.forget_all();
                 self.con.writeln("conversation forgotten: starting from scratch");
             }
-            name @ ("update" | "rescue") => {
-                // /update [force] [/dev/…|internet]   /rescue [/dev/…]
-                let mut args: Vec<String> = vec![if name == "rescue" { "rescue" } else { "start" }.into()];
+            name @ ("update" | "rescue" | "fsck") => {
+                // /update [force] [/dev/…|internet]   /rescue [/dev/…]   /fsck
+                let mut args: Vec<String> = vec![match name {
+                    "rescue" => "rescue",
+                    "fsck" => "fsck",
+                    _ => "start",
+                }
+                .into()];
                 for a in it.by_ref() {
                     match a {
                         "force" | "--force" if name == "update" => args.push("--force".into()),
@@ -1330,18 +1335,21 @@ impl Repl {
                             args.push("--from=internet".into())
                         }
                         dev if name == "update" => args.push(format!("--from={dev}")),
+                        _ if name == "fsck" => {}
                         dev => args.push(dev.into()),
                     }
                 }
-                self.con.writeln(
-                    "starting attended OS update (fold the agent, then reboot into the rescue image)…",
-                );
+                self.con.writeln(if name == "fsck" {
+                    "staging the disk check (reboot into the rescue image, e2fsck -f -y, then back here)…"
+                } else {
+                    "starting attended OS update (fold the agent, then reboot into the rescue image)…"
+                });
                 self.save_state(true);
                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                 match run_bia_update(&refs, |line| {
                     self.con.writeln(&self.con.c(GRAY, line));
                 }) {
-                    Ok(()) => self.con.writeln("update staged (if the machine did not reboot, check the lines above)"),
+                    Ok(()) => self.con.writeln(&format!("{} staged (if the machine did not reboot, check the lines above)", if name == "fsck" { "disk check" } else { "update" })),
                     Err(e) => self.con.writeln(&self.con.c(RED, &format!("{name}: {e}"))),
                 }
             }
@@ -2173,7 +2181,10 @@ impl Repl {
         self.push_history(Msg::user(env));
     }
 
-    fn turn(&mut self, messages: Vec<Inbound>) {
+    fn turn(&mut self, mut messages: Vec<Inbound>) {
+        // MCPs started in the background: attach the finished ones before the model reads
+        // their job results (callable now, plus their block when it changed)
+        self.tools.poll_starts(&mut messages);
         let tg: Vec<String> = messages
             .iter()
             .filter(|ib| ib.channel.starts_with("telegram:"))

@@ -30,8 +30,13 @@
 #      /bia-update/, the marker goes on this (flash) ESP, and the rescue image
 #      boots the disk afterwards.
 #
+#   bia-update fsck  (carry_fsck): check and repair this root with e2fsck -f -y in the
+#      rescue image while it is not mounted, then boot it again; the result reaches
+#      the agent at that boot (bia-update boot).
+#
 #   bia-update start [--force] [--from=/dev/…|--from=internet]
 #   bia-update rescue [/dev/…]
+#   bia-update fsck
 #   bia-update boot
 #   bia-update status
 set -euo pipefail
@@ -326,7 +331,7 @@ write_marker() {
     [ -n "$id" ] || refuse "rescue marker" "$dev has no filesystem UUID"
     args="$args $k=UUID=$id"
   done
-  args="${args# } bia.mark=$rdir/next.cfg"
+  args="${args# } bia.mark=$rdir/next.cfg${MARK_EXTRA:+ $MARK_EXTRA}"
   printf 'set bia_rescue_cmdline="%s"\n' "$(rescue_cmdline "$args")" > "$esp$rdir/next.cfg.new"
   mv -f "$esp$rdir/next.cfg.new" "$esp$rdir/next.cfg"
   sync
@@ -497,7 +502,10 @@ net_stage() {
   fi
   # the unpacked image plus its root tree (plus the download) is the peak
   need=$(( (2 * raw_size + size) / 1024 + 512 * 1024 ))
-  free=$(df -Pk "$NET" | awk 'NR == 2 { print $4 }')
+  # stat, not df: a damaged /usr/bin/df must not block the update that replaces it
+  free=$(stat -f -c '%a %S' "$NET" 2>&1) \
+    || refuse "disk space" "cannot read the free space of $NET: $free (a damaged filesystem? carry_fsck checks and repairs it)"
+  free=$(( ${free% *} * ${free#* } / 1024 ))
   [ "${free:-0}" -gt "$need" ] \
     || refuse "disk space" "the internet update needs $((need >> 20)) GiB free for $UPDATE, there is $((${free:-0} >> 20)) GiB"
   trap net_fail EXIT
@@ -738,6 +746,46 @@ rescue_main() {
   reboot_into_rescue
 }
 
+# ---- fsck: check and repair this root offline (carry_fsck) ------------------------
+fsck_main() {
+  local root esp_dev esp_mnt f
+  root=$(live_root)
+  for f in need-apply copying pending; do
+    [ -f "$UPDATE/$f" ] && refuse "fsck" "an OS update is in progress ($UPDATE/$f); finish it first"
+  done
+  read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
+  mkdir -p "$UPDATE"
+  chmod 700 "$UPDATE"
+  rm -f "$UPDATE/fsck-result" "$UPDATE/fsck.log"
+  printf 'check of %s started %s\n' "$root" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$UPDATE/fsck-requested"
+  sync
+  MARK_EXTRA=bia.fsck=1 write_marker "$esp_mnt" "$root" "$root" "$esp_dev" "$esp_dev" "$esp_dev"
+  boot_next_current
+  printf 'staged: the rescue image checks and repairs %s (e2fsck -f -y) while it is not mounted, then boots this system again; the result comes at that boot. Rebooting now.\n' "$root"
+  reboot_into_rescue
+}
+
+# The result of carry_fsck, for the agent (at the first boot after the check).
+fsck_report() {
+  local rc verdict
+  [ -f "$UPDATE/fsck-requested" ] || return 0
+  if [ -f "$UPDATE/fsck-result" ]; then
+    read -r rc verdict < "$UPDATE/fsck-result"
+    cp -f "$UPDATE/fsck.log" /var/log/bia-fsck.log 2>/dev/null || true
+    if [ "$rc" -lt 4 ]; then
+      notify_agent "the disk check (carry_fsck) finished: $verdict. Log: /var/log/bia-fsck.log. If files were repaired, check lost+found (find / -xdev -name lost+found) and dpkg --verify; carry_update reinstalls the whole system."
+    else
+      notify_agent "the disk check (carry_fsck) finished, but $verdict. Log: /var/log/bia-fsck.log. Tell root: the disk may be failing (smartctl -a, dmesg); back up with carry_fold."
+    fi
+    say "bia-update: disk check: $verdict"
+  else
+    clear_stale_marker
+    notify_agent "carry_fsck was started ($(cat "$UPDATE/fsck-requested")), but the rescue image did not run, so the disk was not checked. Nothing was changed."
+    fail "disk check"
+  fi
+  rm -f "$UPDATE/fsck-requested" "$UPDATE/fsck-result" "$UPDATE/fsck.log"
+}
+
 # ---- boot: finish what the rescue image started --------------------------------
 notify_agent() {
   printf '%s\n' "$*" > /run/bia-updated
@@ -757,6 +805,7 @@ clear_stale_marker() {
 boot_main() {
   local bin
   say "bia-update: boot"
+  fsck_report
   bin=$(carry_bin)
   if [ -f "$UPDATE/pending" ]; then
     if [ ! -x "$bin" ]; then
@@ -823,7 +872,8 @@ status_main() {
 case ${1:-} in
   start|--start|update) shift; start_main "$@" ;;
   rescue|--rescue) shift; rescue_main "${1:-}" ;;
+  fsck|--fsck) fsck_main ;;
   boot|"") boot_main ;;
   status) status_main ;;
-  *) echo "usage: bia-update start [--force] [--from=/dev/…|--from=internet] | rescue [/dev/…] | boot | status" >&2; exit 2 ;;
+  *) echo "usage: bia-update start [--force] [--from=/dev/…|--from=internet] | rescue [/dev/…] | fsck | boot | status" >&2; exit 2 ;;
 esac

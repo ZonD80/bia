@@ -227,6 +227,12 @@ fn main() {
             |ctx, a| rescue::rescue(ctx, arg_str_opt(&a, "disk")),
         )
         .tool(
+            "fsck",
+            "Check and repair this computer's root filesystem (BIAROOT/BIADISK) offline: reboots into the rescue image, which runs e2fsck -f -y while the disk is not mounted, then boots this system again. The result (repaired, clean, or errors left) arrives as a notice at that boot. Use when the system reports filesystem errors (\"Bad message\", EXT4 checksum errors in dmesg, tune2fs state \"with errors\"). Every boot already checks the disk automatically; this forces a full check. Tell the user first: the computer is offline for a few minutes. Back up with carry_fold first when files matter.",
+            json!({"type": "object", "properties": {}}),
+            |ctx, _| rescue::fsck(ctx),
+        )
+        .tool(
             "to_disk",
             "Copy this whole computer onto a disk so that disk can boot. Required: disk=/dev/sda (whole disk), or partition=/dev/... (disk is inferred). Does not change the disk you are using now. Then reboots into that disk (BootNext 'bia disk'). On a legacy BIOS boot it powers off instead: tell the user to remove the flash stick and turn the computer on. Empty disk: full EFI+root wipe install. Windows already there: also pass partition=/dev/... , or shrink_from+size_mib, or size_mib alone; disk alone on Windows lists volumes. wipe=true erases the whole disk including Windows. Choose devices with bash lsblk.",
             json!({"type": "object", "properties": {

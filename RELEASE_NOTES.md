@@ -5,6 +5,25 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.7
+
+### Changes
+- A takeover now also shows its plan, progress and result on every other terminal and on the server's consoles (the provider's web or serial console), as `bia takeover: …` lines, so whoever watches the server sees what happens. The gate link and the land secret stay on the terminal that runs it.
+- bia now checks its disk at every boot, before using it, and repairs what it finds by itself. Before, the boot never checked it, so errors such as a damaged system file ("Bad message") stayed until someone repaired them by hand. On a healthy disk this costs a fraction of a second.
+- A full disk check on request: ask bia to check and repair its disk, or type /fsck on the console. bia restarts into its rescue system for a few minutes, checks the disk while it is not in use, and tells you the result when it is back.
+- An update no longer stops at the disk-space step when the system's df program is damaged.
+- A server taken over with takeover.sh now shows "bia disk" in its boot menu and firmware boot list instead of "bia flash", like any other bia installed on a disk.
+- After an MCP is updated or edited, bia can restart it on purpose (discover with restart=true) and then knows its new functions. The model gets an MCP's instructions again only when they really changed (bia keeps a fingerprint of what it gave the model, also across restarts), so an update that changes nothing it sees costs no extra tokens. Before, bia kept the old function list until it restarted itself.
+- Web app on a phone: the chat header has its back arrow again (to the chat list and Console, Root shell, Files, Human tasks, Display, Settings), and a long status such as the model name stays on one line instead of covering the chat.
+- bia now knows when someone opens or closes the web app, and may greet them when it fits (for example when it has news for them or they were away long). Quick reconnects of a phone and extra tabs are not reported.
+- bia no longer hangs at boot while its MCPs start (for example Telegram or WhatsApp restoring their session over a slow network): they start in the background as jobs, and bia is ready for you right away.
+
+### For bia
+- If you see filesystem errors ("Bad message", EXT4 checksum errors in dmesg, tune2fs state "clean with errors"), tell root and call carry_fsck: it checks and repairs the disk offline and reports at the next boot. Do not build your own boot entries, init= scripts or one-shot units for fsck.
+- After a repair: check lost+found and dpkg --verify; carry_update reinstalls the whole system if system files were damaged.
+- After you update or edit an MCP, call discover(path="mcp/<name>", restart=true): it starts the new version and tells you its functions only if they changed. When a result says "mcp/<name> changed", use the definitions in it from then on. Running MCPs are not restarted by themselves when their files change.
+- At boot, MCPs start in the background as jobs (mcp_start); each result arrives as system|job:<id>: started (callable now, with its new definitions only if they changed) or why not. Until then, calls to that MCP answer that it is still starting (wait for the job; job_logs shows progress, job_kill gives the start up). say to a Telegram or WhatsApp chat meanwhile is queued and goes out when that MCP is up; if it does not start, each queued message comes back as [send failed …] on system|outbox.
+
 ## 1.1.6
 
 ### Changes

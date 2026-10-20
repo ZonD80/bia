@@ -3,12 +3,12 @@
 //! Nothing here touches the agent's console: web is a channel like telegram or whatsapp.
 use bia_mcp::Ctx;
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 pub const ID_ROOT: &str = "root";
@@ -30,8 +30,25 @@ struct Sink {
     tx: Sender<Vec<u8>>,
 }
 
+/// One person's browser sessions, for the open/close notices (Bus::web_opened/web_closed).
+#[derive(Default)]
+struct Seen {
+    sessions: usize,
+    /// bumped by every open, so a pending close notice knows a newer session came
+    generation: u64,
+    /// the model was told the web app is open (and not yet that it closed)
+    open: bool,
+    /// when the last close notice went out
+    closed_at: Option<Instant>,
+}
+
+/// A close only counts after this long without a new session: phones drop and reconnect.
+pub const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(60);
+
 pub struct Bus {
     ctx: Mutex<Option<Ctx>>,
+    presence: Mutex<HashMap<String, Seen>>,
+    close_grace: std::time::Duration,
     /// Messages that arrived before the MCP session was up (or in tests), with when
     /// they came (Unix seconds) so the envelope's issued is not the later delivery.
     held: Mutex<VecDeque<(Inbound, i64)>>,
@@ -45,6 +62,8 @@ impl Bus {
     pub fn new(files: PathBuf) -> Bus {
         Bus {
             ctx: Mutex::new(None),
+            presence: Mutex::new(HashMap::new()),
+            close_grace: CLOSE_GRACE,
             held: Mutex::new(VecDeque::new()),
             sinks: Mutex::new(vec![]),
             next: AtomicUsize::new(1),
@@ -149,6 +168,79 @@ impl Bus {
         sinks.retain(|s| s.identity != identity || s.tx.send(pkt.clone()).is_ok());
     }
 
+    /// Tests: a short grace before a close notice.
+    pub fn with_close_grace(mut self, d: std::time::Duration) -> Bus {
+        self.close_grace = d;
+        self
+    }
+
+    /// A browser chat session of `identity` connected (from `ip`). The person's first
+    /// session tells the model their web app is open; more tabs, and a reconnect within
+    /// the grace after a drop, say nothing.
+    pub fn web_opened(&self, identity: &str, ip: &str) {
+        let away = {
+            let mut p = self.presence.lock().unwrap();
+            let seen = p.entry(identity.to_string()).or_default();
+            seen.sessions += 1;
+            seen.generation += 1;
+            if seen.open {
+                return;
+            }
+            seen.open = true;
+            seen.closed_at.map(|t| t.elapsed())
+        };
+        let since = match away {
+            Some(d) => format!("back after {}", human_duration(d)),
+            None => "first time since bia started".into(),
+        };
+        self.push_inbound(Inbound {
+            identity: ID_SYSTEM.into(),
+            channel: CH_WEB.into(),
+            id: mint_msg_id(),
+            text: format!(
+                "[web open] {identity} opened the web app (from {ip}; {since}). Their chats there are web and web:<chat>. \
+                 Greet them with say(identity=\"{identity}\", channel=\"web\") only if it fits: you have news or an answer for them, or they were away long. \
+                 Otherwise do nothing; no reply is needed."
+            ),
+        });
+    }
+
+    /// A browser chat session of `identity` ended. When it was their last one and none
+    /// comes back within the grace, the model hears that the web app is closed.
+    pub fn web_closed(bus: &Arc<Bus>, identity: &str) {
+        let generation = {
+            let mut p = bus.presence.lock().unwrap();
+            let Some(seen) = p.get_mut(identity) else { return };
+            seen.sessions = seen.sessions.saturating_sub(1);
+            if seen.sessions > 0 || !seen.open {
+                return;
+            }
+            seen.generation
+        };
+        let (bus, identity) = (bus.clone(), identity.to_string());
+        std::thread::spawn(move || {
+            std::thread::sleep(bus.close_grace);
+            {
+                let mut p = bus.presence.lock().unwrap();
+                let Some(seen) = p.get_mut(&identity) else { return };
+                if seen.sessions > 0 || seen.generation != generation || !seen.open {
+                    return;
+                }
+                seen.open = false;
+                seen.closed_at = Some(Instant::now());
+            }
+            bus.push_inbound(Inbound {
+                identity: ID_SYSTEM.into(),
+                channel: CH_WEB.into(),
+                id: mint_msg_id(),
+                text: format!(
+                    "[web closed] {identity} closed the web app (no browser of theirs is open now). \
+                     What you send to their web chat waits there for them. No reply is needed."
+                ),
+            });
+        });
+    }
+
     // ---- machine status (written by the agent to files/state/status.json) ----
 
     pub fn status(&self) -> Value {
@@ -169,6 +261,17 @@ impl Bus {
             })
             .map(|v| v as u64)
             .unwrap_or_else(|| self.started.elapsed().as_secs())
+    }
+}
+
+/// 45 s, 12 min, 3 h, 2 days: how long someone was away.
+fn human_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..=89 => format!("{s} s"),
+        90..=5399 => format!("{} min", (s + 30) / 60),
+        5400..=172_799 => format!("{} h", (s + 1800) / 3600),
+        _ => format!("{} days", (s + 43_200) / 86_400),
     }
 }
 
@@ -226,6 +329,38 @@ pub fn rfc3339_unix(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn web_open_and_close_notices_skip_reconnects_and_extra_tabs() {
+        let bus = Arc::new(Bus::new(std::env::temp_dir()).with_close_grace(std::time::Duration::from_millis(200)));
+        let texts = |bus: &Bus| bus.take_held().into_iter().map(|ib| (ib.identity, ib.text)).collect::<Vec<_>>();
+        bus.web_opened("alex", "192.0.2.7");
+        let t = texts(&bus);
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].0, ID_SYSTEM);
+        assert!(t[0].1.starts_with("[web open] alex") && t[0].1.contains("192.0.2.7") && t[0].1.contains("first time"), "{}", t[0].1);
+        // a second tab, then one of two closes: nothing
+        bus.web_opened("alex", "192.0.2.7");
+        Bus::web_closed(&bus, "alex");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(texts(&bus).is_empty());
+        // the last tab drops and comes back within the grace: nothing
+        Bus::web_closed(&bus, "alex");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        bus.web_opened("alex", "192.0.2.7");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        assert!(texts(&bus).is_empty());
+        // closed for good: one close notice, and the next open says they are back
+        Bus::web_closed(&bus, "alex");
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let t = texts(&bus);
+        assert_eq!(t.len(), 1);
+        assert!(t[0].1.starts_with("[web closed] alex"), "{}", t[0].1);
+        bus.web_opened("alex", "192.0.2.8");
+        let t = texts(&bus);
+        assert!(t.len() == 1 && t[0].1.contains("back after"), "{t:?}");
+        assert_eq!(human_duration(std::time::Duration::from_secs(3 * 3600)), "3 h");
+    }
 
     #[test]
     fn rfc3339_known_dates() {

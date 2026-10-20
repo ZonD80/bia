@@ -326,7 +326,9 @@ try:
         sys.exit(0)
     m = wait_for(r"https://\S+?:8443/([0-9a-f]{32})/", 30 * 60, fail=r"(?m)takeover-e2e: takeover exit [1-9]|^error: ")
     token = m.group(1)
-    fp = wait_for(r"CA fingerprint \(SHA-256\) of the new bia:\s+([0-9a-f]{64})", 60).group(1)
+    # the takeover's stderr (through /dev/kmsg) and its own console copy (announce) can
+    # interleave on the serial line: take the first fingerprint after the heading
+    fp = wait_for(r"(?s)CA fingerprint \(SHA-256\) of the new bia:.*?\b([0-9a-f]{64})\b", 60).group(1)
     say(f"gate up; CA {fp[:16]}…")
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -353,6 +355,14 @@ try:
         die("the gate's CA does not match the fingerprint the terminal showed")
     say(f"root.p12 downloaded from the gate ({len(p12)} bytes); the CA inside it matches")
     wait_for(r"takeover-e2e: takeover exit 0", 120)
+    # the takeover also writes to every console itself (announce), without the gate's secrets
+    mirrored = [l for l in ANSI.sub("", serial()).splitlines() if "bia takeover: " in l]
+    if not any("ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW" in l for l in mirrored) or \
+            not any("root's certificate was downloaded from the gate page" in l for l in mirrored):
+        die(f"the takeover did not announce itself on the console ({len(mirrored)} lines)")
+    if any(token in l for l in mirrored):
+        die("the gate's token reached the console")
+    say(f"the takeover announced itself on the console ({len(mirrored)} lines), without the gate's token")
     open(f"{WWW}/go", "w").write("go\n")
     mark = len(ANSI.sub("", serial()))
     wait_for(r"bia-rescue: takeover: replacing", 10 * 60, since=mark)
@@ -498,6 +508,69 @@ try:
          "/run/bia stays 0755 after the agent started; root's console socket is in /run/bia/root (0700)")
     out, rc = shell("runuser -u bia -- test -x /run/bia && echo bia-can''-enter")
     want(re.search(r"(?m)^bia-can-enter", out), "user bia can enter /run/bia")
+
+    # web presence: the model hears when root's web app opens and closes, once each, not
+    # for a second tab or a quick reconnect (bia-mcp-web bus.rs web_opened/web_closed)
+    def ws_chat():
+        s = cctx.wrap_socket(socket.create_connection(("127.0.0.1", WEB_PORT), timeout=30))
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall(f"GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
+        head = b""
+        while b"\r\n\r\n" not in head:
+            c = s.recv(4096)
+            if not c:
+                die("/ws closed during the handshake")
+            head += c
+        if b" 101 " not in head.split(b"\r\n")[0]:
+            die("/ws: " + head.decode(errors="replace")[:200])
+        return s
+
+    def ws_close(s):
+        mask = os.urandom(4)
+        try:
+            s.sendall(bytes([0x88, 0x80]) + mask)
+            s.close()
+        except OSError:
+            pass
+
+    def conversation():
+        st, b = fsget("/home/bia/files/state/conversation.json")
+        return b.decode(errors="replace") if st == 200 else ""
+
+    def wait_conv(pat, timeout):
+        end = time.time() + timeout * SCALE
+        while time.time() < end:
+            if re.search(pat, conversation()):
+                return True
+            time.sleep(5)
+        return False
+
+    tab1 = ws_chat()
+    want(wait_conv(r"\[web open\] root opened the web app", 240), "the model hears that root opened the web app")
+    tab2 = ws_chat()          # a second tab
+    time.sleep(3)
+    ws_close(tab1)            # one of two tabs closes
+    time.sleep(3)
+    ws_close(tab2)            # the last one drops …
+    time.sleep(3)
+    tab3 = ws_chat()          # … and comes back within the grace
+    time.sleep(75)            # past the 60 s grace of the drop
+    conv = conversation()
+    want(len(re.findall(r"\[web open\] root", conv)) == 1 and "[web closed] root" not in conv,
+         "a second tab and a quick reconnect are not reported")
+    ws_close(tab3)            # closed for good
+    want(wait_conv(r"\[web closed\] root closed the web app", 240), "the model hears that root closed the web app (after the grace)")
+    conv = conversation()
+    want(len(re.findall(r"\[web open\] root", conv)) == 1 and len(re.findall(r"\[web closed\] root", conv)) == 1,
+         "exactly one open and one close notice")
+    for m in re.finditer(r"\[web (open|closed)\] root[^\"]{0,80}", conv):
+        print(f"  ..   {m.group(0)}", flush=True)
+
+    # the release image is the stick's ("bia flash"); a taken-over server's menu says "bia disk"
+    out, rc = shell("grep -h '^menuentry' /boot/EFI/BOOT/grub.cfg /boot/boot/grub/grub.cfg 2>/dev/null | head -4")
+    titles = re.findall(r'(?m)^menuentry "([^"]+)"', ANSI.sub("", out))
+    want(titles and titles[0] == "bia disk" and "bia flash" not in titles, f"the boot menu entry is \"bia disk\" ({titles})")
 
     refused = "this machine already runs bia"
     out, rc = shell(f"curl -fsS {host}/takeover.sh | BIA_RELEASE_URL={host}/rel bash -s -- --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")

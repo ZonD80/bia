@@ -113,6 +113,11 @@ mount -t vfat "$esp" "$NEWESP_MNT" || tdie "seeds" "cannot mount the new ESP $es
 if [ -d "$TK/esp" ]; then
   cp -r "$TK/esp/." "$NEWESP_MNT/" || tdie "seeds" "cannot copy the seeds onto $esp (ESP full?)"
 fi
+# The release image is the flash stick's (root BIAROOT, menu "bia flash"); here it is
+# the server's internal disk, so its menu says "bia disk" (as its UEFI entry below).
+for cfg in "$NEWESP_MNT/boot/grub/grub.cfg" "$NEWESP_MNT/EFI/BOOT/grub.cfg" "$NEWESP_MNT/EFI/debian/grub.cfg"; do
+  [ -f "$cfg" ] && sed -i 's/^menuentry "bia flash"/menuentry "bia disk"/' "$cfg"
+done
 sync
 umount "$NEWESP_MNT"
 ok "keys, certificates and network settings"
@@ -124,8 +129,8 @@ if [ -d /sys/firmware/efi/efivars ] && command -v efibootmgr >/dev/null 2>&1; th
   done
   case $(uname -m) in aarch64) loader='\EFI\BOOT\BOOTAA64.EFI' ;; *) loader='\EFI\BOOT\BOOTX64.EFI' ;; esac
   order=$(efibootmgr 2>/dev/null | awk '/^BootOrder:/ { print $2; exit }')
-  if efibootmgr -q -c -d "$disk" -p 1 -l "$loader" -L "bia" >/dev/null 2>&1; then
-    new=$(efibootmgr 2>/dev/null | awk '/^Boot[0-9A-Fa-f]{4}/ { l = $0; sub(/^Boot[0-9A-Fa-f]{4}\*? */, "", l); if (index(l, "bia") == 1) id = substr($1, 5, 4) } END { print id }')
+  if efibootmgr -q -c -d "$disk" -p 1 -l "$loader" -L "bia disk" >/dev/null 2>&1; then
+    new=$(efibootmgr 2>/dev/null | awk '/^Boot[0-9A-Fa-f]{4}/ { l = $0; sub(/^Boot[0-9A-Fa-f]{4}\*? */, "", l); if (index(l, "bia disk") == 1) id = substr($1, 5, 4) } END { print id }')
     if [ -n "$new" ]; then
       rest=$(printf '%s\n' "$order" | awk -F, -v n="$new" '{ for (i = 1; i <= NF; i++) if (toupper($i) != toupper(n)) o = o (o == "" ? "" : ",") $i; print o }')
       efibootmgr -q -o "$new${rest:+,$rest}" >/dev/null 2>&1

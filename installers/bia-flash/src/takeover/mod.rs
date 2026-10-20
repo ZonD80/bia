@@ -8,6 +8,7 @@
 //! PKI and seeds → gate (root certificate download) → one-shot boot entry → reboot.
 //! Nothing on the machine changes before the confirmation; the disk is only written by
 //! bia's rescue image after the reboot, from RAM.
+pub mod announce;
 pub mod config;
 pub mod gate;
 pub mod net;
@@ -21,6 +22,12 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// A takeover message here and on every other terminal and console (announce).
+macro_rules! say {
+    () => { announce::all("") };
+    ($($t:tt)*) => { announce::all(&format!($($t)*)) };
+}
 
 /// The oldest release whose rescue image knows the takeover mode.
 pub const MIN_VERSION: (u32, u32, u32) = (1, 1, 3);
@@ -297,6 +304,15 @@ fn esp_mount() -> Result<PathBuf> {
 }
 
 pub fn run(a: Args) -> Result<()> {
+    let r = takeover(a);
+    if let Err(e) = &r {
+        // the terminal that runs it gets the error from main
+        announce::mirror(&format!("stopped: {e:#}"));
+    }
+    r
+}
+
+fn takeover(a: Args) -> Result<()> {
     // ---- sources ----
     let mut m = Merged::new();
     for (i, c) in a.configs.iter().enumerate() {
@@ -307,7 +323,7 @@ pub fn run(a: Args) -> Result<()> {
         m.add(a.flags.clone(), "flag")?;
     }
     for w in &m.warnings {
-        eprintln!("warning: {w}");
+        say!("warning: {w}");
     }
     let cfg: Config = m.config()?;
     if a.dump_config && !cfg!(target_os = "linux") {
@@ -335,7 +351,7 @@ pub fn run(a: Args) -> Result<()> {
 
     // ---- detection ----
     let mach = detect()?;
-    eprintln!(
+    say!(
         "== this machine: {}, {}{}, {} RAM{}",
         mach.arch,
         if mach.uefi { "UEFI" } else { "legacy BIOS" },
@@ -454,7 +470,7 @@ pub fn run(a: Args) -> Result<()> {
     } else {
         for k in ["fmm", "setup", "pki"] {
             if m.source_of(k).is_some() {
-                eprintln!("note: land mode ignores {k}: the agent that flies here brings its own");
+                say!("note: land mode ignores {k}: the agent that flies here brings its own");
             }
         }
         None
@@ -476,7 +492,7 @@ pub fn run(a: Args) -> Result<()> {
         None => {
             let (l, w) = capture_network()?;
             for w in w {
-                eprintln!("note: {w}");
+                say!("note: {w}");
             }
             (l, "detected".into())
         }
@@ -605,17 +621,17 @@ pub fn run(a: Args) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&config::masked(&v, a.show_secrets))?);
         return Ok(());
     }
-    eprintln!("\n== bia takeover plan");
+    say!("\n== bia takeover plan");
     for Row(k, v, s) in &rows {
-        eprintln!("  {k:<19} {v}   [{s}]");
+        say!("  {k:<19} {v}   [{s}]");
     }
-    eprintln!();
+    say!();
     if land.is_some() {
-        eprintln!("After the reboot everything on {disk} is replaced by bia, which waits for one of your bias to fly");
-        eprintln!("its agent here over the internet (TCP 4791 must be reachable) with the land secret you get next.");
+        say!("After the reboot everything on {disk} is replaced by bia, which waits for one of your bias to fly");
+        say!("its agent here over the internet (TCP 4791 must be reachable) with the land secret you get next.");
     } else {
-        eprintln!("After the reboot everything on {disk} is replaced by bia. The only way in is then bia's web app");
-        eprintln!("(https://<address>) with the root certificate you get in the next step, or this provider's console.");
+        say!("After the reboot everything on {disk} is replaced by bia. The only way in is then bia's web app");
+        say!("(https://<address>) with the root certificate you get in the next step, or this provider's console.");
     }
     let wipe = match &cfg.wipe {
         Some(w) => w.clone(),
@@ -627,9 +643,9 @@ pub fn run(a: Args) -> Result<()> {
 
     // ---- model check, download ----
     if let Some(ag) = agent.as_ref().filter(|_| !a.no_test) {
-        eprintln!("== waking {} {} …", ag.fmm.provider, ag.fmm.model);
+        say!("== waking {} {} …", ag.fmm.provider, ag.fmm.model);
         let g = crate::test_model(&ag.fmm).context("the model did not answer (fix the key or model, or --no-test)")?;
-        eprintln!("\n  bia: {}\n", g.hello);
+        say!("\n  bia: {}\n", g.hello);
     }
     fs::create_dir_all(&stage_dir)?;
     let image = match image_path {
@@ -638,12 +654,12 @@ pub fn run(a: Args) -> Result<()> {
             std::env::set_var("BIA_FLASH_CACHE", stage_dir.join("cache"));
             let tag = cfg.os.clone().unwrap_or_else(|| "latest".into());
             let man = crate::release::manifest(if tag.starts_with("https://") { "latest" } else { &tag })?;
-            crate::release::fetch(&man, &mach.arch, &mut |msg| eprintln!("== {msg}"))?.path
+            crate::release::fetch(&man, &mach.arch, &mut |msg| say!("== {msg}"))?.path
         }
     };
     let xz_sha = if xz_sha.is_empty() { sha256_file(&image)? } else { xz_sha };
     let raw_sha = if raw_sha.is_empty() {
-        eprintln!("== checking the local image");
+        say!("== checking the local image");
         let mut r = crate::image::ImageReader::open(&image)?;
         let mut h = <sha2::Sha256 as sha2::Digest>::new();
         r.drain(&mut |b| sha2::Digest::update(&mut h, b))?;
@@ -716,8 +732,8 @@ pub fn run(a: Args) -> Result<()> {
 
     // ---- gate: the operator gets root's certificate before anything is overwritten ----
     if let Some(seeded) = &seeded {
-        eprintln!("\n== CA fingerprint (SHA-256) of the new bia:\n   {}", seeded.ca_sha256);
-        eprintln!("   other bias know this one as {}", seeded.agent_name);
+        say!("\n== CA fingerprint (SHA-256) of the new bia:\n   {}", seeded.ca_sha256);
+        say!("   other bias know this one as {}", seeded.agent_name);
         if let Some(p12) = seeded.root_p12.clone() {
             let port = cfg.gate_port.unwrap_or(8443);
             let g = gate::start(&files, port, p12, seeded.ca_sha256.clone())
@@ -732,13 +748,14 @@ pub fn run(a: Args) -> Result<()> {
                 .chain(names.iter().cloned())
                 .map(|h| format!("https://{h}:{}/{}/", g.port, g.token))
                 .collect();
-            eprintln!("\n== ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW (bia-root.p12, password 12345678)");
-            eprintln!("   This disk is replaced; after the takeover this certificate is the only way into bia.");
-            eprintln!("   Nothing is changed and nothing reboots until it was downloaded from the gate page:");
+            say!("\n== ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW (bia-root.p12, password 12345678)");
+            say!("   This disk is replaced; after the takeover this certificate is the only way into bia.");
+            say!("   Nothing is changed and nothing reboots until it was downloaded from the gate page:");
             for u in &urls {
                 eprintln!("       {u}");
             }
-            eprintln!("   (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
+            announce::mirror("       (the link is on the terminal that runs the takeover: whoever has it gets root's key)");
+            say!("   (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
             if let Some(u) = urls.first() {
                 eprintln!("   From a shell (an agent: from your own machine, into your files; never print it):");
                 eprintln!("       curl -fk -o bia-root.p12 {u}root.p12");
@@ -751,7 +768,7 @@ pub fn run(a: Args) -> Result<()> {
         }
         if let Some(pem) = &seeded.root_pem {
             stage::write_file(Path::new("/root/bia-root.crt"), pem.as_bytes())?;
-            eprintln!("== root certificate for your CSR: /root/bia-root.crt");
+            say!("== root certificate for your CSR: /root/bia-root.crt");
         }
     }
     if let Some(code) = &land_code {
@@ -760,6 +777,7 @@ pub fn run(a: Args) -> Result<()> {
         eprintln!("\n== land secret (also in {}; this disk is replaced, so write it down):\n\n   {code}\n", saved.display());
         eprintln!("   After the reboot, tell one of your bias: fly to this server's address with land secret {code}");
         eprintln!("   (carry_fly host=<address> secret=<land secret>). TCP 4791 must be open in the provider's firewall.");
+        announce::mirror("== the land secret is on the terminal that runs the takeover (and in /root/bia-land-secret.txt until the reboot)");
         if ask.interactive() {
             loop {
                 if ask.line("Type YES once you have the land secret", "")? == "YES" {
@@ -773,7 +791,7 @@ pub fn run(a: Args) -> Result<()> {
     let _ = fs::remove_dir_all(&work);
 
     if a.dry_run {
-        eprintln!("== dry run: staged in {}; no boot entry was added", stage_dir.display());
+        say!("== dry run: staged in {}; no boot entry was added", stage_dir.display());
         return Ok(());
     }
 
@@ -788,17 +806,18 @@ pub fn run(a: Args) -> Result<()> {
         None if ask.interactive() => ask.line("Reboot into the takeover now? (yes/no)", "yes")?.starts_with('y'),
         None => false,
     };
-    eprintln!("\n== ready. At the next boot bia's rescue writes bia onto {disk} from memory (a few minutes), then bia starts.");
+    say!("\n== ready. At the next boot bia's rescue writes bia onto {disk} from memory (a few minutes), then bia starts.");
     if land_code.is_some() {
-        eprintln!("   It then waits in land mode for a flight with the land secret.");
+        say!("   It then waits in land mode for a flight with the land secret.");
     } else {
-        eprintln!("   Then open https://<address>/ with root's certificate.");
+        say!("   Then open https://<address>/ with root's certificate.");
     }
-    eprintln!("   Rebooting without the takeover: remove {} and the boot entry \"bia takeover\".", stage_dir.display());
+    say!("   Rebooting without the takeover: remove {} and the boot entry \"bia takeover\".", stage_dir.display());
     if reboot {
+        say!("== rebooting into the takeover now; bia's rescue reports on this console next");
         let _ = Command::new("systemctl").arg("reboot").status();
     } else {
-        eprintln!("   Reboot when ready: systemctl reboot");
+        say!("   Reboot when ready: systemctl reboot");
     }
     Ok(())
 }
@@ -806,7 +825,7 @@ pub fn run(a: Args) -> Result<()> {
 /// Block until root's certificate was downloaded from the gate (all of it was sent).
 /// `limit` > 0 gives up after that many seconds, before anything was changed.
 fn wait_for_root(downloaded: &std::sync::atomic::AtomicBool, limit: u64) -> Result<()> {
-    eprintln!("   Waiting for the download; the takeover then continues by itself…");
+    say!("   Waiting for the download; the takeover then continues by itself…");
     let start = std::time::Instant::now();
     while !downloaded.load(std::sync::atomic::Ordering::SeqCst) {
         if limit > 0 && start.elapsed().as_secs() >= limit {
@@ -814,7 +833,7 @@ fn wait_for_root(downloaded: &std::sync::atomic::AtomicBool, limit: u64) -> Resu
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    eprintln!("== root's certificate was downloaded from the gate page");
+    say!("== root's certificate was downloaded from the gate page");
     Ok(())
 }
 
@@ -893,7 +912,7 @@ fn install_uefi(arch: &str, boot: &stage::BootFiles, rel: &str, id: &str) -> Res
             if !orig.contains("# bia takeover") {
                 fs::write(&p, format!("{}{orig}", stage::grub_hook(id)))?;
             }
-            eprintln!("note: {} now starts the takeover first (original in {})", p.display(), backup.display());
+            say!("note: {} now starts the takeover first (original in {})", p.display(), backup.display());
         }
     }
     let src = run_cmd("findmnt", &["-no", "SOURCE", &esp.to_string_lossy()])?;
@@ -921,7 +940,7 @@ fn install_uefi(arch: &str, boot: &stage::BootFiles, rel: &str, id: &str) -> Res
         let _ = run_cmd("efibootmgr", &["-q", "-o", &order]);
     }
     run_cmd("efibootmgr", &["-q", "-n", &new])?;
-    eprintln!("== next boot: Boot{new} (bia takeover), once");
+    say!("== next boot: Boot{new} (bia takeover), once");
     Ok(())
 }
 
@@ -941,7 +960,7 @@ fn install_bios(rel: &str, id: &str) -> Result<()> {
     fs::write(&custom, text)?;
     let cmd = if have("grub-reboot") { "grub-reboot" } else { "grub2-reboot" };
     run_cmd(cmd, &["bia-takeover"])?;
-    eprintln!("== next boot: GRUB entry \"bia takeover\", once");
+    say!("== next boot: GRUB entry \"bia takeover\", once");
     Ok(())
 }
 

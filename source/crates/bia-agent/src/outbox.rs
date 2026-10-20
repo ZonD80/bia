@@ -138,6 +138,8 @@ pub enum Outcome {
     Done(String, Result<String, String>),
     /// still queued or uploading: (local id, tasks ahead of it in this chat)
     Pending(String, usize),
+    /// held until its MCP, starting in the background, is up: (the start's job id)
+    Held(String),
 }
 
 #[derive(Clone)]
@@ -512,6 +514,13 @@ impl Outbox {
                 self.con.push_inbound(notice(&line));
             }
         }
+    }
+
+    /// A send that could not even be queued (its MCP did not start): wakes the model, as
+    /// a failed send does.
+    pub fn report_failed(&self, line: &str) {
+        self.con.writeln(&self.con.c(crate::console::RED, &format!("  {line}")));
+        self.con.push_inbound(notice(line));
     }
 
     /// Quiet outcomes since the last call, for the next turn's history.

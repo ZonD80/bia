@@ -1,2 +1,9 @@
 MODULES=most
 COMPRESS=gzip
+# Check the root filesystem before it is mounted (scripts/local checkfs). The fsck hook
+# guesses the type of / from its device, which does not exist while the image is built,
+# and then leaves fsck out; name it.
+FSTYPE=ext4
+# Repair what the check finds (-y) instead of stopping at a shell on the console: bia
+# often runs where nobody is at the console. fsck.repair=no on the kernel line overrides.
+fsckfix=y
