@@ -1,7 +1,7 @@
 {
   "name": "whatsapp",
-  "version": "1.1.5",
-  "description": "Log into your own WhatsApp as a linked device and send messages as yourself. You are a real user, not a bot. whatsapp_login starts QR pairing and opens a scannable QR in a separate window on display :0 (titled WhatsApp QR); only a short notice goes to the console so it does not scroll away. The human scans it in WhatsApp > Settings > Linked devices > Link a device. There is no SMS code or password (whatsapp_submit_code / whatsapp_submit_password explain that). whatsapp_set_profile changes push name / About; whatsapp_set_photo sets the avatar (JPEG under /home/bia/files). whatsapp_search finds a contact by phone digits. whatsapp_send sends a message. whatsapp_history lists recent messages and their ids. whatsapp_delete_messages deletes those messages and whatsapp_delete_history clears a whole chat — for everyone by default where WhatsApp allows it (revoke=false only on this account). whatsapp_create_group(title, members) makes a group you administer and returns its chat_id (…@g.us) and an invite link; whatsapp_add_members / whatsapp_remove_member / whatsapp_leave_group / whatsapp_group_invite_link manage it. whatsapp_ban stops one chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. whatsapp_unban lets that chat through again. Voice calls use whatsapp-rust voip: whatsapp_call_start / whatsapp_call_accept / whatsapp_call_hangup / whatsapp_call_reject / whatsapp_call_join_group / whatsapp_call_say / whatsapp_call_status. Incoming calls arrive as [incoming call]; speech as [speech <lang>] (STT stays live while you speak; [<lang>] marks a language change, ? a language not learned yet). After whatsapp_call_say / say on a call, wait for [you finished speaking] before speaking again — a new call_say cancels the current utterance ([voice cancelled]). Keep spoken replies short. chat_id is phone digits from search (whatsapp:15551234567), a group id@g.us, or a lid. Files you receive are saved under /home/bia/files/inbox/whatsapp/. Session lives in /home/bia/files/whatsapp/whatsapp.db and restores via whatsapp_restore at boot. whatsapp_call_say and say on a call need lang (the language of the text). whatsapp_send_voice(chat_id, text, lang) sends a voice message (only when asked). Voice messages you receive arrive transcribed as [speech <lang>] before their file line. Languages are learned with the lang MCP (lang_install). whatsapp_send_location sends a map pin or a place (name/address); whatsapp_send_contact sends a contact card. Locations and contacts people send arrive as [location] / [live location] / [contact] lines with a map link, phone numbers and e-mails. A live location updates silently: whatsapp_live_location tells where they are now, and [live location ended] says when it stopped. Edits arrive as [edited <id>] with the old and new text.",
+  "version": "1.1.6",
+  "description": "Your own WhatsApp as a linked device, a real user, not a bot (QR login only): chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/whatsapp/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-whatsapp",
     "x86_64": "bin/x86_64/bia-mcp-whatsapp"
@@ -76,26 +76,11 @@
   ],
   "examples": [
     "root|console|<issued>|<delivered>|log into whatsapp -> discover(path='mcp/whatsapp', enable=true); whatsapp_login()  (QR opens in a WhatsApp QR window on :0)",
-    "root|console|<issued>|<delivered>|scan the whatsapp QR in the WhatsApp QR window -> wait until whatsapp_status says auth=ready",
-    "root|console|<issued>|<delivered>|set my whatsapp name and about -> whatsapp_set_profile(first_name='Bia', bio='personal computer')",
-    "root|console|<issued>|<delivered>|set my whatsapp photo -> whatsapp_set_photo(path='/home/bia/files/inbox/avatar.jpg')",
     "root|console|<issued>|<delivered>|find +1 555 123 4567 on whatsapp -> whatsapp_search(query='15551234567')",
     "root|console|<issued>|<delivered>|send hi on that whatsapp chat -> whatsapp_send(chat_id='15551234567', text='hi')",
-    "root|console|<issued>|<delivered>|show the last whatsapp messages with that number -> whatsapp_history(chat_id='15551234567')",
-    "root|console|<issued>|<delivered>|delete those whatsapp messages for everyone -> whatsapp_delete_messages(chat_id='15551234567', message_ids=['3EB0…'])",
-    "root|console|<issued>|<delivered>|clear that whatsapp chat -> whatsapp_delete_history(chat_id='15551234567')",
-    "root|console|<issued>|<delivered>|ban that whatsapp chat -> whatsapp_ban(chat_id='15551234567')",
-    "root|console|<issued>|<delivered>|let that whatsapp chat through again -> whatsapp_unban(chat_id='15551234567')",
     "alice|whatsapp:15551234567|<issued>|<delivered>|[incoming call] from alice -> whatsapp_call_accept(chat_id='15551234567') or whatsapp_call_reject(chat_id='15551234567')",
-    "root|console|<issued>|<delivered>|call alice on whatsapp -> whatsapp_call_start(chat_id='15551234567')",
     "alice|whatsapp:15551234567|<issued>|<delivered>|[speech en] hello -> say(identity='alice', channel='whatsapp:15551234567', message='Hi — short spoken reply.', lang='en'); wait for [you finished speaking] before speaking again",
-    "root|console|<issued>|<delivered>|join the whatsapp group call -> whatsapp_call_join_group(chat_id='123456789@g.us')",
-    "alice|whatsapp:15551234567|<issued>|<delivered>|[speech ru] привет, как дела? -> say(identity='alice', channel='whatsapp:15551234567', message='Привет! Всё хорошо.', lang='ru')",
     "root|console|<issued>|<delivered>|send alice a voice message saying I am late -> whatsapp_send_voice(chat_id='15551234567', text='Hi, I am running about ten minutes late.', lang='en')",
-    "root|whatsapp:4917012345678|<issued>|<delivered>|where is the hotel? -> whatsapp_send_location(chat_id='4917012345678', latitude=52.520008, longitude=13.404954, name='Grand Hotel', address='Main St 1')",
-    "root|console|<issued>|<delivered>|send Lena the plumber's number -> whatsapp_send_contact(chat_id='<Lena>', name='Max Plumber', phone='+49 170 1234567')",
-    "root|console|<issued>|<delivered>|where is Lena now? -> whatsapp_live_location(chat_id='<Lena>')",
-    "root|console|<issued>|<delivered>|make a whatsapp group Trip with +49 170 1234567 and +1 555 555 0100 -> whatsapp_create_group(title='Trip', members=['491701234567', '15555550100'])",
-    "root|console|<issued>|<delivered>|add +1 555 123 4567 to that group -> whatsapp_add_members(chat_id='120363012345678901@g.us', members=['15551234567'])"
+    "root|console|<issued>|<delivered>|make a whatsapp group Trip with +49 170 1234567 and +1 555 555 0100 -> whatsapp_create_group(title='Trip', members=['491701234567', '15555550100'])"
   ]
 }

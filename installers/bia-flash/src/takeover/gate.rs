@@ -1,7 +1,7 @@
 //! The gate: before anything is overwritten, the operator downloads root's certificate
 //! from a one-time HTTPS page served with the *new* bia's server certificate. The page
 //! shows the CA fingerprint the terminal shows too. After the takeover the only way in
-//! is that certificate, so the takeover waits until it was downloaded (or copied).
+//! is that certificate, so the takeover waits until it was downloaded.
 use anyhow::{Context, Result};
 use bia_pki::Pki;
 use std::io::{BufRead, BufReader, Write};
@@ -61,7 +61,6 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
                 let (code, ctype, extra, body): (u16, &str, String, Vec<u8>) = if path == base || path == format!("{base}/") {
                     (200, "text/html; charset=utf-8", String::new(), page(&tok, &ca_sha).into_bytes())
                 } else if path == format!("{base}/root.p12") {
-                    done.store(true, Ordering::SeqCst);
                     (200, "application/x-pkcs12", "Content-Disposition: attachment; filename=\"bia-root.p12\"\r\n".into(), p12)
                 } else {
                     (404, "text/plain", String::new(), b"not found".to_vec())
@@ -71,9 +70,13 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
                     "HTTP/1.1 {code} X\r\nContent-Type: {ctype}\r\n{extra}Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
                     body.len()
                 );
-                let _ = tls.write_all(&body);
+                let sent = tls.write_all(&body).and_then(|_| tls.flush());
                 tls.conn.send_close_notify();
                 let _ = tls.flush();
+                // downloaded = the whole certificate went out, not just asked for
+                if sent.is_ok() && ctype == "application/x-pkcs12" {
+                    done.store(true, Ordering::SeqCst);
+                }
             });
         }
     });

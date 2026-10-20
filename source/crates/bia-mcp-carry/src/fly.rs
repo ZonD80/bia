@@ -562,9 +562,20 @@ pub fn new_secret_for(host: Option<&str>) -> Result<String, String> {
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
         }
         std::fs::rename(&tmp, &p).map_err(|e| format!("save the land secret: {e}"))?;
-        return Ok(format!("{s}\n(saved for {}: carry_fly(host='{}') uses it without secret)", host_key(h), host_key(h)));
+        let k = host_key(h);
+        return Ok(format!("{s}\n(saved for {k}: carry_fly(host='{k}') uses it without secret)\n{}", land_steps(&k, &s)));
     }
     Ok(s)
+}
+
+/// What to do with a new land secret: take the server (`h`, no port) over over ssh, then fly there.
+fn land_steps(h: &str, secret: &str) -> String {
+    format!(
+        "Next (only if root agreed: it erases that server):\n\
+         1. bash: ssh root@{h} 'hostname; cat /etc/os-release; findmnt -no SOURCE /; lsblk -d -o NAME,SIZE,TYPE' — check it is that server, not this computer, and note the disk under / (e.g. /dev/vda).\n\
+         2. bash, the WHOLE remote command in single quotes (else the pipe runs here and erases this computer): ssh root@{h} 'curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | bash -s -- --land --land-secret {secret} --yes --wipe <disk> --reboot' (sudo bash if the login is not root). It checks everything first and changes nothing when a check fails; read its output. \"this machine already runs bia\" means it reached a bia: fix the quoting or the address, never work around it.\n\
+         3. carry_fly(host='{h}', timeout_secs=1800): it retries while the server installs (a few minutes; TCP 4791 must be open in the provider's firewall)."
+    )
 }
 
 /// Drop the secret filed for `host` (the server deletes its copy once an agent landed).

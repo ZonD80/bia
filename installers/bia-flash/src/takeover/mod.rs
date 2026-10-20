@@ -445,7 +445,7 @@ pub fn run(a: Args) -> Result<()> {
         rows.push(Row(
             "root certificate".into(),
             match &root {
-                bia_pki::RootSeed::Generate => "made here, downloaded from the gate page (and saved to /root/bia-root.p12)".to_string(),
+                bia_pki::RootSeed::Generate => "made here, downloaded from the gate page".to_string(),
                 bia_pki::RootSeed::Csr(_) => "your CSR, signed here (your key never leaves you)".to_string(),
             } + &if root_from.is_empty() { String::new() } else { format!("; only from {}", root_from.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ")) },
             src("pki", "default"),
@@ -719,38 +719,35 @@ pub fn run(a: Args) -> Result<()> {
         eprintln!("\n== CA fingerprint (SHA-256) of the new bia:\n   {}", seeded.ca_sha256);
         eprintln!("   other bias know this one as {}", seeded.agent_name);
         if let Some(p12) = seeded.root_p12.clone() {
-            let saved = PathBuf::from("/root/bia-root.p12");
-            stage::write_file(&saved, &p12)?;
-            age_atime(&saved);
             let port = cfg.gate_port.unwrap_or(8443);
+            let g = gate::start(&files, port, p12, seeded.ca_sha256.clone())
+                .context("root's certificate can only leave this machine through the gate page; nothing was changed")?;
             let mut here = global_ips();
             here.extend(ips.iter().copied());
             here.sort();
             here.dedup();
-            let hosts: Vec<String> = here
+            let urls: Vec<String> = here
                 .iter()
                 .map(|ip| if ip.is_ipv6() { format!("[{ip}]") } else { ip.to_string() })
                 .chain(names.iter().cloned())
+                .map(|h| format!("https://{h}:{}/{}/", g.port, g.token))
                 .collect();
-            let mut gate_done = None;
-            eprintln!("\n== ROOT'S CERTIFICATE MUST LEAVE THIS MACHINE NOW (bia-root.p12, password 12345678)");
+            eprintln!("\n== ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW (bia-root.p12, password 12345678)");
             eprintln!("   This disk is replaced; after the takeover this certificate is the only way into bia.");
-            eprintln!("   Nothing is changed and nothing reboots until it was fetched. Get it one of these ways:");
-            match gate::start(&files, port, p12, seeded.ca_sha256.clone()) {
-                Ok(g) => {
-                    gate_done = Some(g.downloaded.clone());
-                    eprintln!("   - download it from the gate page:");
-                    for h in &hosts {
-                        eprintln!("       https://{h}:{}/{}/", g.port, g.token);
-                    }
-                    eprintln!("     (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
-                }
-                Err(e) => eprintln!("   (no gate page: {e:#})"),
+            eprintln!("   Nothing is changed and nothing reboots until it was downloaded from the gate page:");
+            for u in &urls {
+                eprintln!("       {u}");
             }
-            let host = hosts.first().map(String::as_str).unwrap_or("<this server>");
-            eprintln!("   - or copy it from another terminal or bash job (an agent: keep it in its files, never print it):");
-            eprintln!("       scp root@{host}:{} .", saved.display());
-            wait_for_root(&saved, gate_done.as_deref(), cfg.gate_wait.unwrap_or(0))?;
+            eprintln!("   (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
+            if let Some(u) = urls.first() {
+                eprintln!("   From a shell (an agent: from your own machine, into your files; never print it):");
+                eprintln!("       curl -fk -o bia-root.p12 {u}root.p12");
+                eprintln!("       wget --no-check-certificate -O bia-root.p12 {u}root.p12");
+                let host = here.first().map_or("<this server>".to_string(), |ip| ip.to_string());
+                eprintln!("   If port {} is blocked from outside, through ssh:", g.port);
+                eprintln!("       ssh root@{host} 'curl -fsk https://127.0.0.1:{}/{}/root.p12' > bia-root.p12", g.port, g.token);
+            }
+            wait_for_root(&g.downloaded, cfg.gate_wait.unwrap_or(0))?;
         }
         if let Some(pem) = &seeded.root_pem {
             stage::write_file(Path::new("/root/bia-root.crt"), pem.as_bytes())?;
@@ -806,38 +803,19 @@ pub fn run(a: Args) -> Result<()> {
     Ok(())
 }
 
-/// Set the atime of the saved certificate far back: the first read (scp, cat) then moves
-/// it, also on `relatime` mounts (on `noatime` only the gate page counts).
-fn age_atime(p: &Path) {
-    let old = fs::FileTimes::new().set_accessed(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1));
-    let _ = fs::OpenOptions::new().write(true).open(p).and_then(|f| f.set_times(old));
-}
-
-/// Block until root's certificate was downloaded from the gate or copied (its atime moved
-/// past the aged one). `limit` > 0 gives up after that many seconds, before anything was
-/// changed.
-fn wait_for_root(saved: &Path, gate: Option<&std::sync::atomic::AtomicBool>, limit: u64) -> Result<()> {
-    eprintln!("   Waiting until it was fetched; the takeover then continues by itself…");
+/// Block until root's certificate was downloaded from the gate (all of it was sent).
+/// `limit` > 0 gives up after that many seconds, before anything was changed.
+fn wait_for_root(downloaded: &std::sync::atomic::AtomicBool, limit: u64) -> Result<()> {
+    eprintln!("   Waiting for the download; the takeover then continues by itself…");
     let start = std::time::Instant::now();
-    loop {
-        if gate.is_some_and(|d| d.load(std::sync::atomic::Ordering::SeqCst)) {
-            // let the response finish
-            std::thread::sleep(std::time::Duration::from_secs(2));
-            eprintln!("== root's certificate was downloaded from the gate page");
-            return Ok(());
-        }
-        if fs::metadata(saved).and_then(|m| m.accessed()).is_ok_and(|t| t > std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)) {
-            eprintln!("== root's certificate was copied from this machine");
-            return Ok(());
-        }
+    while !downloaded.load(std::sync::atomic::Ordering::SeqCst) {
         if limit > 0 && start.elapsed().as_secs() >= limit {
-            bail!(
-                "root's certificate was not fetched within {limit} s; nothing was changed. Fetch {} and run the takeover again",
-                saved.display()
-            );
+            bail!("root's certificate was not downloaded within {limit} s; nothing was changed. Run the takeover again");
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    eprintln!("== root's certificate was downloaded from the gate page");
+    Ok(())
 }
 
 /// Global addresses on this machine right now (DHCP ones too), for the gate links.

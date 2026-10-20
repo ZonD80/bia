@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.6
+
+### Changes
+- A takeover now continues only after root's certificate (bia-root.p12) was downloaded from its one-time page, in a browser or with curl or wget; copying the file with scp no longer counts. A download counts only once the whole file was sent. If the page cannot start (its port is taken), the takeover stops before changing anything. Its output shows ready curl and wget commands, and an ssh one for when the port is blocked from outside.
+- bia's tool descriptions are shorter: each MCP says in a sentence or two what it is for, and the details come with each tool, its results and its errors.
+
+### For bia
+- When you take over a server without --land, download root's certificate from the gate page the takeover prints, instead of copying it with scp: in a second bash job run `curl -fk -o /home/bia/files/<address>-root.p12 https://<address>:8443/<token>/root.p12` (if port 8443 is blocked: `ssh root@<address> 'curl -fsk https://127.0.0.1:8443/<token>/root.p12' > /home/bia/files/<address>-root.p12`); then the takeover continues by itself. Never cat or print that file: it holds root's key. Tell root where it is.
+- To make a server a land for yourself, call carry_new_land_secret(host=<address>): it now returns the exact steps (ssh check, takeover command with the secret filled in, carry_fly).
+
 ## 1.1.5
 
 ### Changes

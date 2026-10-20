@@ -176,7 +176,7 @@ fn main() {
         )
         .tool(
             "fly",
-            "Send this computer's backup to a computer that is waiting. host is the ip from carry_discover. If you omit host and exactly one computer is waiting, send to that one. If several are waiting, do not send. Both screens show a 6-digit code. Call carry_confirm only after the user says they match. A server taken over in land mode (by root, or by you over ssh: see the carry description) waits somewhere on the internet with a land secret instead: pass its address as host and the land secret as secret, with timeout_secs up to 1800 while it is still installing; then no code is shown, both sides prove the secret and the backup travels encrypted. This computer keeps running. The other one reboots.",
+            "Send this computer's backup to a computer that is waiting. host is the ip from carry_discover. If you omit host and exactly one computer is waiting, send to that one. If several are waiting, do not send. Both screens show a 6-digit code. Call carry_confirm only after the user says they match. A server taken over in land mode (by root, or by you: carry_new_land_secret) waits somewhere on the internet with a land secret instead: pass its address as host and the land secret as secret, with timeout_secs up to 1800 while it is still installing; then no code is shown, both sides prove the secret and the backup travels encrypted. This computer keeps running. The other one reboots.",
             json!({"type": "object", "properties": {
                 "host": {"type": "string", "description": "ip or name of the waiting computer. Omit to look for one on this network."},
                 "port": {"type": "integer", "description": "optional. Default 4791."},
@@ -187,7 +187,7 @@ fn main() {
         )
         .tool(
             "new_land_secret",
-            "Make a new land secret (140 bits) for a server you are about to take over in land mode: pass it to takeover (takeover.sh … --land --land-secret <secret>, e.g. over ssh). With host it is also saved for that server, so carry_fly(host=…) finds it by itself later. The server keeps it through updates while it waits; it is deleted (here too) once an agent has landed.",
+            "Start making a server you reach over ssh (Ubuntu, Debian; not a bia) a land for this agent: makes a land secret (140 bits), saves it for host, and returns the exact steps (check over ssh, takeover.sh --land, carry_fly). Ask root first: the takeover erases that server. The secret is deleted (here too) once an agent has landed.",
             json!({"type": "object", "properties": {
                 "host": {"type": "string", "description": "the server's address or name: save the secret for it"}
             }}),
