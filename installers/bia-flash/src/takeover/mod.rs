@@ -721,49 +721,36 @@ pub fn run(a: Args) -> Result<()> {
         if let Some(p12) = seeded.root_p12.clone() {
             let saved = PathBuf::from("/root/bia-root.p12");
             stage::write_file(&saved, &p12)?;
+            age_atime(&saved);
             let port = cfg.gate_port.unwrap_or(8443);
+            let mut here = global_ips();
+            here.extend(ips.iter().copied());
+            here.sort();
+            here.dedup();
+            let hosts: Vec<String> = here
+                .iter()
+                .map(|ip| if ip.is_ipv6() { format!("[{ip}]") } else { ip.to_string() })
+                .chain(names.iter().cloned())
+                .collect();
             let mut gate_done = None;
+            eprintln!("\n== ROOT'S CERTIFICATE MUST LEAVE THIS MACHINE NOW (bia-root.p12, password 12345678)");
+            eprintln!("   This disk is replaced; after the takeover this certificate is the only way into bia.");
+            eprintln!("   Nothing is changed and nothing reboots until it was fetched. Get it one of these ways:");
             match gate::start(&files, port, p12, seeded.ca_sha256.clone()) {
                 Ok(g) => {
                     gate_done = Some(g.downloaded.clone());
-                    eprintln!("\n== Get root's certificate now (password 12345678):");
-                    let mut here = global_ips();
-                    here.extend(ips.iter().copied());
-                    here.sort();
-                    here.dedup();
-                    for ip in &here {
-                        let host = if ip.is_ipv6() { format!("[{ip}]") } else { ip.to_string() };
-                        eprintln!("   https://{host}:{}/{}/", g.port, g.token);
+                    eprintln!("   - download it from the gate page:");
+                    for h in &hosts {
+                        eprintln!("       https://{h}:{}/{}/", g.port, g.token);
                     }
-                    for n in &names {
-                        eprintln!("   https://{n}:{}/{}/", g.port, g.token);
-                    }
-                    eprintln!("   (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
-                    eprintln!("   or copy {} from this machine (scp).", saved.display());
+                    eprintln!("     (the browser warns about the certificate: it is the new bia's own CA, check the fingerprint)");
                 }
-                Err(e) => eprintln!("\nnote: no gate page ({e:#}); copy {} from this machine (scp) instead.", saved.display()),
+                Err(e) => eprintln!("   (no gate page: {e:#})"),
             }
-            if ask.interactive() {
-                loop {
-                    let a = ask.line("Type YES once you have root's certificate (bia-root.p12)", "")?;
-                    if a == "YES" {
-                        break;
-                    }
-                    eprintln!("Without it you cannot reach bia after the takeover.");
-                }
-            } else {
-                eprintln!("note: unattended: root's certificate is in {}; fetch it before the machine reboots", saved.display());
-                let wait = cfg.gate_wait.unwrap_or(0);
-                if wait > 0 {
-                    eprintln!("== waiting up to {wait} s for the download from the gate page");
-                    let end = std::time::Instant::now() + std::time::Duration::from_secs(wait);
-                    while std::time::Instant::now() < end && !gate_done.as_ref().is_some_and(|d| d.load(std::sync::atomic::Ordering::SeqCst)) {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    }
-                    // let the last response finish
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                }
-            }
+            let host = hosts.first().map(String::as_str).unwrap_or("<this server>");
+            eprintln!("   - or copy it from another terminal or bash job (an agent: keep it in its files, never print it):");
+            eprintln!("       scp root@{host}:{} .", saved.display());
+            wait_for_root(&saved, gate_done.as_deref(), cfg.gate_wait.unwrap_or(0))?;
         }
         if let Some(pem) = &seeded.root_pem {
             stage::write_file(Path::new("/root/bia-root.crt"), pem.as_bytes())?;
@@ -817,6 +804,40 @@ pub fn run(a: Args) -> Result<()> {
         eprintln!("   Reboot when ready: systemctl reboot");
     }
     Ok(())
+}
+
+/// Set the atime of the saved certificate far back: the first read (scp, cat) then moves
+/// it, also on `relatime` mounts (on `noatime` only the gate page counts).
+fn age_atime(p: &Path) {
+    let old = fs::FileTimes::new().set_accessed(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1));
+    let _ = fs::OpenOptions::new().write(true).open(p).and_then(|f| f.set_times(old));
+}
+
+/// Block until root's certificate was downloaded from the gate or copied (its atime moved
+/// past the aged one). `limit` > 0 gives up after that many seconds, before anything was
+/// changed.
+fn wait_for_root(saved: &Path, gate: Option<&std::sync::atomic::AtomicBool>, limit: u64) -> Result<()> {
+    eprintln!("   Waiting until it was fetched; the takeover then continues by itself…");
+    let start = std::time::Instant::now();
+    loop {
+        if gate.is_some_and(|d| d.load(std::sync::atomic::Ordering::SeqCst)) {
+            // let the response finish
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            eprintln!("== root's certificate was downloaded from the gate page");
+            return Ok(());
+        }
+        if fs::metadata(saved).and_then(|m| m.accessed()).is_ok_and(|t| t > std::time::UNIX_EPOCH + std::time::Duration::from_secs(1)) {
+            eprintln!("== root's certificate was copied from this machine");
+            return Ok(());
+        }
+        if limit > 0 && start.elapsed().as_secs() >= limit {
+            bail!(
+                "root's certificate was not fetched within {limit} s; nothing was changed. Fetch {} and run the takeover again",
+                saved.display()
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// Global addresses on this machine right now (DHCP ones too), for the gate links.

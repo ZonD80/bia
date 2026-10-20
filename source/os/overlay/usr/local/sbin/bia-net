@@ -15,6 +15,15 @@ SYS=${BIA_NET_SYS:-/sys/class/net}
 OUT=${BIA_NET_OUT:-/etc/network/interfaces}
 [ -d "$NET" ] || exit 0
 
+confs() { # the per-MAC stanza files (not resolv.conf)
+  local f
+  for f in "$NET"/*.conf; do
+    [ -f "$f" ] || continue
+    [ "$(basename "$f")" = resolv.conf ] && continue
+    echo "$f"
+  done
+}
+
 wired() { # names of wired (Ethernet, not wireless, not virtual) interfaces
   local d n
   for d in "$SYS"/*; do
@@ -30,7 +39,8 @@ wired() { # names of wired (Ethernet, not wireless, not virtual) interfaces
 if [ "${1:-}" = --fallback ]; then
   i=0
   while [ "$i" -lt 120 ]; do
-    if ip route show default 2>/dev/null | grep -q . || ip -6 route show default 2>/dev/null | grep -q .; then
+    # a gateway, not dhcpcd's IPv4LL "default dev eth0 scope link"
+    if ip route show default 2>/dev/null | grep -q ' via ' || ip -6 route show default 2>/dev/null | grep -q ' via '; then
       exit 0
     fi
     sleep 1
@@ -54,8 +64,7 @@ have_mac() {
 i=0
 while [ "$i" -lt 30 ]; do
   missing=0
-  for f in "$NET"/*.conf; do
-    [ -f "$f" ] || continue
+  for f in $(confs); do
     have_mac "$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')" || missing=1
   done
   [ "$missing" = 0 ] && break
@@ -70,8 +79,7 @@ tmp=$OUT.tmp
   echo "auto lo"
   echo "iface lo inet loopback"
   matched=" "
-  for f in "$NET"/*.conf; do
-    [ -f "$f" ] || continue
+  for f in $(confs); do
     mac=$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')
     name=
     for d in "$SYS"/*; do

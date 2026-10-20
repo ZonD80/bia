@@ -2,6 +2,8 @@
 # Visible boot progress after the interface is configured (lease or static).
 [ -n "$IFACE" ] || exit 0
 [ "$IFACE" = lo ] && exit 0
+# networking.service runs the hooks once more for "--all"
+[ "$IFACE" = --all ] && exit 0
 addr=$(ip -4 -o addr show dev "$IFACE" scope global 2>/dev/null | awk '{ print $4; exit }')
 if [ -n "$addr" ]; then
   msg="bia-network: $IFACE is up ($addr)"

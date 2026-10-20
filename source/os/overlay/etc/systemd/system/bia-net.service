@@ -3,6 +3,10 @@ Description=Network configuration carried over by a takeover (interfaces by MAC 
 DefaultDependencies=no
 After=local-fs.target bia-seed.service systemd-udev-trigger.service
 Before=networking.service network-pre.target
+# pull network-pre.target in: ifup@<if>.service (udev hotplug) is ordered after it, so
+# without this it brings the interface up with the shipped DHCP stanza before the
+# takeover's configuration is in place
+Wants=network-pre.target
 ConditionPathIsDirectory=/etc/bia/net
 
 [Service]

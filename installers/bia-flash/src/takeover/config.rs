@@ -45,8 +45,9 @@ pub struct Config {
     pub reboot: Option<bool>,
     #[serde(default)]
     pub gate_port: Option<u16>,
-    /// Unattended runs: keep the gate page up this many seconds, or until root's
-    /// certificate was downloaded (default 0: it is in /root/bia-root.p12).
+    /// The takeover waits until root's certificate was fetched (gate page or a copy of
+    /// /root/bia-root.p12); this gives up after so many seconds,
+    /// before anything was changed (default 0: no limit).
     #[serde(default)]
     pub gate_wait: Option<u64>,
     /// Land mode: `true` (a land secret is made) or `{"secret": "…"}`. bia then waits for
