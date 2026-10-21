@@ -2208,7 +2208,10 @@ impl Wa {
     // -- inbound messages -----------------------------------------------------------
 
     async fn on_message(&self, ctx: MessageContext) {
-        if let Err(e) = self.handle_inbound(&ctx).await {
+        // Its place among this chat's messages to the model, taken before anything slow
+        // (messages are handled concurrently; the lane keeps them in order).
+        let turn = lanes().reserve(&ctx.info.source.chat.to_non_ad().to_string());
+        if let Err(e) = self.handle_inbound(&ctx, turn).await {
             self.log(format!("inbound error: {e}"));
         }
     }
@@ -2405,7 +2408,7 @@ impl Wa {
         Ok(())
     }
 
-    async fn handle_inbound(&self, ctx: &MessageContext) -> Result<(), String> {
+    async fn handle_inbound(&self, ctx: &MessageContext, mut turn: bia_mcp::lanes::Turn) -> Result<(), String> {
         let info = &ctx.info;
         let client = ctx.client.clone();
         let chat = info.source.chat.to_non_ad();
@@ -2521,46 +2524,55 @@ impl Wa {
             return Ok(());
         }
 
-        let mut deliver = text.clone();
-        // During an active voice call, ignore chat media (live STT covers speech).
-        let in_call = Calls::global().active_key().as_deref() == Some(key.as_str());
-        if kind.is_some() && !in_call {
-            match self.save_media(&client, &key, base, &info.id).await {
-                Ok((rel, abs)) => {
-                    if deliver.is_empty() {
-                        deliver = format!("file: {rel}");
-                    } else {
-                        deliver = format!("{deliver}\nfile: {rel}");
-                    }
-                    if matches!(kind, Some("voice") | Some("audio")) {
-                        let abs2 = abs.clone();
-                        let lang = bia_speech::contacts::lang_for(&format!("whatsapp:{key}"));
-                        let heard = tokio::task::spawn_blocking(move || bia_speech::transcribe_note_from(&abs2, lang.as_deref()))
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|r| r);
-                        deliver = with_transcript(heard, &deliver, &format!("whatsapp/{rel}"));
-                    }
-                }
-                Err(e) => {
-                    self.log(format!("media {key}: {e}"));
-                    if deliver.is_empty() {
-                        // Nothing usable; don't push a bare "(media)".
-                        return Ok(());
-                    }
-                }
-            }
-        }
-        if deliver.is_empty() {
-            return Ok(());
-        }
-        self.inbound_at(&label, &key, &info.id, &deliver, ts);
+        // Read as soon as it arrives: downloading media and transcribing a voice note
+        // take a while, and the sender should not wait for them to see it was received.
         if let Err(e) = client
             .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
             .await
         {
             self.log(format!("mark_read chat={key}: {e}"));
         }
+        let mut deliver = text.clone();
+        let mut voice = None;
+        // During an active voice call, ignore chat media (live STT covers speech).
+        let in_call = Calls::global().active_key().as_deref() == Some(key.as_str());
+        if let Some(k) = kind.filter(|_| !in_call) {
+            let note = match self.save_media(&client, &key, base, &info.id).await {
+                Ok((rel, abs)) => {
+                    if matches!(k, "voice" | "audio") {
+                        voice = Some((rel.clone(), abs));
+                    }
+                    format!("file: {rel}")
+                }
+                Err(e) => {
+                    self.log(format!("media {key}: {e}"));
+                    let what = match k {
+                        "voice" => "voice message",
+                        "audio" => "audio file",
+                        "image" => "photo",
+                        "document" => "file",
+                        k => k,
+                    };
+                    format!("[{what} not received: {e}; ask them to send it again if you need it]")
+                }
+            };
+            deliver = if deliver.is_empty() { note } else { format!("{deliver}\n{note}") };
+        }
+        if deliver.is_empty() {
+            return Ok(());
+        }
+        // Downloaded alongside the chat's other messages; transcribed and delivered in
+        // turn, so what this chat sent next reaches the model after the transcript.
+        turn.wait().await;
+        if let Some((rel, abs)) = voice {
+            let lang = bia_speech::contacts::lang_for(&format!("whatsapp:{key}"));
+            let heard = tokio::task::spawn_blocking(move || bia_speech::transcribe_note_from(&abs, lang.as_deref()))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+            deliver = with_transcript(heard, &deliver, &format!("whatsapp/{rel}"));
+        }
+        self.inbound_at(&label, &key, &info.id, &deliver, ts);
         Ok(())
     }
 
@@ -2655,6 +2667,12 @@ fn write_bans(ids: &[String]) -> Result<(), String> {
     std::fs::write(bans_path(), serde_json::to_vec_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
     unsafe { libc::sync() };
     Ok(())
+}
+
+/// Inbound messages to the model, in order per chat (see [`bia_mcp::lanes`]).
+fn lanes() -> &'static bia_mcp::lanes::Lanes {
+    static L: std::sync::LazyLock<bia_mcp::lanes::Lanes> = std::sync::LazyLock::new(Default::default);
+    &L
 }
 
 /// Inbound messages that arrived before the agent link (`set_ctx`) existed; delivered

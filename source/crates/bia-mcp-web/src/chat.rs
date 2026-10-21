@@ -1191,6 +1191,7 @@ fn store_user_msg(h: &Hub, identity: &str, chat: &str, m: Msg) -> Result<Msg, St
         .filter_map(|a| att_abs(&h.files, &a.path).map(|abs| (a.path.clone(), abs)))
         .collect();
     deliver_later(Delivery {
+        turn: lanes().reserve(&format!("{identity}/{chat}")),
         identity: identity.to_string(),
         chat: chat.to_string(),
         id: m.id.clone(),
@@ -1201,8 +1202,10 @@ fn store_user_msg(h: &Hub, identity: &str, chat: &str, m: Msg) -> Result<Msg, St
 }
 
 /// A user message on its way to the model. Voice and audio files are transcribed
-/// first; everything goes through one queue so messages keep their order.
+/// first, on a thread of the message's own; `turn` keeps a chat's messages in order
+/// without other chats waiting for them.
 struct Delivery {
+    turn: bia_mcp::lanes::Turn,
     identity: String,
     chat: String,
     id: String,
@@ -1212,24 +1215,25 @@ struct Delivery {
 }
 
 fn deliver_later(d: Delivery) {
-    static TX: OnceLock<std::sync::mpsc::Sender<Delivery>> = OnceLock::new();
-    let tx = TX.get_or_init(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<Delivery>();
-        let _ = std::thread::Builder::new()
-            .name("web-deliver".into())
-            .spawn(move || {
-                for d in rx {
-                    deliver(d);
-                }
-            });
-        tx
-    });
-    if let Err(e) = tx.send(d) {
-        deliver(e.0);
+    let d = Arc::new(Mutex::new(Some(d)));
+    let mine = d.clone();
+    let spawned = std::thread::Builder::new()
+        .name("web-deliver".into())
+        .spawn(move || mine.lock().unwrap().take().map(deliver));
+    if spawned.is_err() {
+        if let Some(d) = d.lock().unwrap().take() {
+            deliver(d);
+        }
     }
 }
 
-fn deliver(d: Delivery) {
+/// Web chats' messages to the model, in order per chat (see [`bia_mcp::lanes`]).
+fn lanes() -> &'static bia_mcp::lanes::Lanes {
+    static L: std::sync::LazyLock<bia_mcp::lanes::Lanes> = std::sync::LazyLock::new(Default::default);
+    &L
+}
+
+fn deliver(mut d: Delivery) {
     let Ok(h) = hub() else { return };
     let mut note = d.note;
     if !d.voice.is_empty() {
@@ -1262,6 +1266,7 @@ fn deliver(d: Delivery) {
             note.push_str(&t);
         }
     }
+    d.turn.wait_blocking();
     h.to_agent(&d.identity, &d.chat, &d.id, note);
 }
 

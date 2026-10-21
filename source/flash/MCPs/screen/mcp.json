@@ -1,6 +1,6 @@
 {
   "name": "screen",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "The real desktop, the whole screen, not a web page: screen_shot first, then click, type and press keys at pixel x,y from the top-left.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-screen",

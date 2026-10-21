@@ -536,10 +536,13 @@ impl Tg {
         Ok(client)
     }
 
-    /// Deliver one inbound message to the model. Returns `true` if it was pushed.
+    /// Deliver one inbound message to the model. Returns `true` if it was pushed. `turn`
+    /// is its place in its chat (see [`lanes`]): what is slow (looking the sender up,
+    /// downloading media) runs alongside the chat's other messages, the delivery in turn.
     async fn handle_inbound_message(
         client: &Client,
         msg: ferogram::update::IncomingMessage,
+        mut turn: bia_mcp::lanes::Turn,
     ) -> Result<bool, String> {
         if msg.outgoing() {
             return Ok(false);
@@ -570,16 +573,22 @@ impl Tg {
         watermark::note(chat_id, mid);
         let msg_id = mid.to_string();
         tg.note_msg(mid, chat_id);
+        let date = msg.date() as i64;
         // During an active voice call, ignore chat media (live STT covers speech).
         if calls::Calls::global().active_chat() == Some(chat_id) {
             if text.is_empty() {
                 return Ok(false);
             }
-            tg.inbound_at(&identity, chat_id, &msg_id, &text, msg.date() as i64);
-            texts().put(&format!("{chat_id}:{mid}"), msg.date() as i64, msg.text().unwrap_or(""));
             mark_delivered_read(client, &msg, chat_id).await;
+            turn.wait().await;
+            tg.inbound_at(&identity, chat_id, &msg_id, &text, date);
+            texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
             return Ok(true);
         }
+        // Read as soon as it arrives: downloading media and transcribing a voice note
+        // take a while, and the sender should not wait for them to see it was received.
+        mark_delivered_read(client, &msg, chat_id).await;
+        let mut media = None;
         if let Some(tl::enums::MessageMedia::GeoLive(geo_live)) = msg.media() {
             // The first point of a share reaches the model; the moves come as edits.
             let Some((lat, lon, acc)) = geo_of(&geo_live.geo) else { return Ok(false) };
@@ -597,33 +606,43 @@ impl Tg {
         } else if let Some(shared) = msg.media().and_then(shared_text) {
             // A location or contact: nothing to download, the text is the content.
             text = if text.is_empty() { shared } else { format!("{text}\n{shared}") };
-        } else if let Some(media) = msg.media() {
-            if let Ok(rel) = save_inbound_media(client, chat_id, media).await {
-                if text.is_empty() {
-                    text = format!("file: {rel}");
-                } else {
-                    text = format!("{text}\nfile: {rel}");
-                }
-                if is_audio(&rel) {
-                    // Voice notes: transcribed off the update loop's thread.
-                    let abs = Self::files_dir().join(&rel);
-                    let lang = bia_speech::contacts::lang_for(&format!("telegram:{chat_id}"));
-                    let heard = tokio::task::spawn_blocking(move || bia_speech::transcribe_note_from(&abs, lang.as_deref()))
-                        .await
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r);
-                    text = with_transcript(heard, &text, &format!("telegram/{rel}"));
-                }
-            }
+        } else {
+            media = msg.media().cloned();
         }
-        if text.is_empty() {
-            // No bare "(media)" — skip empty media failures.
+        if text.is_empty() && media.is_none() {
             return Ok(false);
         }
-        tg.inbound_at(&identity, chat_id, &msg_id, &text, msg.date() as i64);
+        let mut voice = None;
+        if let Some(media) = media {
+            let note = match save_inbound_media(client, chat_id, &media).await {
+                Ok(rel) => {
+                    if is_audio(&rel) {
+                        voice = Some(rel.clone());
+                    }
+                    format!("file: {rel}")
+                }
+                Err(e) => {
+                    tg.log(format!("media chat={chat_id} msg={mid}: {e}"));
+                    format!("[{} not received: {e}; ask them to send it again if you need it]", media_kind(&media))
+                }
+            };
+            text = if text.is_empty() { note } else { format!("{text}\n{note}") };
+        }
+        // Transcribed and delivered in turn: what this chat sent next reaches the model
+        // after the transcript.
+        turn.wait().await;
+        if let Some(rel) = voice {
+            let abs = Self::files_dir().join(&rel);
+            let lang = bia_speech::contacts::lang_for(&format!("telegram:{chat_id}"));
+            let heard = tokio::task::spawn_blocking(move || bia_speech::transcribe_note_from(&abs, lang.as_deref()))
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+            text = with_transcript(heard, &text, &format!("telegram/{rel}"));
+        }
+        tg.inbound_at(&identity, chat_id, &msg_id, &text, date);
         // The text as sent (no file notes), so an edit can show what it was.
-        texts().put(&format!("{chat_id}:{mid}"), msg.date() as i64, msg.text().unwrap_or(""));
-        mark_delivered_read(client, &msg, chat_id).await;
+        texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
         Ok(true)
     }
 
@@ -1555,7 +1574,8 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
                     ),
                 );
             }
-            match Tg::handle_inbound_message(client, msg).await {
+            let turn = lanes().reserve(&chat_id.to_string());
+            match Tg::handle_inbound_message(client, msg, turn).await {
                 Ok(true) => delivered += 1,
                 Ok(false) => {}
                 Err(e) => Tg::global().log(format!("catch-up deliver chat={chat_id}: {e}")),
@@ -1632,22 +1652,36 @@ async fn run_update_loop(
             maybe = stream.next() => {
                 let Some(upd) = maybe else { break; };
                 match upd {
+                    // Each message in a task of its own, like WhatsApp's: a slow one (a
+                    // download, a transcription) holds up only what its chat sent after
+                    // it, never other chats, edits or calls. Its turn is taken here, in
+                    // arrival order.
                     Update::NewMessage(msg) => {
-                        if let Err(e) = Tg::handle_inbound_message(&client, msg).await {
-                            Tg::global().log(format!("inbound error: {e}"));
-                        }
+                        let turn = lanes().reserve(&marked_chat_id(msg.peer_id()).to_string());
+                        let client = client.clone();
+                        Tg::global().rt.spawn(async move {
+                            if let Err(e) = Tg::handle_inbound_message(&client, msg, turn).await {
+                                Tg::global().log(format!("inbound error: {e}"));
+                            }
+                        });
                     }
                     Update::MessageEdited(msg) => {
                         // Live locations move by editing their message; real edits are
-                        // reported with the old and new text.
-                        handle_edit(&client, msg).await;
+                        // reported with the old and new text, after the message itself.
+                        let mut turn = lanes().reserve(&marked_chat_id(msg.peer_id()).to_string());
+                        let client = client.clone();
+                        Tg::global().rt.spawn(async move {
+                            turn.wait().await;
+                            handle_edit(&client, msg).await;
+                        });
                     }
                     Update::MessageDeleted(del) => {
                         handle_message_deleted(del);
                     }
                     Update::Raw(raw) => {
                         if matches!(&raw.inner, tl::enums::Update::MessageReactions(_)) {
-                            handle_reaction_update(&client, &raw.inner).await;
+                            let (client, upd) = (client.clone(), raw.inner.clone());
+                            Tg::global().rt.spawn(async move { handle_reaction_update(&client, &upd).await });
                         }
                         call_state.on_raw(&client, *raw).await;
                     }
@@ -1702,6 +1736,39 @@ async fn save_inbound_media(
         .await
         .map_err(|e| format!("download: {e}"))?;
     Ok(format!("inbox/telegram/{chat_id}/{name}"))
+}
+
+/// What a message that could not be downloaded carried, for the model's note.
+fn media_kind(media: &tl::enums::MessageMedia) -> &'static str {
+    use tl::enums::{Document, DocumentAttribute, MessageMedia};
+    match media {
+        MessageMedia::Photo(_) => "photo",
+        MessageMedia::Document(md) => {
+            if md.voice {
+                return "voice message";
+            }
+            let Some(Document::Document(d)) = &md.document else {
+                return "file";
+            };
+            for a in &d.attributes {
+                match a {
+                    DocumentAttribute::Audio(x) if x.voice => return "voice message",
+                    DocumentAttribute::Audio(_) => return "audio file",
+                    DocumentAttribute::Video(_) => return "video",
+                    DocumentAttribute::Sticker(_) => return "sticker",
+                    _ => {}
+                }
+            }
+            "file"
+        }
+        _ => "attachment",
+    }
+}
+
+/// Inbound messages to the model, in order per chat (see [`bia_mcp::lanes`]).
+fn lanes() -> &'static bia_mcp::lanes::Lanes {
+    static L: std::sync::LazyLock<bia_mcp::lanes::Lanes> = std::sync::LazyLock::new(Default::default);
+    &L
 }
 
 /// Live locations per chat (`files/state/telegram-live.json`).

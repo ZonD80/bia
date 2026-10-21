@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.8
+
+### Changes
+- Telegram and WhatsApp: a message now shows as read as soon as bia receives it. Before, a voice message showed as read only after bia had downloaded and transcribed it, so the sender waited without knowing whether it arrived.
+- Telegram, WhatsApp and the web app handle each incoming message on its own: downloading a file or transcribing a voice message no longer holds up other chats (on Telegram it held up everything, including incoming calls; in the web app, other people's messages). Within one chat, messages still reach bia in the order they were sent: a text sent right after a voice message comes after that voice message's transcript, never before it.
+- Telegram and WhatsApp: when a photo, voice message or file cannot be downloaded, bia is now told so and can ask for it again. Before, such a message without text was dropped silently.
+
+### For bia
+- "[<photo|voice message|file…> not received: <reason>; …]" on a Telegram or WhatsApp message means its attachment could not be downloaded: ask the sender to send it again if you need it.
+
 ## 1.1.7
 
 ### Changes

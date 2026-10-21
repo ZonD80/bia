@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "Your own Telegram account, a real user, not a bot: login, chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/telegram/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-telegram",

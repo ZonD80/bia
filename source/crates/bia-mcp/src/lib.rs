@@ -5,6 +5,7 @@
 //! progress. tools/call runs on a worker thread so a second request can arrive
 //! (and be cancelled) while a long handler is running.
 
+pub mod lanes;
 pub mod md;
 pub mod share;
 
