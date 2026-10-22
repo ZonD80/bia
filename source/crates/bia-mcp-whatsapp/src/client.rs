@@ -294,6 +294,30 @@ fn describe(base: &wa::Message) -> (String, Option<&'static str>) {
     (text, kind)
 }
 
+/// The context (reply, forward, mentions) of a message, on whichever kind carries it.
+fn context_info(base: &wa::Message) -> Option<&wa::ContextInfo> {
+    macro_rules! first {
+        ($($f:ident),+) => {{
+            None$(.or_else(|| base.$f.as_option().and_then(|m| m.context_info.as_option())))+
+        }};
+    }
+    first!(
+        extended_text_message,
+        image_message,
+        video_message,
+        ptv_message,
+        audio_message,
+        document_message,
+        sticker_message,
+        location_message,
+        live_location_message,
+        contact_message,
+        contacts_array_message,
+        poll_creation_message,
+        poll_creation_message_v3
+    )
+}
+
 /// Live locations per chat (`files/state/whatsapp-live.json`).
 fn live() -> &'static bia_mcp::share::LiveTracker {
     static T: OnceLock<bia_mcp::share::LiveTracker> = OnceLock::new();
@@ -2533,6 +2557,9 @@ impl Wa {
             self.log(format!("mark_read chat={key}: {e}"));
         }
         let mut deliver = text.clone();
+        if let Some(r) = self.reply_note(&client, &key, base).await {
+            deliver = if deliver.is_empty() { r } else { format!("{r}\n{deliver}") };
+        }
         let mut voice = None;
         // During an active voice call, ignore chat media (live STT covers speech).
         let in_call = Calls::global().active_key().as_deref() == Some(key.as_str());
@@ -2574,6 +2601,29 @@ impl Wa {
         }
         self.inbound_at(&label, &key, &info.id, &deliver, ts);
         Ok(())
+    }
+
+    /// `[reply to <id> from <who>: "…"]` for a message that quotes another one: author and
+    /// text from the chat cache ("you" for bia's own), else from the quoted copy it carries.
+    async fn reply_note(&self, client: &Client, key: &str, base: &wa::Message) -> Option<String> {
+        let ctx = context_info(base)?;
+        let id = ctx.stanza_id.as_deref().filter(|s| !s.is_empty())?;
+        let cached = self.hist.lock().unwrap().get(key, id);
+        let (from, text) = match cached {
+            Some(l) => (if l.me { "you".to_string() } else { l.from }, l.text),
+            None => {
+                let from = match ctx.participant.as_deref().and_then(|p| p.parse::<Jid>().ok()) {
+                    Some(j) => format!("+{}", key_of_jid_async(client, &j).await),
+                    None => String::new(),
+                };
+                let text = ctx.quoted_message.as_option().map(|q| {
+                    let (t, kind) = describe(q);
+                    hist_text(&t, kind)
+                });
+                (from, text.unwrap_or_default())
+            }
+        };
+        Some(bia_mcp::share::reply_text(id, &from, &text, ""))
     }
 
     async fn save_media(

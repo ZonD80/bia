@@ -628,6 +628,9 @@ impl Tg {
             };
             text = if text.is_empty() { note } else { format!("{text}\n{note}") };
         }
+        if let Some(r) = reply_note(client, &msg, chat_id).await {
+            text = format!("{r}\n{text}");
+        }
         // Transcribed and delivered in turn: what this chat sent next reaches the model
         // after the transcript.
         turn.wait().await;
@@ -1763,6 +1766,38 @@ fn media_kind(media: &tl::enums::MessageMedia) -> &'static str {
         }
         _ => "attachment",
     }
+}
+
+/// `[reply to <id> from <who>: "…"]` for a message that answers another one: the quoted
+/// part when the sender picked one, else the replied message's text (fetched; the text
+/// cache when that fails). Topic roots in forum groups are not replies.
+async fn reply_note(client: &Client, msg: &ferogram::update::IncomingMessage, chat_id: i64) -> Option<String> {
+    let tl::enums::Message::Message(m) = &msg.raw else { return None };
+    let Some(tl::enums::MessageReplyHeader::MessageReplyHeader(h)) = &m.reply_to else { return None };
+    let id = h.reply_to_msg_id?;
+    if h.forum_topic && h.reply_to_top_id.is_none() {
+        return None;
+    }
+    let quote = h.quote_text.clone().unwrap_or_default();
+    let (from, text) = match msg.get_reply_with(client).await {
+        Ok(Some(r)) => {
+            let from = if r.outgoing() {
+                "you".to_string()
+            } else {
+                match r.sender_user_id().unwrap_or(0) {
+                    0 => String::new(),
+                    uid => user_label(client, uid).await,
+                }
+            };
+            let text = match (r.text().unwrap_or(""), r.media()) {
+                ("", Some(media)) => shared_text(media).unwrap_or_else(|| format!("[{}]", media_kind(media))),
+                (t, _) => t.to_string(),
+            };
+            (from, text)
+        }
+        _ => (String::new(), texts().get(&format!("{chat_id}:{id}")).map(|(_, t)| t).unwrap_or_default()),
+    };
+    Some(bia_mcp::share::reply_text(&id.to_string(), &from, &text, &quote))
 }
 
 /// Inbound messages to the model, in order per chat (see [`bia_mcp::lanes`]).

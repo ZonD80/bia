@@ -5,6 +5,12 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.10
+
+### Changes
+- Telegram and WhatsApp: when you reply to a message (or quote part of it), bia now sees which message you mean, who wrote it and its text. Before, it got only your words and had to guess what "and this?" was about.
+- After an update or a restart, bia now reports back in the chat where you (or anyone else) were talking to it just before, instead of only on its own screen. If it promised to check something after the reboot, it tells you the result there.
+
 ## 1.1.9
 
 ### Changes

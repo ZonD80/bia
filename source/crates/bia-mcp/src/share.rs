@@ -419,6 +419,30 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// The line put before a message that answers another one, as web chats do:
+/// `[reply to 4405 from you: "Starting the update…"]`. `from` is who wrote the quoted
+/// message ("you" for bia's own), `text` its text (or what it carried), `quote` the part
+/// the sender selected, if any. Unknown text gives just `[reply to <id> from <who>]`.
+pub fn reply_text(id: &str, from: &str, text: &str, quote: &str) -> String {
+    let clip = |s: &str| {
+        let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        if s.chars().count() > 200 {
+            s.chars().take(200).collect::<String>() + "…"
+        } else {
+            s
+        }
+    };
+    let from = if from.trim().is_empty() { String::new() } else { format!(" from {}", from.trim()) };
+    let (quote, text) = (clip(quote), clip(text));
+    if !quote.is_empty() {
+        format!("[reply to {id}{from}, quoting: \"{quote}\"]")
+    } else if !text.is_empty() {
+        format!("[reply to {id}{from}: \"{text}\"]")
+    } else {
+        format!("[reply to {id}{from}]")
+    }
+}
+
 /// What the model gets when someone edits a message: when it was sent and edited, the
 /// old text (None when bia never saw it) and the new one.
 pub fn edit_text(id: &str, sent: Option<i64>, edited: i64, old: Option<&str>, new: &str) -> String {
@@ -505,6 +529,15 @@ impl TextMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replies_name_the_quoted_message() {
+        assert_eq!(reply_text("7", "you", "Starting the\nupdate", ""), "[reply to 7 from you: \"Starting the update\"]");
+        assert_eq!(reply_text("7", "Ann", "long text", "text"), "[reply to 7 from Ann, quoting: \"text\"]");
+        assert_eq!(reply_text("7", "", "", ""), "[reply to 7]");
+        let long = "x".repeat(300);
+        assert_eq!(reply_text("7", "you", &long, "").chars().count(), "[reply to 7 from you: \"\"]".len() + 201);
+    }
 
     #[test]
     fn location_lines() {

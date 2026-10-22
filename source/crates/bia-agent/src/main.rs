@@ -657,6 +657,18 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         None
     };
     release::record(&state_dir, VERSION);
+    // Who was talking to bia just before the restart (from the resumed conversation): the
+    // boot reply goes to the screen only, so they hear back on their own chats.
+    let was_update = updated.is_some() || release_notes.is_some();
+    let talkers = if first_launch {
+        vec![]
+    } else {
+        let book = &repl.tools.addressbook;
+        last_talkers(&repl.history, saved_at, was_update, |id, ch| {
+            id == tools::ID_ROOT || book.find_for(id, ch).is_some_and(|c| c.trust == "root")
+        })
+    };
+    let report = (!talkers.is_empty()).then(|| report_back(&talkers, was_update));
     let how = if let Some(msg) = migrated {
         if resumed {
             format!(
@@ -801,6 +813,10 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .text
             .replace(READY_PLAIN, &catch_up(waiting));
     }
+    if let Some(r) = &report {
+        let t = repl.pending[0].text.replace(NO_TOOLS, "Do not call other tools for this notice.");
+        repl.pending[0].text = format!("{t}\n{r}");
+    }
     if !repl.pending.is_empty() {
         boot.note(&format!(
             "{} inbound message(s) waiting (telegram/whatsapp catch-up / schedules / queued)",
@@ -883,6 +899,70 @@ fn catch_up(n: usize) -> String {
     format!("{n} message(s) that came while you were off are delivered with this notice. Do not say you are ready for commands; answer and handle each of them now as usual, with tools when they need them.")
 }
 
+const NO_TOOLS: &str = "Do not call tools for this notice.";
+
+/// People who wrote shortly before the restart, newest first, one per channel:
+/// (identity, channel, when, their last words). After an update root's last chat counts
+/// at any age, since root wants to hear about updates.
+fn last_talkers(
+    history: &[tools::Msg],
+    saved_at: Option<u64>,
+    was_update: bool,
+    is_root: impl Fn(&str, &str) -> bool,
+) -> Vec<(String, String, u64, String)> {
+    let end = saved_at.unwrap_or_else(|| clock::unix(clock::now()));
+    let mut out: Vec<(String, String, u64, String)> = vec![];
+    let mut root_seen = false;
+    for m in history.iter().rev().filter(|m| m.role == tools::Role::User) {
+        let mut f = m.content.splitn(3, '|');
+        let (Some(id), Some(ch)) = (f.next(), f.next()) else { continue };
+        if id == tools::ID_SYSTEM
+            || ch == tools::CH_CONSOLE
+            || ch == tools::CH_SCHEDULE
+            || ch.starts_with(jobs::PREFIX)
+        {
+            continue;
+        }
+        let at = memory::issued_unix(&m.content).unwrap_or(0);
+        let root = is_root(id, ch);
+        let recent = end.saturating_sub(at) <= TALK_WINDOW_SECS;
+        if !(recent || (was_update && root && !root_seen)) {
+            if root_seen || !was_update {
+                break;
+            }
+            continue;
+        }
+        root_seen |= root;
+        if out.iter().any(|o| o.1 == ch) {
+            continue;
+        }
+        let said: String = memory::envelope_body(&m.content).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+        out.push((id.to_string(), ch.to_string(), at, said));
+        if out.len() >= 5 {
+            break;
+        }
+    }
+    out
+}
+
+/// How long before the restart a message still counts as part of the talk that led to it.
+const TALK_WINDOW_SECS: u64 = 2 * 3600;
+
+/// Added to the boot notice when people wrote from chats just before the restart.
+fn report_back(talkers: &[(String, String, u64, String)], was_update: bool) -> String {
+    let mut s = String::from("Before this restart these people wrote to you (newest first):");
+    for (id, ch, at, said) in talkers {
+        s.push_str(&format!("\n- {id} on {ch}, {} ago: \"{said}\"", clock::ago(*at)));
+    }
+    let what = if was_update {
+        "that you are back after the update, the new version and what changed"
+    } else {
+        "that you are back after the restart"
+    };
+    s.push_str(&format!("\nThey are not at the screen. Look at the conversation before this notice: everyone who asked for this restart or update, or whom you told you would report or check something after it, gets a short report now on their own channel with say(identity, channel), in their language: {what}, and the outcome of what you said you would check. Root wants it after every update. Those says are part of this notice; do not skip them."));
+    s
+}
+
 /// Appended to every boot notice: catch-up messages (people who wrote while bia was off,
 /// jobs cut short) are delivered in the same turn and must not inherit the notice's
 /// "no tools" rule.
@@ -912,6 +992,37 @@ fn first_chars(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod boot_notice_tests {
+    use crate::tools::Msg;
+
+    fn env(id: &str, ch: &str, at: u64, text: &str) -> Msg {
+        Msg::user(format!("{id}|{ch}|{}|{}|m|{text}", crate::clock::rfc3339_unix(at), crate::clock::rfc3339_unix(at)))
+    }
+
+    #[test]
+    fn talkers_before_the_restart() {
+        let t0 = 1_800_000_000;
+        let h = vec![
+            env("ZonD", "telegram:1", t0 - 86400, "hello"),
+            env("Ann", "whatsapp:49", t0 - 7200 - 60, "old"),
+            env("ZonD", "telegram:1", t0 - 1200, "update to 1.1.9"),
+            env("system", "console", t0 - 600, "notice"),
+            env("root", "console", t0 - 500, "typed"),
+            env("Bob", "web:c1", t0 - 300, "and me?"),
+        ];
+        let root = |id: &str, _: &str| id == "ZonD";
+        let t = super::last_talkers(&h, Some(t0), false, root);
+        let chans: Vec<&str> = t.iter().map(|x| x.1.as_str()).collect();
+        assert_eq!(chans, ["web:c1", "telegram:1"]);
+        assert_eq!(t[1].3, "update to 1.1.9");
+        // root's chat counts at any age after an update
+        let h = vec![env("ZonD", "telegram:1", t0 - 86400, "hello"), env("Ann", "whatsapp:49", t0 - 9000, "old")];
+        assert!(super::last_talkers(&h, Some(t0), false, root).is_empty());
+        let t = super::last_talkers(&h, Some(t0), true, root);
+        assert_eq!(t.iter().map(|x| x.1.as_str()).collect::<Vec<_>>(), ["telegram:1"]);
+        let r = super::report_back(&t, true);
+        assert!(r.contains("ZonD on telegram:1") && r.contains("new version"));
+    }
+
     #[test]
     fn catch_up_replaces_the_ready_order() {
         let notice = format!("System booted. {}{}", super::READY_PLAIN, super::BOOT_BATCH);
