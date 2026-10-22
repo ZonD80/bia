@@ -1,0 +1,12 @@
+{
+  "name": "my-example",
+  "version": "0.1.0",
+  "description": "One line: what this MCP does and when to use it.",
+  "command": "/usr/bin/python3",
+  "args": ["server.py"],
+  "env": {},
+  "keywords": ["example"],
+  "examples": [
+    "root|console|<issued>|<delivered>|say hello to Ann -> example_hello(name='Ann')"
+  ]
+}

@@ -819,6 +819,8 @@ pub struct Tools {
     mcp_arch: String,
     mcp_env: Vec<(String, String)>,
     mcp_log_dir: PathBuf,
+    /// the last few calls (name + arguments), to tell the model when it repeats one
+    recent_calls: std::collections::VecDeque<String>,
 }
 
 struct Branch {
@@ -944,6 +946,7 @@ impl Tools {
             mcp_arch: std::env::consts::ARCH.into(),
             mcp_env: vec![],
             mcp_log_dir: files_dir.join("logs"),
+            recent_calls: Default::default(),
         };
         let obj = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
         t.add_grouped("discover", "discover", "The only tool in the list. An empty path lists the tree. path opens a branch (shell, talk, calendar, memory, jobs, machine, or mcp/<server>). enable=true appends that branch's function schemas once. Then call each function by the name in the schema, for example bash(...) or system_fmm_configure(...). Do not enable the same path again. q searches. call and arguments also run a function. The list never grows.",
@@ -2091,13 +2094,28 @@ impl Tools {
     fn discover_cmd(&mut self, args: &Value) -> Result<String> {
         let notes = self.rescan_mcps();
         let q = args.get("q").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().trim_matches('/');
+        // discover(path=X, q=f) where f is a function in X: the model wants X, so enable it
+        // (searching again and again instead was a common loop)
+        if !q.is_empty() && !path_arg.is_empty() && self.step_path(q).as_deref() == Some(path_arg) {
+            let mut a = args.clone();
+            if let Some(o) = a.as_object_mut() {
+                o.remove("q");
+                o.insert("enable".into(), Value::Bool(true));
+            }
+            return self.discover_cmd(&a);
+        }
         if !q.is_empty() {
             let q_l = q.to_lowercase();
             let extra: Vec<String> = notes
                 .into_iter()
                 .filter(|n| n.to_lowercase().contains(&q_l))
                 .collect();
-            return Ok(Self::attach_notes(self.discover_search(q), &extra));
+            let mut found = self.discover_search(q);
+            if let Some(step) = self.next_step(q) {
+                found = format!("{step}\n{found}");
+            }
+            return Ok(Self::attach_notes(found, &extra));
         }
         let path = args
             .get("path")
@@ -2369,12 +2387,78 @@ impl Tools {
     ) -> Result<(String, Value, String), String> {
         let (name, name_note) = self.resolve_tool_name(name)?;
         let (args, arg_note) = self.align_args(&name, args)?;
-        let note = [name_note, arg_note]
+        let repeat_note = self.repeat_note(&name, &args);
+        let note = [repeat_note, name_note, arg_note]
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
         Ok((name, args, note))
+    }
+
+    /// A call the model already made a moment ago with the same arguments: say so, with the
+    /// next step, so it does not loop (the call still runs).
+    fn repeat_note(&mut self, name: &str, args: &Value) -> String {
+        const KEEP: usize = 8;
+        let key = format!("{name} {args}");
+        let times = self.recent_calls.iter().filter(|k| **k == key).count();
+        self.recent_calls.push_back(key);
+        while self.recent_calls.len() > KEEP {
+            self.recent_calls.pop_front();
+        }
+        if times == 0 {
+            return String::new();
+        }
+        let q = args.get("q").and_then(|v| v.as_str()).unwrap_or("");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").trim_matches('/');
+        let next = match self.next_step(q) {
+            Some(step) if name == "discover" => step,
+            _ if name == "discover" && !path.is_empty() && !Self::flag(args, "enable") => {
+                format!("To use {path}: discover(path=\"{path}\", enable=true), then call its function by name.")
+            }
+            _ => "Use the result you already have: do the next step of the task, or answer with say.".into(),
+        };
+        format!("[repeat] You already called {name} with these arguments ({}x); the result will not change. {next}", times + 1)
+    }
+
+    /// `q` names one function exactly (system_fmm_configure, fmm_configure, lang_install): how to
+    /// load and call it.
+    fn next_step(&self, q: &str) -> Option<String> {
+        let q = q.trim().trim_end_matches("()").to_lowercase();
+        if q.is_empty() || q.contains(' ') {
+            return None;
+        }
+        let suffix = format!("_{q}");
+        // (function, path) of every loaded function named q or ending in _q; an exact name wins
+        let mut hits: Vec<(String, String)> = vec![];
+        for b in BRANCHES {
+            for i in self.group_tools(b.id) {
+                hits.push((self.specs[i].name.clone(), b.id.to_string()));
+            }
+        }
+        for (spec, kind) in self.specs.iter().zip(&self.kinds) {
+            if let Kind::Mcp { server, .. } = kind {
+                hits.push((spec.name.clone(), format!("mcp/{}", self.infos[*server].name)));
+            }
+        }
+        let exact: Vec<_> = hits.iter().filter(|(f, _)| *f == q).collect();
+        let near: Vec<_> = hits.iter().filter(|(f, _)| f.ends_with(&suffix)).collect();
+        let pick = if exact.len() == 1 { exact.first().copied() } else if exact.is_empty() && near.len() == 1 { near.first().copied() } else { None };
+        if let Some((f, path)) = pick {
+            return Some(format!("{f} is in {path}: discover(path=\"{path}\", enable=true), then call {f}(…)."));
+        }
+        let call = format!("{q}(");
+        self.infos.iter().chain(&self.catalog).find(|i| {
+            i.examples.iter().any(|e| e.contains(&call)) || i.description.contains(&call)
+        }).map(|i| format!("{q} is in mcp/{0}: discover(path=\"mcp/{0}\", enable=true), then call it by the name in its schema.", i.name))
+    }
+
+    /// The path (shell, mcp/system, …) holding the one function `q` names, if any.
+    fn step_path(&self, q: &str) -> Option<String> {
+        let step = self.next_step(q)?;
+        let start = step.find("discover(path=\"")? + "discover(path=\"".len();
+        let len = step[start..].find('"')?;
+        Some(step[start..start + len].to_string())
     }
 
     fn resolve_tool_name(&mut self, name: &str) -> Result<(String, String), String> {
@@ -3853,6 +3937,33 @@ done
         std::fs::write(path, text).unwrap();
         let t = std::time::SystemTime::now() + std::time::Duration::from_secs(ahead);
         std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+    }
+
+    #[test]
+    fn a_repeated_call_gets_the_next_step() {
+        let dir = std::env::temp_dir().join(format!("bia-repeat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        let mut log = |_: &str| {};
+        // a search naming one function exactly leads with how to load and call it
+        let (r, err) = t.call("discover", &json!({"q": "bash"}), &mut log);
+        assert!(!err && r.starts_with("bash is in shell: discover(path=\"shell\", enable=true)"), "{r}");
+        let (r, err) = t.call("discover", &json!({"path": "shell", "q": "bash"}), &mut log);
+        assert!(!err && r.contains("\"command\""), "path + a function in it enables that path: {r}");
+        let q = json!({"path": "shell", "q": "bash"});
+        let (_, _, note) = t.guide_call("discover", &q).unwrap();
+        assert!(note.is_empty(), "{note}");
+        let (_, _, note) = t.guide_call("discover", &q).unwrap();
+        assert!(note.starts_with("[repeat]") && note.contains("(2x)") && note.contains("discover(path=\"shell\", enable=true)"), "{note}");
+        // any other tool: the generic next step; different arguments are not a repeat
+        let say = json!({"message": "hi"});
+        t.guide_call("say", &say).unwrap();
+        let (_, _, note) = t.guide_call("say", &say).unwrap();
+        assert!(note.contains("[repeat]") && note.contains("next step"), "{note}");
+        let (_, _, note) = t.guide_call("say", &json!({"message": "hello"})).unwrap();
+        assert!(!note.contains("[repeat]"), "{note}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

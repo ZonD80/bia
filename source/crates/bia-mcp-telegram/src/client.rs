@@ -1828,10 +1828,29 @@ fn live_until(date: i32, period: i32) -> (Option<u64>, bool) {
     (Some(until), until <= now_secs())
 }
 
-/// Last known text of recent messages (`files/state/telegram-texts.json`).
+/// Last known text of recent messages. A root-only cache, so as root it lives in
+/// `/var/cache/bia/telegram-texts.json`, outside /home/bia (user bia's backups cannot read a
+/// 0600 file); else `files/state/telegram-texts.json` (dev, tests). Moves the old one over.
 fn texts() -> &'static bia_mcp::share::TextMemory {
     static T: OnceLock<bia_mcp::share::TextMemory> = OnceLock::new();
-    T.get_or_init(|| bia_mcp::share::TextMemory::open(Tg::files_dir().join("state").join("telegram-texts.json"), 5000))
+    T.get_or_init(|| {
+        let old = Tg::files_dir().join("state").join("telegram-texts.json");
+        let path = if unsafe { libc::geteuid() } == 0 && std::path::Path::new("/var/cache").is_dir() {
+            let dir = PathBuf::from("/var/cache/bia");
+            let _ = std::fs::create_dir_all(&dir);
+            let new = dir.join("telegram-texts.json");
+            if old.exists() {
+                if !new.exists() && std::fs::rename(&old, &new).is_err() {
+                    let _ = std::fs::copy(&old, &new);
+                }
+                let _ = std::fs::remove_file(&old);
+            }
+            new
+        } else {
+            old
+        };
+        bia_mcp::share::TextMemory::open(path, 5000)
+    })
 }
 
 /// An edited message. Live locations: record the point (see `handle_live_edit`).

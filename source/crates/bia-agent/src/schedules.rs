@@ -820,6 +820,24 @@ fn output_notifies(pattern: &str, output: &str) -> Result<bool> {
 
 const RUN_TIMEOUT: Duration = Duration::from_secs(300);
 const MATCH_CAP: usize = 8 * 1024 * 1024;
+/// Run logs older than this are deleted when a task runs; each run writes its own file.
+const LOG_KEEP: Duration = Duration::from_secs(14 * 86400);
+
+fn prune_logs(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let now = SystemTime::now();
+    for e in rd.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .is_some_and(|age| age > LOG_KEEP);
+        if old && e.file_name().to_string_lossy().ends_with(".log") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
 
 fn execute(run: &Run) -> Option<Fired> {
     let fail = |why: String| -> Option<Fired> {
@@ -832,6 +850,7 @@ fn execute(run: &Run) -> Option<Fired> {
         if let Err(e) = std::fs::create_dir_all(parent) {
             return fail(format!("could not create the log directory: {e}"));
         }
+        prune_logs(parent);
     }
     let mut log = match std::fs::File::create(&run.log_path) {
         Ok(f) => f,

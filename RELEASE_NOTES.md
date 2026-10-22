@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.1.9
+
+### Changes
+- Logs of scheduled tasks are now deleted after 14 days. Before, every run left its log file behind forever. Only these run logs are deleted; messages, memory and other files are not touched.
+- The cache of recent Telegram message texts (used to show what an edited message said before) moved out of /home/bia to /var/cache/bia. It is readable only by root, so backups made as user bia skipped it with a warning; now it is no longer in the backed-up folder at all.
+- Everything bia builds for itself now lives in one folder per feature in /home/bia/MCPs, works on both kinds of machine (ARM and x86) and keeps your data and keys outside that folder, so a feature can be shared with other bias or people as is. bia starts each one from a template (MCPs/.template).
+- bia's instructions are up to date again. Updates kept the instructions from the day bia was first installed (in /home/bia/bia.toml), so newer rules, for example about web chats, voice and languages, never reached it. bia now uses its current built-in instructions unless you wrote your own in bia.toml.
+- bia's instructions are half as long (about 2,500 characters instead of 5,200) with the same rules, so every request costs less. bia also no longer gets stuck searching for a function again and again: such a search now loads that function, and any repeated call is answered with what to do next.
+
+### For bia
+- Old files in files/state/schedule-logs are now deleted by bia itself: drop any cleanup you set up for them.
+- files/state/telegram-texts.json is gone from /home/bia (moved to /var/cache/bia): remove any backup exclude or workaround you added for it, and never run backups as root to include it.
+- Move what you already built into MCPs/<name>/ folders as your prompt now says (see MCPs/.template/README.md): each script outside MCPs (e.g. in files/) that a schedule runs, with its helpers; move its data to files/state/<name>/, point the schedule at the new path, run it once by hand to check, then tell root what you moved.
+
 ## 1.1.8
 
 ### Changes
