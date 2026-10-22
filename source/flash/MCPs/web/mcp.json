@@ -1,6 +1,6 @@
 {
   "name": "web",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "bia's HTTPS web app: people with a client certificate from this machine chat with you there, each as their own identity. Their messages arrive as <identity>|web|… or <identity>|web:<chat>|…; answer or write first with say(identity, channel) (say new_chat=true opens a chat); react, say edit=, delete_messages, pin_message, close_poll and chat_history work there too. Calls: web_call_*. Certificates and trust with other bias: web_pki_*, web_peer_*. The web app is not the console: the console is the physical screen.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-web",

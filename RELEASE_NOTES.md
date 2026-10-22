@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.2.1
+
+### Changes
+- Backups made by bia now include every key and password file again. Some files written while bia was running (passwords saved since the last restart, the web app's certificate keys, the notification key and the list of browsers that get notifications, land secrets) belonged to the system administrator until the next restart, so a backup skipped them with a warning. If such a key had been lost, you would have had to turn browser notifications on again. Now they belong to bia right away.
+
+### For bia
+- If a backup you made earlier warned that it could not read files under files/state (for example web/push/vapid.pk8, pki/*.key or passwords.json), make a new backup now: those files are included from this version on.
+
 ## 1.2.0
 
 ### Changes

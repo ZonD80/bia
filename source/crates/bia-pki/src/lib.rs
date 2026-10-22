@@ -63,6 +63,14 @@ pub struct Pki {
 }
 
 impl Pki {
+    /// 0600 for a key or PKCS#12 this (root) process wrote, owned like the files folder.
+    fn private(&self, path: &Path) {
+        chmod600(path);
+        if let Some(files) = self.dir.parent().and_then(Path::parent) {
+            own_like_files(path, files);
+        }
+    }
+
     pub fn dir_for(files: &Path) -> PathBuf {
         files.join("state").join("pki")
     }
@@ -125,7 +133,7 @@ impl Pki {
         let cert = params.self_signed(&key)?;
         fs::write(self.ca_cert_path(), cert.pem()).context("write ca.crt")?;
         fs::write(self.ca_key_path(), key.serialize_pem()).context("write ca.key")?;
-        chmod600(&self.ca_key_path());
+        self.private(&self.ca_key_path());
         Ok(())
     }
 
@@ -231,7 +239,7 @@ impl Pki {
         let cert = params.signed_by(&key, &ca_cert, &ca_key)?;
         fs::write(self.server_cert_path(), cert.pem()).context("write server.crt")?;
         fs::write(self.server_key_path(), key.serialize_pem()).context("write server.key")?;
-        chmod600(&self.server_key_path());
+        self.private(&self.server_key_path());
         Ok(())
     }
 
@@ -562,7 +570,7 @@ impl Pki {
         let token = random_token(24);
         let path = self.dir.join("pickup").join(format!("{token}.p12"));
         fs::write(&path, p12).context("write pickup p12")?;
-        chmod600(&path);
+        self.private(&path);
         let meta = serde_json::json!({
             "identity": identity,
             "created": std::time::SystemTime::now()
@@ -935,6 +943,15 @@ fn chmod600(path: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+}
+
+/// Root writes it here, but backups made as user bia must read it: hand it to the owner of
+/// `files` (the agent gives all of /home/bia to bia at boot anyway).
+fn own_like_files(p: &Path, files: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(m) = std::fs::metadata(files) {
+        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
     }
 }
 

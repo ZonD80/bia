@@ -11,6 +11,10 @@ identity rules (never bia, identity required), the removed stop action and root'
 import json, os, ssl, subprocess, sys, tempfile, threading, time, http.client, base64
 
 exe, files = sys.argv[1], tempfile.mkdtemp(prefix="bia-web-e2e-")
+# files belong to user bia while the MCP runs as root: what it writes there must stay readable for bia's backups
+BIA_UID = 1000 if os.geteuid() == 0 else os.geteuid()
+if os.geteuid() == 0:
+    os.chown(files, BIA_UID, BIA_UID)
 env = dict(os.environ, BIA_FILES=files, BIA_WEB_PORT="8443", BIA_WEB_HTTP_PORT="0")
 p = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True, bufsize=1)
 notes, results, rid = [], {}, [0]
@@ -98,7 +102,11 @@ for path, what in (("/sw.js", b"pushsubscriptionchange"), ("/manifest.webmanifes
 s, b = req("GET", "/v1/push/key", ctx=ctx)
 key = base64.urlsafe_b64decode(json.loads(b)["key"] + "==") if s == 200 else b""
 check(len(key) == 65 and key[0] == 4, f"VAPID key is an uncompressed P-256 point ({s}, {len(key)} bytes)")
-check(oct(os.stat(f"{files}/state/web/push/vapid.pk8").st_mode & 0o777) == "0o600", "VAPID private key is 0600")
+for key in ("ca.key", "server.key"):
+    st_p = os.stat(f"{files}/state/pki/{key}")
+    check(oct(st_p.st_mode & 0o777) == "0o600" and st_p.st_uid == BIA_UID, f"pki/{key} is 0600 and belongs to the files owner ({oct(st_p.st_mode & 0o777)}, uid {st_p.st_uid})")
+st_k = os.stat(f"{files}/state/web/push/vapid.pk8")
+check(oct(st_k.st_mode & 0o777) == "0o600" and st_k.st_uid == BIA_UID, f"VAPID private key is 0600 and belongs to the files owner ({oct(st_k.st_mode & 0o777)}, uid {st_k.st_uid})")
 subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", f"{d}/ua.pem"], check=True, capture_output=True)
 der = subprocess.run(["openssl", "ec", "-in", f"{d}/ua.pem", "-pubout", "-outform", "DER"], check=True, capture_output=True).stdout
 b64u = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
@@ -110,6 +118,8 @@ s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": {"p256dh": key
 s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}, ctx=ctx); check(s == 200, f"subscribe ({s} {b[:80]!r})")
 subs = json.load(open(f"{files}/state/web/push/subs.json"))
 check([(x["identity"], x["endpoint"]) for x in subs] == [("root", ep)], f"subscription stored for root: {subs}")
+st_s = os.stat(f"{files}/state/web/push/subs.json")
+check(oct(st_s.st_mode & 0o777) == "0o600" and st_s.st_uid == BIA_UID, f"subs.json is 0600 and belongs to the files owner ({oct(st_s.st_mode & 0o777)}, uid {st_s.st_uid})")
 s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}); check(s in (401, 403), f"subscribe needs a client cert ({s})")
 def req_ua(method, path, body, ua):
     c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)

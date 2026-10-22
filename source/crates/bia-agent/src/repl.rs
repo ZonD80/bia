@@ -380,6 +380,9 @@ impl Repl {
         if std::fs::write(&p, backup).is_ok() {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+            if let Some(files) = p.parent().and_then(std::path::Path::parent) {
+                own_like_files(&p, files);
+            }
             unsafe { libc::sync() };
         }
     }
@@ -2964,5 +2967,14 @@ mod channel_tests {
             "a web slash line is just queued"
         );
         assert_eq!(queued.borrow().len(), 2);
+    }
+}
+
+/// Root writes it here, but backups made as user bia must read it: hand it to the owner of
+/// `files` (the agent gives all of /home/bia to bia at boot anyway).
+fn own_like_files(p: &std::path::Path, files: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(m) = std::fs::metadata(files) {
+        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
     }
 }

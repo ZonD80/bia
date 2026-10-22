@@ -59,6 +59,9 @@ impl Sub {
 
 struct Push {
     dir: PathBuf,
+    /// owner of the files folder (bia): this MCP runs as root, but a backup made as user bia
+    /// must be able to read the key and the subscriptions
+    owner: Option<(u32, u32)>,
     key: EcdsaKeyPair,
     subs: Mutex<Vec<Sub>>,
     con: Arc<Bus>,
@@ -74,6 +77,10 @@ fn dir(files: &Path) -> PathBuf {
 pub fn init(files: &Path, con: Arc<Bus>) -> Result<(), String> {
     let dir = dir(files);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let owner = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(files).ok().map(|m| (m.uid(), m.gid()))
+    };
     let rng = SystemRandom::new();
     let kp = dir.join("vapid.pk8");
     let pk8 = match std::fs::read(&kp) {
@@ -91,8 +98,19 @@ pub fn init(files: &Path, con: Arc<Bus>) -> Result<(), String> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
+    // also fixes what 1.2.0 left owned by root (and subs.json readable by everyone)
+    for p in [
+        dir.parent().unwrap_or(&dir).to_path_buf(),
+        dir.clone(),
+        kp.clone(),
+        dir.join("subs.json"),
+    ] {
+        own(&p, owner);
+    }
+    let _ = set_private(&dir.join("subs.json"));
     let _ = PUSH.set(Push {
         dir,
+        owner,
         key,
         subs: Mutex::new(subs),
         con,
@@ -116,6 +134,20 @@ fn write_private(p: &Path, b: &[u8]) -> Result<(), String> {
     f.write_all(b).map_err(|e| format!("{}: {e}", p.display()))
 }
 
+/// Hand `p` to the owner of the files folder (no-op when that is us or unknown).
+fn own(p: &Path, owner: Option<(u32, u32)>) {
+    if let Some((uid, gid)) = owner {
+        if p.exists() {
+            let _ = std::os::unix::fs::chown(p, Some(uid), Some(gid));
+        }
+    }
+}
+
+fn set_private(p: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600))
+}
+
 fn push() -> Result<&'static Push, String> {
     PUSH.get()
         .ok_or_else(|| "web push is not started".to_string())
@@ -132,6 +164,9 @@ impl Push {
             let p = self.dir.join("subs.json");
             let tmp = p.with_extension("tmp");
             if std::fs::write(&tmp, b).is_ok() {
+                // the subscriptions' auth secrets: private, like the key
+                let _ = set_private(&tmp);
+                own(&tmp, self.owner);
                 let _ = std::fs::rename(&tmp, &p);
             }
         }

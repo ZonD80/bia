@@ -536,6 +536,15 @@ fn secrets_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/home/bia/files/state/land-secrets.json"))
 }
 
+/// Root writes it here, but backups made as user bia must read it: hand it to the owner of
+/// `files` (the agent gives all of /home/bia to bia at boot anyway).
+fn own_like_files(p: &std::path::Path, files: &std::path::Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(m) = std::fs::metadata(files) {
+        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
+    }
+}
+
 /// The host part only (no port, lower case): how secrets are filed.
 fn host_key(host: &str) -> String {
     split_host_port(host, 0).0.to_ascii_lowercase()
@@ -560,6 +569,9 @@ pub fn new_secret_for(host: Option<&str>) -> Result<String, String> {
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+            if let Some(files) = p.parent().and_then(std::path::Path::parent) {
+                own_like_files(&tmp, files);
+            }
         }
         std::fs::rename(&tmp, &p).map_err(|e| format!("save the land secret: {e}"))?;
         let k = host_key(h);
@@ -1045,16 +1057,31 @@ mod tests {
         assert_eq!(split_host_port("2001:db8::1", 4791), ("2001:db8::1".to_string(), 4791));
         assert_eq!(split_host_port("vps.example.com:99", 4791), ("vps.example.com".to_string(), 99));
         assert_eq!(resolve("10.0.2.2:14791", 4791).unwrap().to_string(), "10.0.2.2:14791");
-        let f = tmp("secrets.json");
+        // files/state/land-secrets.json, files owned by user bia (uid 1000 here) while this runs as root
+        let files = tmp("own-files");
+        std::fs::create_dir_all(files.join("state")).unwrap();
+        let root = unsafe { libc::geteuid() } == 0;
+        if root {
+            std::os::unix::fs::chown(&files, Some(1000), Some(1000)).unwrap();
+        }
+        let f = files.join("state").join("land-secrets.json");
         std::env::set_var("BIA_LAND_SECRETS", &f);
         let out = new_secret_for(Some("VPS.example.com:14791")).unwrap();
         let s = out.lines().next().unwrap().to_string();
+        {
+            use std::os::unix::fs::MetadataExt;
+            let m = std::fs::metadata(&f).unwrap();
+            assert_eq!(m.mode() & 0o777, 0o600);
+            if root {
+                assert_eq!(m.uid(), 1000, "backups made as user bia can read it");
+            }
+        }
         assert_eq!(saved_secret("vps.example.com").as_deref(), Some(s.as_str()));
         assert_eq!(saved_secret("vps.example.com:4791").as_deref(), Some(s.as_str()), "the port does not matter");
         assert!(saved_secret("other").is_none());
         forget_secret("vps.example.com");
         assert!(saved_secret("vps.example.com").is_none(), "forgotten after the landing");
-        let _ = std::fs::remove_file(f);
+        let _ = std::fs::remove_dir_all(files);
     }
 
     #[test]

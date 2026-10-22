@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::otp::{self, Alg, OtpParams};
 use crate::passkey;
@@ -83,6 +83,15 @@ fn path() -> PathBuf {
     PathBuf::from(files).join("state").join("passwords.json")
 }
 
+/// Root writes it here, but backups made as user bia must read it: hand it to the owner of
+/// `files` (the agent gives all of /home/bia to bia at boot anyway).
+fn own_like_files(p: &Path, files: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(m) = std::fs::metadata(files) {
+        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
+    }
+}
+
 /// Exclusive lock so the secrets MCP and the chrome MCP can share passwords.json.
 struct StoreLock(File);
 
@@ -141,6 +150,9 @@ fn save(items: &[Entry]) -> Result<(), String> {
         f.sync_all().map_err(|e| e.to_string())?;
     }
     fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).ok();
+    if let Some(files) = p.parent().and_then(Path::parent) {
+        own_like_files(&tmp, files);
+    }
     fs::rename(&tmp, &p).or_else(|_| fs::copy(&tmp, &p).map(|_| ())).map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&tmp);
     unsafe { libc::sync() };
@@ -576,6 +588,7 @@ pub fn export_path(id: &str, rel: &str) -> Result<String, String> {
     let mut f = File::create(&abs).map_err(|e| format!("{}: {e}", abs.display()))?;
     f.write_all(bytes).map_err(|e| format!("{}: {e}", abs.display()))?;
     let _ = f.set_permissions(std::fs::Permissions::from_mode(0o600));
+    own_like_files(&abs, Path::new(&files));
     Ok(json!({
         "uuid": entry.uuid,
         "description": entry.description,
