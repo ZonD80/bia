@@ -21,6 +21,10 @@ const EMOJI_JS: &str = include_str!("../web/emoji.js");
 const PKI_JS: &str = include_str!("../web/pki.js");
 const MD_JS: &str = include_str!("../web/md.js");
 const ICON: &str = include_str!("../web/icon.svg");
+const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
+const APPLE_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
+const SW_JS: &str = include_str!("../web/sw.js");
+const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
 const GUI: &str = include_str!("../web/gui.html");
 const SKILL: &str = include_str!("../web/skills/web-console/SKILL.md");
 const VNC_ADDR: (&str, u16) = ("127.0.0.1", 5900);
@@ -276,6 +280,10 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/pki.js"
             | "/md.js"
             | "/icon.svg"
+            | "/icon-192.png"
+            | "/apple-touch-icon.png"
+            | "/sw.js"
+            | "/manifest.webmanifest"
             | "/favicon.ico"
             | "/.well-known/bia.json"
             | "/openapi.yaml"
@@ -746,6 +754,10 @@ impl Web {
             ("GET", "/md.js") => asset(stream, "text/javascript; charset=utf-8", MD_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
             ("GET", "/icon.svg" | "/favicon.ico") => asset(stream, "image/svg+xml", ICON),
+            ("GET", "/icon-192.png") => respond(stream, 200, "image/png", ICON_PNG, None),
+            ("GET", "/apple-touch-icon.png") => respond(stream, 200, "image/png", APPLE_ICON, None),
+            ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", MANIFEST),
+            ("GET", "/sw.js") => asset(stream, "text/javascript; charset=utf-8", SW_JS),
             ("GET", "/.well-known/bia.json") => respond_json(
                 stream,
                 crate::openapi::discovery(self.port, &self.ca_sha256()),
@@ -1048,6 +1060,43 @@ impl Web {
                 }
             }
             ("GET", "/v1/chats") => respond_json(stream, crate::chat::hello(&id.identity, root)),
+            ("GET", "/v1/push/key") => match crate::push::public_key() {
+                Ok(k) => respond_json(stream, json!({"key": k})),
+                Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
+            },
+            ("POST", "/v1/push/subscribe") => match crate::push::subscribe(
+                &id.identity,
+                &json_body(),
+                req.header("user-agent").unwrap_or(""),
+            ) {
+                Ok(sid) => respond_json(stream, json!({"ok": true, "id": sid})),
+                Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
+            },
+            ("POST", "/v1/push/unsubscribe") => {
+                let v = json_body();
+                match crate::push::unsubscribe(&id.identity, v["endpoint"].as_str().unwrap_or("")) {
+                    Ok(gone) => respond_json(stream, json!({"ok": true, "removed": gone})),
+                    Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
+                }
+            }
+            ("GET", "/v1/push/subs") => match crate::push::list(&id.identity) {
+                Ok(v) => respond_json(stream, v),
+                Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
+            },
+            ("POST", "/v1/push/remove") => {
+                let ids: Vec<String> = json_body()["ids"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+                match crate::push::remove(&id.identity, &ids) {
+                    Ok(n) => respond_json(stream, json!({"ok": true, "removed": n})),
+                    Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
+                }
+            }
+            ("POST", "/v1/push/test") => match crate::push::test(&id.identity) {
+                Ok(n) => respond_json(stream, json!({"ok": true, "sent": n})),
+                Err(e) => respond(stream, 502, "text/plain; charset=utf-8", e.as_bytes(), None),
+            },
             ("POST", "/v1/chats/action") => {
                 match crate::chat::action(&id.identity, root, &json_body()) {
                     Ok(v) => respond_json(stream, v),
@@ -1655,7 +1704,12 @@ impl Web {
                         continue;
                     };
                     let cid = v.get("cid").cloned().unwrap_or(Value::Null);
-                    let reply = if v.get("t").and_then(|t| t.as_str()) == Some("ping") {
+                    let t = v.get("t").and_then(|t| t.as_str());
+                    if t == Some("active") {
+                        self.con.set_active(sid, v["on"].as_bool().unwrap_or(false));
+                        continue;
+                    }
+                    let reply = if t == Some("ping") {
                         json!({"t": "pong"})
                     } else {
                         match crate::chat::action(identity, root, &v) {
@@ -2689,6 +2743,7 @@ pub(crate) fn respond(
         429 => "Too Many Requests",
         500 => "Error",
         502 => "Bad Gateway",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     let mut head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n", body.len());

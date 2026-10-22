@@ -1,6 +1,6 @@
 {
   "name": "chrome",
-  "version": "1.1.10",
+  "version": "1.2.0",
   "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines. For clicks outside the page (some captchas) use mcp/screen.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",

@@ -519,6 +519,44 @@ fn snippet(m: &Msg) -> String {
     s
 }
 
+/// A new message from bia: wake the person's browsers that are not in front (not for muted chats).
+fn push_msg(h: &Hub, identity: &str, chat: &str, m: &Msg) {
+    let Some(c) = h.with_user(identity, |u| u.chats.iter().find(|c| c.id == chat).cloned()) else {
+        return;
+    };
+    if c.muted {
+        return;
+    }
+    let mut body: String = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if body.is_empty() {
+        body = match (m.files.first(), &m.poll) {
+            (Some(a), _) => match a.kind.as_str() {
+                "photo" => "🖼 Photo".into(),
+                "video" => "📹 Video".into(),
+                "voice" => "🎤 Voice message".into(),
+                "audio" => format!("🎵 {}", a.name),
+                _ => format!("📄 {}", a.name),
+            },
+            (None, Some(p)) => format!("📊 {}", p.question),
+            _ => return,
+        };
+    }
+    if body.chars().count() > 300 {
+        body = body.chars().take(300).collect::<String>() + "…";
+    }
+    crate::push::notify(
+        identity,
+        crate::push::Note {
+            title: c.title,
+            body,
+            tag: format!("bia-{chat}"),
+            url: format!("chat/{chat}"),
+            ttl: 24 * 3600,
+            urgent: false,
+        },
+    );
+}
+
 fn files_block(files: &[Att]) -> String {
     let mut s = String::from("files:\n");
     for a in files {
@@ -1486,6 +1524,7 @@ pub fn say(
     })?;
     h.emit(identity, json!({"t": "msg", "chat": chat, "m": m}));
     h.emit_chat(identity, &chat);
+    push_msg(h, identity, &chat, &m);
     Ok(m.id)
 }
 
@@ -1598,6 +1637,7 @@ pub fn say_voice(
     })?;
     h.emit(identity, json!({"t": "msg", "chat": chat, "m": m}));
     h.emit_chat(identity, &chat);
+    push_msg(h, identity, &chat, &m);
     Ok(m.id)
 }
 

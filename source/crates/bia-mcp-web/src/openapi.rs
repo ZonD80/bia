@@ -244,6 +244,57 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "responses": {"200": {"description": "Result"}, "400": {"description": "Error text"}}
                 }
             },
+            "/v1/push/key": {
+                "get": {
+                    "tags": ["push"],
+                    "summary": "VAPID public key (base64url) for PushManager.subscribe's applicationServerKey",
+                    "security": [{"mtls": []}],
+                    "responses": {"200": {"description": "{key}"}}
+                }
+            },
+            "/v1/push/subscribe": {
+                "post": {
+                    "tags": ["push"],
+                    "summary": "Store a Web Push subscription (PushSubscription.toJSON()) for the caller; bia then pushes new bia messages, calls and (root) human tasks while no tab of the caller is in front",
+                    "security": [{"mtls": []}],
+                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["endpoint", "keys"], "properties": {"endpoint": {"type": "string"}, "keys": {"type": "object", "properties": {"p256dh": {"type": "string"}, "auth": {"type": "string"}}}}}}}},
+                    "responses": {"200": {"description": "{ok}"}, "400": {"description": "Error text"}}
+                }
+            },
+            "/v1/push/unsubscribe": {
+                "post": {
+                    "tags": ["push"],
+                    "summary": "Forget one of the caller's subscriptions",
+                    "security": [{"mtls": []}],
+                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["endpoint"], "properties": {"endpoint": {"type": "string"}}}}}},
+                    "responses": {"200": {"description": "{ok, removed}"}}
+                }
+            },
+            "/v1/push/subs": {
+                "get": {
+                    "tags": ["push"],
+                    "summary": "The caller's subscribed browsers: id, device, service, created, expires, expired, last_ok, last_err, last_err_at, failing",
+                    "security": [{"mtls": []}],
+                    "responses": {"200": {"description": "{subs: [...]}"}}
+                }
+            },
+            "/v1/push/remove": {
+                "post": {
+                    "tags": ["push"],
+                    "summary": "Forget some of the caller's browsers by id (from /v1/push/subs)",
+                    "security": [{"mtls": []}],
+                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}}}},
+                    "responses": {"200": {"description": "{ok, removed}"}}
+                }
+            },
+            "/v1/push/test": {
+                "post": {
+                    "tags": ["push"],
+                    "summary": "Push a test notification to every subscribed browser of the caller",
+                    "security": [{"mtls": []}],
+                    "responses": {"200": {"description": "{ok, sent}"}, "502": {"description": "Push service error text"}}
+                }
+            },
             "/v1/search": {
                 "get": {
                     "tags": ["chat"],

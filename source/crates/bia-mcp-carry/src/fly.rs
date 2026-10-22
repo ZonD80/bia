@@ -303,7 +303,7 @@ fn fly_archive(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Durati
             ctx.log("fly: looking for a machine that is landing");
             let hosts = discover(ctx, Duration::from_secs(3));
             match hosts.len() {
-                0 => return Err("no machine is landing on this network".into()),
+                0 => return Err("no machine is landing on this network; for a server on the internet pass host (its address) and secret (its land secret)".into()),
                 1 => {
                     ctx.log(format!("fly: found {}", hosts[0].label()));
                     (std::net::IpAddr::V4(hosts[0].ip), if port.is_some() { port.unwrap() } else { hosts[0].port })

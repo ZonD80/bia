@@ -152,14 +152,14 @@ fn main() {
         )
         .tool(
             "discover",
-            "List computers on this network that are waiting to receive a backup. Returns ip and name, one per line. Empty means nobody is waiting.",
+            "List computers on this local network that wait for a backup (UDP broadcast; never finds a server on the internet: use carry_fly with host). Returns ip and name, one per line.",
             json!({"type": "object", "properties": {
                 "timeout_secs": {"type": "integer", "description": "seconds to listen. Default 3."}
             }}),
             |ctx, a| {
                 let hosts = fly::discover(ctx, timeout_arg(&a, 3));
                 if hosts.is_empty() {
-                    Ok("no machine is landing on this network".into())
+                    Ok("no machine is landing on this network. A server on the internet is not found by discover: call carry_fly with host (its address) and secret (its land secret; saved ones are used by themselves).".into())
                 } else {
                     Ok(hosts.iter().map(|h| h.label()).collect::<Vec<_>>().join("\n"))
                 }
@@ -176,7 +176,7 @@ fn main() {
         )
         .tool(
             "fly",
-            "Send this computer's backup to a computer that is waiting. host is the ip from carry_discover. If you omit host and exactly one computer is waiting, send to that one. If several are waiting, do not send. Both screens show a 6-digit code. Call carry_confirm only after the user says they match. A server taken over in land mode (by root, or by you: carry_new_land_secret) waits somewhere on the internet with a land secret instead: pass its address as host and the land secret as secret, with timeout_secs up to 1800 while it is still installing; then no code is shown, both sides prove the secret and the backup travels encrypted. This computer keeps running. The other one reboots.",
+            "Send this computer's backup to a waiting computer: host=its ip or name (a server on the internet in land mode also needs secret). host is an ip from carry_discover or any address you know. If you omit host and exactly one computer is waiting, send to that one. If several are waiting, do not send. Both screens show a 6-digit code. Call carry_confirm only after the user says they match. A server taken over in land mode (by root, or by you: carry_new_land_secret) waits somewhere on the internet with a land secret instead: pass its address as host and the land secret as secret, with timeout_secs up to 1800 while it is still installing; then no code is shown, both sides prove the secret and the backup travels encrypted. This computer keeps running. The other one reboots.",
             json!({"type": "object", "properties": {
                 "host": {"type": "string", "description": "ip or name of the waiting computer. Omit to look for one on this network."},
                 "port": {"type": "integer", "description": "optional. Default 4791."},

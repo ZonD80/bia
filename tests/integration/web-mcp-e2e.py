@@ -92,5 +92,41 @@ k = base64.b64encode(os.urandom(16)).decode()
 c.request("GET", "/ws/term", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": k, "Sec-WebSocket-Version": "13"})
 r = c.getresponse(); check(r.status == 101, f"/ws/term is root's console mirror again since 1.1.3 ({r.status})")
 
+# Web Push: worker + manifest before sign-in, VAPID key, subscriptions (no real push is sent)
+for path, what in (("/sw.js", b"pushsubscriptionchange"), ("/manifest.webmanifest", b'"standalone"'), ("/icon-192.png", b"\x89PNG")):
+    s, b = req("GET", path); check(s == 200 and what in b, f"{path} served before sign-in ({s})")
+s, b = req("GET", "/v1/push/key", ctx=ctx)
+key = base64.urlsafe_b64decode(json.loads(b)["key"] + "==") if s == 200 else b""
+check(len(key) == 65 and key[0] == 4, f"VAPID key is an uncompressed P-256 point ({s}, {len(key)} bytes)")
+check(oct(os.stat(f"{files}/state/web/push/vapid.pk8").st_mode & 0o777) == "0o600", "VAPID private key is 0600")
+subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", f"{d}/ua.pem"], check=True, capture_output=True)
+der = subprocess.run(["openssl", "ec", "-in", f"{d}/ua.pem", "-pubout", "-outform", "DER"], check=True, capture_output=True).stdout
+b64u = lambda x: base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+keys = {"p256dh": b64u(der[-65:]), "auth": b64u(os.urandom(16))}
+ep = "https://fcm.googleapis.com/fcm/send/bia-e2e"
+for bad in ("http://fcm.googleapis.com/x", "https://192.168.1.10/x", "https://localhost/x"):
+    s, b = req("POST", "/v1/push/subscribe", {"endpoint": bad, "keys": keys}, ctx=ctx); check(s == 400, f"subscribe refuses {bad} ({s})")
+s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": {"p256dh": keys["p256dh"], "auth": "short"}}, ctx=ctx); check(s == 400, f"subscribe refuses a bad auth secret ({s})")
+s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}, ctx=ctx); check(s == 200, f"subscribe ({s} {b[:80]!r})")
+subs = json.load(open(f"{files}/state/web/push/subs.json"))
+check([(x["identity"], x["endpoint"]) for x in subs] == [("root", ep)], f"subscription stored for root: {subs}")
+s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}); check(s in (401, 403), f"subscribe needs a client cert ({s})")
+def req_ua(method, path, body, ua):
+    c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
+    c.request(method, path, body=json.dumps(body), headers={"Content-Type": "application/json", "User-Agent": ua})
+    r = c.getresponse(); return r.status, r.read()
+ep2 = "https://web.push.apple.com/bia-e2e"
+s, b = req_ua("POST", "/v1/push/subscribe", {"endpoint": ep2, "keys": keys, "expirationTime": 1000}, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1")
+id2 = json.loads(b).get("id", "") if s == 200 else ""
+check(s == 200 and len(id2) == 12, f"second browser subscribed ({s} {b!r})")
+s, b = req("GET", "/v1/push/subs", ctx=ctx); rows = json.loads(b)["subs"] if s == 200 else []
+row2 = next((r for r in rows if r["id"] == id2), {})
+check(len(rows) == 2 and row2.get("device") == "Safari on iPhone" and row2.get("service") == "Apple" and row2.get("expired"), f"both browsers listed, iPhone one expired: {rows}")
+s, b = req("POST", "/v1/push/remove", {"ids": [id2]}, ctx=ctx)
+check(s == 200 and json.loads(b)["removed"] == 1, f"remove a browser by id ({s} {b!r})")
+s, b = req("GET", "/v1/push/subs", ctx=ctx); check([r["service"] for r in json.loads(b)["subs"]] == ["Google (FCM)"], f"one browser left: {b[:200]!r}")
+s, b = req("POST", "/v1/push/unsubscribe", {"endpoint": ep}, ctx=ctx)
+check(s == 200 and json.loads(b)["removed"] and json.load(open(f"{files}/state/web/push/subs.json")) == [], f"unsubscribe ({s} {b!r})")
+
 p.stdin.close(); p.wait(timeout=10)
 print("RESULT", "FAILED" if check.failed else "PASSED")

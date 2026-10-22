@@ -16,6 +16,7 @@ mod listen;
 mod openapi;
 mod pki;
 mod pty;
+mod push;
 mod server;
 mod tools;
 
@@ -60,6 +61,9 @@ fn main() {
 
     // the chat store works even while the server could not bind (the agent can still post)
     chat::init(&files, bus.clone());
+    if let Err(e) = push::init(&files, bus.clone()) {
+        bus.log(&format!("  web push off: {e}"));
+    }
     let b = bus.clone();
     Server::new("web", env!("CARGO_PKG_VERSION"))
         .tool(

@@ -18,5 +18,6 @@ serde_json.workspace = true
 libc.workspace = true
 base64 = "0.22"
 sha1_smol = "1"
+ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }

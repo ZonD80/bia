@@ -120,6 +120,9 @@ details.howto li { margin: 4px 0; }
 .search svg.i { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; color: var(--dim); }
 .side-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 8px 80px; }
 .side-label { font-size: 13px; color: var(--dim); padding: 12px 10px 6px; font-weight: 500; }
+.notif-ask { display: flex; align-items: center; gap: 8px; margin: 4px 8px 6px; padding: 6px 4px 6px 12px; border-radius: 10px; background: var(--hover); font-size: 14px; }
+.notif-ask[hidden] { display: none; }
+.notif-ask .btn-icon { width: 32px; height: 32px; }
 .citem { display: flex; gap: 10px; align-items: center; padding: 8px 9px; border-radius: 12px; cursor: pointer; user-select: none; }
 .citem:hover { background: var(--hover); }
 .citem.active { background: var(--active); color: #fff; }

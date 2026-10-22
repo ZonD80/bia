@@ -456,8 +456,11 @@ async function start(who) {
   route();
   if (S.root) { pollTasks(); setInterval(pollTasks, 4000); pollStatus(); setInterval(pollStatus, 5000); }
   if (who.days_left !== undefined && who.days_left < 30) toast(`Your certificate expires in ${who.days_left} days — renew it in Settings`, true);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRead(); updateTitle(); });
-  window.addEventListener('focus', () => maybeRead());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRead(); updateTitle(); sendActive(); });
+  window.addEventListener('focus', () => { maybeRead(); sendActive(); });
+  // focus moving into an iframe (display, task pages) blurs the window but keeps the tab in front
+  window.addEventListener('blur', () => setTimeout(sendActive, 0));
+  notifInit();
   setInterval(() => { if (S.ws && S.ws.readyState === 1) S.ws.send('{"t":"ping"}'); }, 30000);
 }
 
@@ -516,6 +519,7 @@ function onHello(v) {
     if (S.cur && S.route.startsWith('chat/')) { S.cache.delete(S.cur); openChat(S.cur, { keepScroll: false }); }
   } else if (S.cur && S.route.startsWith('chat/')) { renderChatHead(); renderPinbar(); }
   updateTitle();
+  sendActive();
 }
 
 function onEvent(v) {
@@ -648,13 +652,126 @@ function notifyMsg(chat, m) {
   const c = S.chats.get(chat);
   const visible = !document.hidden && S.cur === chat && S.route.startsWith('chat/');
   if (visible || (c && c.muted)) { if (visible) maybeRead(); return; }
+  if (isActive()) { blip(); return; }
+  // subscribed: bia pushes it (it saw no tab of ours in front), with the system's sound
+  if (NOTIF.sub) return;
   blip();
-  if (S.prefs.notify && 'Notification' in window && Notification.permission === 'granted' && document.hidden) {
-    try {
-      const n = new Notification(chatTitle(chat), { body: snippet(m), icon: '/icon.svg', tag: 'bia-' + chat });
-      n.onclick = () => { window.focus(); go('chat/' + chat); n.close(); };
-    } catch {}
+  showNote(chatTitle(chat), snippet(m), 'bia-' + chat, 'chat/' + chat);
+}
+
+// Browser notifications. A service worker (/sw.js) shows them; with Web Push bia wakes it
+// even when no tab is open. bia only pushes while no tab of this identity is in front, so
+// each tab reports {t:'active'} over its WebSocket.
+const NOTIF = { reg: null, sub: null, id: '', err: '' };
+const canNotify = () => 'Notification' in window;
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+function isActive() { return document.visibilityState === 'visible' && document.hasFocus(); }
+function sendActive() { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify({ t: 'active', on: isActive() })); }
+async function notifInit() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.t === 'open') go(e.data.url || ''); });
+    try { NOTIF.reg = await navigator.serviceWorker.register('/sw.js'); }
+    catch (e) { NOTIF.err = 'service worker: ' + e.message; }
   }
+  renderNotifAsk();
+  if (S.prefs.notify && canNotify() && Notification.permission === 'granted') await pushOn();
+}
+function b64uBytes(s) {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+  return Uint8Array.from(b, c => c.charCodeAt(0));
+}
+function sameBytes(a, b) {
+  if (!a || !b) return false;
+  a = new Uint8Array(a); b = new Uint8Array(b);
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+// subscribe this browser with its push service and hand the subscription to bia
+async function pushOn() {
+  NOTIF.err = '';
+  if (!NOTIF.reg || !('PushManager' in window)) { NOTIF.err = NOTIF.err || 'this browser has no Web Push'; return false; }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const key = b64uBytes((await GET('/v1/push/key')).key);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !sameBytes(sub.options.applicationServerKey, key)) { await sub.unsubscribe(); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    NOTIF.id = (await POST('/v1/push/subscribe', sub.toJSON())).id || '';
+    NOTIF.sub = sub;
+    return true;
+  } catch (e) {
+    NOTIF.sub = null; NOTIF.err = e.message || String(e);
+    return false;
+  }
+}
+async function pushOff() {
+  let sub = NOTIF.sub;
+  if (!sub && NOTIF.reg) { try { sub = await NOTIF.reg.pushManager.getSubscription(); } catch {} }
+  NOTIF.sub = null; NOTIF.id = '';
+  if (!sub) return;
+  try { await POST('/v1/push/unsubscribe', { endpoint: sub.endpoint }); } catch {}
+  try { await sub.unsubscribe(); } catch {}
+}
+// from a click: browsers only ask for permission on a user gesture
+async function enableNotifications() {
+  S.prefs.notify = true; S.prefs.notifAsked = true; savePrefs();
+  if (canNotify() && Notification.permission === 'default') await Notification.requestPermission();
+  if (canNotify() && Notification.permission === 'granted') {
+    if (await pushOn()) toast('Notifications are on'); else toast('Notifications are on while this tab is open (' + NOTIF.err + ')', true);
+  }
+  renderNotifAsk(); renderSettings();
+}
+async function showNote(title, body, tag, url, urgent) {
+  if (!S.prefs.notify || !canNotify() || Notification.permission !== 'granted') return;
+  const opts = { body, tag, renotify: true, requireInteraction: !!urgent, icon: '/icon-192.png', badge: '/icon-192.png', data: { url } };
+  if (NOTIF.reg) { try { await NOTIF.reg.showNotification(title, opts); return; } catch {} }
+  try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); go(url); n.close(); }; } catch {}
+}
+function ago(ms) {
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+// Settings: every browser of this identity that bia pushes to, with how delivery went
+async function loadPushSubs() {
+  const el = $('#pushSubs');
+  if (!el) return;
+  let subs;
+  try { subs = (await GET('/v1/push/subs')).subs || []; } catch (e) { set(el, h('div', { class: 'err-line' }, e.message)); return; }
+  if (!subs.length) { set(el, h('div', { class: 'muted', style: 'font-size:13px' }, 'No browser gets push notifications yet.')); return; }
+  const remove = async (ids, self) => {
+    try { await POST('/v1/push/remove', { ids }); } catch (e) { toast(e.message, true); return; }
+    // our own entry gone: stop this browser's subscription too
+    if (self) { S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings(); } else loadPushSubs();
+  };
+  const bad = subs.filter(x => x.expired || x.failing);
+  set(el, ...subs.map(x => {
+    const self = x.id === NOTIF.id;
+    const state = x.expired ? h('span', { class: 'tag bad' }, 'expired')
+      : x.failing ? h('span', { class: 'tag bad', title: x.last_err }, 'failing')
+      : x.last_ok ? h('span', { class: 'tag ok' }, 'delivered ' + ago(x.last_ok))
+      : h('span', { class: 'tag' }, 'nothing sent yet');
+    const detail = [x.service, 'added ' + new Date(x.created).toLocaleDateString()];
+    if (x.expires && !x.expired) detail.push('expires ' + new Date(x.expires).toLocaleDateString());
+    if (x.failing && x.last_err) detail.push(`${ago(x.last_err_at)}: ${x.last_err}`);
+    return h('div', { class: 'setrow' },
+      h('div', { class: 'grow' }, x.device, ' ', self ? h('span', { class: 'tag acc' }, 'this browser') : null, ' ', state,
+        h('div', { class: 'muted', style: 'font-size:13px;word-break:break-word' }, detail.join(' · '))),
+      iconBtn('trash', self ? 'Stop notifications in this browser' : 'Remove this browser', () => remove([x.id], self)));
+  }), bad.length > 1 ? h('div', { class: 'setrow' }, h('div', { class: 'grow' }),
+    h('button', { class: 'btn ghost small', onclick: () => remove(bad.map(x => x.id), bad.some(x => x.id === NOTIF.id)) }, `Remove ${bad.length} expired or failing`)) : null);
+}
+function renderNotifAsk() {
+  const el = $('#notifAsk');
+  if (!el) return;
+  const ask = canNotify() && Notification.permission === 'default' && S.prefs.notify && !S.prefs.notifAsked;
+  el.hidden = !ask;
+  if (!ask) { set(el); return; }
+  set(el, ic('bell'), h('div', { class: 'grow' }, 'Get notified when bia writes'),
+    h('button', { class: 'btn small', onclick: enableNotifications }, 'Turn on'),
+    iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); }));
 }
 function updateTitle() {
   let n = 0;
@@ -728,6 +845,7 @@ function buildSide() {
       iconBtn('menu', 'Menu', e => sideMenu(e)),
       h('div', { class: 'search' }, ic('search'), search)),
     h('div', { id: 'connState', class: 'side-label', style: 'color:var(--warn)', hidden: true }, 'Connecting…'),
+    h('div', { id: 'notifAsk', class: 'notif-ask', hidden: true }),
     h('div', { class: 'side-scroll', id: 'sideScroll' },
       h('div', { id: 'searchRes', class: 'search-res', hidden: true }),
       h('div', { id: 'chatList' }),
@@ -2409,9 +2527,7 @@ async function pollTasks() {
       S.taskSeen.add(t.id);
       toast('bia needs you: ' + t.title);
       blip();
-      if (S.prefs.notify && document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        try { const n = new Notification('bia needs you', { body: t.title, icon: '/icon.svg', tag: 'hitl-' + t.id }); n.onclick = () => { window.focus(); go('task/' + t.id); }; } catch {}
-      }
+      if (!isActive() && !NOTIF.sub) showNote('bia needs you', t.title, 'hitl-' + t.id, 'task/' + t.id, true);
     }
   }
   const changed = JSON.stringify(tasks.map(t => t.id)) !== JSON.stringify(S.tasks.map(t => t.id));
@@ -2519,13 +2635,30 @@ async function renderSettings() {
       h('input', { type: 'range', min: 12, max: 20, value: S.prefs.fs, oninput: e => { S.prefs.fs = +e.target.value; savePrefs(); e.target.parentElement.firstChild.textContent = `Message text size (${S.prefs.fs}px)`; } })),
     h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Send with Enter (Shift+Enter for a new line)'), sw(S.prefs.enterSends, v => { S.prefs.enterSends = v; savePrefs(); })));
 
+  const perm = canNotify() ? Notification.permission : '';
+  const notifOn = S.prefs.notify && perm === 'granted';
+  const notifState = !canNotify()
+    ? (isIOS() && !isStandalone() ? 'On iPhone and iPad: Share → Add to Home Screen, open bia from the home screen, then turn this on.' : 'not supported by this browser')
+    : perm === 'denied' ? 'blocked for this site — allow notifications in the browser\'s site settings'
+    : !notifOn ? 'off'
+    : NOTIF.sub ? 'on — also when no bia tab is open'
+    : `on while a bia tab is open${NOTIF.err ? ` (push: ${NOTIF.err})` : ''}`;
+  const testPush = async () => {
+    try { const r = await POST('/v1/push/test'); toast(`Sent to ${r.sent} browser${r.sent === 1 ? '' : 's'}`); }
+    catch (e) { toast(e.message, true); }
+    loadPushSubs();
+  };
   const notif = h('div', { class: 'card' }, h('h3', null, ic('bell'), 'Notifications'),
-    h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Desktop notifications', h('div', { class: 'muted', style: 'font-size:13px' }, 'Notification' in window ? `browser permission: ${Notification.permission}` : 'not supported by this browser')),
-      sw(S.prefs.notify && 'Notification' in window && Notification.permission === 'granted', async v => {
-        S.prefs.notify = v; savePrefs();
-        if (v && 'Notification' in window && Notification.permission !== 'granted') { await Notification.requestPermission(); renderSettings(); }
-      })),
-    h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Sound'), sw(S.prefs.sound, v => { S.prefs.sound = v; savePrefs(); if (v) blip(); })));
+    h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Browser notifications', h('div', { class: 'muted', style: 'font-size:13px' }, notifState)),
+      canNotify() && perm !== 'denied' ? sw(notifOn, async v => {
+        if (v) return enableNotifications();
+        S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings();
+      }) : null),
+    NOTIF.sub ? h('div', { class: 'setrow' }, h('div', { class: 'grow muted', style: 'font-size:13px' }, 'Notifications go through your browser\'s push service, end-to-end encrypted.'),
+      h('button', { class: 'btn ghost small', onclick: testPush }, 'Send a test')) : null,
+    h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Sound'), sw(S.prefs.sound, v => { S.prefs.sound = v; savePrefs(); if (v) blip(); })),
+    h('h3', { style: 'margin-top:18px' }, 'Browsers with push notifications'), h('div', { id: 'pushSubs' }, 'Loading…'));
+  setTimeout(loadPushSubs, 0);
 
   const kids = [profile, appearance, notif];
   if (S.root) {
@@ -2840,4 +2973,5 @@ function showRing(v) {
       h('button', { class: 'call-btn accept', title: 'Answer', onclick: () => { stopRing(); go('chat/' + v.chat); startCall(v.chat, v.id); } }, ic('phone'))));
   document.body.appendChild(RING.el);
   ringTone();
+  if (!isActive() && !NOTIF.sub) showNote('bia is calling', 'Open the chat to answer', 'ring-' + v.chat, 'chat/' + v.chat, true);
 }

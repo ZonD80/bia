@@ -1,0 +1,13 @@
+{
+  "name": "bia",
+  "short_name": "bia",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#17212b",
+  "theme_color": "#17212b",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

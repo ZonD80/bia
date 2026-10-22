@@ -8,6 +8,8 @@
 #   installers/macos/AppIcon.icns       bia flash.app (panel tile, macOS grid)
 #   installers/bia-flash/assets/icon.ico      Windows .exe resource (16…256)
 #   installers/bia-flash/assets/icon-256.png  window icon (egui; Linux/Windows title bar)
+#   source/crates/bia-mcp-web/web/icon-192.png          web console notifications + manifest
+#   source/crates/bia-mcp-web/web/apple-touch-icon.png  web console on an iOS home screen
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
@@ -105,6 +107,10 @@ ico website/public/favicon.ico 16 32 48
 ico installers/bia-flash/assets/icon.ico 16 32 48 64 128 256
 cp "$TMP/mark-256.png" installers/bia-flash/assets/icon-256.png
 
+# ---- web console (bia-mcp-web) ----
+scale "$TMP/mark-1024.png" source/crates/bia-mcp-web/web/icon-192.png 192
+cp website/public/apple-touch-icon.png source/crates/bia-mcp-web/web/apple-touch-icon.png
+
 # ---- macOS .icns ----
 set_dir="$TMP/AppIcon.iconset"
 mkdir -p "$set_dir"
@@ -115,6 +121,7 @@ done
 iconutil -c icns "$set_dir" -o installers/macos/AppIcon.icns
 
 ls -l website/public/icon.svg website/public/favicon.ico website/public/apple-touch-icon.png \
-  installers/macos/AppIcon.icns installers/bia-flash/assets/icon.ico installers/bia-flash/assets/icon-256.png
+  installers/macos/AppIcon.icns installers/bia-flash/assets/icon.ico installers/bia-flash/assets/icon-256.png \
+  source/crates/bia-mcp-web/web/icon-192.png source/crates/bia-mcp-web/web/apple-touch-icon.png
 cp "$TMP/tile-1024.png" "${PREVIEW_DIR:-$TMP}/tile-1024.png" 2>/dev/null || true
 cp "$TMP/mark-1024.png" "${PREVIEW_DIR:-$TMP}/mark-1024.png" 2>/dev/null || true

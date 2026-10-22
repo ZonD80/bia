@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.2.0
+
+### Changes
+- The web app can now notify you when bia writes, calls or needs you, even when no bia tab is open. Turn it on with the banner in the side bar or in Settings → Notifications; on iPhone and iPad, first add bia to the Home Screen and open it from there. Nothing is sent while you have bia in front of you, and the message text is encrypted on the way.
+- bia no longer thinks it can only move itself to computers on the same network: it now sees right away that carry_fly takes the address (and land secret) of a server on the internet.
+- Settings → Notifications lists every browser that gets your notifications, shows whether delivery works, and lets you remove old or broken ones. Expired ones are removed by themselves.
+
+### For bia
+- When someone uses the web app and has not turned notifications on, tell them once that Settings → Notifications lets them get your messages with the tab closed (on iPhone: Add to Home Screen first).
+
 ## 1.1.10
 
 ### Changes

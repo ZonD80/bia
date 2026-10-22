@@ -28,6 +28,8 @@ struct Sink {
     id: usize,
     identity: String,
     tx: Sender<Vec<u8>>,
+    /// the tab is visible and focused (it says so with `{"t":"active"}`)
+    active: bool,
 }
 
 /// One person's browser sessions, for the open/close notices (Bus::web_opened/web_closed).
@@ -134,6 +136,7 @@ impl Bus {
             id,
             identity: identity.to_string(),
             tx,
+            active: false,
         });
         (id, rx)
     }
@@ -157,6 +160,22 @@ impl Bus {
             .unwrap()
             .iter()
             .any(|s| s.identity == identity)
+    }
+
+    /// The tab behind a session came to the front (or left it).
+    pub fn set_active(&self, id: usize, on: bool) {
+        if let Some(s) = self.sinks.lock().unwrap().iter_mut().find(|s| s.id == id) {
+            s.active = on;
+        }
+    }
+
+    /// The person is looking at the web app right now (no push needed).
+    pub fn web_active(&self, identity: &str) -> bool {
+        self.sinks
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|s| s.identity == identity && s.active)
     }
 
     /// JSON event for every browser session of one identity.
@@ -392,7 +411,14 @@ mod tests {
         bus.web_event("alex", "{\"t\":\"x\"}");
         assert_eq!(rx_a.try_recv().unwrap(), b"\x1d{\"t\":\"x\"}".to_vec());
         assert!(rx_b.try_recv().is_err());
+        assert!(!bus.web_active("alex"));
+        bus.set_active(a, true);
+        assert!(bus.web_active("alex") && !bus.web_active("root"));
+        bus.set_active(a, false);
+        assert!(!bus.web_active("alex"));
+        bus.set_active(a, true);
         bus.remove_sink(a);
+        assert!(!bus.web_active("alex"));
         assert!(!bus.has_web("alex"));
     }
 }

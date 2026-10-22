@@ -441,6 +441,17 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
         );
     }
     crate::chat::emit_event(identity, json!({"t": "ring", "chat": k.1, "id": id}));
+    crate::push::notify(
+        identity,
+        crate::push::Note {
+            title: "bia is calling".into(),
+            body: "Open the chat to answer".into(),
+            tag: format!("ring-{}", k.1),
+            url: format!("chat/{}", k.1),
+            ttl: RING_SECS as u32,
+            urgent: true,
+        },
+    );
     let (ident, chat, rid) = (identity.to_string(), k.1.clone(), id);
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(RING_SECS));
