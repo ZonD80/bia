@@ -494,6 +494,20 @@ data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"outpu
     }
 
     #[test]
+    fn cut_off_arguments_are_marked_not_emptied() {
+        assert_eq!(parse_args("", "end"), json!({}));
+        assert_eq!(parse_args("{\"path\":\"/x\"}", "end")["path"], "/x");
+        let cut = parse_args("{\"path\":\"/home/bia/files/a.txt\",\"content\":\"lorem ip", "length");
+        let msg = crate::tools::cut_args_error(&cut).expect("marked");
+        assert!(msg.contains("output limit") && msg.contains("nothing was run"), "{msg}");
+        // Responses API: a truncated function_call item
+        let sse = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\"bash\",\"arguments\":\"{\\\"command\\\":\\\"echo\"}}\n\
+data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n";
+        let r = Remote::read_responses_stream(sse.as_bytes(), &mut |_, _| true).unwrap();
+        assert!(crate::tools::cut_args_error(&r.calls[0].args).is_some(), "{}", r.calls[0].args);
+    }
+
+    #[test]
     fn responses_stream_reasoning_summaries() {
         let sse = r#"data: {"type":"response.reasoning_summary_part.added","summary_index":0}
 data: {"type":"response.reasoning_summary_text.delta","delta":"First"}
@@ -622,6 +636,24 @@ pub struct RemoteResult {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub stop: String,
+}
+
+/// Tool-call arguments as sent. Arguments that are not valid JSON (a reply cut off at the
+/// provider's output limit, finish_reason "length") are not run: they become a marker that
+/// Tools::guide_call refuses, instead of an empty object the tool would run with.
+fn parse_args(raw: &str, stop: &str) -> Value {
+    if raw.trim().is_empty() {
+        return json!({});
+    }
+    serde_json::from_str(raw).unwrap_or_else(|_| {
+        json!({
+            crate::tools::CUT_ARGS: {
+                "stop": stop,
+                "received": raw.chars().take(200).collect::<String>(),
+                "bytes": raw.len(),
+            }
+        })
+    })
 }
 
 pub fn default_model(provider: &str) -> &'static str {
@@ -950,7 +982,7 @@ impl Remote {
                     id
                 },
                 name,
-                args: serde_json::from_str(&args).unwrap_or_else(|_| json!({})),
+                args: parse_args(&args, &stop),
             })
             .collect();
         Ok(RemoteResult {
@@ -1130,7 +1162,7 @@ impl Remote {
                         calls.push(ToolCall {
                             id: item["call_id"].as_str().unwrap_or("").to_string(),
                             name: item["name"].as_str().unwrap_or("").to_string(),
-                            args: serde_json::from_str(args).unwrap_or_else(|_| json!({})),
+                            args: parse_args(args, &stop),
                         });
                     }
                 }
@@ -1398,11 +1430,7 @@ impl Remote {
             .map(|(_, id, name, args)| ToolCall {
                 id,
                 name,
-                args: if args.trim().is_empty() {
-                    json!({})
-                } else {
-                    serde_json::from_str(&args).unwrap_or_else(|_| json!({}))
-                },
+                args: parse_args(&args, &stop),
             })
             .collect();
         Ok(RemoteResult {

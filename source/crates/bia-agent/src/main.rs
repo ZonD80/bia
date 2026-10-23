@@ -246,6 +246,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         .map(|m| m.len())
         .unwrap_or(0);
     let local_rt = config::LocalRuntime::load(&config::LocalRuntime::path(&paths.files));
+    // what the model set with set_model_config wins over bia.toml
+    let sampling = local_rt.sampling.clone().unwrap_or_else(|| cfg.sampling.clone());
     let mut model_cfg = cfg.model.clone();
     if let Some(ctx) = local_rt.ctx {
         model_cfg.ctx = ctx;
@@ -266,7 +268,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .map(|(path, plan)| llm::LocalSpec {
                 path: path.clone(),
                 cfg: model_cfg.clone(),
-                sampling: cfg.sampling.clone(),
+                sampling: sampling.clone(),
                 plan: plan.clone(),
             });
     let llm = if skip_local {
@@ -303,7 +305,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         let load = |mctx: &config::ModelCfg| {
             let b = boot.clone();
             let mut last = -1i32;
-            llm::Llm::load(model_path, mctx, &cfg.sampling, plan, move |f| {
+            llm::Llm::load(model_path, mctx, &sampling, plan, move |f| {
                 let pct = (f * 100.0) as i32;
                 if pct != last {
                     last = pct;
@@ -559,7 +561,10 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         think,
         system,
         history,
-        max_tool_rounds: cfg.agent.max_tool_rounds,
+        max_tool_rounds: config::AgentRuntime::load(&config::AgentRuntime::path(&paths.files))
+            .max_tool_rounds
+            .unwrap_or(cfg.agent.max_tool_rounds),
+        human_seq: 0,
         session_log,
         state_path,
         pending: saved_pending,

@@ -208,6 +208,8 @@ pub struct Repl {
     pub system: String,
     pub history: Vec<Msg>,
     pub max_tool_rounds: usize,
+    /// messages from people so far: a new one gives the turn a fresh round budget
+    pub human_seq: u64,
     pub session_log: Option<PathBuf>,
     pub state_path: PathBuf,
     /// messages that arrived while the model was busy
@@ -1411,6 +1413,191 @@ impl Repl {
         toks
     }
 
+    /// The tool round limit was reached. The chain of tool calls ends here: the model answers
+    /// with a plain reply (a note to itself: what is done, what is next; no tool call), then
+    /// finish_status's system message lets it go on with a fresh budget, posting a status to
+    /// the person first (say rounds are free). The person can stop it any time by writing:
+    /// their message arrives between rounds.
+    fn after_round_limit(&mut self, calls: &[ToolCall]) {
+        self.con
+            .writeln(&self.con.c(RED, "  [tool round limit reached]"));
+        self.answer_unrun(calls, "not run: a pause in a long task; call it again after the pause");
+        // no number here: a model that knows it starts counting and stops by itself
+        self.system_message(
+            "pause: long tasks are paused now and then, so the calls above were not run. Reply now in plain text, without any tool call: a short note for yourself on what is done and what is next. Then you will be told to go on.",
+        );
+    }
+
+    /// The model's plain reply after a round limit: close any calls it made anyway and let it
+    /// go on, telling the person where it is first.
+    fn finish_status(&mut self, calls: &[ToolCall]) {
+        self.answer_unrun(calls, "not run: this reply was only for your note; call it again now if it is still needed");
+        self.system_message(
+            "continue: go on with the task where you left off. First post a short status to the person who asked with say (what is done, what is next), then carry on calling tools as the task needs. These pauses come by themselves: never stop, wait or end your reply because of them. If the person writes to stop or change course, do what they say.",
+        );
+    }
+
+    /// set_model_config: show or change context, round limit and local sampling. Changes that
+    /// touch the brain are followed by a short test request and undone when it fails.
+    fn model_config_call(&mut self, args: &Value) -> (String, bool) {
+        let ch = match crate::tools::parse_model_change(args) {
+            Ok(ch) => ch,
+            Err(e) => return (format!("error: {e}"), true),
+        };
+        let mut done: Vec<String> = vec![];
+        let mut failed = false;
+        if let Some(r) = ch.max_tool_rounds {
+            let old = self.max_tool_rounds;
+            self.max_tool_rounds = r;
+            let p = crate::config::AgentRuntime::path(&self.files_dir());
+            let mut rt = crate::config::AgentRuntime::load(&p);
+            rt.max_tool_rounds = Some(r);
+            let _ = rt.save(&p);
+            done.push(format!("max_tool_rounds {r} (was {old})"));
+        }
+        if ch.touches_sampling() {
+            match self.local_spec.as_ref().map(|s| s.sampling.clone()) {
+                None => {
+                    done.push("sampling not changed: this machine has no local model".into());
+                    failed = true;
+                }
+                Some(old) => {
+                    let mut new = old.clone();
+                    ch.apply_sampling(&mut new);
+                    self.set_local_sampling(&new);
+                    // the cloud brain does not use it; test it on the local model when it runs
+                    let check = if self.remote.is_none() { self.check_brain() } else { Ok(String::new()) };
+                    match check {
+                        Ok(how) => {
+                            let p = crate::config::LocalRuntime::path(&self.files_dir());
+                            let mut rt = crate::config::LocalRuntime::load(&p);
+                            rt.sampling = Some(new.clone());
+                            let _ = rt.save(&p);
+                            done.push(format!(
+                                "local sampling {}{}",
+                                sampling_line(&new),
+                                if how.is_empty() {
+                                    " (for the local model; the cloud brain keeps its own)".to_string()
+                                } else {
+                                    format!("; test request ok, {how}")
+                                }
+                            ));
+                        }
+                        Err(e) => {
+                            self.set_local_sampling(&old);
+                            done.push(format!("local sampling NOT changed: the test request failed with it ({e}); restored {}", sampling_line(&old)));
+                            failed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(n) = ch.context {
+            let old = match &self.remote {
+                Some(r) => r.ctx,
+                None => self.local_spec.as_ref().map(|s| s.cfg.ctx).unwrap_or(0),
+            };
+            let line = self.apply_context(n);
+            self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
+            match self.check_brain() {
+                Ok(how) => done.push(format!("{line}; test request ok, {how}")),
+                Err(e) => {
+                    let back = if old > 0 { self.apply_context(old) } else { "nothing to restore".into() };
+                    let again = self.check_brain().map(|h| format!("works again, {h}")).unwrap_or_else(|e| format!("still failing: {e}"));
+                    done.push(format!("context NOT changed: the test request failed after it ({e}); {back}; {again}"));
+                    failed = true;
+                }
+            }
+        }
+        let now = self.model_settings();
+        if done.is_empty() {
+            (now, false)
+        } else {
+            (format!("{}
+now: {now}", done.join("\n")), failed)
+        }
+    }
+
+    fn files_dir(&self) -> std::path::PathBuf {
+        // state_path is files/state/<conversation file>
+        self.state_path
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("/home/bia/files"))
+    }
+
+    fn set_local_sampling(&mut self, s: &crate::config::SamplingCfg) {
+        if let Some(spec) = self.local_spec.as_mut() {
+            spec.sampling = s.clone();
+        }
+        if let Some(l) = self.llm.as_mut() {
+            l.set_sampling(s.clone());
+        }
+    }
+
+    /// The current settings, as set_model_config shows them.
+    fn model_settings(&self) -> String {
+        let brain = match &self.remote {
+            Some(r) => format!("cloud {} (FMM)", r.label()),
+            None => self
+                .local_spec
+                .as_ref()
+                .and_then(|s| s.path.file_name())
+                .map(|f| format!("local {}", f.to_string_lossy()))
+                .unwrap_or_else(|| "none".into()),
+        };
+        let sampling = self
+            .local_spec
+            .as_ref()
+            .map(|s| sampling_line(&s.sampling))
+            .unwrap_or_else(|| "no local model".into());
+        format!(
+            "brain {brain}; context {}; max_tool_rounds {}; local sampling {sampling}",
+            self.ctx_budget(),
+            self.max_tool_rounds
+        )
+    }
+
+    /// A short real request after a settings change: does the brain still answer? The local
+    /// model gets the live prompt (its cached prefix is reused) plus a check message, or the
+    /// system prompt alone when the conversation no longer fits; FMM gets probe_remote.
+    fn check_brain(&mut self) -> Result<String, String> {
+        if self.remote.is_some() {
+            return self.probe_remote().map(|_| "the cloud brain answered".into()).map_err(|e| format!("{e:#}"));
+        }
+        if self.llm.is_none() {
+            return Ok("local model not loaded yet".into());
+        }
+        let check = Msg::user("[settings check] Reply with the single word OK. Call no tools.".into());
+        let mut h = self.history.clone();
+        h.push(check.clone());
+        let full = self.format.render(&self.system, &self.tools.prompt_specs(), &h, true, self.think);
+        let small = self.format.render(&self.system, &self.tools.prompt_specs(), &[check], true, self.think);
+        let llm = self.llm.as_mut().unwrap();
+        let bos = llm.info.has_bos;
+        let mut toks = llm.tokenize(&full, bos).map_err(|e| format!("{e:#}"))?;
+        if toks.len() + 64 > llm.n_ctx {
+            toks = llm.tokenize(&small, bos).map_err(|e| format!("{e:#}"))?;
+        }
+        let (text, _) = llm
+            .generate(&toks, 32, |_, _| true, |_| true)
+            .map_err(|e| format!("{e:#}"))?;
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("the local model answered nothing".into());
+        }
+        Ok(format!("the local model answered \"{}\"", text.chars().take(30).collect::<String>()))
+    }
+
+    /// Calls stored but not run: each still needs its result, or the next request is refused
+    /// (an assistant's tool calls must be answered right after it).
+    fn answer_unrun(&mut self, calls: &[ToolCall], why: &str) {
+        for c in calls {
+            self.push_history(Msg::tool(c.name.clone(), c.id.clone(), why.to_string()));
+        }
+    }
+
     /// Execute tool calls, print them, append the results to the history.
     fn run_calls(&mut self, calls: &[ToolCall]) {
         self.tools.fired_job.set(false);
@@ -1502,9 +1689,13 @@ impl Repl {
                 continue;
             }
             let con = self.con.clone();
-            let (result, is_err) = self.tools.call(&name, &args, &mut |line| {
-                con.writeln(&con.c(GRAY, &format!("     {line}")))
-            });
+            let (result, is_err) = if name == "set_model_config" {
+                self.model_config_call(&args)
+            } else {
+                self.tools.call(&name, &args, &mut |line| {
+                    con.writeln(&con.c(GRAY, &format!("     {line}")))
+                })
+            };
             if !is_say || is_err {
                 let shown_result = if name == "discover" && !is_err {
                     if result.chars().count() > 2000 {
@@ -1543,13 +1734,6 @@ impl Repl {
                 result
             };
             self.push_history(Msg::tool(c.name.clone(), c.id.clone(), content));
-            if name == "set_context" {
-                if let Some(n) = self.tools.pending_ctx.take() {
-                    let line = self.apply_context(n);
-                    self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
-                    self.system_message(&line);
-                }
-            }
         }
     }
 
@@ -1704,9 +1888,13 @@ impl Repl {
             Some(Err(e)) => say(&self.con, RED, &format!("  ! {e}")),
             None => {
                 let con = self.con.clone();
-                let (result, is_err) = self.tools.call(name, &args, &mut |l| {
-                    con.writeln(&con.c(GRAY, &format!("     {l}")))
-                });
+                let (result, is_err) = if name == "set_model_config" {
+                    self.model_config_call(&args)
+                } else {
+                    self.tools.call(name, &args, &mut |l| {
+                        con.writeln(&con.c(GRAY, &format!("     {l}")))
+                    })
+                };
                 for l in result.lines() {
                     say(
                         &self.con,
@@ -1718,13 +1906,6 @@ impl Repl {
                     "root ran {name}({shown}) on the console: {}",
                     trunc_bytes(&result, 2000)
                 ));
-                if name == "set_context" {
-                    if let Some(n) = self.tools.pending_ctx.take() {
-                        let line = self.apply_context(n);
-                        say(&self.con, GRAY, &format!("  {line}"));
-                        self.system_message(&line);
-                    }
-                }
             }
         }
         self.save_state(false);
@@ -2077,6 +2258,10 @@ impl Repl {
 
     fn record_inbound(&mut self, ib: &Inbound) {
         self.con.journal_done(&ib.id);
+        if ib.identity != ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) {
+            // a person wrote: a new task gets a fresh round budget
+            self.human_seq += 1;
+        }
         if ib.channel.starts_with(crate::jobs::PREFIX) {
             self.on_job_envelope(ib);
         }
@@ -2231,6 +2416,9 @@ impl Repl {
         let _ = self.deliver_queued();
         let (start_marker, _) = self.format.markers();
         let mut round = 0;
+        let mut seen = self.human_seq;
+        // the next reply is the model's note after a round limit (after_round_limit)
+        let mut status_pending = false;
         loop {
             if self.pending.iter().any(|ib| console_command(ib).is_some()) {
                 break;
@@ -2266,18 +2454,31 @@ impl Repl {
                     .filter(|m| m.role == Role::Assistant)
                     .map(|m| m.tool_calls)
                     .unwrap_or_default();
+                if status_pending {
+                    status_pending = false;
+                    self.finish_status(&calls);
+                    let _ = self.deliver_ready(true);
+                    continue;
+                }
                 if calls.is_empty() {
                     if self.deliver_ready(true) > 0 {
                         continue;
                     }
                     break;
                 }
-                if !calls.iter().all(|c| c.name == "say") {
+                if self.human_seq != seen {
+                    // a person's new message came in during this turn: a new task, a new budget
+                    seen = self.human_seq;
+                    round = 0;
+                }
+                if !crate::tools::only_say(&calls) {
                     round += 1;
                     if round > self.max_tool_rounds {
-                        self.con
-                            .writeln(&self.con.c(RED, "  [tool round limit reached]"));
-                        break;
+                        self.after_round_limit(&calls);
+                        status_pending = true;
+                        round = 0;
+                        let _ = self.deliver_ready(true);
+                        continue;
                     }
                 }
                 self.run_calls(&calls);
@@ -2413,6 +2614,12 @@ impl Repl {
             if stats.stop == Stop::Interrupted {
                 break;
             }
+            if status_pending {
+                status_pending = false;
+                self.finish_status(&calls);
+                let _ = self.deliver_ready(true);
+                continue;
+            }
             if calls.is_empty() {
                 if self.deliver_ready(true) > 0 {
                     continue;
@@ -2420,12 +2627,18 @@ impl Repl {
                 break;
             }
             // conversation (say) does not count against the tool budget
-            if !calls.iter().all(|c| c.name == "say") {
+            if self.human_seq != seen {
+                seen = self.human_seq;
+                round = 0;
+            }
+            if !crate::tools::only_say(&calls) {
                 round += 1;
                 if round > self.max_tool_rounds {
-                    self.con
-                        .writeln(&self.con.c(RED, "  [tool round limit reached]"));
-                    break;
+                    self.after_round_limit(&calls);
+                    status_pending = true;
+                    round = 0;
+                    let _ = self.deliver_ready(true);
+                    continue;
                 }
             }
             self.run_calls(&calls);
@@ -2977,4 +3190,11 @@ fn own_like_files(p: &std::path::Path, files: &std::path::Path) {
     if let Ok(m) = std::fs::metadata(files) {
         let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
     }
+}
+
+fn sampling_line(s: &crate::config::SamplingCfg) -> String {
+    format!(
+        "temperature {} top_p {} top_k {} min_p {} repeat_penalty {} repeat_last_n {}",
+        s.temperature, s.top_p, s.top_k, s.min_p, s.repeat_penalty, s.repeat_last_n
+    )
 }

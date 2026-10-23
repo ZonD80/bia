@@ -35,7 +35,7 @@ pub struct ModelCfg {
     pub mlock: bool,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[serde(default)]
 pub struct SamplingCfg {
     pub temperature: f32,
@@ -83,7 +83,7 @@ impl Default for AgentCfg {
     fn default() -> Self {
         AgentCfg {
             system_prompt: DEFAULT_SYSTEM_PROMPT.into(),
-            max_tool_rounds: 32,
+            max_tool_rounds: 100,
             show_thinking: true,
         }
     }
@@ -95,6 +95,9 @@ impl Default for AgentCfg {
 pub struct LocalRuntime {
     #[serde(default)]
     pub ctx: Option<u32>,
+    /// set_model_config: sampling of the local model instead of bia.toml's [sampling]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampling: Option<SamplingCfg>,
 }
 
 impl LocalRuntime {
@@ -103,27 +106,57 @@ impl LocalRuntime {
     }
 
     pub fn load(path: &Path) -> LocalRuntime {
-        std::fs::read(path)
-            .ok()
-            .and_then(|d| serde_json::from_slice(&d).ok())
-            .unwrap_or_default()
+        load_json(path)
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, path).or_else(|_| std::fs::copy(&tmp, path).map(|_| ()))?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(())
+        save_json(self, path)
     }
+}
+
+/// Runtime overlay for the agent (`/home/bia/files/state/agent.json`): what the model set with
+/// set_model_config that is not about one brain.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct AgentRuntime {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tool_rounds: Option<usize>,
+}
+
+impl AgentRuntime {
+    pub fn path(files: &Path) -> std::path::PathBuf {
+        files.join("state").join("agent.json")
+    }
+
+    pub fn load(path: &Path) -> AgentRuntime {
+        load_json(path)
+    }
+
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        save_json(self, path)
+    }
+}
+
+fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
+    std::fs::read(path)
+        .ok()
+        .and_then(|d| serde_json::from_slice(&d).ok())
+        .unwrap_or_default()
+}
+
+fn save_json<T: Serialize>(v: &T, path: &Path) -> std::io::Result<()> {
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&serde_json::to_vec_pretty(v).map_err(std::io::Error::other)?)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path).or_else(|_| std::fs::copy(&tmp, path).map(|_| ()))?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(())
 }
 
 impl Config {
@@ -135,6 +168,10 @@ impl Config {
                         && SHIPPED_PROMPTS.contains(&sha256_hex(&c.agent.system_prompt).as_str());
                     if stock {
                         c.agent.system_prompt = DEFAULT_SYSTEM_PROMPT.into();
+                    }
+                    // 32 was the shipped bia.toml value before 1.2.2: it means "the default"
+                    if c.agent.max_tool_rounds == 32 {
+                        c.agent.max_tool_rounds = AgentCfg::default().max_tool_rounds;
                     }
                     (c, None)
                 }
@@ -185,6 +222,14 @@ mod prompt_tests {
     fn shipped_bia_toml_uses_the_built_in_prompt() {
         let shipped = include_str!("../../../flash/bia.toml");
         assert_eq!(load_toml(shipped).agent.system_prompt, DEFAULT_SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn tool_rounds_default_to_100_and_the_old_stock_32_counts_as_default() {
+        assert_eq!(load_toml(include_str!("../../../flash/bia.toml")).agent.max_tool_rounds, 100);
+        assert_eq!(load_toml("[agent]\nmax_tool_rounds = 32\n").agent.max_tool_rounds, 100);
+        assert_eq!(load_toml("[agent]\nmax_tool_rounds = 40\n").agent.max_tool_rounds, 40);
+        assert_eq!(load_toml("[agent]\nshow_thinking = false\n").agent.max_tool_rounds, 100);
     }
 
     #[test]

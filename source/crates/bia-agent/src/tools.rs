@@ -389,9 +389,21 @@ fn pythonic_value(v: &Value) -> String {
 pub fn normalize_history(format: ToolFormat, history: &[Msg]) -> Vec<Msg> {
     let mut out: Vec<Msg> = Vec::with_capacity(history.len());
     let mut open: std::collections::VecDeque<(String, String)> = Default::default(); // (id, name) of calls awaiting results
+    // Chat APIs reject a history where an assistant's tool calls are not answered right after
+    // it (DeepSeek: "insufficient tool messages following tool_calls message"), and one such
+    // spot breaks every later request. Messages that came between a call and its results wait
+    // until the results are in; calls that never got a result are answered as not run.
+    let mut held: Vec<Msg> = vec![];
+    fn close(out: &mut Vec<Msg>, open: &mut std::collections::VecDeque<(String, String)>, held: &mut Vec<Msg>) {
+        for (id, name) in open.drain(..) {
+            out.push(Msg::tool(name, id, NOT_RUN.into()));
+        }
+        out.append(held);
+    }
     for (i, m) in history.iter().enumerate() {
         match m.role {
             Role::Assistant => {
+                close(&mut out, &mut open, &mut held);
                 let mut msg = m.clone();
                 if msg.tool_calls.is_empty() {
                     msg.tool_calls = format.parse_calls(&m.content);
@@ -411,31 +423,155 @@ pub fn normalize_history(format: ToolFormat, history: &[Msg]) -> Vec<Msg> {
             }
             Role::Tool => {
                 let mut msg = m.clone();
-                if msg.call_id.is_empty() {
+                let pos = if msg.call_id.is_empty() {
                     // take the first open call with this name, else the first open call
-                    let pos = open
-                        .iter()
+                    open.iter()
                         .position(|(_, n)| n == &m.name)
-                        .or(if open.is_empty() { None } else { Some(0) });
-                    match pos {
-                        Some(p) => {
-                            msg.call_id = open.remove(p).map(|(id, _)| id).unwrap_or_default()
-                        }
-                        None => {
-                            // orphan result: hand it over as plain text
-                            out.push(Msg::user(format!("[result of {}] {}", m.name, m.content)));
-                            continue;
+                        .or(if open.is_empty() { None } else { Some(0) })
+                } else {
+                    open.iter().position(|(id, _)| id == &msg.call_id)
+                };
+                match pos {
+                    Some(p) => {
+                        msg.call_id = open.remove(p).map(|(id, _)| id).unwrap_or_default();
+                        out.push(msg);
+                        if open.is_empty() {
+                            out.append(&mut held);
                         }
                     }
-                } else {
-                    open.retain(|(id, _)| id != &msg.call_id);
+                    None => {
+                        // orphan result (its call is gone or already answered): plain text
+                        let text = Msg::user(format!("[result of {}] {}", m.name, m.content));
+                        if open.is_empty() {
+                            out.push(text);
+                        } else {
+                            held.push(text);
+                        }
+                    }
                 }
-                out.push(msg);
             }
+            Role::User if !open.is_empty() => held.push(m.clone()),
             Role::User => out.push(m.clone()),
         }
     }
+    close(&mut out, &mut open, &mut held);
     out
+}
+
+/// Only messages to people in this round (`say`, also through discover/invoke as FMM
+/// models call it): such rounds do not count against max_tool_rounds.
+pub fn only_say(calls: &[ToolCall]) -> bool {
+    calls.iter().all(|c| Tools::expand_call(&c.name, &c.args).0 == "say")
+}
+
+/// Marker key for tool-call arguments that arrived as broken JSON (remote::parse_args).
+pub const CUT_ARGS: &str = "__bia_cut_off_arguments";
+
+/// A call whose arguments were cut off: what to tell the model instead of running it.
+pub fn cut_args_error(args: &Value) -> Option<String> {
+    let c = args.get(CUT_ARGS)?;
+    let stop = c.get("stop").and_then(|s| s.as_str()).unwrap_or("");
+    let why = if matches!(stop, "length" | "max_tokens" | "max_output_tokens") {
+        " (your reply hit the provider's output limit)"
+    } else {
+        ""
+    };
+    Some(format!(
+        "your tool call arrived with incomplete arguments ({} bytes of broken JSON){why}, so nothing was run. Call it again; if the arguments are long (a big file or message), split the work into several smaller calls.",
+        c.get("bytes").and_then(|b| b.as_u64()).unwrap_or(0)
+    ))
+}
+
+/// The result given to a tool call that never ran (round limit, interruption, restart).
+pub const NOT_RUN: &str = "not run: this call was never executed (stopped or the tool round limit was reached); call it again if it is still needed";
+
+/// What a set_model_config call asks to change (validated; `None` = keep).
+#[derive(Debug, Default, PartialEq)]
+pub struct ModelChange {
+    pub context: Option<u32>,
+    pub max_tool_rounds: Option<usize>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<i32>,
+    pub min_p: Option<f32>,
+    pub repeat_penalty: Option<f32>,
+    pub repeat_last_n: Option<i32>,
+}
+
+impl ModelChange {
+    pub fn touches_sampling(&self) -> bool {
+        self.temperature.is_some()
+            || self.top_p.is_some()
+            || self.top_k.is_some()
+            || self.min_p.is_some()
+            || self.repeat_penalty.is_some()
+            || self.repeat_last_n.is_some()
+    }
+
+    pub fn apply_sampling(&self, s: &mut crate::config::SamplingCfg) {
+        if let Some(v) = self.temperature {
+            s.temperature = v;
+        }
+        if let Some(v) = self.top_p {
+            s.top_p = v;
+        }
+        if let Some(v) = self.top_k {
+            s.top_k = v;
+        }
+        if let Some(v) = self.min_p {
+            s.min_p = v;
+        }
+        if let Some(v) = self.repeat_penalty {
+            s.repeat_penalty = v;
+        }
+        if let Some(v) = self.repeat_last_n {
+            s.repeat_last_n = v;
+        }
+    }
+}
+
+/// Check set_model_config's arguments; numbers may come as strings. Unknown fields are refused
+/// so a typo does not look like a change.
+pub fn parse_model_change(args: &Value) -> Result<ModelChange, String> {
+    const KNOWN: &[&str] = &["context", "max_tool_rounds", "temperature", "top_p", "top_k", "min_p", "repeat_penalty", "repeat_last_n"];
+    let mut ch = ModelChange::default();
+    let Some(o) = args.as_object() else {
+        return Ok(ch);
+    };
+    for k in o.keys() {
+        if !KNOWN.contains(&k.as_str()) {
+            return Err(format!("unknown setting {k}; known: {}", KNOWN.join(", ")));
+        }
+    }
+    let num = |k: &str| -> Result<Option<f64>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Number(n)) => Ok(n.as_f64()),
+            Some(Value::String(s)) => s.trim().parse::<f64>().map(Some).map_err(|_| format!("{k} must be a number")),
+            Some(_) => Err(format!("{k} must be a number")),
+        }
+    };
+    let ranged = |k: &str, lo: f64, hi: f64| -> Result<Option<f64>, String> {
+        match num(k)? {
+            Some(v) if !(lo..=hi).contains(&v) => Err(format!("{k} must be between {lo} and {hi}")),
+            v => Ok(v),
+        }
+    };
+    let whole = |k: &str, v: Option<f64>| -> Result<Option<f64>, String> {
+        match v {
+            Some(x) if x.fract() != 0.0 => Err(format!("{k} must be a whole number")),
+            v => Ok(v),
+        }
+    };
+    ch.context = whole("context", ranged("context", 512.0, 2_000_000.0)?)?.map(|v| v as u32);
+    ch.max_tool_rounds = whole("max_tool_rounds", ranged("max_tool_rounds", 4.0, 256.0)?)?.map(|v| v as usize);
+    ch.temperature = ranged("temperature", 0.0, 2.0)?.map(|v| v as f32);
+    ch.top_p = ranged("top_p", 0.0, 1.0)?.map(|v| v as f32);
+    ch.top_k = whole("top_k", ranged("top_k", 0.0, 1000.0)?)?.map(|v| v as i32);
+    ch.min_p = ranged("min_p", 0.0, 1.0)?.map(|v| v as f32);
+    ch.repeat_penalty = ranged("repeat_penalty", 0.5, 2.0)?.map(|v| v as f32);
+    ch.repeat_last_n = whole("repeat_last_n", ranged("repeat_last_n", -1.0, 4096.0)?)?.map(|v| v as i32);
+    Ok(ch)
 }
 
 /// Qwen3.5: `<function=name><parameter=k>value</parameter></function>`.
@@ -796,7 +932,6 @@ pub struct Tools {
     /// the model asked to forget the conversation; done by the REPL after this turn
     pub pending_forget: std::cell::Cell<bool>,
     /// the model asked to change the active brain's context window; applied by the REPL after this call
-    pub pending_ctx: std::cell::Cell<Option<u32>>,
     /// compact the live window into reflections after this turn
     pub pending_reflect: std::cell::Cell<bool>,
     con: Arc<Console>,
@@ -858,7 +993,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "machine",
         blurb: "Context window, reboot, poweroff, forget.",
-        guide: "set_context(tokens) sets the active brain's context (512–2000000) and reloads it; on failure the previous window is restored. reboot and poweroff only when root asks; the conversation is saved and resumes. forget only when root asks to start over. Act with tools first; do not ask root for something you can look up. Changing network, packages, files, disks, or your own logins needs no extra confirmation.",
+        guide: "set_model_config shows or changes how you run: context (tokens, reloads you; on failure the previous window is restored), max_tool_rounds (rounds in a row before a status), and the local model's sampling (temperature, top_p, top_k, min_p, repeat_penalty, repeat_last_n; cloud FMM models keep their own). Only the fields you pass change. reboot and poweroff only when root asks; the conversation is saved and resumes. forget only when root asks to start over. Act with tools first; do not ask root for something you can look up. Changing network, packages, files, disks, or your own logins needs no extra confirmation.",
     },
 ];
 
@@ -930,7 +1065,6 @@ impl Tools {
             files_dir: files_dir.into(),
             pending_exit: std::cell::Cell::new(None),
             pending_forget: std::cell::Cell::new(false),
-            pending_ctx: std::cell::Cell::new(None),
             pending_reflect: std::cell::Cell::new(false),
             con,
             addressbook: crate::addressbook::AddressBook::load(&state.join("addressbook.json")),
@@ -1026,8 +1160,17 @@ impl Tools {
                 "identity": {"type": "string", "description": "chat owner identity; defaults to last human inbound"},
                 "limit": {"type": "integer", "description": "default 30, max 100"}
             }), &[]));
-        t.add_grouped("machine", "set_context", "Set the active brain's context window in tokens, then unload and reload it. Local GGUF: new KV cache (clamped to the model's trained length); on failure the previous window is restored. FMM: software budget stored in fmm.json. 512–2000000.",
-            obj(json!({"tokens": {"type": "integer", "description": "context length in tokens"}}), &["tokens"]));
+        t.add_grouped("machine", "set_model_config", "Show or change how your brain runs: context tokens, tool rounds before a pause, local model sampling (temperature, top_p…). Only the fields you pass change; none shows the current settings. Changes are kept across restarts.",
+            obj(json!({
+                "context": {"type": "integer", "description": "context window in tokens, 512–2000000: reloads the brain (local GGUF: new KV cache, clamped to the model's trained length; FMM: budget in fmm.json); on failure the previous window is restored"},
+                "max_tool_rounds": {"type": "integer", "description": "tool rounds in a row before you post a status and go on, 4–256 (bash, MCP functions and say do not count)"},
+                "temperature": {"type": "number", "description": "local model, 0–2"},
+                "top_p": {"type": "number", "description": "local model, 0–1"},
+                "top_k": {"type": "integer", "description": "local model, 0 (off)–1000"},
+                "min_p": {"type": "number", "description": "local model, 0–1"},
+                "repeat_penalty": {"type": "number", "description": "local model, 0.5–2"},
+                "repeat_last_n": {"type": "integer", "description": "local model, -1 (whole context)–4096"}
+            }), &[]));
         t.add_grouped("memory", "memory_list", "List reflections overlapping a time period. from/to are RFC 3339 UTC or YYYY-MM-DD. Optional category (summary, facts, or any category you invented) and depth (0=raw-period, higher=reflections of reflections).",
             obj(json!({
                 "from": {"type": "string"},
@@ -2385,6 +2528,9 @@ impl Tools {
         name: &str,
         args: &Value,
     ) -> Result<(String, Value, String), String> {
+        if let Some(e) = cut_args_error(args) {
+            return Err(e);
+        }
         let (name, name_note) = self.resolve_tool_name(name)?;
         let (args, arg_note) = self.align_args(&name, args)?;
         let repeat_note = self.repeat_note(&name, &args);
@@ -2978,16 +3124,8 @@ impl Tools {
     fn builtin(&mut self, name: &str, args: &Value) -> Result<String> {
         let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
         match name {
-            "set_context" => {
-                let n = args.get("tokens").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                if !(512..=2_000_000).contains(&n) {
-                    bail!("tokens must be between 512 and 2000000");
-                }
-                self.pending_ctx.set(Some(n));
-                Ok(format!(
-                    "ok: applying context {n} tokens (unload/reload; previous restored on failure)"
-                ))
-            }
+            // the agent runs it (it holds the brain and its settings): Repl::model_config_call
+            "set_model_config" => bail!("set_model_config is run by the agent loop"),
             "memory_list" => crate::memory::tool_list(&self.files_dir.join("state"), args),
             "memory_get" => crate::memory::tool_get(&self.files_dir.join("state"), args),
             "memory_tree" => crate::memory::tool_tree(&self.files_dir.join("state"), args),
@@ -3937,6 +4075,114 @@ done
         std::fs::write(path, text).unwrap();
         let t = std::time::SystemTime::now() + std::time::Duration::from_secs(ahead);
         std::fs::File::options().write(true).open(path).unwrap().set_modified(t).unwrap();
+    }
+
+    /// role and call id of each message, the shape chat APIs check
+    fn shape(h: &[Msg]) -> Vec<String> {
+        h.iter()
+            .map(|m| match m.role {
+                Role::User => "user".to_string(),
+                Role::Assistant => format!("assistant[{}]", m.tool_calls.iter().map(|c| c.id.as_str()).collect::<Vec<_>>().join(",")),
+                Role::Tool => format!("tool:{}", m.call_id),
+            })
+            .collect()
+    }
+
+    fn call(id: &str, name: &str) -> ToolCall {
+        ToolCall { id: id.into(), name: name.into(), args: json!({}) }
+    }
+
+    #[test]
+    fn say_rounds_are_free_however_they_are_called() {
+        let say = ToolCall { id: "a".into(), name: "say".into(), args: json!({"message": "hi"}) };
+        let via_discover = ToolCall { id: "b".into(), name: "discover".into(), args: json!({"call": "say", "arguments": {"message": "status"}}) };
+        let via_invoke = ToolCall { id: "c".into(), name: "invoke".into(), args: json!({"name": "say", "arguments": {"message": "x"}}) };
+        let work = ToolCall { id: "d".into(), name: "discover".into(), args: json!({"call": "memory_list", "arguments": {}}) };
+        assert!(only_say(&[say.clone(), via_discover.clone(), via_invoke]));
+        assert!(!only_say(&[via_discover, work.clone()]));
+        assert!(!only_say(&[work]));
+        assert!(!only_say(&[ToolCall { id: "e".into(), name: "discover".into(), args: json!({"q": "say"}) }]), "a search is a round");
+    }
+
+    #[test]
+    fn a_cut_off_call_is_not_run() {
+        let dir = std::env::temp_dir().join(format!("bia-cut-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        let cut = json!({CUT_ARGS: {"stop": "length", "received": "{\"command\":\"ec", "bytes": 15}});
+        let e = t.guide_call("bash", &cut).unwrap_err();
+        assert!(e.contains("15 bytes") && e.contains("output limit"), "{e}");
+        assert!(t.guide_call("bash", &json!({"command": "true"})).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn model_config_arguments_are_checked() {
+        assert_eq!(parse_model_change(&json!({})).unwrap(), ModelChange::default());
+        let ch = parse_model_change(&json!({"context": 65536, "max_tool_rounds": "64", "temperature": 0.7, "top_k": 40})).unwrap();
+        assert_eq!((ch.context, ch.max_tool_rounds, ch.temperature, ch.top_k), (Some(65536), Some(64), Some(0.7), Some(40)));
+        assert!(ch.touches_sampling());
+        let mut s = crate::config::SamplingCfg::default();
+        ch.apply_sampling(&mut s);
+        assert_eq!((s.temperature, s.top_k, s.min_p), (0.7, 40, crate::config::SamplingCfg::default().min_p));
+        assert!(!parse_model_change(&json!({"max_tool_rounds": 8})).unwrap().touches_sampling());
+        for (bad, why) in [
+            (json!({"context": 100}), "between 512"),
+            (json!({"max_tool_rounds": 1000}), "between 4"),
+            (json!({"temperature": 3}), "between 0"),
+            (json!({"top_k": 2.5}), "whole number"),
+            (json!({"tokens": 4096}), "unknown setting tokens"),
+            (json!({"top_p": "lots"}), "must be a number"),
+        ] {
+            let e = parse_model_change(&bad).unwrap_err();
+            assert!(e.contains(why), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn unanswered_tool_calls_are_repaired_for_chat_apis() {
+        let f = ToolFormat::Hermes;
+        // the round limit left two calls without results; the next inbound came after them
+        let h = vec![
+            Msg::user("hi".into()),
+            Msg::assistant(String::new(), vec![call("a", "say"), call("b", "bash")]),
+            Msg::user("next message".into()),
+        ];
+        let n = normalize_history(f, &h);
+        assert_eq!(shape(&n), ["user", "assistant[a,b]", "tool:a", "tool:b", "user"]);
+        assert!(n[2].content.starts_with("not run:"), "{}", n[2].content);
+
+        // a message that came between two results waits until both are in
+        let h = vec![
+            Msg::assistant(String::new(), vec![call("a", "say"), call("b", "bash")]),
+            Msg::tool("say".into(), "a".into(), "ok".into()),
+            Msg::user("system notice".into()),
+            Msg::tool("bash".into(), "b".into(), "done".into()),
+            Msg::assistant("fine".into(), vec![]),
+        ];
+        let n = normalize_history(f, &h);
+        assert_eq!(shape(&n), ["assistant[a,b]", "tool:a", "tool:b", "user", "assistant[]"]);
+        assert_eq!(n[2].content, "done");
+
+        // a result whose call is gone becomes text; a call still open at the end is answered
+        let h = vec![
+            Msg::user("x".into()),
+            Msg::tool("bash".into(), "gone".into(), "old output".into()),
+            Msg::assistant(String::new(), vec![call("c", "bash")]),
+        ];
+        let n = normalize_history(f, &h);
+        assert_eq!(shape(&n), ["user", "user", "assistant[c]", "tool:c"]);
+        assert!(n[1].content.starts_with("[result of bash] old output"));
+
+        // a well-formed history is left as it is
+        let h = vec![
+            Msg::user("q".into()),
+            Msg::assistant(String::new(), vec![call("a", "say")]),
+            Msg::tool("say".into(), "a".into(), "sent".into()),
+            Msg::assistant("done".into(), vec![]),
+        ];
+        assert_eq!(shape(&normalize_history(f, &h)), shape(&h));
     }
 
     #[test]

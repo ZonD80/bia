@@ -5,6 +5,18 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.2.2
+
+### Changes
+- bia no longer gets stuck with "HTTP 400 … tool_calls must be followed by tool messages" (seen with DeepSeek). When bia used up its tool rounds in one turn, its last calls stayed without an answer, and the model's service refused every later request. Such a conversation now heals itself on the next request; nothing is lost.
+- bia no longer stops a long task after a fixed number of tool rounds: every 100 rounds (was a hard stop after 32) it posts you a short status and goes on for as long as the task needs. To stop it or change course, just write to it; your message reaches it between steps.
+- When the model's reply is cut off by its service's output limit in the middle of a tool call, bia no longer runs that tool with empty arguments: nothing runs, and the model is told to call it again with shorter arguments.
+- bia can now adjust how it runs with one tool, set_model_config: its context size, after how many tool rounds it posts you a status, and the sampling of the local model (temperature and similar). After each change it makes a short test request and undoes the change if the model stops answering. Changes are kept across restarts.
+- In the web app, everyone you gave a certificate with trust root now has the root options too: the root shell, the live console, the screen, files, machine status, certificates and requests from other agents, and notifications for human tasks. Before, only the certificate named root had them. People with trust normal still have only their own chats.
+
+### For bia
+- set_context is now set_model_config (context=<tokens>); it also takes max_tool_rounds and the local model's sampling. If your notes or schedules mention set_context, update them.
+
 ## 1.2.1
 
 ### Changes

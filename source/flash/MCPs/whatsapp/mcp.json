@@ -1,6 +1,6 @@
 {
   "name": "whatsapp",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Your own WhatsApp as a linked device, a real user, not a bot (QR login only): chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/whatsapp/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-whatsapp",

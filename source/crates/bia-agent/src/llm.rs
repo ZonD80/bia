@@ -67,6 +67,11 @@ pub struct Llm {
 }
 
 impl Llm {
+    /// Sampling for the next requests (set_model_config); llama-server takes it per request.
+    pub fn set_sampling(&mut self, s: SamplingCfg) {
+        self.sampling = s;
+    }
+
     pub fn load(
         path: &Path,
         cfg: &ModelCfg,

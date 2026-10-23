@@ -184,7 +184,7 @@ send or abandons an upload. A send cut off by a restart is reported as
 
 ### Tools and discovery
 
-Built-in tools: `bash`, `say`, `discover`, `set_context`, `job_*`/`list_jobs`,
+Built-in tools: `bash`, `say`, `discover`, `set_model_config`, `job_*`/`list_jobs`,
 `memory_*`, `schedule_*`, `addressbook_*`. The prompt starts with only a few;
 `discover(q=…)` searches and `discover(path="mcp/<name>", enable=true)` loads
 an MCP's function definitions as a `system` message, so the cached prompt
