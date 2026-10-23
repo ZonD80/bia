@@ -138,5 +138,27 @@ s, b = req("GET", "/v1/push/subs", ctx=ctx); check([r["service"] for r in json.l
 s, b = req("POST", "/v1/push/unsubscribe", {"endpoint": ep}, ctx=ctx)
 check(s == 200 and json.loads(b)["removed"] and json.load(open(f"{files}/state/web/push/subs.json")) == [], f"unsubscribe ({s} {b!r})")
 
+# root options go by trust: another identity with trust root gets them, a normal one does not
+def ctx_for(identity, trust):
+    s, b = req("POST", "/v1/pki/issue", {"identity": identity, "role": "user", "trust": trust}, ctx=ctx)
+    path = json.loads(b)["path"]
+    s, p12 = req("GET", path)
+    open(f"{d}/{identity}.p12", "wb").write(p12)
+    subprocess.run(["openssl", "pkcs12", "-in", f"{d}/{identity}.p12", "-passin", "pass:12345678", "-nodes", "-out", f"{d}/{identity}.pem"], check=True, capture_output=True)
+    c = ssl.create_default_context(cafile=f"{d}/ca.pem"); c.check_hostname = False
+    c.load_cert_chain(f"{d}/{identity}.pem")
+    return c
+alice, bob = ctx_for("alice", "root"), ctx_for("bob", "normal")
+s, b = req("GET", "/v1/whoami", ctx=alice); check(s == 200 and json.loads(b).get("root") is True, f"alice (trust root) is root in the web app: {b[:120]!r}")
+s, b = req("GET", "/v1/whoami", ctx=bob); check(s == 200 and json.loads(b).get("root") is False, f"bob (trust normal) is not: {b[:120]!r}")
+for path in ("/v1/status", "/v1/pki/certs", "/v1/pki/requests"):
+    sa, _ = req("GET", path, ctx=alice); sb, _ = req("GET", path, ctx=bob)
+    check(sa == 200 and sb == 403, f"{path}: alice {sa}, bob {sb}")
+for who, c, want in (("alice", alice, 101), ("bob", bob, 403)):
+    cn = http.client.HTTPSConnection("127.0.0.1", 8443, context=c, timeout=10)
+    cn.request("GET", "/ws/shell", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(), "Sec-WebSocket-Version": "13"})
+    r = cn.getresponse(); check(r.status == want, f"/ws/shell for {who}: {r.status}")
+    cn.close()
+
 p.stdin.close(); p.wait(timeout=10)
 print("RESULT", "FAILED" if check.failed else "PASSED")

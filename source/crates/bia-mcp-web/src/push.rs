@@ -1,6 +1,6 @@
 //! Web Push (RFC 8030 delivery, RFC 8291 aes128gcm payloads, RFC 8292 VAPID): a browser with
 //! notifications on subscribes through its push service (FCM, Mozilla, Apple); bia then
-//! wakes its service worker (`/sw.js`) for new bia messages, calls and root's human tasks,
+//! wakes its service worker (`/sw.js`) for new bia messages, calls and human tasks (for identities with trust root),
 //! even with the console closed. Nothing is pushed while a tab of that identity is in front
 //! (the page reports `{"t":"active"}` over its WebSocket) — that tab notifies by itself.
 //! Payloads are end-to-end encrypted: the push service only sees ciphertext.
@@ -73,7 +73,7 @@ fn dir(files: &Path) -> PathBuf {
     files.join("state").join("web").join("push")
 }
 
-/// Load (or make) the VAPID key and the subscriptions; watch root's human tasks.
+/// Load (or make) the VAPID key and the subscriptions; watch human tasks for everyone with trust root.
 pub fn init(files: &Path, con: Arc<Bus>) -> Result<(), String> {
     let dir = dir(files);
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
@@ -407,6 +407,7 @@ pub fn unsubscribe(identity: &str, endpoint: &str) -> Result<bool, String> {
 
 /// A notification for the service worker: `title`, `body`, `tag` (a newer one with the same
 /// tag replaces it), `url` (the console route to open on click).
+#[derive(Clone)]
 pub struct Note {
     pub title: String,
     pub body: String,
@@ -627,7 +628,17 @@ fn seal(
     Ok(out)
 }
 
-// ---- root's human tasks ----
+// ---- human tasks (for everyone with trust root) ----
+
+fn root_identities(files: &Path) -> Vec<String> {
+    let mut ids = bia_pki::Pki::load_or_create(files)
+        .map(|p| p.root_identities())
+        .unwrap_or_default();
+    if !ids.iter().any(|i| i == crate::bus::ID_ROOT) {
+        ids.push(crate::bus::ID_ROOT.into());
+    }
+    ids
+}
 
 fn watch_tasks(files: &Path) {
     let ids = |files: &Path| -> Vec<(String, String)> {
@@ -651,17 +662,18 @@ fn watch_tasks(files: &Path) {
         let now = ids(files);
         for (id, title) in &now {
             if seen.insert(id.clone()) {
-                notify(
-                    crate::bus::ID_ROOT,
-                    Note {
-                        title: "bia needs you".into(),
-                        body: title.clone(),
-                        tag: format!("hitl-{id}"),
-                        url: format!("task/{id}"),
-                        ttl: 24 * 3600,
-                        urgent: true,
-                    },
-                );
+                let note = Note {
+                    title: "bia needs you".into(),
+                    body: title.clone(),
+                    tag: format!("hitl-{id}"),
+                    url: format!("task/{id}"),
+                    ttl: 24 * 3600,
+                    urgent: true,
+                };
+                // every identity with trust root can do human tasks
+                for who in root_identities(files) {
+                    notify(&who, note.clone());
+                }
             }
         }
         let live: HashSet<&String> = now.iter().map(|(id, _)| id).collect();

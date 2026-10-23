@@ -483,6 +483,24 @@ impl Pki {
             .any(|m| m.identity == identity && !m.revoked && m.not_after > now)
     }
 
+    /// Identities with an active (unrevoked, unexpired) certificate of trust root.
+    pub fn root_identities(&self) -> Vec<String> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut ids: Vec<String> = self
+            .list_issued()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.trust == "root" && !m.revoked && m.not_after > now)
+            .map(|m| m.identity)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     pub fn revoke(&self, serial: &str) -> Result<bool> {
         let serial = sanitize_serial(serial)?;
         let p = self.dir.join("issued").join(format!("{serial}.json"));
@@ -944,15 +962,22 @@ fn chmod600(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
     }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// Root writes it here, but backups made as user bia must read it: hand it to the owner of
 /// `files` (the agent gives all of /home/bia to bia at boot anyway).
 fn own_like_files(p: &Path, files: &Path) {
-    use std::os::unix::fs::MetadataExt;
-    if let Ok(m) = std::fs::metadata(files) {
-        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(m) = std::fs::metadata(files) {
+            let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
+        }
     }
+    #[cfg(not(unix))]
+    let _ = (p, files);
 }
 
 /// Install the process-wide rustls crypto provider (call once at startup).

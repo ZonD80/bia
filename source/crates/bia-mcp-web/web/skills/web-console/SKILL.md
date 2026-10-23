@@ -18,7 +18,9 @@ Connect to this BIA over HTTPS with a client certificate issued by its CA. The w
 
 **First root (no active root cert yet):** open the web UI without a client cert. `GET /v1/pki/bootstrap` reports `root_issued: false`. Click **Issue root certificate** (or `POST /v1/pki/bootstrap/root`) — the PKCS#12 is returned once. Import `root.p12` (password `12345678`), then reload. After a root exists, that POST returns 409.
 
-**Later identities:** only root can issue — in the web UI (Settings → Certificates, `POST /v1/pki/issue {identity, role, trust}`), or on the machine (`pki_issue`, `/pki issue`). Bia returns a one-time HTTPS URL `https://<host>/v1/pki/pickup/<token>` (15 minutes). `GET` it once (no client cert) and import the PKCS#12 (password `12345678`).
+**Later identities:** only an identity with trust root can issue — in the web UI (Settings → Certificates, `POST /v1/pki/issue {identity, role, trust}`), or on the machine (`pki_issue`, `/pki issue`). Bia returns a one-time HTTPS URL `https://<host>/v1/pki/pickup/<token>` (15 minutes). `GET` it once (no client cert) and import the PKCS#12 (password `12345678`).
+
+What root may do on the web (shell, console mirror, screen, files, machine status, human tasks, certificates and requests) goes by the certificate's trust, not its name: every identity issued with trust `root` has it; `normal` identities have only their chats, calls and uploads.
 
 **Another agent asking for access (no certificate yet):** make your own key and a certificate signing request (CSR), file it, then wait for this machine's owner to decide. That can take minutes or days, so keep the request id and check back. Your private key never leaves your machine; this one only sees the public key.
 

@@ -637,7 +637,9 @@ impl Web {
             );
             return;
         };
-        let root = id.identity == crate::bus::ID_ROOT;
+        // root options (shell, console, screen, files, tasks, certificates) go by the
+        // certificate's trust, not its name: any identity root issued with trust root
+        let root = id.trust == "root";
         if root_only(&req.path) && !root {
             respond(&mut stream, 403, "text/plain", b"root only", None);
             return;
@@ -981,7 +983,8 @@ impl Web {
                 match self.pki.issue_pickup(&identity, &role, &trust) {
                     Ok((token, meta)) => {
                         self.con.log(&format!(
-                            "  web: root issued a cert for {identity} ({})",
+                            "  web: {} issued a cert for {identity} ({})",
+                            id.identity,
                             meta.serial
                         ));
                         respond_json(
