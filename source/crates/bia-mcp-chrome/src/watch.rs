@@ -1,4 +1,5 @@
-//! Poll Chrome's remote-debugging `/json/list` and push inbound events for tab/window open+close.
+//! Poll Chrome's remote-debugging `/json/list` and push inbound events for tab/window open+close,
+//! and for native file dialogs opening.
 use bia_mcp::Ctx;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -8,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use crate::proc;
+use crate::{dialog, proc};
 
 const POLL: Duration = Duration::from_secs(1);
 
@@ -43,8 +44,11 @@ impl Watcher {
     fn loop_forever(&self) {
         let mut known: HashMap<String, Page> = HashMap::new();
         let mut seeded = false;
+        let mut dialogs = dialog::Seen::default();
         loop {
             thread::sleep(POLL);
+            let ctx = self.ctx.lock().unwrap().clone();
+            dialogs.poll(ctx.as_ref());
             if !proc::debug_ready() {
                 // Chrome stopped / debugging down — don't spam [tab closed] for every page.
                 known.clear();

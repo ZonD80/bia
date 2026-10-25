@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.3.2
+
+### Changes
+- bia can upload files on websites again: when a page opens its file picker (an upload button or a drop zone), bia gets a notice and picks the files itself, several at once, a whole folder, or a place to save a download. Before, it got stuck waiting on the picker.
+
+### For bia
+- To attach a file on a website, click the page's upload button or drop zone; when the [file dialog opened] notice arrives, call chrome_choose_files(paths=[absolute paths]) (or cancel=true), then wait until the page shows the file before sending the form.
+
 ## 1.3.1
 
 ### Changes

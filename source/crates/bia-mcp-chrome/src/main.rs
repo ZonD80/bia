@@ -2,6 +2,7 @@
 mod bridge;
 mod crx;
 mod devtools;
+mod dialog;
 mod frame;
 mod host;
 mod install;
@@ -34,6 +35,7 @@ fn main() {
         }
     }
     let updates = install::Updates::new();
+    dialog::prepare();
     install::warm(&dir, &updates);
     install::serve(updates.clone());
     let bridge = bridge::Bridge::start(&dir);
@@ -152,6 +154,15 @@ fn main() {
             "Stop Google Chrome.",
             json!({"type": "object", "properties": {}}),
             move |_, _| proc::stop(),
+        )
+        .tool(
+            "choose_files",
+            "Answer Chrome's file dialog: paths=[absolute paths] (several to multi-select, one folder to upload it, a new path to save), or cancel=true.",
+            json!({"type": "object", "properties": {
+                "paths": {"type": "array", "items": {"type": "string"}, "description": "absolute paths bia (the Chrome user) can read; a not-yet-existing path for a Save dialog"},
+                "cancel": {"type": "boolean", "description": "close the dialog without choosing"}
+            }}),
+            |_, a| dialog::choose(&a),
         );
 
     let google_tools = dt.list_tools().unwrap_or_else(|e| {
@@ -159,7 +170,7 @@ fn main() {
         Vec::new()
     });
     for t in google_tools {
-        // Skip lifecycle name collisions; omit upload_file (use CDP DOM.setFileInputFiles).
+        // Skip lifecycle name collisions; file dialogs go through choose_files.
         if matches!(
             t.name.as_str(),
             "install" | "status" | "start" | "restart" | "stop" | "upload_file"

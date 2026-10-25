@@ -126,6 +126,7 @@ pub const DISPLAY: &str = ":0";
 fn spawn(bin: &Path) -> Result<u32, String> {
     let home = ensure_account()?;
     let profile = ensure_profile()?;
+    crate::dialog::prepare();
     // stop() may SIGKILL Chrome; without this the next launch shows "Restore pages?".
     clear_crash_restore_flags(&profile);
     let log = log_path();

@@ -1,7 +1,7 @@
 {
   "name": "chrome",
-  "version": "1.3.1",
-  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
+  "version": "1.3.2",
+  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",
     "x86_64": "bin/x86_64/bia-mcp-chrome"
@@ -22,6 +22,8 @@
     "recaptcha",
     "upload",
     "file",
+    "attach",
+    "dialog",
     "cdp",
     "devtools",
     "click",
@@ -33,6 +35,7 @@
     "root|console|<issued>|<delivered>|click the sign-in button -> chrome_take_snapshot(); chrome_click(uid='…')",
     "root|console|<issued>|<delivered>|fill a login form -> chrome_take_snapshot(); chrome_fill_form(elements=[{uid:'…',value:'user'},{uid:'…',value:'pass'}])",
     "root|console|<issued>|<delivered>|reload chrome -> chrome_restart()",
+    "root|console|<issued>|<delivered>|attach report.pdf to the form -> chrome_take_snapshot(); chrome_click(uid='…' of the upload button); system|chrome [file dialog opened] -> chrome_choose_files(paths=['/home/bia/files/report.pdf'])",
     "root|console|<issued>|<delivered>|there is a captcha on the page -> discover(path='mcp/screen', enable=true); screen_shot(); screen_cursor_move_human(x=…, y=…); screen_click(x=…, y=…)"
   ]
 }
