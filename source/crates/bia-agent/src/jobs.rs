@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PREFIX: &str = "job:";
-pub const MAX_RUNNING: usize = 8;
 const KEEP_DONE: usize = 40;
 /// Job logs older than this are deleted at boot and then once a day (each job writes one).
 const LOG_KEEP: Duration = Duration::from_secs(30 * 86400);
@@ -137,13 +136,6 @@ impl Store {
         running
     }
 
-    pub fn running_count(&self) -> usize {
-        self.jobs
-            .iter()
-            .filter(|j| j.state == "running" || j.state == "killing")
-            .count()
-    }
-
     pub fn get(&self, id: &str) -> Option<&Job> {
         let id = id.trim().trim_start_matches(PREFIX);
         self.jobs.iter().find(|j| j.id == id)
@@ -155,13 +147,9 @@ impl Store {
     }
 
     pub fn alloc(&mut self, tool: &str, mcp: &str, call_id: &str) -> Result<Job, String> {
-        if self.running_count() >= MAX_RUNNING {
-            return Err(format!(
-                "too many running jobs ({MAX_RUNNING}); wait or job_kill"
-            ));
-        }
+        // No cap on running jobs (boot starts every MCP as one); ids wrap at 16 bits.
         let mut id = String::new();
-        for _ in 0..16 {
+        for _ in 0..0x10000 {
             self.next = self.next.wrapping_add(1);
             if self.next == 0 {
                 self.next = 1;

@@ -207,6 +207,11 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
         Mode::Restore => "this boot restored from a carry archive".into(),
         Mode::Update => "this boot restored this machine after updating from a newer image".into(),
     });
+    let base = if mode == Mode::Update {
+        format!("{base} (log: /bia-update/update.log)")
+    } else {
+        base
+    };
     let notice = boot_notice(&base, &failed, &missing_bins);
     ctx.log(&notice);
     let _ = std::fs::remove_file("/etc/bia-land-mode");
@@ -227,7 +232,7 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
             let _ = fs::remove_dir_all(stash);
         }
         let _ = fs::rename(dir.join("pending"), dir.join("done"));
-        ctx.log("unfold: update finished; /bia-update is removed on the next boot");
+        ctx.log("unfold: update finished; /bia-update (except update.log) is removed on the next boot");
     }
     ctx.log("unfold: rebooting");
     reboot(&notice)?;

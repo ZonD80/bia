@@ -117,11 +117,13 @@ fn page_entries(list: &Value) -> HashMap<String, Page> {
     out
 }
 
-fn json_list() -> Result<Value, String> {
+pub fn json_list() -> Result<Value, String> {
     let body = http_get(proc::DEBUG_PORT, "/json/list")?;
     serde_json::from_str(&body).map_err(|e| e.to_string())
 }
 
+/// GET over HTTP/1.1 (Chrome 156 answers HTTP/1.0 with nothing, and keeps the
+/// connection open despite `Connection: close`, so the body is read by Content-Length).
 fn http_get(port: u16, path: &str) -> Result<String, String> {
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(400))
@@ -134,16 +136,38 @@ fn http_get(port: u16, path: &str) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     write!(
         stream,
-        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )
     .map_err(|e| e.to_string())?;
     let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+    let mut chunk = [0u8; 16384];
+    loop {
+        let n = match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // a server that keeps the connection open: what arrived is the reply
+            Err(e) if buf.is_empty() => return Err(e.to_string()),
+            Err(_) => break,
+        };
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&buf[..end]).to_ascii_lowercase();
+            let len = head
+                .lines()
+                .find_map(|l| l.strip_prefix("content-length:"))
+                .and_then(|v| v.trim().parse::<usize>().ok());
+            if let Some(len) = len {
+                if buf.len() >= end + 4 + len {
+                    buf.truncate(end + 4 + len);
+                    break;
+                }
+            }
+        }
+    }
     let text = String::from_utf8_lossy(&buf);
     let body = text
-        .split("\r\n\r\n")
-        .nth(1)
-        .or_else(|| text.split("\n\n").nth(1))
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b)
         .ok_or_else(|| "no http body".to_string())?;
     Ok(body.to_string())
 }

@@ -3,7 +3,9 @@
 # Chromium (same GTK dialog as Google Chrome) as user bia, a page with single, multiple and
 # folder inputs, and the real choose() via the ignored choose_from_env test. Covers a
 # completion-popup trap, a non-ASCII name, multi-select (first refused because the GTK
-# bookmarks file did not exist when the dialog opened), folder upload, cancel and Save.
+# bookmarks file did not exist when the dialog opened), folder upload with Chrome's
+# "Upload N files?" prompt confirmed by the tool (over CDP), cancel and Save. Also the
+# DefaultAutomaticDownloadsSetting policy: several downloads from one click, no prompt.
 #
 #   tests/integration/chrome-dialog-test.sh            (runs itself in bia-dialog:$ARCH)
 set -uo pipefail
@@ -47,17 +49,23 @@ cat >/home/bia/www/index.html <<'HTML'
 <input id=s type=file style="top:10px">
 <input id=m type=file multiple style="top:80px">
 <input id=d type=file webkitdirectory style="top:150px">
+<button id=many style="position:absolute;top:220px;left:10px;font-size:24px">many</button>
 <script>
 for (const i of document.querySelectorAll('input')) {
   i.onchange = () => document.title = i.id + ':' + [...i.files].map(f => (f.webkitRelativePath || f.name) + '=' + f.size).sort().join(',');
   i.oncancel = () => document.title = i.id + ':cancel';
 }
+many.onclick = () => { for (let i = 0; i < 4; i++) { const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['x' + i])); a.download = 'many' + i + '.txt'; a.click(); } };
 </script>
 HTML
+# what install.rs writes besides the extension entries
+mkdir -p /etc/chromium/policies/managed
+echo '{"DefaultAutomaticDownloadsSetting": 1}' >/etc/chromium/policies/managed/bia-chrome.json
 chown -R bia:bia /home/bia
 (cd /home/bia/www && python3 -m http.server 8000 >/dev/null 2>&1 &)
 runuser -u bia -- env DISPLAY=:0 HOME=/home/bia LANG=C.UTF-8 chromium --no-first-run --no-sandbox --test-type \
-  --disable-gpu --user-data-dir=/home/bia/prof --window-position=0,0 --window-size=1200,780 \
+  --disable-gpu --remote-debugging-port=9222 --user-data-dir=/home/bia/prof --window-position=0,0 --window-size=1200,780 \
   http://127.0.0.1:8000/ >/tmp/chromium.log 2>&1 &
 for _ in $(seq 60); do xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -q 0x && break; sleep 0.5; done
 sleep 4
@@ -97,14 +105,17 @@ sleep 0.5; check "page got 3 files" "[ \"\$(title)\" = 'm:a.txt=2,b.txt=3,ü ß.
 check "staged as bia" "[ \"\$(stat -c %U /home/bia/files/state/chrome/pick/*/a.txt | head -1)\" = bia ]"
 
 open_input 150
-check "folder" "BIA_DIALOG_PATHS=$F/dir run_choose | grep -q 'Upload N files'"
-sleep 1; xdotool key Tab space; sleep 1   # Chrome's own "Upload 2 files to this site?" prompt
+check "folder, Chrome's upload prompt confirmed" "BIA_DIALOG_PATHS=$F/dir run_choose | grep -q 'confirmed Chrome.*Upload 2 files'"
+sleep 0.5
 check "page got the folder" "[ \"\$(title)\" = 'd:dir/one.txt=3,dir/two.txt=4' ]"
 
 open_input 10
 check "unreadable file refused" "chmod 600 $F/b.txt; chown root $F/b.txt; BIA_DIALOG_PATHS=$F/b.txt run_choose | grep -q 'cannot read'"
 check "relative path refused" "BIA_DIALOG_PATHS=up/a.txt run_choose | grep -q 'not an absolute path'"
 BIA_DIALOG_CANCEL=1 BIA_DIALOG_PATHS=x run_choose >/dev/null
+
+xdotool mousemove 60 $((CONTENT_Y + 235)) click 1; sleep 3
+check "4 downloads from one click, no prompt" "[ \"\$(ls /home/bia/Downloads/many*.txt 2>/dev/null | wc -l)\" = 4 ]"
 
 xdotool mousemove 600 500 click 1 key ctrl+s
 for _ in $(seq 20); do dialog_open && break; sleep 0.25; done

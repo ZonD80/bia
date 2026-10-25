@@ -215,7 +215,10 @@ fn write_policies(id: &str) -> Result<(), String> {
                 "update_url": url,
                 "toolbar_pin": "force_pinned"
             }
-        }
+        },
+        // a site saving several files at once must not stop at "Download multiple files?
+        // Block / Allow", which nobody is there to answer (1 = allow every site)
+        "DefaultAutomaticDownloadsSetting": 1
     });
     let text = serde_json::to_vec_pretty(&policy).map_err(|e| e.to_string())?;
     for d in policy_dirs() {

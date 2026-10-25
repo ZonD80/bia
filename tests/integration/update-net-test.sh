@@ -97,6 +97,7 @@ check "boot files unpacked" '[ -f /bia-update/net/esp/vmlinuz-lts ] && [ -f /bia
 check "image and download removed" '[ ! -e /bia-update/net/os.img ] && ! ls /bia-update/net/*.xz >/dev/null 2>&1'
 check "no loop device left" '! losetup -a 2>/dev/null | grep -q "/bia-update/net/os.img"'
 grep -q "download bia-$ARCH.img.xz" /tmp/stage.err; check "progress shown to the agent" '[ $? -eq 0 ]'
+check "progress also in /bia-update/update.log" 'grep -q "download bia-$ARCH.img.xz" /bia-update/update.log'
 
 out=$( (net_stage 9.9.9 0) 2>/dev/null ); rc=$?
 check "same version is refused ($rc)" '[ $rc -ne 0 ] && echo "$out" | grep -q "already runs 9.9.9"'
@@ -118,6 +119,18 @@ check "an unreachable release is refused" '[ $rc -ne 0 ] && echo "$out" | grep -
 
 # the rescue marker carries the directory, not a UUID
 check "DIR= sources pass through the marker" 'grep -q "case \$dev in DIR=\*)" /work/source/os/overlay/usr/local/sbin/bia-update'
+
+# the fixed log: a new run starts it afresh, child stderr (the fold) lands in it,
+# and only the log left means an idle boot that does not touch it
+start_log "start --test"
+check "a new run starts a fresh log" '[ "$(wc -l </bia-update/update.log)" = 1 ] && grep -q "bia-update start --test" /bia-update/update.log'
+run_logged sh -c 'echo "fold: 42 files" >&2' 2>/dev/null
+check "child stderr goes to the log" 'grep -q "fold: 42 files" /bia-update/update.log'
+check "the net tree is work to finish" 'has_work'
+rm -rf /bia-update/net
+check "only the log is not work" '! has_work'
+(NO_LOG=1; say "bia-update: idle" 2>/dev/null)
+check "idle boots leave the log alone" '! grep -q "bia-update: idle" /bia-update/update.log'
 
 echo "RESULT $([ $FAILED -eq 0 ] && echo PASSED || echo FAILED)"
 exit $FAILED

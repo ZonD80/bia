@@ -34,6 +34,11 @@
 #      rescue image while it is not mounted, then boot it again; the result reaches
 #      the agent at that boot (bia-update boot).
 #
+#   Every step is shown on the consoles (and to the agent's tool) as before and also
+#      appended to /bia-update/update.log, which the rescue image and the unfold boot
+#      extend; a new start/rescue/fsck begins it afresh, and it is kept after the rest
+#      of /bia-update is removed.
+#
 #   bia-update start [--force] [--from=/dev/…|--from=internet]
 #   bia-update rescue [/dev/…]
 #   bia-update fsck
@@ -45,6 +50,7 @@ RELEASE=etc/bia-release
 VERSION_FILE=etc/bia-version
 UPDATE=/bia-update
 NET=$UPDATE/net
+LOG=$UPDATE/update.log
 # GitHub releases. BIA_RELEASE_URL or /etc/bia-release-url: another directory with
 # bia-os.json and the images (tests, mirrors).
 RELEASE_URL=${BIA_RELEASE_URL:-$(cat /etc/bia-release-url 2>/dev/null || true)}
@@ -77,9 +83,23 @@ console_printf() {
   done
 }
 
+# A copy of every line in $LOG (only once $UPDATE exists; NO_LOG=1 skips idle boots).
+log_line() {
+  [ "${NO_LOG:-}" != 1 ] && [ -d "$UPDATE" ] && printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOG" 2>/dev/null
+  return 0
+}
+
+# Start a fresh $LOG for a new attended run.
+start_log() {
+  mkdir -p "$UPDATE"
+  chmod 700 "$UPDATE"
+  printf '%s bia-update %s\n' "$(date '+%F %T')" "$*" >"$LOG"
+}
+
 say() {
   printf '%s\n' "$*" >&2
   console_printf '%s\n' "$*"
+  log_line "$*"
 }
 
 # Debian-style result on the right of a finished step.
@@ -244,10 +264,12 @@ mount_rw() {
 }
 
 run_logged() {
+  local log=/dev/null
+  [ -d "$UPDATE" ] && [ "${NO_LOG:-}" != 1 ] && log=$LOG
   if [ -p /dev/stderr ]; then
-    "$@"
+    "$@" 2> >(tee -a "$log" >&2)
   else
-    "$@" 2> >(tee -a "${CONSOLES[@]}" >&2 2>/dev/null)
+    "$@" 2> >(tee -a "$log" "${CONSOLES[@]}" >&2 2>/dev/null)
   fi
 }
 
@@ -588,6 +610,7 @@ start_main() {
   bin=$(carry_bin)
   [ -x "$bin" ] || refuse "update" "no carry binary at $bin"
   [ ! -f "$UPDATE/pending" ] || refuse "update" "an unfold is pending; reboot to finish it first"
+  start_log "start $*"
   root=$(live_root)
   [ -n "$(rel_of /)" ] || refuse "update" "this system has no $RELEASE"
   here=$(ver_of /)
@@ -734,6 +757,7 @@ rescue_main() {
   local bin target root here dstesp esp_dev esp_mnt here_arch there_arch
   bin=$(carry_bin)
   [ -x "$bin" ] || refuse "rescue" "no carry binary at $bin"
+  start_log "rescue ${1:-}"
   target=$(resolve_rescue_target "${1:-}") || refuse "rescue" "no target disk"
   root=$(live_root)
   here=$(rel_of /)
@@ -778,9 +802,8 @@ fsck_main() {
   for f in need-apply copying pending; do
     [ -f "$UPDATE/$f" ] && refuse "fsck" "an OS update is in progress ($UPDATE/$f); finish it first"
   done
+  start_log fsck
   read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
-  mkdir -p "$UPDATE"
-  chmod 700 "$UPDATE"
   rm -f "$UPDATE/fsck-result" "$UPDATE/fsck.log"
   printf 'check of %s started %s\n' "$root" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$UPDATE/fsck-requested"
   sync
@@ -827,8 +850,15 @@ clear_stale_marker() {
   fi
 }
 
+# Anything in $UPDATE besides the log (an update, rescue or check to finish or clean up).
+has_work() {
+  [ -d "$UPDATE" ] && [ -n "$(find "$UPDATE" -mindepth 1 -maxdepth 1 ! -name update.log -print -quit 2>/dev/null)" ]
+}
+
 boot_main() {
   local bin
+  # idle boots leave the last run's log alone
+  has_work || NO_LOG=1
   say "bia-update: boot"
   fsck_report
   bin=$(carry_bin)
@@ -836,7 +866,7 @@ boot_main() {
     if [ ! -x "$bin" ]; then
       fail "update"
       say "bia-update: no carry binary at $bin; the folded agent stays in $UPDATE/fold.tar.gz"
-      notify_agent "the OS was updated but the agent could not be restored: $bin is missing. The fold is in $UPDATE/fold.tar.gz."
+      notify_agent "the OS was updated but the agent could not be restored: $bin is missing. The fold is in $UPDATE/fold.tar.gz. Log: $LOG."
       exit 0
     fi
     say "bia-update: $(head -n 1 "$UPDATE/lead" 2>/dev/null || echo 'restoring this machine onto the updated OS')"
@@ -850,31 +880,32 @@ boot_main() {
       sleep infinity
     fi
     fail "restoring this machine"
-    notify_agent "the OS was updated but unfolding the agent failed; the fold is still in $UPDATE/fold.tar.gz (see journalctl -u bia-update)"
+    notify_agent "the OS was updated but unfolding the agent failed; the fold is still in $UPDATE/fold.tar.gz (log: $LOG)"
     exit 0
   fi
   if [ -f "$UPDATE/copying" ]; then
     # Only the rescue image writes this; booting here means it stopped mid-copy
     # and the marker is gone. The system may be a mix of two releases.
     fail "update"
-    notify_agent "an OS update stopped while copying ($(cat "$UPDATE/copying")). This system may be incomplete. The agent fold is in $UPDATE/fold.tar.gz; run carry_update again (force=true if needed)."
+    notify_agent "an OS update stopped while copying ($(cat "$UPDATE/copying")). This system may be incomplete. The agent fold is in $UPDATE/fold.tar.gz; run carry_update again (force=true if needed). Log: $LOG."
     exit 0
   fi
   if [ -f "$UPDATE/need-apply" ]; then
     # Staged, but GRUB booted the normal entry: the rescue image never ran.
     fail "update"
     clear_stale_marker
-    notify_agent "an OS update was staged but the rescue image did not start ($(cat "$UPDATE/need-apply")). Nothing was changed. $(cat "$UPDATE/rescue-failed" 2>/dev/null)"
+    notify_agent "an OS update was staged but the rescue image did not start ($(cat "$UPDATE/need-apply")). Nothing was changed. $(cat "$UPDATE/rescue-failed" 2>/dev/null) Log: $LOG."
     rm -f "$UPDATE/need-apply"
     exit 0
   fi
   clear_stale_marker
   # Nothing left to finish (done, or a stage the rescue image never ran): the fold
-  # and logs are no longer needed. Failed states above exit before this point.
-  if [ -d "$UPDATE" ]; then
-    rm -rf "$UPDATE"
+  # and the rest are no longer needed; update.log stays for the agent to read.
+  # Failed states above exit before this point.
+  if has_work; then
+    find "$UPDATE" -mindepth 1 -maxdepth 1 ! -name update.log -exec rm -rf {} +
     sync
-    say "bia-update: removed $UPDATE (no update in progress)"
+    say "bia-update: removed $UPDATE (no update in progress; kept $LOG)"
   fi
   say "bia-update: idle (carry_update or /update starts an update)"
 }
@@ -885,6 +916,7 @@ status_main() {
   for f in need-apply copying pending rescue-failed; do
     [ -f "$UPDATE/$f" ] && say "bia-update: $UPDATE/$f: $(head -n 1 "$UPDATE/$f")"
   done
+  [ -f "$LOG" ] && say "bia-update: log $LOG (last: $(tail -n 1 "$LOG"))"
   while read -r line; do
     set -- $line
     say "bia-update: other $2 ($1) version $3"

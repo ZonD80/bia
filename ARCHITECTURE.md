@@ -416,6 +416,10 @@ overwritten:
 On failure the marker stays (every boot retries), the log goes to
 `<dst>/bia-update/rescue.log`, and a shell opens. `carry_rescue` / `/rescue`
 does the same from the flash with the internal disk as destination.
+Every step is also appended to `/bia-update/update.log` (the consoles and the
+tool keep their output): `bia-update` start/rescue/fsck begin it afresh, the
+rescue image appends its run, the unfold boot appends its lines, and the final
+cleanup keeps it, so the agent tails one file instead of probing.
 `tests/e2e/update-e2e.sh` (`make update-e2e`) tests disk, flash and rescue cases
 in QEMU (passing on arm64).
 

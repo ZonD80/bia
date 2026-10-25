@@ -14,7 +14,7 @@ use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::proc;
+use crate::{cdp, proc};
 
 const ROLE: &str = "GtkFileChooserDialog";
 const HOME: &str = "/home/bia";
@@ -148,14 +148,90 @@ fn folder(d: &Dialog, g: &Geometry, dir: &Path) -> Result<String, String> {
     x("xdotool", &["key", "alt+1"])?;
     sleep(Duration::from_millis(800));
     g.accept()?;
-    closed(
-        d,
-        format!(
-            "Chose folder {}. Chrome now asks \"Upload N files to this site?\" inside the window: screen_shot, then screen_click its Upload button.{}",
-            dir.display(),
-            WAIT
-        ),
-    )
+    closed(d, String::new())?;
+    let n = count_files(dir);
+    if n == 0 {
+        return Ok(format!("Chose folder {} (it has no files).", dir.display()));
+    }
+    if confirm_upload(&d.page)? {
+        return Ok(format!(
+            "Chose folder {} and confirmed Chrome's \"Upload {n} files to this site?\".{WAIT}",
+            dir.display()
+        ));
+    }
+    Ok(format!(
+        "Chose folder {}. Chrome should now ask \"Upload {n} files to this site?\" inside the window; bia could not confirm it: screen_shot, then screen_click its Upload button.{WAIT}",
+        dir.display()
+    ))
+}
+
+/// Chrome asks before a folder upload, inside the browser window (no X window). The
+/// prompt takes focus from the page, so the page reporting no focus means it is up:
+/// Tab from Cancel (focused) to Upload, Space; the page gets focus back once it closes.
+/// False when the prompt was not seen (the caller hands it to the model).
+fn confirm_upload(page: &str) -> Result<bool, String> {
+    let focus = |ws: &str| cdp::eval(ws, "document.hasFocus()").ok().and_then(|v| v.as_bool());
+    // the shown tab without focus (a background tab never has it)
+    let asking = |ws: &str| {
+        cdp::eval(ws, "document.visibilityState == 'visible' && !document.hasFocus()").ok().and_then(|v| v.as_bool())
+            == Some(true)
+    };
+    // Just after the file dialog closes the page has no focus either: wait until the
+    // browser window is active again, then for the page to stay unfocused.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while x("xdotool", &["getactivewindow", "getwindowname"]).map(|n| page_of(&n) != page).unwrap_or(true) {
+        if Instant::now() > deadline {
+            break;
+        }
+        sleep(Duration::from_millis(150));
+    }
+    // reading a large folder delays the prompt
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let ws = 'found: loop {
+        if let Some(ws) = cdp::tabs_titled(page).into_iter().find(|ws| asking(ws)) {
+            let mut held = true;
+            for _ in 0..3 {
+                sleep(Duration::from_millis(250));
+                held &= asking(&ws);
+            }
+            if held {
+                break 'found ws;
+            }
+        }
+        if Instant::now() > deadline {
+            return Ok(false);
+        }
+        sleep(Duration::from_millis(300));
+    };
+    x("xdotool", &["key", "Tab", "space"])?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        sleep(Duration::from_millis(250));
+        if focus(&ws) == Some(true) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Regular files under `dir` (what Chrome counts for its prompt), up to a cap.
+fn count_files(dir: &Path) -> usize {
+    let mut n = 0;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            match e.file_type() {
+                Ok(t) if t.is_dir() => todo.push(e.path()),
+                Ok(t) if t.is_file() => n += 1,
+                _ => {}
+            }
+            if n >= 100_000 {
+                return n;
+            }
+        }
+    }
+    n
 }
 
 fn save_as(d: &Dialog, g: &Geometry, path: &Path) -> Result<String, String> {
@@ -265,7 +341,7 @@ fn scan(others: &mut HashSet<String>) -> Vec<Dialog> {
             .and_then(|l| l.rsplit_once('#'))
             .and_then(|(_, p)| x("xprop", &["-id", p.trim(), "_NET_WM_NAME"]).ok())
             .and_then(|p| prop_str(&p, "_NET_WM_NAME"))
-            .map(|t| t.trim_end_matches(" - Google Chrome").to_string())
+            .map(|t| page_of(&t))
             .unwrap_or_default();
         out.push(Dialog {
             id: id.to_string(),
@@ -277,6 +353,12 @@ fn scan(others: &mut HashSet<String>) -> Vec<Dialog> {
 }
 
 /// `NAME(TYPE) = "value"` → value.
+/// The page title in a browser window's title.
+fn page_of(window: &str) -> String {
+    let t = window.trim();
+    t.strip_suffix(" - Google Chrome").or_else(|| t.strip_suffix(" - Chromium")).unwrap_or(t).to_string()
+}
+
 fn prop_str(props: &str, name: &str) -> Option<String> {
     let line = props.lines().find(|l| l.starts_with(&format!("{name}(")))?;
     let (_, v) = line.split_once(" = ")?;
@@ -439,6 +521,13 @@ mod tests {
     }
 
     #[test]
+    fn page_titles() {
+        assert_eq!(page_of("Upload - Google Chrome"), "Upload");
+        assert_eq!(page_of("m:a.txt - Chromium\n"), "m:a.txt");
+        assert_eq!(page_of("Plain"), "Plain");
+    }
+
+    #[test]
     fn uri_escapes() {
         assert_eq!(file_uri(Path::new("/home/bia/a b/ü.txt")), "file:///home/bia/a%20b/%C3%BC.txt");
     }
@@ -465,5 +554,16 @@ mod tests {
         let r = choose(&serde_json::json!({"paths": paths, "cancel": cancel}));
         println!("choose: {r:?}");
         r.unwrap();
+    }
+
+    /// Prints what the folder-upload confirmation sees over CDP (BIA_CDP_TITLE = tab title).
+    #[test]
+    #[ignore]
+    fn cdp_from_env() {
+        let title = std::env::var("BIA_CDP_TITLE").unwrap_or_default();
+        println!("cdp: list {:?}", crate::watch::json_list().map(|v| v.to_string()));
+        for ws in cdp::tabs_titled(&title) {
+            println!("cdp: {ws} focus {:?}", cdp::eval(&ws, "[document.visibilityState, document.hasFocus()]"));
+        }
     }
 }

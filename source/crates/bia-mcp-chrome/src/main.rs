@@ -1,5 +1,6 @@
 //! Chrome MCP. Lifecycle + passkey native host; page automation is Google chrome-devtools-mcp.
 mod bridge;
+mod cdp;
 mod crx;
 mod devtools;
 mod dialog;

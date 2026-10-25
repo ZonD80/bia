@@ -12,7 +12,7 @@ pub fn update(ctx: &Ctx, from: Option<&str>, force: bool) -> Result<String, Stri
     if Path::new("/bia-update/pending").is_file() {
         return Err("an update is waiting to be unfolded; reboot to finish it".into());
     }
-    ctx.log("update: starting attended OS update (bia-update start)");
+    ctx.log("update: starting attended OS update (bia-update start); progress: /bia-update/update.log");
     let mut args = vec!["start".to_string()];
     if force {
         args.push("--force".into());

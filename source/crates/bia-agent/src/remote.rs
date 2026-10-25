@@ -554,6 +554,32 @@ data: {"type":"response.completed","response":{"usage":{}}}
     }
 
     #[test]
+    fn openai_drops_empty_assistant_messages() {
+        // DeepSeek: "Invalid assistant message: content or tool_calls must be set"
+        let call = ToolCall { id: "c1".into(), name: "bash".into(), args: json!({}) };
+        let mut t = Msg::user("out".into());
+        t.role = Role::Tool;
+        t.call_id = "c1".into();
+        let h = vec![
+            Msg::user("a".into()),
+            Msg::assistant(String::new(), vec![]),
+            Msg::user("b".into()),
+            Msg::assistant("  ".into(), vec![call.clone()]),
+            t,
+            Msg::assistant(" \n".into(), vec![]),
+            Msg::user("c".into()),
+            Msg::assistant("done".into(), vec![]),
+        ];
+        let m = Remote::openai_messages("sys", &h);
+        let roles: Vec<&str> = m.iter().map(|v| v["role"].as_str().unwrap()).collect();
+        assert_eq!(roles, ["system", "user", "assistant", "tool", "user", "assistant"]);
+        assert_eq!(m[1]["content"], "a\n\nb");
+        assert!(m[2]["tool_calls"].is_array());
+        assert_eq!(m[4]["content"], "c");
+        assert!(m.iter().all(|v| v["role"] != "assistant" || v["content"].is_string() || v["tool_calls"].is_array()));
+    }
+
+    #[test]
     fn responses_input_shapes() {
         let mut a = Msg::user("x".into());
         a.role = Role::Assistant;
@@ -815,10 +841,25 @@ impl Remote {
     fn openai_messages(system: &str, history: &[Msg]) -> Vec<Value> {
         let shot = latest_shot(history);
         let mut msgs = vec![json!({"role": "system", "content": system})];
+        // set after a skipped empty assistant: the next user message joins the previous one
+        let mut join = false;
         for (i, m) in history.iter().enumerate() {
             match m.role {
-                Role::User => msgs.push(json!({"role": "user", "content": m.content})),
+                Role::User => {
+                    let prev = msgs.last_mut().filter(|p| join && p["role"] == "user" && p["content"].is_string());
+                    if let Some(p) = prev {
+                        p["content"] = Value::String(format!("{}\n\n{}", p["content"].as_str().unwrap_or(""), m.content));
+                    } else {
+                        msgs.push(json!({"role": "user", "content": m.content}));
+                    }
+                    join = false;
+                }
+                // A reply that was only reasoning, or was interrupted, has neither text nor
+                // calls. DeepSeek refuses it ("content or tool_calls must be set"), and
+                // consecutive user messages too, so it is dropped and its neighbours joined.
+                Role::Assistant if m.content.trim().is_empty() && m.tool_calls.is_empty() => join = true,
                 Role::Assistant => {
+                    join = false;
                     let mut o = json!({"role": "assistant", "content": if m.content.is_empty() { Value::Null } else { Value::String(m.content.clone()) }});
                     if !m.tool_calls.is_empty() {
                         o["tool_calls"] = Value::Array(
@@ -830,7 +871,10 @@ impl Remote {
                     }
                     msgs.push(o);
                 }
-                Role::Tool => msgs.push(openai_tool(m, shot == Some(i))),
+                Role::Tool => {
+                    join = false;
+                    msgs.push(openai_tool(m, shot == Some(i)))
+                }
             }
         }
         msgs

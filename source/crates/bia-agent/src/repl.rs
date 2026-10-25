@@ -1980,7 +1980,8 @@ now: {now}", done.join("\n")), failed)
     }
 
     /// One remote (FMM) generation: streams the text, appends the assistant message with its calls.
-    fn remote_step(&mut self) -> anyhow::Result<()> {
+    /// `Some(tail)` when the reply was cut because it kept repeating (runaway.rs).
+    fn remote_step(&mut self) -> anyhow::Result<Option<String>> {
         let remote = self.remote.as_ref().unwrap();
         self.set_state("remote");
         self.con.drain();
@@ -1995,11 +1996,15 @@ now: {now}", done.join("\n")), failed)
         let out_chars = std::cell::Cell::new(0usize);
         let prompt_est = self.fmm_ctx_used.max(self.history_token_estimate());
         let ctx_total = self.ctx_budget();
+        let guard = std::cell::RefCell::new(crate::runaway::Guard::default());
         let r = remote.generate(
             &self.system,
             &tools,
             &history,
             &mut |thought, piece| {
+                if !guard.borrow_mut().push(thought, piece) {
+                    return false;
+                }
                 if thought {
                     shown.push_thought(piece);
                     return keep_generating(&con, &queued, true);
@@ -2068,6 +2073,14 @@ now: {now}", done.join("\n")), failed)
                 }
             ),
         ));
+        let looped = guard.into_inner().tripped().map(str::to_string);
+        if let Some(tail) = &looped {
+            self.log("assistant", &r.text);
+            self.con.writeln(&self.con.c(RED, "  [stopped: the reply kept repeating]"));
+            self.push_history(Msg::assistant(crate::runaway::cut(&r.text), vec![]));
+            self.system_message(&crate::runaway::notice(tail));
+            return Ok(looped);
+        }
         self.log("assistant", &r.text);
         for c in &r.calls {
             self.log("tool-call", &format!("{}({})", c.name, c.args));
@@ -2078,7 +2091,7 @@ now: {now}", done.join("\n")), failed)
             r.calls
         };
         self.push_history(Msg::assistant(r.text, calls));
-        Ok(())
+        Ok(None)
     }
 
     /// Re-feed a restored conversation into the KV cache so the first answer is fast.
@@ -2404,6 +2417,8 @@ now: {now}", done.join("\n")), failed)
         let mut seen = self.human_seq;
         // the next reply is the model's note after a round limit (after_round_limit)
         let mut status_pending = false;
+        // replies cut for repeating themselves (runaway.rs) this turn
+        let mut loops = 0u32;
         loop {
             if self.pending.iter().any(|ib| console_command(ib).is_some()) {
                 break;
@@ -2414,7 +2429,16 @@ now: {now}", done.join("\n")), failed)
             }
             if self.remote.is_some() {
                 match self.remote_step() {
-                    Ok(()) => self.fmm_probation = None,
+                    Ok(None) => self.fmm_probation = None,
+                    Ok(Some(_)) => {
+                        self.fmm_probation = None;
+                        loops += 1;
+                        if loops <= crate::runaway::RETRIES {
+                            continue;
+                        }
+                        self.con.writeln(&self.con.c(RED, "  [the model keeps repeating itself; turn stopped]"));
+                        break;
+                    }
                     Err(e) => {
                         self.con
                             .writeln(&self.con.c(RED, &format!("\n[FMM error: {e:#}]")));
@@ -2499,6 +2523,7 @@ now: {now}", done.join("\n")), failed)
             let con2 = self.con.clone();
             let prefill_shown = std::cell::Cell::new(false);
             let queued: std::cell::RefCell<Vec<Inbound>> = std::cell::RefCell::new(vec![]);
+            let mut guard = crate::runaway::Guard::default();
             let res = self.llm.as_mut().unwrap().generate(
                 &prompt,
                 4096,
@@ -2516,6 +2541,9 @@ now: {now}", done.join("\n")), failed)
                     if prefill_shown.get() {
                         con.write("\r                                        \r");
                         prefill_shown.set(false);
+                    }
+                    if !guard.push(false, piece) {
+                        return false;
                     }
                     shown.push(piece);
                     keep_generating(&con, &queued, true)
@@ -2581,6 +2609,18 @@ now: {now}", done.join("\n")), failed)
                 s.ctx_total = ctx_total;
                 s.messages = msgs;
             });
+            if let Some(tail) = guard.tripped().map(str::to_string) {
+                self.log("assistant", &text);
+                self.con.writeln(&self.con.c(RED, "  [stopped: the reply kept repeating]"));
+                self.push_history(Msg::assistant(crate::runaway::cut(&text), vec![]));
+                self.system_message(&crate::runaway::notice(&tail));
+                loops += 1;
+                if loops <= crate::runaway::RETRIES {
+                    continue;
+                }
+                self.con.writeln(&self.con.c(RED, "  [the model keeps repeating itself; turn stopped]"));
+                break;
+            }
             // keep the raw text (thinking included) so the next prompt extends the cached sequence exactly
             let mut calls = self.format.parse_calls(&text);
             if calls.is_empty() {

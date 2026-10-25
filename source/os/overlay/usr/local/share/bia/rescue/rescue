@@ -75,6 +75,9 @@ arg() {
 save_log() {
   if mountpoint -q "$DST_MNT" 2>/dev/null && [ -d "$DST_MNT/bia-update" ]; then
     cp -f "$LOG" "$DST_MNT/bia-update/rescue.log" 2>/dev/null
+    # the agent follows one file: /bia-update/update.log (bia-update) gets this run too
+    { printf '%s bia-rescue: log of the rescue image\n' "$(date '+%F %T')"; cat "$LOG"; } \
+      >>"$DST_MNT/bia-update/update.log" 2>/dev/null
     sync
   fi
 }

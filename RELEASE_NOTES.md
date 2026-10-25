@@ -5,6 +5,22 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.3.3
+
+### Changes
+- An OS update writes every step to /bia-update/update.log (the download, packing up, the offline copy and the restore), as well as showing it on screen; bia reads that one file to follow the update, and it is kept afterwards.
+- MCPs no longer fail to start after boot with "too many running jobs"; there is no limit on running jobs anymore.
+- When the model gets stuck repeating itself (the same text again and again, or endless made-up tool calls in its thoughts), bia stops the reply, tells the model, and lets it try again; after three such loops in one turn it stops the turn.
+- Switching the model to DeepSeek no longer fails with "Invalid assistant message: content or tool_calls must be set" (bia sent it an empty reply from the previous model).
+- Folder uploads on websites go through without help: bia confirms Chrome's "Upload N files to this site?" itself. Sites can also download several files at once without Chrome asking "Download multiple files? Block / Allow".
+- Notices about Chrome tabs opening and closing work again with newer Chrome versions.
+
+### For bia
+- During an OS update, follow it with tail -n 20 /bia-update/update.log instead of checking processes or mounts, if required.
+- If an MCP failed to start with "too many running jobs", start it again with discover(path="mcp/<name>", restart=true).
+- If switching to DeepSeek failed with "content or tool_calls must be set", tell the owner it works now and switch with system_fmm_configure when they want.
+- Drop any habit of clicking Chrome's "Upload" or "Allow" prompts with screen tools; chrome_choose_files confirms a folder upload, and multiple downloads land in /home/bia/Downloads without asking.
+
 ## 1.3.2
 
 ### Changes

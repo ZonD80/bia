@@ -18,6 +18,7 @@ mod outbox;
 mod release;
 mod remote;
 mod repl;
+mod runaway;
 mod schedules;
 mod state;
 mod sys;
