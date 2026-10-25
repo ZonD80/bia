@@ -2208,8 +2208,10 @@ impl Tools {
                 }
                 let server_key = format!("mcp/{srv}");
                 let key = format!("tool:{name}");
+                // checked before ensure_loaded, which marks the whole server as sent
+                let had = self.schemas_sent.contains(&server_key) || self.schemas_sent.contains(&key);
                 self.ensure_loaded(&srv)?;
-                if self.schemas_sent.contains(&server_key) || self.schemas_sent.contains(&key) {
+                if had {
                     return Ok(Self::call_by_name(&name, std::slice::from_ref(&name), true));
                 }
                 self.schemas_sent.insert(key);
@@ -2250,6 +2252,16 @@ impl Tools {
         let notes = self.rescan_mcps();
         let q = args.get("q").and_then(|v| v.as_str()).unwrap_or("").trim();
         let path_arg = args.get("path").and_then(|v| v.as_str()).unwrap_or("").trim().trim_matches('/');
+        // q names one function the model can already call: it lost track of how (its schema
+        // went with a compacted part of the conversation, or never stuck), so give it that
+        // schema instead of "already enabled" again (a model repeated that search 9 times)
+        if let Some(i) = self.enabled_fn(q) {
+            let f = self.specs[i].name.clone();
+            return Ok(format!(
+                "{f} is ready: call {f}(…) by name now, with these parameters. Do not discover it again.\n{}",
+                self.schema_one(i)
+            ));
+        }
         // discover(path=X, q=f) where f is a function in X: the model wants X, so enable it
         // (searching again and again instead was a common loop)
         if !q.is_empty() && !path_arg.is_empty() && self.step_path(q).as_deref() == Some(path_arg) {
@@ -2569,7 +2581,12 @@ impl Tools {
         }
         let q = args.get("q").and_then(|v| v.as_str()).unwrap_or("");
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("").trim_matches('/');
+        let ready = self.enabled_fn(q).map(|i| self.specs[i].name.clone());
         let next = match self.next_step(q) {
+            _ if name == "discover" && ready.is_some() => {
+                let f = ready.unwrap_or_default();
+                format!("{f} is already callable: call {f}(…) by name now with the parameters in the schema above.")
+            }
             Some(step) if name == "discover" => step,
             _ if name == "discover" && !path.is_empty() && !Self::flag(args, "enable") => {
                 format!("To use {path}: discover(path=\"{path}\", enable=true), then call its function by name.")
@@ -2609,6 +2626,34 @@ impl Tools {
         self.infos.iter().chain(&self.catalog).find(|i| {
             i.examples.iter().any(|e| e.contains(&call)) || i.description.contains(&call)
         }).map(|i| format!("{q} is in mcp/{0}: discover(path=\"mcp/{0}\", enable=true), then call it by the name in its schema.", i.name))
+    }
+
+    /// The function `q` names exactly, when it is callable now and its branch's schemas
+    /// were already given to the model (else enabling gives them).
+    fn enabled_fn(&self, q: &str) -> Option<usize> {
+        let q = q.trim().trim_end_matches("()");
+        if q.is_empty() || q == "discover" {
+            return None;
+        }
+        let i = self.specs.iter().position(|s| s.name == q)?;
+        let sent = |k: &str| self.schemas_sent.contains(k);
+        let ready = match &self.kinds[i] {
+            Kind::Builtin => {
+                let g = &self.groups[i];
+                !g.is_empty() && self.enabled.contains(g) && (sent(g) || sent(&format!("tool:{q}")))
+            }
+            Kind::Mcp { server, .. } => {
+                self.loaded.contains(server)
+                    && (sent(&format!("mcp/{}", self.servers[*server].name)) || sent(&format!("tool:{q}")))
+            }
+        };
+        ready.then_some(i)
+    }
+
+    /// Compaction dropped the part of the conversation holding the function schemas: the
+    /// next enable gives them again (callable functions stay callable).
+    pub fn forget_schemas(&mut self) {
+        self.schemas_sent.clear();
     }
 
     /// The path (shell, mcp/system, …) holding the one function `q` names, if any.
@@ -4203,7 +4248,20 @@ done
         let (_, _, note) = t.guide_call("discover", &q).unwrap();
         assert!(note.is_empty(), "{note}");
         let (_, _, note) = t.guide_call("discover", &q).unwrap();
-        assert!(note.starts_with("[repeat]") && note.contains("(2x)") && note.contains("discover(path=\"shell\", enable=true)"), "{note}");
+        // shell is enabled now: call bash, not "enable shell" (which contradicted "already enabled")
+        assert!(note.starts_with("[repeat]") && note.contains("(2x)") && note.contains("bash is already callable"), "{note}");
+        assert!(!note.contains("enable=true"), "{note}");
+        // asking for an enabled function again gives its schema, not "already enabled"
+        let (r, err) = t.call("discover", &json!({"q": "bash"}), &mut log);
+        assert!(!err && r.starts_with("bash is ready") && r.contains("\"command\""), "{r}");
+        let (r, _) = t.call("discover", &json!({"path": "shell", "q": "bash"}), &mut log);
+        assert!(r.starts_with("bash is ready"), "{r}");
+        // after compaction the next enable sends the schemas again
+        let (r, _) = t.call("discover", &json!({"path": "shell", "enable": true}), &mut log);
+        assert!(r.contains("already enabled"), "{r}");
+        t.forget_schemas();
+        let (r, _) = t.call("discover", &json!({"path": "shell", "enable": true}), &mut log);
+        assert!(!r.contains("already enabled") && r.contains("\"command\""), "{r}");
         // any other tool: the generic next step; different arguments are not a repeat
         let say = json!({"message": "hi"});
         t.guide_call("say", &say).unwrap();

@@ -1,6 +1,6 @@
 {
   "name": "lang",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "Languages bia hears and speaks, on this machine (no cloud): learning them, voices, keyboards, transcription and speech settings. Speech arrives as [speech <lang>] lines; [new language heard: …] means lang_install it (tell the person first).",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-lang",

@@ -110,6 +110,35 @@ impl Guard {
     }
 }
 
+/// A reply with no tool calls whose text is one written out: `say|web|answered=[…]`
+/// (the envelope format copied from the history), `say(…)` or tool-call markup. Nothing
+/// ran, so the model is told. The name of the function it meant, or the markup.
+pub fn fake_call(text: &str, known: &[String]) -> Option<String> {
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let line = line.trim_start_matches(['`', '*', '-', '>', ' ']);
+        for tag in ["<invoke", "<tool_call", "<function_call", "<parameter name="] {
+            if line.contains(tag) {
+                return Some(tag.trim_start_matches('<').to_string());
+            }
+        }
+        let name: String = line.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let rest = line[name.len()..].trim_start();
+        if !name.is_empty() && (rest.starts_with('|') || rest.starts_with('(')) && known.iter().any(|k| *k == name) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// What the model reads after writing a call as text.
+pub fn fake_notice(name: &str) -> String {
+    format!(
+        "nothing ran: your last reply wrote {name} as text instead of calling it. \
+         Make it a real tool call (e.g. say(channel=…, message=…, answered=[…])). \
+         Messages you meant to answer or close are still open."
+    )
+}
+
 /// Retries after a loop within one turn before the turn stops.
 pub const RETRIES: u32 = 2;
 
@@ -241,6 +270,19 @@ mod tests {
     fn short_replies_never_checked() {
         let mut g = Guard::default();
         assert!(feed(&mut g, false, &"ok ".repeat(1000)));
+    }
+
+    #[test]
+    fn calls_written_as_text() {
+        let known: Vec<String> = ["say", "discover", "bash"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(fake_call("say|web|answered=[b731eaf330007,b732474b0000c]", &known).as_deref(), Some("say"));
+        assert_eq!(fake_call("I will reply.\nsay(channel=\"web\", message=\"hi\")", &known).as_deref(), Some("say"));
+        assert_eq!(fake_call("<invoke name=\"say\">", &known).as_deref(), Some("invoke"));
+        assert_eq!(fake_call("`bash(command=\"ls\")`", &known).as_deref(), Some("bash"));
+        // ordinary notes stay notes
+        assert!(fake_call("(no action — already closed)", &known).is_none());
+        assert!(fake_call("The say tool sends messages; bash runs commands.", &known).is_none());
+        assert!(fake_call("unknown_fn(1)", &known).is_none());
     }
 
     #[test]

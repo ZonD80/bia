@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.3.4
+
+### Changes
+- A model that writes a tool call as plain text (for example "say|web|answered=[…]") is told that nothing ran and tries again; before, the messages it meant to answer stayed open while it believed they were closed.
+- Asking for a function that is already enabled now shows how to call it, instead of "already enabled" again; models no longer loop on that search, also after a long conversation was compacted.
+
+### For bia
+- Call tools only as real tool calls; a reply that only writes one out (say|…, say(…), <invoke …>) does nothing. Check the unanswered: notice and answer or close what is still open.
+
 ## 1.3.3
 
 ### Changes

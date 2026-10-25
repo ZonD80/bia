@@ -742,6 +742,8 @@ impl Repl {
             ));
         }
         self.history.extend(tail);
+        // function schemas sent in the compacted span are gone from the model's view
+        self.tools.forget_schemas();
         if let Some(l) = self.llm.as_mut() {
             l.reset();
         }
@@ -1980,7 +1982,8 @@ now: {now}", done.join("\n")), failed)
     }
 
     /// One remote (FMM) generation: streams the text, appends the assistant message with its calls.
-    /// `Some(tail)` when the reply was cut because it kept repeating (runaway.rs).
+    /// `Some(_)` when the reply needs another try: it kept repeating (cut, runaway.rs), or it
+    /// wrote a tool call as text so nothing ran.
     fn remote_step(&mut self) -> anyhow::Result<Option<String>> {
         let remote = self.remote.as_ref().unwrap();
         self.set_state("remote");
@@ -2082,6 +2085,15 @@ now: {now}", done.join("\n")), failed)
             return Ok(looped);
         }
         self.log("assistant", &r.text);
+        if r.calls.is_empty() && r.stop != "interrupted" {
+            let known: Vec<String> = self.tools.specs.iter().map(|t| t.name.clone()).collect();
+            if let Some(f) = crate::runaway::fake_call(&r.text, &known) {
+                self.con.writeln(&self.con.c(RED, &format!("  [{f} was written as text, not called; nothing ran]")));
+                self.push_history(Msg::assistant(r.text, vec![]));
+                self.system_message(&crate::runaway::fake_notice(&f));
+                return Ok(Some(f));
+            }
+        }
         for c in &r.calls {
             self.log("tool-call", &format!("{}({})", c.name, c.args));
         }
@@ -2436,7 +2448,7 @@ now: {now}", done.join("\n")), failed)
                         if loops <= crate::runaway::RETRIES {
                             continue;
                         }
-                        self.con.writeln(&self.con.c(RED, "  [the model keeps repeating itself; turn stopped]"));
+                        self.con.writeln(&self.con.c(RED, "  [the model keeps failing to reply properly; turn stopped]"));
                         break;
                     }
                     Err(e) => {
