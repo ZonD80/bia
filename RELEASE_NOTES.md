@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.4.1
+
+### Changes
+- Photos sent on Telegram arrive again; they failed with "media has no downloadable document for the requested quality" (only photos sent as a file came through).
+
+### For bia
+- If someone resent a photo as a file because of that error, tell them normal photos work now.
+
 ## 1.4.0
 
 ### Changes

@@ -1744,8 +1744,10 @@ async fn save_inbound_media(
     // a bare .bin hid voice notes from transcription.
     let name = format!("{stamp}-{}", media_file_name(media));
     let dest = inbox.join(&name);
+    // download_file, not download_media: that one takes documents only and failed every
+    // photo with "media has no downloadable document for the requested quality"
     client
-        .download_media(media, ferogram::media::MediaQuality::Original, &dest, None)
+        .download_file(media, &dest)
         .await
         .map_err(|e| format!("download: {e}"))?;
     Ok(format!("inbox/telegram/{chat_id}/{name}"))
