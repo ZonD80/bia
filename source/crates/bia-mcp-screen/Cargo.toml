@@ -7,4 +7,5 @@ description = "MCP: real display, screenshots, mouse and keyboard"
 
 [dependencies]
 bia-mcp = { path = "../bia-mcp" }
+bia-ocr = { path = "../bia-ocr" }
 serde_json.workspace = true

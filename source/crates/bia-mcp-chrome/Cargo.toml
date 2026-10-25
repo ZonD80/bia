@@ -16,4 +16,5 @@ bia-mcp-secrets = { path = "../bia-mcp-secrets" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
+bia-ocr = { path = "../bia-ocr" }
 rsa = { version = "0.9", features = ["sha2"] }

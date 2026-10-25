@@ -1,0 +1,14 @@
+[package]
+name = "bia-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Words on the screen and where they are: PaddleOCR models on the image's onnxruntime"
+
+[dependencies]
+serde_json.workspace = true
+libc.workspace = true
+png = "0.18"
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-27"] }

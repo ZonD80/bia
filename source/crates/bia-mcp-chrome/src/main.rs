@@ -158,7 +158,7 @@ fn main() {
         )
         .tool(
             "choose_files",
-            "Answer Chrome's file dialog: paths=[absolute paths] (several to multi-select, one folder to upload it, a new path to save), or cancel=true.",
+            "Answer Chrome's file dialog: paths=[absolute paths] (several to multi-select, one folder to upload it, a new path to save), or cancel=true. For a folder Chrome then asks \"Upload N files to this site?\"; the result lists that prompt's words with x,y: screen_click its Upload button.",
             json!({"type": "object", "properties": {
                 "paths": {"type": "array", "items": {"type": "string"}, "description": "absolute paths bia (the Chrome user) can read; a not-yet-existing path for a Save dialog"},
                 "cancel": {"type": "boolean", "description": "close the dialog without choosing"}

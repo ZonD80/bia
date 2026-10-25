@@ -3,9 +3,11 @@
 # Chromium (same GTK dialog as Google Chrome) as user bia, a page with single, multiple and
 # folder inputs, and the real choose() via the ignored choose_from_env test. Covers a
 # completion-popup trap, a non-ASCII name, multi-select (first refused because the GTK
-# bookmarks file did not exist when the dialog opened), folder upload with Chrome's
-# "Upload N files?" prompt confirmed by the tool (over CDP), cancel and Save. Also the
+# bookmarks file did not exist when the dialog opened), folder upload (the tool waits for
+# Chrome's "Upload N files?" prompt and returns its words with x,y by OCR, downloading the
+# models; the test clicks Upload there as the model would), cancel and Save. Also the
 # DefaultAutomaticDownloadsSetting policy: several downloads from one click, no prompt.
+# OCR runs on the image's onnxruntime, taken from the bia-cache-$ARCH build volume.
 #
 #   tests/integration/chrome-dialog-test.sh            (runs itself in bia-dialog:$ARCH)
 set -uo pipefail
@@ -20,9 +22,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
   && rm -rf /var/lib/apt/lists/* && (id bia || useradd -m bia)
 EOF
   exec docker run --rm --platform "$PLATFORM" -e IN_CONTAINER=1 -e ARCH="$ARCH" \
-    -v bia-dialog-target:/target -e CARGO_TARGET_DIR=/target \
+    -v bia-dialog-target:/target -e CARGO_TARGET_DIR=/target -v "bia-cache-$ARCH":/biacache:ro \
     -v "$PWD":/work:ro -w /work "bia-dialog:$ARCH" bash /work/tests/integration/chrome-dialog-test.sh
 fi
+
+ORT=$(ls /biacache/speech/sherpa-unpack/*/lib/libonnxruntime.so 2>/dev/null | head -1)
+[ -n "$ORT" ] || { echo "no onnxruntime in bia-cache-$ARCH (build the image once)"; exit 1; }
+export BIA_ONNXRUNTIME=$ORT
 
 FAILED=0
 check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; FAILED=1; fi; }
@@ -105,9 +111,14 @@ sleep 0.5; check "page got 3 files" "[ \"\$(title)\" = 'm:a.txt=2,b.txt=3,ü ß.
 check "staged as bia" "[ \"\$(stat -c %U /home/bia/files/state/chrome/pick/*/a.txt | head -1)\" = bia ]"
 
 open_input 150
-check "folder, Chrome's upload prompt confirmed" "BIA_DIALOG_PATHS=$F/dir run_choose | grep -q 'confirmed Chrome.*Upload 2 files'"
-sleep 0.5
+BIA_DIALOG_PATHS=$F/dir run_choose >/tmp/folder.txt
+check "folder: tool saw Chrome's upload prompt" "grep -q 'Chrome now asks .*Upload 2 files.*Words in the Chrome window' /tmp/folder.txt"
+# the model's part: Upload, on the row with Cancel
+UPLOAD=$(grep -o 'Cancel ([0-9]*,[0-9]*)   Upload ([0-9]*,[0-9]*)' /tmp/folder.txt | grep -o 'Upload ([0-9,]*)' | tr -dc '0-9,')
+check "OCR: Cancel and Upload side by side" "[ -n '$UPLOAD' ]"
+xdotool mousemove "${UPLOAD%,*}" "${UPLOAD#*,}" click 1; sleep 1
 check "page got the folder" "[ \"\$(title)\" = 'd:dir/one.txt=3,dir/two.txt=4' ]"
+check "OCR models are bia's" "[ \"\$(stat -c %U /home/bia/files/ocr/models/en_PP-OCRv5_rec_mobile.onnx)\" = bia ]"
 
 open_input 10
 check "unreadable file refused" "chmod 600 $F/b.txt; chown root $F/b.txt; BIA_DIALOG_PATHS=$F/b.txt run_choose | grep -q 'cannot read'"

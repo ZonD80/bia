@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.4.0
+
+### Changes
+- bia reads the screen: it can list every word on it with the exact point to click it, in the languages Chrome is set to and English (Russian, German, Chinese, Arabic, Hindi and many more); the reading models download on first use.
+- Folder uploads in Google Chrome work again: 1.3.3 said bia answers Chrome's "Upload N files to this site?" itself, but in Google Chrome that question ignores the keyboard, so uploads stalled there. Now bia waits for the question and reads its buttons, and clicks Upload.
+
+### For bia
+- New screen_ocr lists the words on screen (x,y,w,h for a region) with the x,y of each; use it first to click a button, link or label with screen_click, and screen_shot when the picture itself matters.
+- Uploading a folder: after chrome_choose_files(paths=[folder]) its result lists the words of Chrome's "Upload N files to this site?" with x,y; screen_click its Upload button (right of Cancel), then wait for the page to show the files. This replaces 1.3.3's step that said not to click it.
+
 ## 1.3.4
 
 ### Changes

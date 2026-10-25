@@ -16,9 +16,18 @@ fn main() {
         )
         .tool(
             "shot",
-            "Take a picture of the screen. You can see the picture in the result. Call this before you click.",
+            "Take a picture of the screen. You can see the picture in the result. Before a click, screen_ocr gives exact points for text.",
             json_obj(),
             |_, _| shot(),
+        )
+        .tool(
+            "ocr",
+            "Words on screen (or region x,y,w,h), each with the x,y of its center: use it first to click a button, link or label, or when unsure where.",
+            serde_json::json!({"type": "object", "properties": {
+                "x": {"type": "integer"}, "y": {"type": "integer"},
+                "w": {"type": "integer"}, "h": {"type": "integer"}
+            }}),
+            |_, a| ocr(&a),
         )
         .tool(
             "click",
@@ -175,6 +184,21 @@ fn shot() -> Result<String, String> {
     }
     prune(&dir);
     Ok(format!("{w}x{h}\nimage: {path_s}"))
+}
+
+/// Words on the screen (or a region) with their centers, read in Chrome's languages and
+/// English; a missing model is downloaded first.
+fn ocr(args: &Value) -> Result<String, String> {
+    let area = match (args.get("x"), args.get("y"), args.get("w"), args.get("h")) {
+        (None, None, None, None) => None,
+        _ => Some(bia_ocr::Rect { x: num(args, "x")?, y: num(args, "y")?, w: num(args, "w")?, h: num(args, "h")? }),
+    };
+    let path = std::env::temp_dir().join(format!("bia-ocr-{}.png", std::process::id()));
+    let path_s = path.display().to_string();
+    run("scrot", &["-o", &path_s])?;
+    let words = bia_ocr::words(&path, area);
+    let _ = std::fs::remove_file(&path);
+    Ok(format!("words, each at the x,y of its center:\n{}", words?))
 }
 
 fn prune(dir: &Path) {

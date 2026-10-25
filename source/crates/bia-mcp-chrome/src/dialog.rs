@@ -153,31 +153,15 @@ fn folder(d: &Dialog, g: &Geometry, dir: &Path) -> Result<String, String> {
     if n == 0 {
         return Ok(format!("Chose folder {} (it has no files).", dir.display()));
     }
-    if confirm_upload(&d.page)? {
-        return Ok(format!(
-            "Chose folder {} and confirmed Chrome's \"Upload {n} files to this site?\".{WAIT}",
-            dir.display()
-        ));
-    }
-    Ok(format!(
-        "Chose folder {}. Chrome should now ask \"Upload {n} files to this site?\" inside the window; bia could not confirm it: screen_shot, then screen_click its Upload button.{WAIT}",
-        dir.display()
-    ))
+    Ok(format!("Chose folder {}. {}{WAIT}", dir.display(), upload_prompt(&d.page, n)))
 }
 
-/// Chrome asks before a folder upload, inside the browser window (no X window). The
-/// prompt takes focus from the page, so the page reporting no focus means it is up:
-/// Tab from Cancel (focused) to Upload, Space; the page gets focus back once it closes.
-/// False when the prompt was not seen (the caller hands it to the model).
-fn confirm_upload(page: &str) -> Result<bool, String> {
-    let focus = |ws: &str| cdp::eval(ws, "document.hasFocus()").ok().and_then(|v| v.as_bool());
-    // the shown tab without focus (a background tab never has it)
-    let asking = |ws: &str| {
-        cdp::eval(ws, "document.visibilityState == 'visible' && !document.hasFocus()").ok().and_then(|v| v.as_bool())
-            == Some(true)
-    };
-    // Just after the file dialog closes the page has no focus either: wait until the
-    // browser window is active again, then for the page to stay unfocused.
+/// Chrome asks "Upload N files to this site?" before a folder upload, inside the
+/// browser window (no X window, no keys: Chrome 155 ignores them). Waits for it and
+/// says what is on it, words with their screen points, for the model to click.
+fn upload_prompt(page: &str, n: usize) -> String {
+    let ask = format!("Chrome now asks \"Upload {n} files to this site?\" inside its window; the files reach the page only after its Upload button is clicked.");
+    // Keys must go to the browser: just after the file dialog closes they may not.
     let deadline = Instant::now() + Duration::from_secs(3);
     while x("xdotool", &["getactivewindow", "getwindowname"]).map(|n| page_of(&n) != page).unwrap_or(true) {
         if Instant::now() > deadline {
@@ -185,33 +169,52 @@ fn confirm_upload(page: &str) -> Result<bool, String> {
         }
         sleep(Duration::from_millis(150));
     }
-    // reading a large folder delays the prompt
+    // While it is up the page gets no keys (it still reports document.hasFocus()), so a
+    // Control press the page does not see means it is up. A large folder delays it.
     let deadline = Instant::now() + Duration::from_secs(15);
-    let ws = 'found: loop {
-        if let Some(ws) = cdp::tabs_titled(page).into_iter().find(|ws| asking(ws)) {
-            let mut held = true;
-            for _ in 0..3 {
-                sleep(Duration::from_millis(250));
-                held &= asking(&ws);
-            }
-            if held {
-                break 'found ws;
+    let seen = loop {
+        if let Some(ws) = cdp::tabs_titled(page).into_iter().find(|ws| keys_reach(ws) == Some(false)) {
+            sleep(Duration::from_millis(250));
+            if keys_reach(&ws) == Some(false) {
+                break true;
             }
         }
         if Instant::now() > deadline {
-            return Ok(false);
+            break false;
         }
         sleep(Duration::from_millis(300));
     };
-    x("xdotool", &["key", "Tab", "space"])?;
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        sleep(Duration::from_millis(250));
-        if focus(&ws) == Some(true) {
-            return Ok(true);
-        }
+    if !seen {
+        return format!("{ask} bia did not see it yet: screen_ocr lists the words on screen with their x,y; screen_click its Upload button.");
     }
-    Ok(false)
+    match window_words() {
+        Ok(words) => format!("{ask} Words in the Chrome window, each at its x,y (screen_click there):\n{words}\n"),
+        Err(e) => format!("{ask} bia could not read it ({e}): screen_ocr (or screen_shot), then screen_click its Upload button."),
+    }
+}
+
+/// OCR of the active window.
+fn window_words() -> Result<String, String> {
+    let win = x("xdotool", &["getactivewindow"]).and_then(|id| Geometry::of(id.trim()))?;
+    let png = std::env::temp_dir().join(format!("bia-dialog-{}.png", std::process::id()));
+    x("scrot", &["-o", png.to_str().ok_or("temp path is not UTF-8")?])?;
+    let words = bia_ocr::words(&png, Some(bia_ocr::Rect { x: win.x, y: win.y, w: win.w, h: win.h }));
+    let _ = fs::remove_file(&png);
+    words
+}
+
+/// Whether a Control press reaches the shown tab at `ws`; None when that cannot be
+/// told (hidden tab, focus inside a frame, no CDP).
+fn keys_reach(ws: &str) -> Option<bool> {
+    const ARM: &str = "(() => { const w = window; w.__biaKeys = 0; \
+        if (!w.__biaProbe) { w.__biaProbe = 1; addEventListener('keydown', () => w.__biaKeys++, true); } \
+        return document.visibilityState == 'visible' && document.activeElement?.tagName != 'IFRAME'; })()";
+    if cdp::eval(ws, ARM).ok()?.as_bool() != Some(true) {
+        return None;
+    }
+    x("xdotool", &["key", "Control_L"]).ok()?;
+    sleep(Duration::from_millis(250));
+    cdp::eval(ws, "window.__biaKeys").ok()?.as_u64().map(|n| n > 0)
 }
 
 /// Regular files under `dir` (what Chrome counts for its prompt), up to a cap.
@@ -563,7 +566,7 @@ mod tests {
         let title = std::env::var("BIA_CDP_TITLE").unwrap_or_default();
         println!("cdp: list {:?}", crate::watch::json_list().map(|v| v.to_string()));
         for ws in cdp::tabs_titled(&title) {
-            println!("cdp: {ws} focus {:?}", cdp::eval(&ws, "[document.visibilityState, document.hasFocus()]"));
+            println!("cdp: {ws} keys reach {:?}", super::keys_reach(&ws));
         }
     }
 }
