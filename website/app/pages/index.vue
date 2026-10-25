@@ -15,7 +15,7 @@
             <NuxtLink class="btn btn--primary" to="/download">Get bia — it’s free</NuxtLink>
             <NuxtLink class="btn btn--ghost" to="/features">See everything it does</NuxtLink>
           </div>
-          <p class="hero__small">Its own computer: a USB stick, an old laptop or a server · your data stays with it, not a cloud</p>
+          <p class="hero__small">Its own computer: a USB stick, an old laptop or a server · your agent’s data stays with it, not a cloud</p>
         </div>
         <div class="hero__art" aria-hidden="true">
           <div class="hero__glow" />
@@ -173,10 +173,10 @@
       <div class="container fred">
         <div>
           <span class="eyebrow">Meet a real one</span>
-          <h2 class="section-title">Fred, three weeks old</h2>
+          <h2 class="section-title">Fred, almost four weeks old</h2>
           <p class="section-lead">
-            Fred is the developer’s own bia. It woke up on a USB stick, learned whose family is whose, made voice
-            calls, moved between computers — and, asked for a promo, made this film by itself. Unedited.
+            Fred is the developer’s own bia. It woke up on a laptop with a single tool, got its own accounts and voice,
+            lost its memory to the wrong backup and rebuilt itself — and, asked for a promo, made this film by itself. Unedited.
           </p>
           <div class="btn-row">
             <NuxtLink class="btn btn--primary" to="/fred">Read Fred’s story</NuxtLink>

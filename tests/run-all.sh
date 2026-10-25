@@ -6,7 +6,7 @@
 #     unit         cargo test for the whole workspace (in bia-build:$ARCH)
 #     integration  tests/integration: web MCP over HTTPS + mTLS, web markdown (node, on the host),
 #                  bia-update internet staging
-#     e2e          QEMU on $ARCH (default arm64): update (internet disk flash rescue), peer,
+#     e2e          QEMU on $ARCH (default arm64): update (internet disk flash rescue fsck twin), peer,
 #                  land, img (UEFI)
 #     takeover     QEMU on $ARCH: an Ubuntu cloud VM taken over by takeover.sh (DHCP, a static /32
 #                  with an on-link gateway, land mode with a second bia flying in, and a bia that
@@ -64,16 +64,24 @@ web_mcp() {
   builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/web-mcp-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
 }
 
+# messenger + instagram MCPs with the real bia-meta, no Meta account (builds bia-meta with the cached Go)
+meta_mcp() {
+  builder 'ARCH='"$ARCH"'; . /work/builders/go-env.sh; ensure_go && OUT=/tmp/meta-e2e && mkdir -p $OUT &&
+           (cd source/go/bia-meta && CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -o $OUT/bia-meta .) &&
+           cargo build -q -p bia-mcp-meta && python3 -I tests/integration/meta-mcp-e2e.py "$CARGO_TARGET_DIR/debug" $OUT/bia-meta'
+}
+
 for stage in "$@"; do
   case $stage in
     unit)
       run unit-cargo unit ;;
     integration)
       run web-mcp-https web_mcp
+      run meta-mcp meta_mcp
       run web-markdown node tests/integration/web-md-test.js
       run update-internet-stage env ARCH="$ARCH" tests/integration/update-net-test.sh ;;
     e2e)
-      run update-e2e env ARCH="$ARCH" bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && tests/e2e/update-e2e.sh all internet disk flash rescue'
+      run update-e2e env ARCH="$ARCH" bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && tests/e2e/update-e2e.sh all internet disk flash rescue fsck twin'
       run peer-e2e env ARCH="$ARCH" tests/e2e/peer-e2e.sh all
       run land-e2e env ARCH="$ARCH" tests/e2e/land-e2e.sh all
       run img-e2e-uefi env ARCH="$ARCH" FIRMWARE=uefi tests/e2e/img-e2e.sh all ;;

@@ -25,7 +25,8 @@ agent is the only user-facing program; everything else is there to serve it.
  └───────────────────────────────────────────────────────────────────────┘
                  │ GRUB → kernel → initramfs → root=LABEL=…
                  ▼
- systemd ── bia-grow.service     (ext4 over the whole stick; moves in a flashed model)
+ systemd ── bia-esp-id.service   (own FAT serial for this drive's ESP; /boot by it)
+        ├── bia-grow.service     (ext4 over the whole stick; moves in a flashed model)
         ├── bia-update.service   (finishes a pending OS update, unfolds agent)
         ├── bia.service ─ bia-session ─ Xorg :0 + openbox + tint2 + kitty
         │                                └── bia-agent  (console on tty1/serial/kitty)
@@ -161,6 +162,7 @@ identity|channel|issued|delivered|id|message
 - `identity`: `system` (own notices, job results, schedules), `root` (the
   person at the console or a root-trusted contact), or a contact id.
 - `channel`: `console`, `web`, `telegram:<chat>`, `whatsapp:<chat>`,
+  `messenger:<chat>`, `instagram:<chat>`,
   `job:<id>`, `schedule`.
 - `issued` / `delivered`: RFC 3339 UTC; lines typed during generation are
   queued, so the model can see how long a message waited.
@@ -169,7 +171,7 @@ identity|channel|issued|delivered|id|message
 The model replies with tool calls; `say(identity, channel, message)` sends to a
 channel and returns at once. Plain text is the final answer for the console.
 
-On telegram and whatsapp, `say` goes through the outbox. Each send gets a
+On telegram, whatsapp, messenger and instagram, `say` goes through the outbox. Each send gets a
 local id `o<n>` (`files/state/outbox.json`) and joins its chat's queue, which
 one worker thread runs in order; different chats run in parallel. `say` waits
 up to 5 s (not at all for 8 MB or more of attachments). In time, it returns
@@ -285,14 +287,36 @@ into `/home/bia/MCPs`.
 | `secrets` | passwords, TOTP/HOTP, WebAuthn passkeys (ES256) in `files/state/passwords.json`; 1Password CSV/JSON import, CXF export |
 | `chrome` | Google Chrome on profile `~/.config/bia-chrome` with remote debugging; force-installed CRX extension proxies WebAuthn to `secrets`; page automation through Google's `chrome-devtools-mcp` (vendored Node) |
 | `screen` | screenshot, mouse and keyboard on `:0` (xdotool/scrot) |
-| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`); deletes are for everyone unless `revoke=false` |
-| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools); deletes are for everyone unless `revoke=false` |
+| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`) and their administration (`group_info`, `set_admin` with named rights and a title, `group_permissions` for what members may do plus slow mode, join approval, history for new members, protected content and disappearing messages, `restrict_member`, `set_group_info`, `join_requests` / `answer_join_request`); deletes are for everyone unless `revoke=false` |
+| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools) and their administration (`group_info`, `set_admin`, `group_permissions`: who may send / edit info / add, join approval, disappearing messages; `set_group_info`, `join_requests` / `answer_join_request`); deletes are for everyone unless `revoke=false` |
+| `messenger` | Facebook Messenger as the account signed in to bia's Chrome (cookies read over Chrome's DevTools port, no password); classic and end-to-end encrypted chats (encrypted ones over WhatsApp's protocol as a registered device); text, files, voice messages (TTS → AAC), replies, edits, reactions, unsends, read marks, typing; search and resolve (names, profile links, ids); groups (create, add/remove, leave, `group_info`, `set_admin`, `set_group_info`; encrypted groups also `group_permissions` and join requests, like WhatsApp); bans, Meta blocks, message requests, mute; the Facebook bio (`set_profile`, the GraphQL mutation fbchat-v2 uses; name and photo stay in Chrome); no calls. Chat ids: a person's Facebook id, `t<thread>` for a classic group, `<id>@g.us` for an encrypted one |
+| `instagram` | Instagram DMs the same way (session from Chrome); shared posts and reels as `[shared]` lines with their link; also pins (chat or message); unsend only (no remove-for-me). Chat id: the thread key (a DM's is the other person's id) |
 | `lang` | languages bia hears and speaks: catalog (`catalog.json`, sha256-pinned), on-demand installs into `files/speech`, voices, speech settings, transcribe/synthesize files |
 | `carry` | `fold`/`unfold` backups of `/home/bia`; `fly` to a machine in land mode (UDP discovery, X25519 handshake, confirmed code); `update` and `rescue` (see below); `morph` |
 
+### Messenger and Instagram
+
+Both MCPs are one Rust crate (`bia-mcp-meta`, two binaries) in front of one Go
+program, `bia-meta` (`source/go/bia-meta`, static, no cgo, in the messenger
+MCP's `bin/`; instagram uses it from there). The protocol work is
+[mautrix-meta](https://github.com/mautrix/meta)'s libraries, pinned in `go.mod`:
+`messagix` for Messenger's socket and tasks, whatsmeow for encrypted chats,
+`instameow` for Instagram. `bia-meta --platform … --dir files/<platform>` speaks
+JSON lines on stdin/stdout: requests answered by id, and events (`message`,
+`backlog`, `edit`, `delete`, `reaction`, `chat`, `status`, `logged_out`).
+Its state is `files/<platform>/session.json` (cookies, 0600) and `meta.db`
+(SQLite via modernc: whatsmeow's device keys plus bia's chat, people and
+message index for edits, reactions, replies and history). Incoming files are
+not downloaded until the message's turn in its chat lane: the event carries a
+ref and the MCP asks for the file, then transcribes voice notes. `backlog`
+(the inbox at connect, offline messages) is delivered when newer than
+`files/state/<platform>.json` `last_seen`. History comes from the server
+(classic Messenger threads, Instagram) or else from the local index (encrypted
+chats have no server history for linked devices).
+
 ### Speech
 
-`bia-speech` (a library shared by `telegram`, `whatsapp` and `lang`) dlopens the
+`bia-speech` (a library shared by `telegram`, `whatsapp`, `messenger`, `instagram` and `lang`) dlopens the
 sherpa-onnx C API and keeps models loaded in-process. Incoming audio (call audio
 per participant, or a voice-note file) goes through Silero VAD, split at short
 pauses. Each segment of 1 s or more gets language identification with the

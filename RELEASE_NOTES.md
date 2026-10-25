@@ -5,6 +5,37 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.3.1
+
+### Changes
+- Instagram voice messages, photos and videos arrive again; every one failed with "internal error … nil pointer dereference". The same fault hit files in Messenger chats that are not encrypted.
+- Logging in to Instagram now connects straight away and says whether the connection is up; before, it reported success but stayed disconnected until the MCP was restarted.
+- A link pasted on Telegram no longer comes with a false "attachment not received" note (its preview has nothing to download); polls, dice and stories are named instead.
+- Telegram reaches a user or chat known only by its id more often (bia loads its contacts and recent chats first), and says how to get access when it still cannot.
+- WhatsApp profile and group photos are sent smaller (640x640 JPEG without metadata), and a picture WhatsApp refuses gets a clear explanation.
+- History on Messenger and Instagram shows a message that was only a file as [voice], [image] and so on, and the full log of these two is kept in logs/mcp-messenger.log and logs/mcp-instagram.log.
+
+### For bia
+- If Instagram voice messages or photos failed for you with "nil pointer dereference", ask the people who sent them to send them again.
+- If you set up a Chrome tab or an MCP restart as a workaround for "Instagram is not connected yet", drop it; instagram_login and instagram_status are enough now.
+- Try whatsapp_set_photo again if it failed with 406; if it still fails, tell the owner the photo has to be set from the phone.
+
+## 1.3.0
+
+### Changes
+- Backups (fold) and restores (unfold) now refuse to run without root rights instead of quietly leaving out files only root can read, such as keys and trusted peers. A backup made from a schedule or a script as user bia missed those files before.
+- User bia can now use sudo without a password, so a schedule or script running as bia can run a backup with sudo.
+- Job logs in files/logs/jobs are deleted after 30 days, and new ones belong to bia instead of root.
+- bia can now run the groups it administers on Telegram, WhatsApp, Messenger and Instagram: show a group's settings, make or remove admins (on Telegram with the exact rights and a title), set what members may do (on Telegram per action, slow mode, protected content; on WhatsApp and encrypted Messenger groups who may send, edit the info or add people), join approval and requests, disappearing messages, the title, description and photo, and on Telegram restrict or ban one member for a while.
+- Updating from a bia stick works again when the computer finds the stick first. Every bia drive had the same boot partition name and ID, so the computer could read the stick's boot partition instead of its own disk's. It then booted normally instead of running the update, and /boot could come from the stick. Each drive now gives its boot partition an ID of its own at startup and mounts /boot by that ID. An update also changes the ID of a stick's boot partition when it is the same as the disk's.
+- New: Facebook Messenger and Instagram direct messages. bia signs in to facebook.com or instagram.com in its own Chrome (with the password and codes it keeps in its secrets), then takes the session from there and reads and answers its chats like on Telegram and WhatsApp: encrypted Messenger chats too, photos, videos, files, voice messages (transcribed; it can answer by voice), replies, edits, reactions, unsending, groups, bans and blocks. There are no calls on these two. Meta does not offer this officially, so it may ask for a security check in the browser now and then.
+
+### For bia
+- If a schedule or script of yours makes backups as user bia (its own tar, or the carry binary), run it as root: put sudo in front of its command, or set the schedule's user to root (schedule_update user=root). Check the next nightly archive includes files/state/pki.
+- Drop any manual cleanup of old job logs and any chown of root-owned files you added for backups: neither is needed now.
+- /boot is now mounted by its own ID instead of the name BIABOOT (see /etc/fstab); the first startup after this update sets that up and logs it (journalctl -u bia-esp-id). Leave it as it is. If an earlier update from a stick failed, you can delete what is left of it in /bia-update (this startup removes it too).
+- mcp/messenger and mcp/instagram are new. Mention them to the owner once; log in only when asked: sign in at facebook.com / instagram.com in your Chrome (chrome MCP; passwords and codes from secrets), then messenger_login / instagram_login.
+
 ## 1.2.2
 
 ### Changes

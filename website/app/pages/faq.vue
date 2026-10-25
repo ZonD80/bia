@@ -49,7 +49,7 @@ const sections = [
       { q: 'Does it delete Windows?', a: 'No. Starting from the stick changes nothing on the computer. If you later want bia on the computer’s disk, you can choose an empty disk or install it beside Windows.' },
       { q: 'Does it need the internet?', a: 'Normally, yes: messengers and the cloud brain need the internet. If you need bia to work with no internet at all, the brain on the stick is an option — it needs a computer with a high-end graphics card or unified memory with at least 64 GB of video memory (VRAM).' },
       { q: 'Do I need a screen?', a: 'Only for the first minutes. After that you can reach bia from your phone through its private app, and the computer can live in a cupboard.' },
-      { q: 'Can bia live on a rented server?', a: 'Yes. Log in to a Linux server (a VPS, for example with Ubuntu) and run one command: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash. It asks for your key and language, keeps the server’s network settings, gives you your personal key for bia’s web app, and replaces the system with bia. The server needs about 4 GB of memory. See the server guide on this site.' },
+      { q: 'Can bia live on a rented server?', a: 'Yes. Log in to a Linux server (a VPS, for example with Ubuntu) and run one command: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash. It asks for your key and language, keeps the server’s network settings, gives you your personal certificate for bia’s web app, and replaces the system with bia. The server needs about 4 GB of memory. See the server guide on this site.' },
       { q: 'Can my bia move to a server by itself?', a: 'Yes. Give it ssh access to a Linux server and ask it to fly there. It makes a land secret, turns the server into a land that waits for it, and flies there over the internet, encrypted. Or prepare the server yourself with takeover.sh --land and tell bia the land secret.' },
     ],
   },
@@ -64,8 +64,8 @@ const sections = [
   {
     title: 'Privacy and safety',
     items: [
-      { q: 'Where are my conversations stored?', a: 'On bia’s own disk, on the computer you control. Nothing is uploaded to a bia company — there isn’t one collecting your data.' },
-      { q: 'Who can talk to bia?', a: 'Anyone you let reach it on messengers can chat with it. Only people you trust fully can ask it to do serious things on the computer, and its private app requires a personal key that you hand out and can take back.' },
+      { q: 'Where are my conversations stored?', a: 'On bia’s own disk, on the computer you control. Nothing is uploaded to a bia company — there isn’t one collecting your agent’s data.' },
+      { q: 'Who can talk to bia?', a: 'Anyone you let reach it on messengers can chat with it. Only people you trust fully can ask it to do serious things on the computer, and its private app requires a personal certificate that you hand out and can take back.' },
       { q: 'Is the cloud brain private?', a: 'When you use a cloud brain, what bia is thinking about is sent to that provider, under their privacy terms. If your work must never leave the building, the brain on the stick is an option on a powerful computer.' },
       { q: 'What if the computer is stolen?', a: 'bia’s disk holds its memories and vault, so treat its computer like your phone: keep it somewhere safe, and keep a backup of bia in a safe place.' },
     ],

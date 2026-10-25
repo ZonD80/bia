@@ -31,7 +31,7 @@ INTERNAL_IMG=${INTERNAL_IMG:-dist/internal.img}
 BUILDER="bia-build:$ARCH"
 NTGCALLS_VER=${NTGCALLS_VER:-v3.0.0}
 
-ALL_MCPS=(system telegram whatsapp secrets chrome screen carry)
+ALL_MCPS=(system telegram whatsapp secrets chrome screen carry messenger instagram)
 
 usage() {
   echo "usage: tools/patch-mcp.sh <mcp…|all>" >&2
@@ -47,7 +47,7 @@ for arg in "$@"; do
     all)
       MCPS=("${ALL_MCPS[@]}")
       ;;
-    system|telegram|whatsapp|secrets|chrome|screen|carry)
+    system|telegram|whatsapp|secrets|chrome|screen|carry|messenger|instagram)
       MCPS+=("$arg")
       ;;
     *)
@@ -98,6 +98,11 @@ for m in "${MCPS[@]}"; do
   cp -f "$OUT" "$FLASH_BIN"
   chmod 755 "$FLASH_BIN"
   ls -lh "$FLASH_BIN"
+  if [ "$m" = messenger ]; then
+    # bia-meta (the Go side of messenger and instagram) lives in the messenger MCP
+    cp -f "dist/$ARCH/bia-meta" "source/flash/MCPs/messenger/bin/$RARCH/bia-meta"
+    chmod 755 "source/flash/MCPs/messenger/bin/$RARCH/bia-meta"
+  fi
   [ "$m" = telegram ] && NEED_TELEGRAM=1
   [ "$m" = chrome ] && NEED_CHROME=1
 done
@@ -204,6 +209,9 @@ for name, off, size in partitions("/img"):
                 continue
             for mcp in mcps:
                 mcp_root = os.path.join(root, mcp)
+                if not os.path.isdir(mcp_root) and mcp in ("messenger", "instagram"):
+                    # new in this release: put the whole MCP folder in place
+                    copy_file(f"/work/source/flash/MCPs/{mcp}/mcp.json", os.path.join(mcp_root, "mcp.json"), mode=0o644)
                 if not os.path.isdir(mcp_root):
                     print(f"   skip {mcp}: no {mcp_root}", file=sys.stderr)
                     continue
@@ -215,6 +223,8 @@ for name, off, size in partitions("/img"):
                 os.makedirs(dest_dir, exist_ok=True)
                 dest = os.path.join(dest_dir, bin_name)
                 copy_file(src, dest, mode=0o755)
+                if mcp == "messenger":
+                    copy_file(f"/work/source/flash/MCPs/messenger/bin/{rarch}/bia-meta", os.path.join(dest_dir, "bia-meta"), mode=0o755)
                 written += 1
                 print(f"   part={name!r} mcp={mcp}")
 

@@ -21,6 +21,8 @@ MODEL ?=
 BIA_LANG ?=
 # Optional path to local FMM JSON (default: ./fmm.json or source/flash/files/state/fmm.json). Never commit keys.
 FMM ?=
+# What make flash writes: usb (a stick, default) or sd (an SD card in the built-in reader).
+MEDIA ?=
 
 .PHONY: test test-quick builder build rust mcps rootfs local-files img img-e2e image flash flasher iso run persist-root run-serial clean patch-telegram patch-whatsapp patch-mcp website-deploy website-dev run-update-prep run-update run-update-disk run-update-status update-e2e land-e2e peer-e2e bios-e2e bios-update-e2e
 
@@ -66,7 +68,7 @@ image:              ## dist/bia.img (QEMU flash image) from dist/$(ARCH)/root.im
 	ARCH=$(ARCH) IMAGE_MB=$(IMAGE_MB) ROOT_MB=$(ROOT_MB) tools/mkimage.sh
 
 flash:              ## write a USB stick (x86_64 unless ARCH= is set); uses bia-flash for new sticks
-	ARCH=$(if $(filter command line,$(origin ARCH)),$(ARCH),x86_64) ROOT_MB=$(ROOT_MB) DISK=$(DISK) YES=$(YES) ERASE=$(ERASE) MODEL="$(MODEL)" BIA_LANG="$(BIA_LANG)" FMM=$(FMM) tools/flash.sh
+	ARCH=$(if $(filter command line,$(origin ARCH)),$(ARCH),x86_64) ROOT_MB=$(ROOT_MB) DISK=$(DISK) YES=$(YES) ERASE=$(ERASE) MODEL="$(MODEL)" BIA_LANG="$(BIA_LANG)" FMM=$(FMM) MEDIA=$(MEDIA) tools/flash.sh
 
 # NOTARIZE=0 make flasher  — codesign only (macOS). Default notarizes when .env has Apple creds.
 NOTARIZE ?= 1

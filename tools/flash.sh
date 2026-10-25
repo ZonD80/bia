@@ -10,6 +10,7 @@
 #   YES=1 DISK=disk10 tools/flash.sh
 #   SKIP_BUILD=1 tools/flash.sh     # just write, using flash/EFI already present
 #   ERASE=1 … tools/flash.sh        # wipe the stick even if it already runs bia
+#   MEDIA=sd tools/flash.sh         # an SD card (built-in SD reader, which macOS calls internal)
 #   MODEL=unsloth/Qwen3-4B-Instruct-2507-GGUF[:file.gguf] make flash
 #                                   # download a GGUF from Hugging Face onto the stick
 #                                   # (implies ERASE=1; HF_TOKEN for gated repos)
@@ -28,6 +29,13 @@ ROOTIMG=${ROOTIMG:-dist/$ARCH/root.img}
 MODEL=${MODEL:-}
 # The owner's language for bia-flash --lang (a code like ru, or a name; default: host locale).
 BIA_LANG=${BIA_LANG:-}
+# usb (a USB stick or card reader) or sd (an SD card in the Mac's built-in reader)
+MEDIA=${MEDIA:-usb}
+case $MEDIA in
+  usb) WANT_PROTO=USB; WHAT_DISK="USB stick" ;;
+  sd)  WANT_PROTO="Secure Digital"; WHAT_DISK="SD card" ;;
+  *) echo "unknown MEDIA=$MEDIA (want usb or sd)"; exit 1 ;;
+esac
 if [ "$(id -u)" -eq 0 ]; then
   echo "run as yourself; the script sudo's only for disk writes"
   exit 1
@@ -69,18 +77,32 @@ whole_id() {
   echo "$1" | sed -E 's|^/dev/||; s|^r||; s|^(disk[0-9]+).*|\1|'
 }
 
+disk_removable() {
+  diskutil info "$1" | awk -F': *' '/Removable Media:/ {print $2; exit}'
+}
+
+# The disk macOS runs from (never a target, whatever it reports).
+boot_disk() {
+  whole_id "$(diskutil info / | awk -F': *' '/Part of Whole:/ {print $2; exit}')"
+}
+
 detect_usb() {
   local ids=()
+  # the built-in SD reader is not "external": look at every physical disk for SD
+  local scope="external physical"
+  [ "$MEDIA" = sd ] && scope="physical"
   while read -r line; do
     case $line in
       /dev/disk*) ids+=("$(whole_id "$line")") ;;
     esac
-  done < <(diskutil list external physical 2>/dev/null | awk '/^\/dev\/disk/ {print $1}')
+  done < <(diskutil list $scope 2>/dev/null | awk '/^\/dev\/disk/ {print $1}')
   local usb=()
-  local d proto
+  local d proto boot
+  boot=$(boot_disk)
   for d in "${ids[@]+"${ids[@]}"}"; do
+    [ "$d" = "$boot" ] && continue
     proto=$(disk_proto "$d")
-    if [ "$proto" = USB ]; then
+    if [ "$proto" = "$WANT_PROTO" ]; then
       usb+=("$d")
     fi
   done
@@ -89,11 +111,11 @@ detect_usb() {
     return
   fi
   if [ ${#usb[@]} -eq 0 ]; then
-    echo "no external USB disk found. Plug in the stick and retry, or set DISK=diskN" >&2
-    diskutil list external physical >&2 || true
+    echo "no $WHAT_DISK found. Insert it and retry, or set DISK=diskN" >&2
+    diskutil list $scope >&2 || true
     exit 1
   fi
-  echo "several USB disks; set DISK=diskN:" >&2
+  echo "several ${WHAT_DISK}s; set DISK=diskN:" >&2
   for d in "${usb[@]}"; do
     echo "  $d  $(disk_name "$d")  $(diskutil info "$d" | awk -F': *' '/Disk Size:/ {print $2; exit}')" >&2
   done
@@ -108,10 +130,16 @@ fi
 
 proto=$(disk_proto "$DISK")
 internal=$(diskutil info "$DISK" | awk -F': *' '/Device Location:/ {print $2; exit}')
-[ "$internal" = Internal ] && { echo "refusing $DISK: it is an internal disk"; exit 1; }
-if [ "$proto" != USB ]; then
-  echo "refusing $DISK: protocol is '$proto' (want USB)"
+[ "$DISK" = "$(boot_disk)" ] && { echo "refusing $DISK: macOS runs from it"; exit 1; }
+if [ "$proto" != "$WANT_PROTO" ]; then
+  echo "refusing $DISK: protocol is '$proto' (want $WANT_PROTO for the $WHAT_DISK; MEDIA=usb or MEDIA=sd)"
   exit 1
+fi
+if [ "$MEDIA" = sd ]; then
+  # the built-in reader counts as internal; the card in it must be removable media
+  [ "$(disk_removable "$DISK")" = Removable ] || { echo "refusing $DISK: not removable media"; exit 1; }
+else
+  [ "$internal" = Internal ] && { echo "refusing $DISK: it is an internal disk"; exit 1; }
 fi
 
 BYTES=$(disk_bytes "$DISK")
@@ -149,7 +177,7 @@ if [ "$EXISTING" != 1 ] && [ "$stick_mib" -lt "$need_mib" ]; then
   exit 1
 fi
 
-echo "== target $DISK  $NAME  $HUMAN  USB"
+echo "== target $DISK  $NAME  $HUMAN  $WHAT_DISK"
 if [ -n "$MODEL" ]; then
   what="root, model $MODEL from Hugging Face"
 else
@@ -210,7 +238,7 @@ if [ "$EXISTING" != 1 ]; then
     --yes \
     "${fmm_args[@]+"${fmm_args[@]}"}" \
     "${model_args[@]+"${model_args[@]}"}"
-  echo "== done. eject and boot the stick (UEFI)."
+  echo "== done. eject and boot the $WHAT_DISK (UEFI)."
   exit 0
 fi
 

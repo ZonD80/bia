@@ -37,7 +37,7 @@ export const useCaseGroups: UseCaseGroup[] = [
       {
         title: 'One assistant, everyone their own chats',
         story:
-          'Each family member gets a personal key to bia’s private app. The teenager asks for homework help, the parents sort bills, and nobody sees anybody else’s chats.',
+          'Each family member gets a personal certificate for bia’s private app. The teenager asks for homework help, the parents sort bills, and nobody sees anybody else’s chats.',
         uses: ['web-console', 'privacy', 'people'],
       },
       {
@@ -159,7 +159,7 @@ export const useCaseGroups: UseCaseGroup[] = [
       {
         title: 'The boring forms, done',
         story:
-          'Tax portals, client registrations, the same supplier form for the tenth time: bia fills them in, signs in with your saved keys, and asks you only for the captcha.',
+          'Tax portals, client registrations, the same supplier form for the tenth time: bia fills them in, signs in with the keys from its vault, and asks you only for the captcha.',
         uses: ['browser', 'vault', 'ask-human'],
       },
     ],

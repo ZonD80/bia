@@ -1,6 +1,7 @@
 mod audio_out;
 mod calls;
 mod client;
+mod group_admin;
 mod groups;
 mod speech;
 mod tts;
@@ -544,6 +545,129 @@ fn main() {
             |ctx, a| {
                 require_login(ctx)?;
                 Tg::global().group_invite_link(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "group_info",
+            "A Telegram group's settings: title, description, member count, what members may do, slow mode, join approval, whether new members see earlier messages, protected content, disappearing messages, pending join requests, the admins with their rights and titles, and your own rights.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().group_info(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "set_admin",
+            "Make a member an admin of a Telegram group (admin=true, default) or take it back (admin=false). rights are what the admin may do: change_info, delete_messages, ban_users, invite_users, pin_messages, manage_call, manage_topics, post_stories, edit_stories, delete_stories, add_admins, anonymous, or all; default: everything except add_admins and anonymous. title is the admin's custom title shown in the group. Needs the add_admins right (owners have it). Basic groups only know admin yes/no.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "member": {"type": "string", "description": "@username, user id or name of a member"},
+                "admin": {"type": "boolean", "description": "true makes them admin (default), false takes it away"},
+                "rights": {"type": "array", "items": {"type": "string"}, "description": "admin rights by name; default the usual set"},
+                "title": {"type": "string", "description": "optional custom admin title (up to 16 characters)"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().set_admin(
+                    arg_str(&a, "chat_id")?,
+                    arg_str(&a, "member")?,
+                    arg_bool(&a, "admin", true),
+                    &arg_str_list(&a, "rights"),
+                    arg_str_opt(&a, "title").unwrap_or(""),
+                )
+            },
+        )
+        .tool(
+            "group_permissions",
+            "Change what every member of a Telegram group may do, and the group's switches. allow / deny take member actions: send_text, send_photos, send_videos, send_video_notes, send_voices, send_audios, send_files, send_stickers, send_gifs, send_games, send_inline, add_links, send_polls, send_reactions, invite_users, pin_messages, change_info, manage_topics, or the groups send_media, send_messages, all; the rest stays as it is (telegram_group_info shows it). slow_mode_seconds is 0, 10, 30, 60, 300, 900 or 3600; join_approval makes admins approve who joins; new_members_see_history; protect_content stops forwarding and saving; disappearing_seconds deletes messages after that time (0 off, e.g. 86400 a day). Slow mode, join approval and history work in supergroups. Needs admin rights.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "allow": {"type": "array", "items": {"type": "string"}, "description": "member actions to allow"},
+                "deny": {"type": "array", "items": {"type": "string"}, "description": "member actions to forbid"},
+                "slow_mode_seconds": {"type": "integer", "description": "0 off, 10, 30, 60, 300, 900, 3600"},
+                "join_approval": {"type": "boolean", "description": "true: admins approve join requests"},
+                "new_members_see_history": {"type": "boolean", "description": "true: new members see earlier messages"},
+                "protect_content": {"type": "boolean", "description": "true: no forwarding, copying or saving"},
+                "disappearing_seconds": {"type": "integer", "description": "auto-delete messages after this many seconds; 0 off"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                let int = |k: &str| a.get(k).and_then(|v| v.as_i64()).map(|n| n as i32);
+                let flag = |k: &str| a.get(k).and_then(|v| v.as_bool());
+                Tg::global().group_permissions(
+                    arg_str(&a, "chat_id")?,
+                    &arg_str_list(&a, "allow"),
+                    &arg_str_list(&a, "deny"),
+                    int("slow_mode_seconds"),
+                    flag("join_approval"),
+                    flag("new_members_see_history"),
+                    flag("protect_content"),
+                    int("disappearing_seconds"),
+                )
+            },
+        )
+        .tool(
+            "restrict_member",
+            "Restrict one member of a Telegram supergroup: deny lists what they may no longer do (the member actions of telegram_group_permissions), deny=[\"all\"] bans them from the group, deny=[] lifts every restriction and ban. seconds limits it in time (0 = until lifted). Needs the ban_users right. (telegram_ban is different: it only stops their messages reaching you.)",
+            json!({"type": "object", "required": ["chat_id", "member", "deny"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "member": {"type": "string", "description": "@username, user id or name"},
+                "deny": {"type": "array", "items": {"type": "string"}, "description": "actions to forbid; [\"all\"] bans; [] lifts"},
+                "seconds": {"type": "integer", "description": "how long; 0 or omitted = until lifted"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().restrict_member(
+                    arg_str(&a, "chat_id")?,
+                    arg_str(&a, "member")?,
+                    &arg_str_list(&a, "deny"),
+                    a.get("seconds").and_then(|v| v.as_i64()).unwrap_or(0),
+                )
+            },
+        )
+        .tool(
+            "set_group_info",
+            "Change a Telegram group's title, description (empty clears it) and/or photo (an image under /home/bia/files). Only what you pass changes. Needs the change_info right.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "title": {"type": "string", "description": "new title"},
+                "description": {"type": "string", "description": "new description; empty clears it"},
+                "photo": {"type": "string", "description": "image path under /home/bia/files"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().set_group_info(
+                    arg_str(&a, "chat_id")?,
+                    arg_str_opt(&a, "title"),
+                    arg_str_opt(&a, "description"),
+                    arg_str_opt(&a, "photo"),
+                )
+            },
+        )
+        .tool(
+            "join_requests",
+            "Pending requests to join a Telegram group (when join approval is on): who asked and when. Answer each with telegram_answer_join_request.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().join_requests(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "answer_join_request",
+            "Approve (approve=true, default) or decline a request to join a Telegram group.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group's chat_id"},
+                "member": {"type": "string", "description": "the person who asked (@username or user id from telegram_join_requests)"},
+                "approve": {"type": "boolean", "description": "true approves (default), false declines"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().answer_join_request(arg_str(&a, "chat_id")?, arg_str(&a, "member")?, arg_bool(&a, "approve", true))
             },
         )
         .tool(

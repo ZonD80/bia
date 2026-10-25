@@ -1,0 +1,19 @@
+[Unit]
+Description=Give this system's ESP a FAT serial of its own and mount /boot from it
+# Every bia ESP starts as BIABOOT/1234-5678: with an update stick attached, GRUB
+# and LABEL=BIABOOT may pick the stick. Runs before anything reads /boot.
+Wants=boot.mount
+After=local-fs.target boot.mount
+Before=bia-grow.service bia-seed.service bia-update.service bia.service
+Conflicts=shutdown.target
+ConditionPathExists=/usr/local/sbin/bia-esp-id
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-esp-id
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

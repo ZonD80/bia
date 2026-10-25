@@ -95,7 +95,7 @@ const compare = [
   { topic: 'Long tasks', them: 'Usually locked until the task is finished', bia: 'Works in the background and keeps talking' },
   { topic: 'Being away', them: 'Messages are simply missed', bia: 'Catches up on everything that arrived while it was off' },
   { topic: 'Languages', them: 'Text in many languages', bia: 'Hears and speaks them on calls, and learns new ones itself' },
-  { topic: 'Your data', them: 'Whatever it reads can end up on their servers', bia: 'On bia’s own disk; only the thinking goes to the cloud brain you pick' },
+  { topic: 'Your agent’s data', them: 'Whatever it reads can end up on their servers', bia: 'On bia’s own disk; only the thinking goes to the cloud brain you pick' },
   { topic: 'Hardware changes', them: 'Dies with your computer', bia: 'Moves to new hardware and repairs itself' },
 ]
 
@@ -110,7 +110,7 @@ const week = [
 
 const character = [
   { icon: 'hand', title: 'Knows its limits', text: 'Captchas and decisions that are yours go to you. Risky steps wait for your yes. Things it cannot do, it says it cannot do.' },
-  { icon: 'shield', title: 'Holds boundaries', text: 'Strangers cannot talk it into giving away your computer or your secrets. Pressure is reported, not obeyed.' },
+  { icon: 'shield', title: 'Holds boundaries', text: 'Strangers cannot talk it into giving away its computer or its secrets. Pressure is reported, not obeyed.' },
   { icon: 'people', title: 'Treats people as people', text: 'It remembers corrections, introductions and preferences — and stays the same character with everyone.' },
 ]
 </script>

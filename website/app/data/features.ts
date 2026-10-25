@@ -26,7 +26,7 @@ export type Feature = {
 export const groups: Record<Feature['group'], { title: string; blurb: string }> = {
   talk: { title: 'Talks with people', blurb: 'Where bia meets the world: messengers, voice, languages, its own chat app — and the people it knows.' },
   mind: { title: 'Thinks and remembers', blurb: 'A memory that lasts, a sense of time, and a brain you choose.' },
-  hands: { title: 'Gets things done', blurb: 'It uses a real computer: programs, the web, the screen, your passwords — and learns new skills.' },
+  hands: { title: 'Gets things done', blurb: 'It uses a real computer: programs, the web, the screen, its own passwords — and learns new skills.' },
   life: { title: 'Lives, moves and grows', blurb: 'It wakes up anywhere, moves between machines, updates itself, and stays yours.' },
 }
 
@@ -137,8 +137,8 @@ export const features: Feature[] = [
       { title: 'Feels like a messenger', text: 'Several chats, replies, reactions, edits, pinned messages, photos, files, voice notes, polls and buttons. Start a new chat for each project, and bia keeps them apart.' },
       { title: 'Calls and voice notes', text: 'Talk to bia live from the browser, or record a voice note. It writes down what you said under the bubble.' },
       { title: 'For the owner: the whole machine', text: 'The owner also sees bia’s live thoughts, a file manager, a task list, a terminal, and even the computer’s screen — all from a browser, from anywhere you can reach it.' },
-      { title: 'Locked with personal keys', text: 'Nobody gets in without a personal key that bia itself issues. You can give a key to a family member or a colleague, each with their own chats, and take it back any time.' },
-      { title: 'Open to other programs', text: 'Other apps and AI agents can use the same app through a documented doorway — with their own key, like any other guest.' },
+      { title: 'Locked with personal certificates', text: 'Nobody gets in without a personal certificate that bia itself issues — bank- and government-grade security, with no password to guess or steal. You can give a certificate to a family member or a colleague, each with their own chats, and take it back any time.' },
+      { title: 'Open to other programs', text: 'Other apps and AI agents can use the same app through a documented doorway — with their own certificate, like any other guest.' },
     ],
     chat: [
       { from: 'you', where: 'web app', text: 'Here are the receipts from this month 📎 (12 photos)' },
@@ -147,7 +147,7 @@ export const features: Feature[] = [
       { from: 'bia', where: 'web app', text: 'Spreadsheet attached. Poll sent to the family chat: “Eat out less / Cheaper brands / Fewer snacks”.' },
     ],
     examples: [
-      'Your household’s private assistant — every family member with their own chats and key.',
+      'Your household’s private assistant — every family member with their own chats and certificate.',
       'A shared office helper where each colleague has their own conversations.',
       'Manage a computer in the cupboard from your phone, without ever plugging in a screen.',
       'Send bia documents to sort, summarise or file, straight from your phone’s browser.',
@@ -387,7 +387,7 @@ export const features: Feature[] = [
   },
   {
     slug: 'vault',
-    name: 'Keeps your keys safe',
+    name: 'Keeps its keys safe',
     group: 'hands',
     icon: 'key',
     tagline: 'Passwords, two-factor codes and passkeys — in a vault on its own disk.',
@@ -409,7 +409,7 @@ export const features: Feature[] = [
       'Find weak or reused passwords and help you replace them.',
     ],
     good_to_know:
-      'The vault is as safe as the computer it lives on. Keep bia’s machine physically safe and give web keys only to people you trust.',
+      'The vault is as safe as the computer it lives on. Keep bia’s machine physically safe and give web app certificates only to people you trust.',
     related: ['browser', 'privacy', 'people'],
   },
   {
@@ -541,9 +541,9 @@ export const features: Feature[] = [
     icon: 'link',
     tagline: 'Other AI agents can call on bia — and bias can work together.',
     lead:
-      'bia is not alone in the world. Other programs and AI agents can talk to it through its own chat app, with their own key, exactly like a human guest. bias can talk to each other through messengers or the web, and one bia can even build and run another computer inside itself.',
+      'bia is not alone in the world. Other programs and AI agents can talk to it through its own chat app, with their own certificate, exactly like a human guest. bias can talk to each other through messengers or the web, and one bia can even build and run another computer inside itself.',
     points: [
-      { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own key from you, and then chat with bia like any member of the household — with their own chats and history.' },
+      { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own certificate from you, and then chat with bia like any member of the household — with their own chats and history.' },
       { title: 'bia to bia', text: 'Two bias can be contacts of each other on Telegram, WhatsApp or the web app: one at home, one at the shop, sharing work and passing messages.' },
       { title: 'Trust in one handshake', text: 'Ask bia to connect to another bia: it hands the other one a certificate and asks for one back. When the other owner approves, both can call each other’s web app. Every request shows the address it came from, and a certificate can be limited to the addresses it may be used from.' },
       { title: 'A computer inside a computer', text: 'bia can set up a virtual computer, boot a second bia in it and drive it — handy for testing, teaching or giving a helper its own room.' },
@@ -561,7 +561,7 @@ export const features: Feature[] = [
       'Run a test bia inside your bia before trying something risky.',
     ],
     good_to_know:
-      'Each agent gets a key you issue and can revoke. Connect agents you trust, and give them only the trust they need.',
+      'Each agent gets a certificate you issue and can revoke. Connect agents you trust, and give them only the trust they need.',
     related: ['web-console', 'people', 'skills'],
   },
   {
@@ -592,20 +592,20 @@ export const features: Feature[] = [
   },
   {
     slug: 'privacy',
-    name: 'Yours, not a cloud’s',
+    name: 'Your agent’s, not a cloud’s',
     group: 'life',
     icon: 'shield',
-    tagline: 'Your chats, keys and memories live on bia’s own computer — locked, signed and yours.',
+    tagline: 'Your agent’s chats, keys and memories live on its own computer — locked, signed and nobody else’s.',
     lead:
-      'Most assistants live inside your own computer, or keep your life on someone else’s servers. bia lives on a separate computer of its own: in your home, your shop, your bag. Its private app is locked with keys only you hand out, and the system it runs on is verified from the very first moment it starts.',
+      'Most assistants live inside your own computer, or keep your life on someone else’s servers. bia lives on a separate computer of its own: in your home, your shop, your bag. Its private app is locked with certificates only you hand out, and the system it runs on is verified from the very first moment it starts.',
     points: [
-      { title: 'Your data at home', text: 'Conversations, memories, passwords, messenger accounts and the browser profile all live on bia’s own disk.' },
-      { title: 'Locked doors', text: 'The private web app only opens for people and agents holding a key that bia itself issued — and you can withdraw a key at any time.' },
+      { title: 'Your agent’s data at home', text: 'Conversations, memories, passwords, messenger accounts and the browser profile all live on bia’s own disk.' },
+      { title: 'Locked doors', text: 'The private web app only opens for people and agents holding a certificate that bia itself issued — the same kind of protection banks and governments rely on. You can withdraw a certificate at any time.' },
       { title: 'Verified start', text: 'On ordinary PCs, bia starts with the same signed components as mainstream Linux, so it works with Secure Boot switched on.' },
       { title: 'Offline, if you need it', text: 'As an option, on a powerful computer (at least 64 GB of video memory), the brain on the stick lets bia think without any connection to the outside world at all.' },
     ],
     chat: [
-      { from: 'you', where: 'web app', text: 'Who has a key to you right now?' },
+      { from: 'you', where: 'web app', text: 'Who has a certificate for you right now?' },
       { from: 'bia', where: 'web app', text: 'Three: you, Anna (her own chats only), and “shop-bia”. Want me to withdraw any?' },
     ],
     examples: [

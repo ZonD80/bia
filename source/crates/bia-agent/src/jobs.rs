@@ -5,11 +5,13 @@ use crate::tools::ID_SYSTEM;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PREFIX: &str = "job:";
 pub const MAX_RUNNING: usize = 8;
 const KEEP_DONE: usize = 40;
+/// Job logs older than this are deleted at boot and then once a day (each job writes one).
+const LOG_KEEP: Duration = Duration::from_secs(30 * 86400);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -42,6 +44,7 @@ pub struct Store {
     log_dir: PathBuf,
     jobs: Vec<Job>,
     next: u32,
+    pruned: u64,
 }
 
 impl Store {
@@ -63,11 +66,36 @@ impl Store {
         for j in jobs.iter_mut().filter(|j| j.state == "cancelling") {
             j.state = "killing".into();
         }
-        Store {
+        let mut store = Store {
             path,
             log_dir,
             jobs,
             next,
+            pruned: 0,
+        };
+        store.prune_logs();
+        store
+    }
+
+    /// Delete job logs older than LOG_KEEP, except those of jobs still running.
+    fn prune_logs(&mut self) {
+        self.pruned = now();
+        let Ok(rd) = std::fs::read_dir(&self.log_dir) else { return };
+        let live = SystemTime::now();
+        for e in rd.flatten() {
+            let path = e.path();
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| live.duration_since(t).ok())
+                .is_some_and(|age| age > LOG_KEEP);
+            let running = self.jobs.iter().any(|j| {
+                (j.state == "running" || j.state == "killing") && Path::new(&j.log_path) == path
+            });
+            if old && !running && e.file_name().to_string_lossy().ends_with(".log") {
+                let _ = std::fs::remove_file(&path);
+            }
         }
     }
 
@@ -151,8 +179,15 @@ impl Store {
         if id.is_empty() {
             return Err("could not allocate a job id".into());
         }
+        if now().saturating_sub(self.pruned) >= 86400 {
+            self.prune_logs();
+        }
         let log_path = self.log_dir.join(format!("{id}.log"));
         let _ = std::fs::File::create(&log_path);
+        // the agent is root; the log sits in bia's files like everything else there
+        if let Some(files) = self.log_dir.parent().and_then(Path::parent) {
+            crate::repl::own_like_files(&log_path, files);
+        }
         let job = Job {
             id: id.clone(),
             tool: tool.into(),
@@ -375,5 +410,48 @@ fn ago(unix: u64) -> String {
         format!("{}m ago", n / 60)
     } else {
         format!("{}h ago", n / 3600)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_job_logs_are_pruned() {
+        let dir = std::env::temp_dir().join(format!("bia-jobs-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let logs = dir.join("logs/jobs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let month_ago = SystemTime::now() - Duration::from_secs(31 * 86400);
+        for name in ["old.log", "busy.log", "old.txt", "new.log"] {
+            let f = std::fs::File::create(logs.join(name)).unwrap();
+            if name != "new.log" {
+                f.set_modified(month_ago).unwrap();
+            }
+        }
+        let busy = Job {
+            id: "busy".into(),
+            tool: "t".into(),
+            mcp: "m".into(),
+            jsonrpc_id: 0,
+            call_id: String::new(),
+            state: "running".into(),
+            issued: 0,
+            ended: 0,
+            log_path: logs.join("busy.log").to_string_lossy().into(),
+            pid: 0,
+        };
+        let file = File { next: 0, jobs: vec![busy] };
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        std::fs::write(dir.join("state/jobs.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+        let mut st = Store::load(&dir.join("state"));
+        assert!(!logs.join("old.log").exists(), "a log older than 30 days goes");
+        assert!(logs.join("busy.log").exists(), "a running job keeps its log");
+        assert!(logs.join("old.txt").exists(), "only .log files");
+        assert!(logs.join("new.log").exists());
+        let job = st.alloc("t", "m", "").unwrap();
+        assert!(Path::new(&job.log_path).exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

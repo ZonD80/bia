@@ -1,4 +1,4 @@
-//! Outgoing telegram/whatsapp messages. `say` must not hold the agent while a big upload
+//! Outgoing telegram/whatsapp/messenger/instagram messages. `say` must not hold the agent while a big upload
 //! runs, so every send gets a local id (`o17`) and goes through a per-chat FIFO run by a
 //! worker thread. The caller waits a few seconds: a quick send returns its platform
 //! message ids as before; a slow one returns the local id and the outcome arrives later

@@ -30,6 +30,18 @@ fn agent_only(server: &str, tool: &str) -> bool {
 
 /// A web chat channel (`web` = the person's main chat, `web:<chat>` = another one). Web is a
 /// bus served by the web MCP, like telegram or whatsapp; the person is the envelope identity.
+/// Chat-app buses served by an MCP: their channels are `<bus>:<chat>`, and sends, edits,
+/// reactions and deletes there go through the outbox to the MCP's tools.
+pub const CHAT_BUSES: &[&str] = &["telegram", "whatsapp", "messenger", "instagram"];
+
+/// Chat buses whose MCP can speak into a voice call (call_say).
+const CALL_BUSES: &[&str] = &["telegram", "whatsapp"];
+
+/// (bus, chat) of a chat-app channel like `messenger:100012345678`.
+pub fn chat_bus(channel: &str) -> Option<(&str, &str)> {
+    channel.split_once(':').filter(|(b, _)| CHAT_BUSES.contains(b))
+}
+
 pub fn is_web(channel: &str) -> bool {
     channel == CH_WEB || channel.starts_with("web:")
 }
@@ -939,7 +951,7 @@ pub struct Tools {
     pub buses: crate::buses::Buses,
     pub schedules: Arc<Mutex<crate::schedules::Store>>,
     pub jobs: Arc<Mutex<crate::jobs::Store>>,
-    /// telegram/whatsapp sends, edits, reactions and deletes (per-chat queues, local o<n> ids)
+    /// telegram/whatsapp/messenger/instagram sends, edits, reactions and deletes (per-chat queues, local o<n> ids)
     pub outbox: crate::outbox::Outbox,
     /// sends cut short by the last shutdown; main delivers them as notices
     pub outbox_lost: Vec<crate::console::Inbound>,
@@ -968,12 +980,12 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "shell",
         blurb: "Run commands on this Debian machine.",
-        guide: "bash(command, user, cwd, timeout_secs) is a PTY job: a stub returns now, the finished output arrives later as system|job:<id>|…. After 30s with no output you may get a stale? notice (not the result); answer prompts with job_input. Default user is root; user=bia is the unprivileged account. cwd defaults to /home/bia. Always work in /home/bia. Do not invent the output. User files are /home/bia/files. The model is /home/bia/model. MCPs are /home/bia/MCPs. Telegram is /home/bia/files/telegram. WhatsApp is /home/bia/files/whatsapp. telegram_ban / whatsapp_ban ban a chat: its messages are not delivered and it is answered with I've banned you. telegram_unban / whatsapp_unban let them through again. There is no /mnt/internal and boot does not switch disks. Open mcp/carry for moving this computer. carry_fold saves all of /home/bia as a gzip backup named name.unfold-<bytes>.tar.gz. It refuses when free space is below the size of /home/bia; ask the user, then pass force=true only after they confirm. carry_unfold restores it and reboots. An older backup whose name has no unfolded size still restores after the user confirms; ask the user, then pass force=true only after they confirm. Do the same when free space is below that size. If packages did not install or MCP binaries were not copied, repair them yourself; ask the user first only before a destructive step. carry_land waits for another computer. carry_fly sends the backup there. carry_confirm is the 6-digit code after the user says both screens match. carry_morph is only on a flash boot: it takes the agent from the internal disk. carry_update (or console /update) updates this OS from the other attached bia system (flash when on the disk, disk when on the flash) through the offline rescue image, then unfolds the agent; only when the user asks. carry_rescue from flash repairs BIADISK. carry_to_disk copies onto a disk you pass then reboots into it (on legacy BIOS it powers off: say to remove the stick and power on first); carry_to_flash copies onto a stick then shut down; use bash lsblk to choose. Pass disk=/dev/… (lsblk). On Windows also pass partition or shrink_from+size_mib or size_mib; wipe=true erases Windows. carry_morph requires disk=. Wired DHCP is already up on eth0. Wi-Fi, apt-get, lsblk/fdisk/mkfs, lscpu/free and /sys are bash (apt-get install pciutils usbutils for lspci and lsusb). Clock, timezone and NTP are bash too: date and timedatectl. Envelope timestamps stay UTC. Web chat is / on the HTTP port; /gui forwards VNC :5900. Apps belong on that display.",
+        guide: "bash(command, user, cwd, timeout_secs) is a PTY job: a stub returns now, the finished output arrives later as system|job:<id>|…. After 30s with no output you may get a stale? notice (not the result); answer prompts with job_input. Default user is root; user=bia is the everyday account; it can sudo without a password. cwd defaults to /home/bia. Always work in /home/bia. Do not invent the output. User files are /home/bia/files. The model is /home/bia/model. MCPs are /home/bia/MCPs. Telegram is /home/bia/files/telegram. WhatsApp is /home/bia/files/whatsapp. telegram_ban / whatsapp_ban ban a chat: its messages are not delivered and it is answered with I've banned you. telegram_unban / whatsapp_unban let them through again. There is no /mnt/internal and boot does not switch disks. Open mcp/carry for moving this computer. carry_fold saves all of /home/bia as a gzip backup named name.unfold-<bytes>.tar.gz. It refuses when free space is below the size of /home/bia; ask the user, then pass force=true only after they confirm. carry_unfold restores it and reboots. An older backup whose name has no unfolded size still restores after the user confirms; ask the user, then pass force=true only after they confirm. Do the same when free space is below that size. If packages did not install or MCP binaries were not copied, repair them yourself; ask the user first only before a destructive step. carry_land waits for another computer. carry_fly sends the backup there. carry_confirm is the 6-digit code after the user says both screens match. carry_morph is only on a flash boot: it takes the agent from the internal disk. carry_update (or console /update) updates this OS from the other attached bia system (flash when on the disk, disk when on the flash) through the offline rescue image, then unfolds the agent; only when the user asks. carry_rescue from flash repairs BIADISK. carry_to_disk copies onto a disk you pass then reboots into it (on legacy BIOS it powers off: say to remove the stick and power on first); carry_to_flash copies onto a stick then shut down; use bash lsblk to choose. Pass disk=/dev/… (lsblk). On Windows also pass partition or shrink_from+size_mib or size_mib; wipe=true erases Windows. carry_morph requires disk=. Wired DHCP is already up on eth0. Wi-Fi, apt-get, lsblk/fdisk/mkfs, lscpu/free and /sys are bash (apt-get install pciutils usbutils for lspci and lsusb). Clock, timezone and NTP are bash too: date and timedatectl. Envelope timestamps stay UTC. Web chat is / on the HTTP port; /gui forwards VNC :5900. Apps belong on that display.",
     },
     Branch {
         id: "talk",
         blurb: "Speak to people and keep contacts.",
-        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web → web for the person's main chat, web:<chat> for every other chat (never shorten web:<chat> to web), with identity = that person; telegram:<chat_id>; whatsapp:<phone>. On web, telegram and whatsapp a message that answers another starts with [reply to <id> from <who>: \"…\"] (from you = one of your own messages; , quoting: \"…\" = the part they picked): that is what they mean, read it before answering. Web chats work like Telegram: inbound text may also start with [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp. On telegram/whatsapp an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). The console is the physical screen; web, telegram and whatsapp are buses of their MCPs (web calls: web_call_start / web_call_hangup in mcp/web) and reconnect when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. telegram_unban / whatsapp_unban let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. addressbook_* is your contacts (trust normal or root). channels lists buses.",
+        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp, messenger, instagram; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web → web for the person's main chat, web:<chat> for every other chat (never shorten web:<chat> to web), with identity = that person; telegram:<chat_id>; whatsapp:<phone>; messenger:<chat_id>; instagram:<chat_id>. On web, telegram, whatsapp, messenger and instagram a message that answers another starts with [reply to <id> from <who>: \"…\"] (from you = one of your own messages; , quoting: \"…\" = the part they picked): that is what they mean, read it before answering. Web chats work like Telegram: inbound text may also start with [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp/messenger/instagram. On telegram/whatsapp/messenger/instagram an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). The console is the physical screen; web, telegram, whatsapp, messenger and instagram are buses of their MCPs (web calls: web_call_start / web_call_hangup in mcp/web) and reconnect when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban / messenger_ban / instagram_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. The *_unban tools let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. Messenger and Instagram take the login from the session in bia's Chrome (messenger_login / instagram_login; sign in there first); they have no calls. addressbook_* is your contacts (trust normal or root). channels lists buses.",
     },
     Branch {
         id: "calendar",
@@ -1106,19 +1118,19 @@ impl Tools {
                 "cwd": {"type": "string", "description": "working directory (default /home/bia)"},
                 "timeout_secs": {"type": "integer", "description": "kill after this many seconds (default 600, 0 = no limit)"}
             }), &["command"]));
-        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (web:<chat> is not web; physical screen → console, telegram:<id>, whatsapp:<phone>). Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
+        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp/messenger/instagram every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (web:<chat> is not web; physical screen → console, telegram:<id>, whatsapp:<phone>). Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
             obj(json!({
                 "identity": {"type": "string", "description": "recipient identity, e.g. root; defaults to last human inbound"},
                 "channel": {"type": "string", "description": "channel, e.g. web, web:<chat> or console; defaults to last human inbound"},
                 "message": {"type": "string", "description": "markdown text; optional when files or poll are given"},
                 "lang": {"type": "string", "description": "language of message (en, ru, es-MX…) for voice=true and for speaking it in an active call; defaults to the person's preferred language (addressbook)"},
-                "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram or whatsapp; only when the user asks for a voice reply"},
+                "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram, whatsapp, messenger or instagram; only when the user asks for a voice reply"},
                 "reply_to": {"type": "string", "description": "web: id of the message to quote"},
                 "new_chat": {"type": "boolean", "description": "web: true opens a new chat named by channel web:<chat>; a chat that does not exist is refused otherwise"},
-                "edit": {"type": "string", "description": "id of a message you sent (from its say result): replace its text with message instead of sending a new one (web, telegram, whatsapp)"},
-                "cancel": {"type": "string", "description": "telegram/whatsapp: local id o<n> of a send that is still queued or uploading; stops it and sends nothing else"},
+                "edit": {"type": "string", "description": "id of a message you sent (from its say result): replace its text with message instead of sending a new one (web, telegram, whatsapp, messenger, instagram)"},
+                "cancel": {"type": "string", "description": "telegram/whatsapp/messenger/instagram: local id o<n> of a send that is still queued or uploading; stops it and sends nothing else"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"},
-                "files": {"type": "array", "items": {"type": "string"}, "description": "attachments: paths under /home/bia/files (web, telegram, whatsapp)"},
+                "files": {"type": "array", "items": {"type": "string"}, "description": "attachments: paths under /home/bia/files (web, telegram, whatsapp, messenger, instagram)"},
                 "buttons": {"type": "array", "description": "web: inline keyboard, rows of buttons; a button is a string or {text, data, url}", "items": {"type": "array", "items": {}}},
                 "poll": {"type": "object", "description": "web: {question, options: [strings], multi: bool}", "properties": {
                     "question": {"type": "string"},
@@ -1126,20 +1138,20 @@ impl Tools {
                     "multi": {"type": "boolean"}
                 }}
             }), &[]));
-        t.add_grouped("talk", "react", "React to a message with an emoji on web, telegram or whatsapp channels (message_id is the envelope id). Empty emoji removes your reaction. answered lists inbound envelope ids whose task is done (a reaction can be the whole answer).",
+        t.add_grouped("talk", "react", "React to a message with an emoji on web, telegram, whatsapp, messenger or instagram channels (message_id is the envelope id). Empty emoji removes your reaction. answered lists inbound envelope ids whose task is done (a reaction can be the whole answer).",
             obj(json!({
-                "channel": {"type": "string", "description": "e.g. web, web:<chat>, telegram:<id>, whatsapp:<phone>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "e.g. web, web:<chat>, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "web only: chat owner identity; defaults to last human inbound"},
                 "message_id": {"type": "string"},
                 "emoji": {"type": "string", "description": "e.g. 👍; empty removes"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"}
             }), &["message_id"]));
-        t.add_grouped("talk", "delete_messages", "Delete messages on a web, telegram or whatsapp chat. They are deleted for everyone (revoke=true, the default); revoke=false deletes them only on bia's side (telegram/whatsapp).",
+        t.add_grouped("talk", "delete_messages", "Delete messages on a web, telegram, whatsapp, messenger or instagram chat. They are deleted for everyone (revoke=true, the default); revoke=false deletes them only on bia's side (telegram/whatsapp/messenger/instagram).",
             obj(json!({
-                "channel": {"type": "string", "description": "web, web:<chat>, telegram:<id>, whatsapp:<phone>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "web, web:<chat>, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "web only: chat owner identity; defaults to last human inbound"},
                 "message_ids": {"type": "array", "items": {"type": "string"}},
-                "revoke": {"type": "boolean", "description": "telegram/whatsapp: true (default) deletes for the other person too; false only on this account"}
+                "revoke": {"type": "boolean", "description": "telegram/whatsapp/messenger/instagram: true (default) deletes for the other person too; false only on this account"}
             }), &["message_ids"]));
         t.add_grouped("talk", "pin_message", "Pin (or unpin with on=false) a message at the top of a web chat.",
             obj(json!({
@@ -3509,10 +3521,7 @@ impl Tools {
                 r.rsplit_once(" (")
                     .map(|(_, d)| d.trim_end_matches(')').to_string())
                     .unwrap_or(r)
-            } else if let Some((mcp, chat)) = channel
-                .split_once(':')
-                .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
-            {
+            } else if let Some((mcp, chat)) = chat_bus(&channel) {
                 let what = format!("voice message, {} chars", message.chars().count());
                 let out = self.outbox_submit(
                     mcp,
@@ -3532,7 +3541,7 @@ impl Tools {
                     crate::outbox::Outcome::Held(job) => held_note(mcp, &job),
                 }
             } else {
-                bail!("voice messages go to web, telegram or whatsapp chats, not {channel}");
+                bail!("voice messages go to web, telegram, whatsapp, messenger or instagram chats, not {channel}");
             };
             let tag = if self.con.color {
                 format!("{GRAY}[{identity}@{channel}]{RESET}")
@@ -3574,7 +3583,7 @@ impl Tools {
         Ok(format!("sent to {identity}@{channel} ({detail})"))
     }
 
-    /// say with edit=<id>: replace the text of a message bia sent, on web, telegram or whatsapp.
+    /// say with edit=<id>: replace the text of a message bia sent, on web, telegram, whatsapp, messenger or instagram.
     fn edit_sent(
         &mut self,
         identity: &str,
@@ -3601,10 +3610,7 @@ impl Tools {
                 "edit",
                 json!({"identity": identity, "channel": channel, "message_id": id, "text": message}),
             )?;
-        } else if let Some((mcp, chat)) = channel
-            .split_once(':')
-            .filter(|(b, _)| *b == "telegram" || *b == "whatsapp")
-        {
+        } else if let Some((mcp, chat)) = chat_bus(channel) {
             let r = self.outbox_action(
                 mcp,
                 chat,
@@ -3619,7 +3625,7 @@ impl Tools {
             ));
             return Ok(format!("edit of {id} on {identity}@{channel}: {r}"));
         } else {
-            bail!("messages can be edited on web, telegram or whatsapp chats, not {channel}");
+            bail!("messages can be edited on web, telegram, whatsapp, messenger or instagram chats, not {channel}");
         }
         self.con.write(&format!(
             "\n{} {tag} ✎ {id}: {message}\n",
@@ -3635,11 +3641,8 @@ impl Tools {
         files: &[String],
         lang: &str,
     ) -> Result<String> {
-        if let Some(chat) = channel.strip_prefix("telegram:") {
-            return self.send_on_mcp_bus("telegram", chat, message, files, lang);
-        }
-        if let Some(chat) = channel.strip_prefix("whatsapp:") {
-            return self.send_on_mcp_bus("whatsapp", chat, message, files, lang);
+        if let Some((mcp, chat)) = chat_bus(channel) {
+            return self.send_on_mcp_bus(mcp, chat, message, files, lang);
         }
         bail!(
             "unknown channel {channel}; available: {}",
@@ -3647,7 +3650,7 @@ impl Tools {
         );
     }
 
-    /// Queue an outgoing op on a telegram/whatsapp chat and wait up to `wait` (see outbox.rs).
+    /// Queue an outgoing op on a telegram/whatsapp/messenger/instagram chat and wait up to `wait` (see outbox.rs).
     fn outbox_submit(
         &mut self,
         mcp: &str,
@@ -3675,7 +3678,7 @@ impl Tools {
             .submit(&format!("{mcp}:{chat}"), chat, op, link, bytes, what, wait))
     }
 
-    /// Edit/react/delete on a telegram/whatsapp chat, in order after earlier sends there.
+    /// Edit/react/delete on a telegram/whatsapp/messenger/instagram chat, in order after earlier sends there.
     fn outbox_action(&mut self, mcp: &str, chat: &str, op: crate::outbox::Op) -> Result<String> {
         match self.outbox_submit(mcp, chat, op, 0, "", crate::outbox::WAIT)? {
             crate::outbox::Outcome::Done(_, Ok(t)) => Ok(t),
@@ -3727,7 +3730,7 @@ impl Tools {
             .ok_or_else(|| anyhow::anyhow!("{mcp} MCP is not running"))?;
         self.loaded.insert(idx);
         // Speak it too when a call is active; "no active call" is the normal case.
-        let not_spoken = if message.trim().is_empty() {
+        let not_spoken = if message.trim().is_empty() || !CALL_BUSES.contains(&mcp) {
             Some(String::new())
         } else {
             let (said, err) = self.mcp_invoke(
@@ -3798,9 +3801,7 @@ impl Tools {
             }
             a
         };
-        let bus = channel
-            .split_once(':')
-            .filter(|(b, _)| *b == "telegram" || *b == "whatsapp");
+        let bus = chat_bus(&channel);
         let need_web = || -> Result<()> {
             if web {
                 Ok(())
@@ -3891,14 +3892,15 @@ impl Tools {
         }
     }
 
-    /// Telegram typing indicator while the model is thinking on those channels.
-    pub fn set_telegram_typing(&mut self, channels: &[String], on: bool) {
-        self.set_mcp_typing("telegram", "telegram:", channels, on);
-    }
-
-    /// WhatsApp typing indicator while the model is thinking on those channels.
-    pub fn set_whatsapp_typing(&mut self, channels: &[String], on: bool) {
-        self.set_mcp_typing("whatsapp", "whatsapp:", channels, on);
+    /// Typing indicator on chat-app channels (telegram:, whatsapp:, messenger:, instagram:)
+    /// while the model is thinking about them.
+    pub fn set_chat_typing(&mut self, channels: &[String], on: bool) {
+        for bus in CHAT_BUSES {
+            let prefix = format!("{bus}:");
+            if channels.iter().any(|c| c.starts_with(&prefix)) {
+                self.set_mcp_typing(bus, &prefix, channels, on);
+            }
+        }
     }
 
     fn set_mcp_typing(&mut self, mcp: &str, prefix: &str, channels: &[String], on: bool) {

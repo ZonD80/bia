@@ -10,7 +10,7 @@ rescue image copies -> destination boots and unfolds -> final idle boot -> power
 Env: TIMEOUT (minutes for the copy phase, default 20), TRIGGER=agent sends a
 natural-language request instead of the slash command (needs a working model).
 """
-import os, re, socket, subprocess, sys, threading, time
+import codecs, os, re, socket, subprocess, sys, threading, time
 
 scen, logpath = sys.argv[1], sys.argv[2]
 cmd = sys.argv[sys.argv.index("--") + 1:]
@@ -56,6 +56,7 @@ log = open(logpath, "w")
 
 def reader():
     partial = ""
+    dec = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split across reads
     while True:
         try:
             d = s.recv(65536)
@@ -63,7 +64,7 @@ def reader():
             break
         if not d:
             break
-        t = d.decode(errors="replace")
+        t = dec.decode(d)
         log.write(t)
         log.flush()
         t = ANSI.sub("", t)
@@ -171,6 +172,8 @@ if scen == "fsck":
     sys.exit(0)
 
 # 2. trigger
+if scen == "twin":
+    scen = "disk"  # the same update; check twin inspects the ESPs afterwards
 if TRIGGER == "agent":
     req = {"disk": "Update this computer's OS from the flash stick now. Call carry_update.",
            "flash": "Update this flash system from the internal disk now. Call carry_update.",

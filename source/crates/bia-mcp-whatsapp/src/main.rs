@@ -509,6 +509,91 @@ fn main() {
             },
         )
         .tool(
+            "group_info",
+            "A WhatsApp group's settings: title, description, member count, who may send, edit the info and add members, join approval, disappearing messages, pending join requests, the admins, and whether you are one.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().group_info(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "set_admin",
+            "Make a member an admin of a WhatsApp group (admin=true, default) or take it back (admin=false). WhatsApp admins all have the same rights. You must be an admin.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "member": {"type": "string", "description": "phone number with country code, or contact name"},
+                "admin": {"type": "boolean", "description": "true makes them admin (default), false takes it away"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().set_admin(arg_str(&a, "chat_id")?, arg_str(&a, "member")?, arg_bool(&a, "admin", true))
+            },
+        )
+        .tool(
+            "group_permissions",
+            "Change a WhatsApp group's settings; only what you pass changes. only_admins_send: only admins may send messages (announcement group). only_admins_edit_info: only admins may change the title, description and photo. only_admins_add: only admins may add members. join_approval: admins approve who joins by link. disappearing_seconds: 0 off, 86400 a day, 604800 a week, 7776000 90 days. You must be an admin.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "only_admins_send": {"type": "boolean"},
+                "only_admins_edit_info": {"type": "boolean"},
+                "only_admins_add": {"type": "boolean"},
+                "join_approval": {"type": "boolean"},
+                "disappearing_seconds": {"type": "integer", "description": "0, 86400, 604800 or 7776000"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                let flag = |k: &str| a.get(k).and_then(|v| v.as_bool());
+                Wa::global().group_permissions(arg_str(&a, "chat_id")?, &groups::GroupSettings {
+                    only_admins_send: flag("only_admins_send"),
+                    only_admins_edit_info: flag("only_admins_edit_info"),
+                    only_admins_add: flag("only_admins_add"),
+                    join_approval: flag("join_approval"),
+                    disappearing_seconds: arg_u32_opt(&a, "disappearing_seconds"),
+                })
+            },
+        )
+        .tool(
+            "set_group_info",
+            "Change a WhatsApp group's title (up to 100 characters), description (up to 2048; empty clears it) and/or photo (an image under /home/bia/files; JPEG, others converted with ffmpeg). Only what you pass changes. When the info is locked only admins can.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "title": {"type": "string"},
+                "description": {"type": "string", "description": "empty clears it"},
+                "photo": {"type": "string", "description": "image path under /home/bia/files"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().set_group_info(arg_str(&a, "chat_id")?, arg_str_opt(&a, "title"), arg_str_opt(&a, "description"), arg_str_opt(&a, "photo"))
+            },
+        )
+        .tool(
+            "join_requests",
+            "Pending requests to join a WhatsApp group (when join approval is on). Answer each with whatsapp_answer_join_request.",
+            json!({"type": "object", "required": ["chat_id"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().join_requests(arg_str(&a, "chat_id")?)
+            },
+        )
+        .tool(
+            "answer_join_request",
+            "Approve (approve=true, default) or decline a request to join a WhatsApp group.",
+            json!({"type": "object", "required": ["chat_id", "member"], "properties": {
+                "chat_id": {"type": "string", "description": "the group id (…@g.us)"},
+                "member": {"type": "string", "description": "the number from whatsapp_join_requests"},
+                "approve": {"type": "boolean", "description": "true approves (default), false declines"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().answer_join_request(arg_str(&a, "chat_id")?, arg_str(&a, "member")?, arg_bool(&a, "approve", true))
+            },
+        )
+        .tool(
             "ban",
             "Ban a WhatsApp chat. Messages from that chat are not delivered to you. Each one is answered with I've banned you. Incoming calls from that chat are auto-rejected. chat_id is a phone number, whatsapp:<phone>, or a chat id.",
             json!({"type": "object", "required": ["chat_id"], "properties": {

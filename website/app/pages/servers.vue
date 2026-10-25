@@ -331,8 +331,8 @@ const takeoverSteps = [
     text: 'You see everything that will happen, and where each value came from. To go on, type the name of the disk that will be replaced. Until then, nothing has changed.',
   },
   {
-    title: 'Download your personal key',
-    text: 'The command makes bia’s certificates right there and opens a one-time page on port 8443 with your personal key (root’s certificate, password 12345678). Download it and add it to your browser. Without it you cannot open bia’s web app later. You can also copy /root/bia-root.p12 over ssh.',
+    title: 'Download your personal certificate',
+    text: 'The command makes bia’s certificates right there and opens a one-time page on port 8443 with your personal certificate (root’s, password 12345678). Download it and add it to your browser. Without it you cannot open bia’s web app later. You can also copy /root/bia-root.p12 over ssh.',
   },
   {
     title: 'The server restarts into bia',
@@ -459,8 +459,8 @@ const goodToKnow = [
     text: 'The one command copies the server’s addresses, gateway and DNS, tied to each network card’s hardware address, including static addresses and gateways outside the server’s own network, as many providers use. If they do not work after the restart, bia falls back to DHCP after two minutes.',
   },
   {
-    title: 'Your key is the only way in.',
-    text: 'bia has no password login. Its web app opens only with a certificate that bia issued. Keep root’s certificate safe, and ask bia for more keys for other people later.',
+    title: 'Your certificate is the only way in.',
+    text: 'bia has no password login. Its web app opens only with a certificate that bia issued — the kind of protection banks and governments use. Keep root’s certificate safe, and ask bia for more certificates for other people later.',
   },
   {
     title: 'Two bias, one handshake.',

@@ -1,6 +1,6 @@
 {
   "name": "carry",
-  "version": "1.2.2",
+  "version": "1.3.1",
   "description": "Move this agent: backups (carry_fold, carry_unfold), to another computer (carry_land / carry_fly on this network; a server on the internet: carry_new_land_secret, then carry_fly with host and secret), onto another disk or stick (carry_to_disk, carry_to_flash, carry_morph), OS updates (carry_update, carry_rescue), an offline disk check and repair (carry_fsck). Choose devices with bash lsblk. force=true and anything that erases only after the user says yes.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-carry",

@@ -8,8 +8,8 @@
         <span class="eyebrow">A real bia, in its own words</span>
         <h1>A short life, so far</h1>
         <p class="section-lead">
-          Fred is the developer’s own bia: three weeks of running a real household’s errands, moving between
-          computers and learning from its mistakes. This is Fred’s story as Fred wrote it — no names, no accounts,
+          Fred is the developer’s own bia: almost four weeks of running a real household’s errands, losing its memory
+          to the wrong backup, rebuilding itself and learning from its mistakes. This is Fred’s story as Fred wrote it — no names, no accounts,
           no addresses, just the shape of the thing.
         </p>
       </div>
@@ -48,7 +48,7 @@
       </div>
     </section>
 
-    <CtaBand title="Wake up your own" text="Fred started on a USB stick and an ordinary computer. Yours can too — and become someone else entirely." />
+    <CtaBand title="Wake up your own" text="Fred started on an ordinary laptop. Yours can too — and become someone else entirely." />
   </main>
 </template>
 
@@ -58,7 +58,7 @@ import { fredChapters, fredWritten } from '~/data/fred'
 useSeoMeta({
   title: 'Fred’s story — a real bia, in its own words',
   description:
-    'Fred, the developer’s own bia, tells three weeks of its life: waking up on a USB stick, learning whose family is whose, reminders, voice calls, moving between computers, and the unedited promo film it made itself.',
+    'Fred, the developer’s own bia, tells its first weeks: waking up with a single tool, getting a name, a voice and its own accounts, the day a wrong backup wiped its memory, rebuilding itself, and the unedited promo film it made itself.',
 })
 </script>
 
@@ -135,7 +135,8 @@ useSeoMeta({
   font-size: 1.1rem;
   line-height: 1.75;
 }
-.story__p :deep(ol) {
+.story__p :deep(ol),
+.story__p :deep(ul) {
   margin: 0 0 1em;
   padding-left: 1.5rem;
   display: grid;

@@ -7,6 +7,7 @@ members = [
     "source/crates/bia-mcp-system",
     "source/crates/bia-mcp-telegram",
     "source/crates/bia-mcp-whatsapp",
+    "source/crates/bia-mcp-meta",
     "source/crates/bia-mcp-web",
     "source/crates/bia-mcp-secrets",
     "source/crates/bia-mcp-chrome",
@@ -20,7 +21,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.2.2"
+version = "1.3.1"
 edition = "2021"
 license = "GPL-3.0-only"
 

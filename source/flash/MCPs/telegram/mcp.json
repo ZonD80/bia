@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "version": "1.2.2",
+  "version": "1.3.1",
   "description": "Your own Telegram account, a real user, not a bot: login, chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/telegram/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-telegram",
@@ -73,7 +73,24 @@
     "invite",
     "invite link",
     "add",
-    "leave"
+    "leave",
+    "admin",
+    "admins",
+    "promote",
+    "demote",
+    "permissions",
+    "rights",
+    "group settings",
+    "group info",
+    "description",
+    "join request",
+    "approve",
+    "disappearing",
+    "restrict",
+    "mute member",
+    "slow mode",
+    "protected content",
+    "title"
   ],
   "examples": [
     "root|console|<issued>|<delivered>|log into telegram with +420… -> discover(path='mcp/telegram', enable=true); telegram_login(phone='+420…')",
@@ -83,6 +100,7 @@
     "alice|telegram:123|<issued>|<delivered>|[incoming call] from alice -> telegram_call_accept(chat_id='123') or telegram_call_reject(chat_id='123')",
     "alice|telegram:123|<issued>|<delivered>|[speech en] hello -> say(identity='alice', channel='telegram:123', message='Hi — short spoken reply.', lang='en'); wait for [you finished speaking] before speaking again",
     "root|console|<issued>|<delivered>|send alice a voice message saying I am late -> telegram_send_voice(chat_id='123', text='Hi, I am running about ten minutes late.', lang='en')",
-    "root|console|<issued>|<delivered>|make a telegram group Family with @mom and @dad -> telegram_create_group(title='Family', members=['@mom', '@dad'])"
+    "root|console|<issued>|<delivered>|make a telegram group Family with @mom and @dad -> telegram_create_group(title='Family', members=['@mom', '@dad'])",
+    "root|console|<issued>|<delivered>|make @ann an admin of that telegram group who can only pin and delete -> telegram_set_admin(chat_id='-1001234567890', member='@ann', rights=['pin_messages', 'delete_messages'])"
   ]
 }

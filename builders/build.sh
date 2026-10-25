@@ -2,7 +2,8 @@
 # Runs inside the bia-build container (Debian/glibc). /work = repo, /cache = volume.
 #   builders/build.sh <arm64|x86_64> [rust|mcps|rootfs|all] [mcp…]
 # For rust, optional trailing names limit which crates to build:
-#   system secrets chrome screen carry telegram whatsapp agent
+#   system secrets chrome screen carry telegram whatsapp meta agent
+# (meta = the messenger and instagram MCPs and their Go helper bia-meta)
 set -euo pipefail
 ARCH=${1:-arm64}; WHAT=${2:-all}
 if [ "$#" -ge 2 ]; then shift 2; else shift "$#" || true; fi
@@ -55,6 +56,19 @@ ensure_ntgcalls_dylib() {
   echo "   installed $dest/libntgcalls.so ($ver)"
 }
 
+# Go toolchain for bia-meta (ensure_go)
+. /work/builders/go-env.sh
+
+# bia-meta: static Go binary (no cgo), the protocol side of the messenger/instagram MCPs.
+go_meta() {
+  ensure_go
+  local ver
+  ver=$(sed -n 's/^version = "\(.*\)"/\1/p' /work/Cargo.toml | head -1)
+  echo "== go bia-meta $ver ($(go version))"
+  (cd /work/source/go/bia-meta && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$OUT/bia-meta" .)
+  ls -l "$OUT/bia-meta"
+}
+
 rust() {
   local triple rf_var
   triple=$(rustc -vV | sed -n 's/^host: //p')
@@ -74,10 +88,12 @@ rust() {
   local -a main_pkgs=()
   local want_tg=0
   local want_wa=0
+  local want_meta=0
   if [ ${#FILTERS[@]} -eq 0 ]; then
     main_pkgs=(bia-agent bia-mcp-system bia-mcp-web bia-mcp-secrets bia-mcp-chrome bia-mcp-screen bia-mcp-carry bia-mcp-lang)
     want_tg=1
     want_wa=1
+    want_meta=1
   else
     local f
     for f in "${FILTERS[@]}"; do
@@ -86,7 +102,8 @@ rust() {
         system|web|secrets|chrome|screen|carry|lang) main_pkgs+=(bia-mcp-"$f") ;;
         telegram) want_tg=1 ;;
         whatsapp) want_wa=1 ;;
-        *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|telegram|whatsapp)" >&2; exit 1 ;;
+        meta|messenger|instagram) want_meta=1 ;;
+        *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|telegram|whatsapp|meta)" >&2; exit 1 ;;
       esac
     done
   fi
@@ -157,13 +174,21 @@ rust() {
       ldd "$OUT/bia-mcp-whatsapp" | sed 's/^/     /' || true
     fi
   fi
+  if [ "$want_meta" = 1 ]; then
+    export "$rf_var=$base_flags"
+    echo "   building bia-mcp-meta (messenger + instagram)"
+    cargo build --release --target "$triple" -p bia-mcp-meta
+    strip -o "$OUT/bia-mcp-messenger" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-messenger"
+    strip -o "$OUT/bia-mcp-instagram" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-instagram"
+    go_meta
+  fi
   ls -l "$OUT"/bia-* 2>/dev/null || true
 }
 
 mcps() {
   echo "== assembling MCP folders for $RARCH"
   local M=/work/source/flash/MCPs
-  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH"
+  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH"
   cp "$OUT/bia-mcp-system" "$M/system/bin/$RARCH/"
   cp "$OUT/bia-mcp-web" "$M/web/bin/$RARCH/"
   cp "$OUT/bia-mcp-telegram" "$M/telegram/bin/$RARCH/"
@@ -173,6 +198,9 @@ mcps() {
   cp "$OUT/bia-mcp-screen" "$M/screen/bin/$RARCH/"
   cp "$OUT/bia-mcp-carry" "$M/carry/bin/$RARCH/"
   cp "$OUT/bia-mcp-lang" "$M/lang/bin/$RARCH/"
+  # instagram uses messenger's bia-meta (one Go binary for both)
+  cp "$OUT/bia-mcp-messenger" "$OUT/bia-meta" "$M/messenger/bin/$RARCH/"
+  cp "$OUT/bia-mcp-instagram" "$M/instagram/bin/$RARCH/"
 }
 
 rootfs() {

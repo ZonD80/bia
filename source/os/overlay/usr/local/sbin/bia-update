@@ -312,10 +312,35 @@ rescue_dir_on() {
   fi
 }
 
+# The rescue image finds ESPs by FAT serial, and every image's ESP starts as
+# 1234-5678: when another partition shares $1's serial, the one that is not this
+# system's ESP (normally the stick) gets its own (bia-esp-id --esp unmounts it).
+unique_esp() {
+  local esp=$1 id d mine
+  id=$(uuid_of "$esp")
+  [ -n "$id" ] || return 0
+  mine=$(esp_of_root "$(live_root)" || true)
+  for d in $(blkid -c /dev/null -t "UUID=$id" -o device 2>/dev/null); do
+    same_dev "$d" "$esp" && continue
+    if [ -n "$mine" ] && same_dev "$d" "$mine"; then
+      /usr/local/sbin/bia-esp-id --esp "$esp" >&2 \
+        || refuse "ESP serial" "$esp has the same FAT serial ($id) as this system's ESP $d and could not get its own"
+      return 0
+    fi
+    /usr/local/sbin/bia-esp-id --esp "$d" >&2 \
+      || refuse "ESP serial" "$d has the same FAT serial ($id) as $esp and could not get its own"
+  done
+}
+
 # Ensure the ESP mounted at $1 can boot the rescue image; write the marker.
 # Args: esp-mount src-dev dst-dev srcesp-dev dstesp-dev markesp-dev [rescue.cpio.gz]
 write_marker() {
   local esp=$1 src=$2 dst=$3 srcesp=$4 dstesp=$5 markesp=$6 cpio=${7:-$RESCUE_CPIO} rdir u args
+  for u in "$srcesp" "$dstesp" "$markesp"; do
+    case $u in DIR=*) ;; *) unique_esp "$u" ;; esac
+  done
+  # a new serial means a remount; the marker still goes on $markesp
+  findmnt -n "$esp" >/dev/null 2>&1 || mount -o rw "$markesp" "$esp" || refuse "rescue marker" "cannot mount $markesp"
   [ -f "$cpio" ] || refuse "rescue image" "no $cpio; $markesp cannot run an offline update"
   if ! /usr/local/sbin/bia-rescue-hook "$esp" "$cpio" >&2; then
     refuse "rescue image" "could not install the rescue boot entry on $markesp"

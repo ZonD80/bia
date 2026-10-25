@@ -168,7 +168,7 @@ fn with_transcript(heard: Result<bia_speech::Heard, String>, text: &str, _file: 
     }
 }
 
-fn resolve_file_path(root: &Path, f: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_file_path(root: &Path, f: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(f);
     let abs = if p.is_absolute() {
         p
@@ -397,32 +397,42 @@ fn hist_text(text: &str, kind: Option<&str>) -> String {
 }
 
 /// Profile photos must be JPEG; ffmpeg (when present) also crops to 640x640.
-fn profile_jpeg(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn profile_jpeg(path: &Path) -> Result<Vec<u8>, String> {
     if bia_speech::audio::has_ffmpeg() {
+        // 640x640 baseline JPEG without metadata, small like WhatsApp's own (WA Web and
+        // Baileys use quality ~50); a near-lossless one was refused with 406 not-acceptable
         let out = bia_speech::paths::tmp().join(format!("photo-{}.jpg", bia_speech::paths::stamp()));
-        let r = std::process::Command::new("ffmpeg")
-            .args(["-y", "-i"])
-            .arg(path)
-            .args([
-                "-vf",
-                "scale=640:640:force_original_aspect_ratio=increase,crop=640:640",
-                "-frames:v",
-                "1",
-                "-q:v",
-                "3",
-            ])
-            .arg(&out)
-            .output();
-        if let Ok(o) = r {
-            if o.status.success() {
-                let bytes = std::fs::read(&out);
-                let _ = std::fs::remove_file(&out);
-                if let Ok(b) = bytes {
-                    if !b.is_empty() {
-                        return Ok(b);
-                    }
-                }
+        let mut best: Option<Vec<u8>> = None;
+        for q in ["6", "9", "13", "18"] {
+            let r = std::process::Command::new("ffmpeg")
+                .args(["-y", "-i"])
+                .arg(path)
+                .args([
+                    "-vf",
+                    "scale=640:640:force_original_aspect_ratio=increase,crop=640:640,format=yuvj420p",
+                    "-frames:v",
+                    "1",
+                    "-map_metadata",
+                    "-1",
+                    "-q:v",
+                    q,
+                ])
+                .arg(&out)
+                .output();
+            let ok = matches!(&r, Ok(o) if o.status.success());
+            let bytes = if ok { std::fs::read(&out).unwrap_or_default() } else { Vec::new() };
+            let _ = std::fs::remove_file(&out);
+            if bytes.is_empty() {
+                break;
             }
+            let small = bytes.len() <= PROFILE_JPEG_MAX;
+            best = Some(bytes);
+            if small {
+                break;
+            }
+        }
+        if let Some(b) = best {
+            return Ok(b);
         }
     }
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -432,6 +442,23 @@ fn profile_jpeg(path: &Path) -> Result<Vec<u8>, String> {
         Err("profile photo must be a JPEG (ffmpeg is needed to convert other formats)".into())
     }
 }
+
+/// WhatsApp answers a picture it does not take with 406 not-acceptable.
+pub(crate) fn photo_error(what: &str, e: &str, size: usize) -> String {
+    if e.contains("406") || e.contains("not-acceptable") {
+        format!(
+            "{what}: WhatsApp did not accept the picture (406 not-acceptable; sent a 640x640 JPEG of {} KB). \
+             Try another picture (a plain photo, not a screenshot or drawing with transparency); if every picture is refused, \
+             WhatsApp may not let this linked device change it yet: set it from the phone",
+            size / 1024
+        )
+    } else {
+        format!("{what}: {e}")
+    }
+}
+
+/// Upper size of a profile or group photo upload.
+const PROFILE_JPEG_MAX: usize = 96 * 1024;
 
 // ---------------------------------------------------------------------------
 // Chat book (key -> jid/title) and local message history
@@ -1318,7 +1345,7 @@ impl Wa {
 
     // -- chat book ------------------------------------------------------------
 
-    fn note_chat(&self, key: &str, jid: &Jid, title: Option<&str>, ts: i64) {
+    pub(crate) fn note_chat(&self, key: &str, jid: &Jid, title: Option<&str>, ts: i64) {
         let mut b = self.book.lock().unwrap();
         if b.note(key, jid, title, ts) {
             b.save();
@@ -1987,12 +2014,13 @@ impl Wa {
         let client = self.require_ready()?;
         let abs = resolve_file_path(&files_dir(), path)?;
         let bytes = profile_jpeg(&abs)?;
+        let bytes_len = bytes.len();
         self.block_on(async {
             client
                 .profile()
                 .set_profile_picture(bytes)
                 .await
-                .map_err(|e| format!("set_photo: {e}"))?;
+                .map_err(|e| photo_error("set_photo", &e.to_string(), bytes_len))?;
             Ok(format!("profile photo set from {}", abs.display()))
         })
     }

@@ -110,7 +110,7 @@ in_chroot apt-get install -y --no-install-recommends \
   bash ca-certificates wget curl bzip2 xz-utils openssh-client \
   python3-minimal \
   wpasupplicant iw \
-  tzdata adduser passwd login \
+  tzdata adduser passwd login sudo \
   kbd kexec-tools \
   alsa-utils \
   xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-dummy xauth x11-xserver-utils x11-utils \
@@ -133,6 +133,11 @@ in_chroot install -d -o bia -g bia -m 755 /home/bia
 in_chroot install -d -o bia -g bia -m 700 /home/bia/.config /home/bia/.local
 in_chroot install -d -o bia -g bia -m 700 /home/bia/.config/bia-chrome /home/bia/.local/share
 in_chroot chsh -s /bin/bash root >/dev/null 2>&1 || true
+# bia may become root without a password (schedules and the model's bash as user bia)
+printf 'bia ALL=(ALL) NOPASSWD: ALL\n' > "$ROOT/etc/sudoers.d/bia"
+chown 0:0 "$ROOT/etc/sudoers.d/bia"
+chmod 0440 "$ROOT/etc/sudoers.d/bia"
+in_chroot visudo -cf /etc/sudoers.d/bia >/dev/null
 ln -sf /usr/share/zoneinfo/UTC "$ROOT/etc/localtime"
 
 # overlay again so dpkg cannot clobber units/fstab
@@ -140,6 +145,7 @@ cp -a /work/source/os/overlay/. "$ROOT/"
 install -m 0755 "$AGENT" "$ROOT/usr/local/sbin/bia-agent"
 
 echo "== systemd enable"
+in_chroot systemctl enable bia-esp-id.service
 in_chroot systemctl enable bia-grow.service
 in_chroot systemctl enable bia-seed.service
 in_chroot systemctl enable bia-net.service

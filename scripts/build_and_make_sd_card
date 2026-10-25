@@ -1,0 +1,7 @@
+#!/bin/bash
+# Build x86_64 and wipe-write the SD card (the Mac's built-in SD reader).
+# Override: ARCH=arm64 ./build_and_make_sd_card   ERASE=0 …   MODEL=repo[:file.gguf] adds a local model
+# A card in a USB card reader shows up as USB: use build_and_make_flash_stick for that.
+exec env \
+  ERASE="${ERASE:-1}" \
+  make -C "$(dirname "$0")/.." ARCH="${ARCH:-x86_64}" MEDIA=sd flash

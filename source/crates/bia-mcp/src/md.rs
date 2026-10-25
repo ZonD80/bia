@@ -50,6 +50,44 @@ pub fn rich(md: &str) -> Rich {
     r
 }
 
+/// Plain text for apps without formatting (Messenger, Instagram): the markup goes, and a
+/// link keeps its address after its text (`text (url)`) unless the text is the address.
+pub fn plain(md: &str) -> String {
+    let r = rich(md);
+    let mut links: Vec<(usize, String)> = r
+        .spans
+        .iter()
+        .filter_map(|sp| match &sp.style {
+            Style::Link(url) => Some((sp.offset + sp.len, url.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut out = r.text.clone();
+    // insert from the end so earlier offsets stay valid
+    links.sort_by(|a, b| b.0.cmp(&a.0));
+    for (end16, url) in links {
+        let Some(at) = byte_at_utf16(&r.text, end16) else { continue };
+        let start16 = r.spans.iter().find(|sp| sp.offset + sp.len == end16 && matches!(&sp.style, Style::Link(u) if *u == url)).map(|sp| sp.offset);
+        let shown = start16.and_then(|st| byte_at_utf16(&r.text, st)).map(|st| &r.text[st..at]).unwrap_or("");
+        if shown.trim() != url.trim() {
+            out.insert_str(at, &format!(" ({url})"));
+        }
+    }
+    out
+}
+
+/// Byte index of a UTF-16 offset in `s`.
+fn byte_at_utf16(s: &str, off16: usize) -> Option<usize> {
+    let mut n = 0;
+    for (i, ch) in s.char_indices() {
+        if n == off16 {
+            return Some(i);
+        }
+        n += ch.len_utf16();
+    }
+    (n == off16).then_some(s.len())
+}
+
 /// WhatsApp's formatting: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, ```` ``` ```` blocks,
 /// `> ` quotes; links become `text (url)`.
 pub fn to_whatsapp(md: &str) -> String {
@@ -374,6 +412,15 @@ mod tests {
 
     fn sp(style: Style, offset: usize, len: usize) -> Span {
         Span { style, offset, len }
+    }
+
+    #[test]
+    fn plain_keeps_link_addresses() {
+        assert_eq!(
+            plain("**Hi** 👋 see [the docs](https://x.io/p) and [https://y.io](https://y.io)"),
+            "Hi 👋 see the docs (https://x.io/p) and https://y.io"
+        );
+        assert_eq!(plain("- one\n- two"), "• one\n• two");
     }
 
     #[test]

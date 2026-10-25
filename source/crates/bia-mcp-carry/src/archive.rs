@@ -58,6 +58,16 @@ fn files_root() -> PathBuf {
     PathBuf::from(std::env::var("BIA_FILES").unwrap_or_else(|_| format!("{HOME}/files")))
 }
 
+/// Fold and unfold read and write all of /home/bia, /etc and dpkg, root's 0600 files too;
+/// as another user tar would leave those out without a word.
+fn require_root(what: &str) -> Result<(), String> {
+    if unsafe { libc::geteuid() } == 0 {
+        Ok(())
+    } else {
+        Err(format!("{what} must run as root: another user cannot read every file under /home/bia. As user bia (schedules by default) run it with sudo."))
+    }
+}
+
 fn rel_ok(path: &Path) -> bool {
     !path.as_os_str().is_empty()
         && !path.is_absolute()
@@ -112,6 +122,7 @@ pub fn unfold_file(ctx: &Ctx, src: &Path, mode: Mode) -> Result<String, String> 
 }
 
 fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Result<String, String> {
+    require_root("unfold")?;
     let len = fs::metadata(src).map(|m| m.len()).map_err(|e| format!("{}: {e}", src.display()))?;
     ctx.log(format!("unfold: reading {} ({} bytes)", src.display(), len));
     let near = src.parent().unwrap_or_else(|| Path::new("/var/tmp"));
@@ -235,6 +246,7 @@ struct Packed {
 }
 
 fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, tool: Option<&str>) -> Result<Packed, String> {
+    require_root("fold")?;
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -1995,6 +2007,12 @@ curl:
         assert!(err.contains("carry_fold"));
         assert!(err.contains("force=true"));
         super::guard_space("fold", u64::MAX, &dir, &dir, true, Some("carry_fold")).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            let err = super::fold_into(&bia_mcp::Ctx::console(), &dir.join("x.tar.gz")).unwrap_err();
+            assert!(err.contains("must run as root"), "{err}");
+            let err = super::unfold_file(&bia_mcp::Ctx::console(), &dir.join("x.tar.gz"), super::Mode::Restore).unwrap_err();
+            assert!(err.contains("must run as root"), "{err}");
+        }
         let unfold = super::guard_space("unfold", u64::MAX, &dir, &dir, false, Some("carry_unfold")).unwrap_err();
         assert!(unfold.contains("when unpacked"), "{unfold}");
         assert!(unfold.contains("carry_unfold"));

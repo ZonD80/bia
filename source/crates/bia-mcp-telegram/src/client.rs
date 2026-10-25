@@ -607,7 +607,17 @@ impl Tg {
             // A location or contact: nothing to download, the text is the content.
             text = if text.is_empty() { shared } else { format!("{text}\n{shared}") };
         } else {
-            media = msg.media().cloned();
+            use tl::enums::MessageMedia;
+            match msg.media() {
+                Some(m @ (MessageMedia::Photo(_) | MessageMedia::Document(_))) => media = Some(m.clone()),
+                // a link preview: the link is in the text; nothing to download
+                None | Some(MessageMedia::WebPage(_)) | Some(MessageMedia::Empty) => {}
+                // a poll, dice, story…: say what it was instead of a failed download
+                Some(m) => {
+                    let note = format!("[{}]", media_kind(m));
+                    text = if text.is_empty() { note } else { format!("{text}\n{note}") };
+                }
+            }
         }
         if text.is_empty() && media.is_none() {
             return Ok(false);
@@ -1764,6 +1774,12 @@ fn media_kind(media: &tl::enums::MessageMedia) -> &'static str {
             }
             "file"
         }
+        MessageMedia::Poll(_) => "poll",
+        MessageMedia::Dice(_) => "dice",
+        MessageMedia::Game(_) => "game",
+        MessageMedia::Story(_) => "story",
+        MessageMedia::Invoice(_) => "invoice",
+        MessageMedia::WebPage(_) => "link preview",
         _ => "attachment",
     }
 }
@@ -2257,8 +2273,33 @@ async fn resolve_target_async(
         .await
         .map_err(|e| format!("resolve: {e}"))?;
     let chat_id = encode_bot_api_id(&peer);
+    ensure_access(client, &peer, chat_id).await?;
     let (title, username) = peer_label(client, &peer).await;
     Ok((chat_id, title, username))
+}
+
+/// A user or channel known only by id needs its access hash, which Telegram hands out
+/// with messages, dialogs, contacts and resolves. When it is missing, the contact list
+/// and the recent dialogs are loaded (they carry it); if it is still missing, the model
+/// is told how to get it.
+async fn ensure_access(client: &Client, peer: &tl::enums::Peer, chat_id: i64) -> Result<(), String> {
+    if matches!(peer, tl::enums::Peer::Chat(_)) || client.resolve_to_input_peer(peer).await.is_ok() {
+        return Ok(());
+    }
+    let _ = client.get_contacts().await;
+    let _ = client.get_dialogs(200).await;
+    if client.resolve_to_input_peer(peer).await.is_ok() {
+        return Ok(());
+    }
+    Err(match peer {
+        tl::enums::Peer::User(_) => format!(
+            "Telegram has not given bia access to user {chat_id} yet (they never wrote to bia, are not in its contacts and share no chat it has loaded). \
+             Find them with telegram_resolve by @username or phone number (that gives access), or ask them to write to bia first, then try again"
+        ),
+        _ => format!(
+            "Telegram has not given bia access to chat {chat_id} yet: find it with telegram_resolve by @username or invite link, or open it once from a message in it, then try again"
+        ),
+    })
 }
 
 fn normalize_target(target: &str) -> String {
@@ -2371,7 +2412,7 @@ fn with_transcript(heard: Result<bia_speech::Heard, String>, text: &str, _file: 
     }
 }
 
-fn resolve_file_path(root: &Path, f: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_file_path(root: &Path, f: &str) -> Result<PathBuf, String> {
     let p = PathBuf::from(f);
     let abs = if p.is_absolute() {
         p

@@ -75,7 +75,7 @@
             <li>No programming. You talk to bia in your own words.</li>
             <li>No monitor once it runs — use its private app from your phone.</li>
             <li>No subscription to bia itself. It is free software.</li>
-            <li>No cloud account to keep your data. It stays on bia’s disk.</li>
+            <li>No cloud account keeps your agent’s data. It stays on bia’s disk.</li>
           </ul>
         </div>
       </div>
@@ -95,7 +95,7 @@ useSeoMeta({
 const flow = [
   { title: 'Write bia onto a USB stick', text: 'Download the small bia writer for Mac, Windows or Linux. Choose how bia should think — usually a cloud brain, or a brain on the stick for powerful computers — and write the stick.' },
   { title: 'Start a computer from the stick', text: 'Plug it into a PC or laptop and switch on. The screen shows bia instead of Windows or a desktop. Nothing on the computer’s own disk is touched unless you ask.' },
-  { title: 'Say hello', text: 'Type on the screen, or open bia’s private app from your phone — bia shows you how to get a personal key for it.' },
+  { title: 'Say hello', text: 'Type on the screen, or open bia’s private app from your phone — bia shows you how to get a personal certificate for it.' },
   { title: 'Give it a life', text: 'Ask bia to join WhatsApp or Telegram, give it a name and a photo, introduce it to the people it will help.' },
   { title: 'Let it settle in', text: 'Move bia from the stick onto the computer’s own disk when you are ready, so the stick is free again. From then on it updates and repairs itself, and moves to a new computer when you get one.' },
 ]

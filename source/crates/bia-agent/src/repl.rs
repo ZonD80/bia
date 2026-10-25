@@ -2373,22 +2373,12 @@ now: {now}", done.join("\n")), failed)
         // MCPs started in the background: attach the finished ones before the model reads
         // their job results (callable now, plus their block when it changed)
         self.tools.poll_starts(&mut messages);
-        let tg: Vec<String> = messages
+        let chats: Vec<String> = messages
             .iter()
-            .filter(|ib| ib.channel.starts_with("telegram:"))
+            .filter(|ib| crate::tools::chat_bus(&ib.channel).is_some())
             .map(|ib| ib.channel.clone())
             .collect();
-        let wa: Vec<String> = messages
-            .iter()
-            .filter(|ib| ib.channel.starts_with("whatsapp:"))
-            .map(|ib| ib.channel.clone())
-            .collect();
-        if !tg.is_empty() {
-            self.tools.set_telegram_typing(&tg, true);
-        }
-        if !wa.is_empty() {
-            self.tools.set_whatsapp_typing(&wa, true);
-        }
+        self.tools.set_chat_typing(&chats, true);
         let mut web: Vec<(String, String)> = messages
             .iter()
             .filter(|ib| crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM)
@@ -2398,12 +2388,7 @@ now: {now}", done.join("\n")), failed)
         self.tools.set_web_typing(&web, true);
         self.turn_inner(messages);
         self.tools.set_web_typing(&web, false);
-        if !tg.is_empty() {
-            self.tools.set_telegram_typing(&tg, false);
-        }
-        if !wa.is_empty() {
-            self.tools.set_whatsapp_typing(&wa, false);
-        }
+        self.tools.set_chat_typing(&chats, false);
     }
 
     fn turn_inner(&mut self, messages: Vec<Inbound>) {
@@ -3185,7 +3170,7 @@ mod channel_tests {
 
 /// Root writes it here, but backups made as user bia must read it: hand it to the owner of
 /// `files` (the agent gives all of /home/bia to bia at boot anyway).
-fn own_like_files(p: &std::path::Path, files: &std::path::Path) {
+pub(crate) fn own_like_files(p: &std::path::Path, files: &std::path::Path) {
     use std::os::unix::fs::MetadataExt;
     if let Ok(m) = std::fs::metadata(files) {
         let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));

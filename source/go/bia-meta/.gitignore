@@ -1,0 +1,3 @@
+# local builds (the real one goes to dist/<arch>/bia-meta)
+/meta
+/bia-meta

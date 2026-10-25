@@ -1,0 +1,21 @@
+[package]
+name = "bia-mcp-meta"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCPs: Facebook Messenger and Instagram DMs through bia-meta (mautrix-meta)"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+bia-speech = { path = "../bia-speech" }
+serde.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+
+[[bin]]
+name = "bia-mcp-messenger"
+path = "src/bin/messenger.rs"
+
+[[bin]]
+name = "bia-mcp-instagram"
+path = "src/bin/instagram.rs"

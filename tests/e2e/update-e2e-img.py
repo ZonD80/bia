@@ -21,7 +21,11 @@ SCEN = {"disk": ("disk", "flash"), "flash": ("flash", "disk"), "rescue": ("disk"
         # the disk updates from GitHub-style release files; the flash stays attached (not newer)
         "internet": ("disk", "flash"),
         # no update: the disk's root is damaged, checked at boot and by carry_fsck
-        "fsck": ("disk", "flash")}
+        "fsck": ("disk", "flash"),
+        # like "disk", but both ESPs are BIABOOT / 1234-5678 (as every flashed drive is)
+        # and the disk mounts /boot by label: bia-esp-id must give the disk's its own
+        "twin": ("disk", "flash")}
+STOCK_SERIAL = "1234-5678"
 REL = f"{UT}/release"
 NET_VERSION = "9.9.9"
 # QEMU user networking: the host's loopback is 10.0.2.2 in the guest
@@ -196,6 +200,24 @@ def prep(scen):
         make_release()
     if scen == "fsck":
         damage_disk_root()
+    if scen == "twin":
+        twin_esps()
+
+
+def twin_esps():
+    """Both ESPs as the flasher makes them: label BIABOOT, FAT serial 1234-5678."""
+    for name in ("flash", "disk"):
+        with Img(name) as im:
+            sh("fatlabel", "-i", im.esp_dev, STOCK_SERIAL.replace("-", ""))
+            sh("fatlabel", im.esp_dev, "BIABOOT")
+            im.mount()
+            for cfg in grub_cfgs(im.esp):
+                c = re.sub(r"--fs-uuid \S+", f"--fs-uuid {STOCK_SERIAL}", open(cfg).read())
+                put(cfg, c.replace("--label BIADBOOT", "--label BIABOOT"))
+            if name == "disk":
+                f = open(f"{im.root}/etc/fstab").read()
+                put(f"{im.root}/etc/fstab", re.sub(r"^\S+(\s+/boot\s)", r"LABEL=BIABOOT\1", f, flags=re.M))
+            print(f"{name}: ESP {blk(im.esp_dev, 'LABEL')} {blk(im.esp_dev, 'UUID')}")
 
 
 def damage_disk_root():
@@ -275,6 +297,8 @@ def check(scen):
         return check_internet()
     if scen == "fsck":
         return check_fsck()
+    if scen == "twin":
+        check_twin()
     with Img(dst, ro=True) as d, Img(src, ro=True) as s:
         d.mount(), s.mount()
         srel = rel(s.root)
@@ -313,6 +337,27 @@ def check(scen):
     if errs:
         sys.exit(f"CHECK {scen}: {len(errs)} failure(s)")
     print(f"CHECK {scen}: all good")
+
+
+def check_twin():
+    """The disk's ESP got a serial of its own, and fstab and GRUB use it."""
+    errs = []
+    with Img("disk", ro=True) as d, Img("flash", ro=True) as f:
+        d.mount(), f.mount()
+        ds, fs = blk(d.esp_dev, "UUID"), blk(f.esp_dev, "UUID")
+        ok = ds not in ("", STOCK_SERIAL) and ds != fs
+        print(("  ok   " if ok else "  FAIL ") + f"disk ESP serial {ds} is its own (flash {fs})")
+        ok or errs.append("serial")
+        fstab = open(f"{d.root}/etc/fstab").read()
+        ok = re.search(rf"^UUID={re.escape(ds)}\s+/boot\s", fstab, re.M) is not None
+        print(("  ok   " if ok else "  FAIL ") + f"disk fstab mounts /boot by UUID={ds}")
+        ok or errs.append("fstab")
+        for cfg in grub_cfgs(d.esp):
+            ok = f"--fs-uuid {ds}" in open(cfg).read() or cfg.endswith("EFI/bia/grub.cfg")
+            print(("  ok   " if ok else "  FAIL ") + f"{cfg[len(d.esp):]} searches --fs-uuid {ds}")
+            ok or errs.append(cfg)
+    if errs:
+        sys.exit(f"CHECK twin: {len(errs)} failure(s)")
 
 
 def check_fsck():
@@ -415,6 +460,9 @@ def patch():
             sh("cp", "-a", "/work/source/os/overlay/usr/local/sbin/.", f"{im.root}/usr/local/sbin/")
             sh("cp", "-a", "/work/source/os/overlay/usr/local/share/bia/.", f"{im.root}/usr/local/share/bia/")
             sh("cp", "-a", "/work/source/os/overlay/etc/systemd/system/.", f"{im.root}/etc/systemd/system/")
+            wants = f"{im.root}/etc/systemd/system/multi-user.target.wants/bia-esp-id.service"
+            if not os.path.lexists(wants):  # systemctl enable, as builders/rootfs.sh does
+                os.symlink("/etc/systemd/system/bia-esp-id.service", wants)
             for tty in ("ttyS0", "ttyAMA0"):  # same as builders/rootfs.sh
                 link = f"{im.root}/etc/systemd/system/serial-getty@{tty}.service"
                 if not os.path.islink(link):

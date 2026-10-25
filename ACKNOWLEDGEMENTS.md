@@ -71,6 +71,18 @@ QEMU) and Yaaia's communication features (messengers, calls, contacts,
 | [tgcalls](https://github.com/ankit-chaubey/tgcalls) | Telegram voice calls (vendored with a patch in `source/vendor/tgcalls`) |
 | [NTgCalls](https://github.com/pytgcalls/ntgcalls) | native call media library, LGPL-3.0 (vendored binding in `source/vendor/ntgcalls`, `libntgcalls.so` shipped) |
 | [whatsapp-rust](https://crates.io/crates/whatsapp-rust) | WhatsApp linked-device client and VoIP |
+| [mautrix-meta](https://github.com/mautrix/meta) (AGPL-3.0) | Messenger and Instagram protocols in `bia-meta`: messagix, instameow, media download; bia's message handling follows its connectors |
+| [whatsmeow](https://github.com/tulir/whatsmeow) (MPL-2.0) | Messenger's end-to-end encrypted chats (as a registered device) |
+| [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) | pure-Go SQLite for `bia-meta`'s keys and chat index |
+| [fbchat-v2](https://github.com/m008v/fbchat-v2) (Apache-2.0) | studied for Messenger's E2EE media and reconnect handling |
+
+## Go
+
+[Go](https://go.dev/) builds `bia-meta` (toolchain fetched and checksum-checked by
+`builders/go-env.sh`). Direct dependencies besides mautrix-meta and whatsmeow:
+[zerolog](https://github.com/rs/zerolog), [coder/websocket](https://github.com/coder/websocket),
+[google/uuid](https://github.com/google/uuid), [golang.org/x/image](https://pkg.go.dev/golang.org/x/image),
+[protobuf](https://pkg.go.dev/google.golang.org/protobuf). The full tree is in `source/go/bia-meta/go.sum`.
 
 ## Rust ecosystem
 

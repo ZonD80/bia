@@ -533,6 +533,11 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     if paths.files.join("whatsapp").join("whatsapp.db").exists() {
         start(&mut tools, "whatsapp", "session on disk");
     }
+    for name in ["messenger", "instagram"] {
+        if paths.files.join(name).join("session.json").exists() {
+            start(&mut tools, name, "session on disk");
+        }
+    }
     // The web bus is always up when enabled (people reach bia there before any login).
     if cfg.web.enabled {
         start(&mut tools, "web", "web app");
@@ -787,7 +792,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         let lost = std::mem::take(&mut repl.tools.outbox_lost);
         if !lost.is_empty() {
             boot.note(&format!(
-                "{} telegram/whatsapp send(s) cut short on reboot",
+                "{} telegram/whatsapp/messenger/instagram send(s) cut short on reboot",
                 lost.len()
             ));
             repl.pending.extend(lost);
@@ -824,7 +829,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     }
     if !repl.pending.is_empty() {
         boot.note(&format!(
-            "{} inbound message(s) waiting (telegram/whatsapp catch-up / schedules / queued)",
+            "{} inbound message(s) waiting (chat-app catch-up / schedules / queued)",
             repl.pending.len()
         ));
     }
@@ -888,7 +893,7 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
         "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: bia, an assistant that lives on this computer. Then tell them, briefly, one line each:\n\
 - ask them what your name should be; remember it and use it from then on.\n\
 - {web}.\n\
-- you can log in to their Telegram and WhatsApp, so they can write and call you there and you can message for them; ask whether they want that.\n\
+- you can log in to their Telegram and WhatsApp (they can write and call you there) and to their Messenger and Instagram, and message for them; ask whether they want that.\n\
 - you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
 - you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
 End by asking what your name should be and what they would like to start with. Do not call tools for this greeting."
@@ -1053,6 +1058,7 @@ mod welcome_tests {
             "Write in English",
             "https://10.0.0.5/",
             "Telegram and WhatsApp",
+            "Messenger and Instagram",
             "own accounts",
             "ChatGPT plan",
             "what your name should be",

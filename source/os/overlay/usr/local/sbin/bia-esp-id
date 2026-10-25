@@ -1,0 +1,160 @@
+#!/bin/bash
+# Give this system's ESP a FAT serial of its own, and use it.
+#
+# Every bia disk starts from the same image, so every ESP has the same label
+# (BIABOOT) and FAT serial (1234-5678). With a second bia drive attached (an update
+# stick), GRUB's `search --fs-uuid` and fstab's LABEL=BIABOOT may pick that drive's
+# ESP: /boot is then the stick, and GRUB never sees the update marker on this ESP.
+#
+# Each boot (bia-esp-id.service, before anything uses /boot):
+#   - the ESP is the vfat partition on the root's disk that holds vmlinuz-lts
+#     (a Windows ESP shared with bia keeps bia under EFI/bia and is left alone);
+#   - a stock or duplicated serial is replaced by a random one (boot sector and its
+#     FAT32 backup), and the ESP's grub.cfg files search for the new one;
+#   - fstab mounts /boot by that serial instead of a label;
+#   - /boot is remounted from the right partition when it came from another drive.
+#
+#   bia-esp-id                 this system's ESP (the service)
+#   bia-esp-id --esp /dev/sdb1 give another bia ESP its own serial (bia-update does
+#                              this for an update stick that shares this one's)
+set -euo pipefail
+STOCK=1234-5678
+FSTAB=${BIA_ESP_FSTAB:-/etc/fstab}
+TMP=/run/bia-esp-id
+say() { echo "bia-esp-id: $*"; }
+
+serial_of() { blkid -p -s UUID -o value "$1" 2>/dev/null | tr 'a-f' 'A-F'; }
+
+# Other partitions (anywhere) with the same serial.
+shared_by_others() {
+  local dev=$1 id=$2 d
+  for d in $(blkid -t "UUID=$id" -o device 2>/dev/null; lsblk -nrpo NAME,UUID 2>/dev/null | awk -v id="$id" 'toupper($2) == id {print $1}'); do
+    [ "$(readlink -f "$d")" = "$(readlink -f "$dev")" ] || return 0
+  done
+  return 1
+}
+
+# Write a new random serial into the FAT boot sector (and the FAT32 backup copy).
+reserial() {
+  local dev=$1
+  python3 - "$dev" <<'PY'
+import os, struct, sys
+dev = sys.argv[1]
+with open(dev, "r+b", buffering=0) as f:
+    bs = bytearray(f.read(512))
+    if bs[510:512] != b"\x55\xaa":
+        sys.exit("no FAT boot sector")
+    fat32 = bs[82:90].startswith(b"FAT32")
+    off = 67 if fat32 else 39
+    serial = os.urandom(4)
+    while serial == b"\x78\x56\x34\x12" or serial == b"\0\0\0\0":
+        serial = os.urandom(4)
+    sector = struct.unpack_from("<H", bs, 11)[0] or 512
+    backup = struct.unpack_from("<H", bs, 50)[0] if fat32 else 0
+    for s in [0] + ([backup] if backup else []):
+        f.seek(s * sector)
+        b = bytearray(f.read(512))
+        if b[510:512] != b"\x55\xaa":
+            continue
+        b[off:off + 4] = serial
+        f.seek(s * sector)
+        f.write(b)
+    os.fsync(f.fileno())
+v = struct.unpack("<I", serial)[0]
+print(f"{v >> 16:04X}-{v & 0xFFFF:04X}")
+PY
+}
+
+# Point the grub.cfg files on the ESP mounted at $1 from serial $2 to $3. Image
+# builds cannot see the ESP's serial, so their grub.cfg searches by label only:
+# the serial search goes in front of it, the label stays as the fallback.
+fix_grub() {
+  local mnt=$1 old=$2 new=$3 cfg
+  for cfg in "$mnt/boot/grub/grub.cfg" "$mnt/EFI/BOOT/grub.cfg" "$mnt/EFI/debian/grub.cfg"; do
+    [ -f "$cfg" ] || continue
+    if grep -q -- '--fs-uuid' "$cfg"; then
+      [ "$old" != "$new" ] && grep -qi -- "--fs-uuid $old\\b" "$cfg" || continue
+      sed -i "s/--fs-uuid $old\\b/--fs-uuid $new/I" "$cfg"
+    elif grep -q '^search --no-floppy --set=root --label ' "$cfg"; then
+      sed -i "s/^search --no-floppy --set=root --label \\(\\S*\\)\$/search --no-floppy --fs-uuid $new --set=root\\
+if [ -z \"\$root\" ]; then\\
+  search --no-floppy --set=root --label \\1\\
+fi/" "$cfg"
+    fi
+  done
+}
+
+# Give $1 a serial nobody else has; prints the old and the new serial.
+make_unique() {
+  local esp=$1 old new mnt tgt
+  old=$(serial_of "$esp")
+  if [ -n "$old" ] && [ "$old" != "$STOCK" ] && ! shared_by_others "$esp" "$old"; then
+    echo "$old $old"
+    return 0
+  fi
+  # unmount everywhere: the kernel must not write the old boot sector back
+  while tgt=$(findmnt -nr -o TARGET -S "$esp" 2>/dev/null | tail -1) && [ -n "$tgt" ]; do
+    umount "$tgt"
+  done
+  new=$(reserial "$esp")
+  blockdev --flushbufs "$esp" 2>/dev/null || true
+  udevadm settle 2>/dev/null || true
+  mnt=$TMP/esp
+  mkdir -p "$mnt"
+  mount -t vfat "$esp" "$mnt"
+  fix_grub "$mnt" "${old:-$STOCK}" "$new"
+  sync
+  umount "$mnt"
+  say "$esp: FAT serial ${old:-none} -> $new (grub.cfg updated)" >&2
+  echo "${old:-$STOCK} $new"
+}
+
+if [ "${1:-}" = --esp ]; then
+  esp=${2:?--esp needs a partition}
+  read -r _ new < <(make_unique "$esp")
+  echo "$new"
+  exit 0
+fi
+
+# --- this system's ESP ---
+root=$(readlink -f "$(findmnt -no SOURCE / 2>/dev/null)" 2>/dev/null || true)
+[ -b "$root" ] || exit 0
+parent=$(lsblk -no PKNAME "$root" 2>/dev/null | head -1)
+[ -n "$parent" ] && [ -b "/dev/$parent" ] || exit 0
+mkdir -p "$TMP/probe"
+esp=
+while read -r p fs; do
+  [ "$fs" = vfat ] || continue
+  if mnt=$(findmnt -n -o TARGET -S "$p" 2>/dev/null | head -1) && [ -n "$mnt" ]; then
+    [ -f "$mnt/vmlinuz-lts" ] && { esp=$p; break; }
+    continue
+  fi
+  mount -o ro "$p" "$TMP/probe" 2>/dev/null || continue
+  [ -f "$TMP/probe/vmlinuz-lts" ] && esp=$p
+  umount "$TMP/probe" 2>/dev/null || true
+  [ -n "$esp" ] && break
+done < <(lsblk -nrpo NAME,FSTYPE "/dev/$parent" 2>/dev/null)
+[ -n "$esp" ] || { say "no bia ESP on /dev/$parent (a shared Windows ESP stays as it is)"; exit 0; }
+
+read -r old new < <(make_unique "$esp")
+
+# fstab: /boot by this serial (a PARTUUID line, Windows coexist, stays)
+if [ -f "$FSTAB" ] && awk '$2 == "/boot" && ($1 ~ /^LABEL=/ || $1 ~ /^UUID=/) && $1 != "UUID='"$new"'" {f=1} END {exit !f}' "$FSTAB"; then
+  awk -v id="$new" '$2 == "/boot" && ($1 ~ /^LABEL=/ || $1 ~ /^UUID=/) {sub(/^[^ \t]+/, "UUID=" id)} {print}' "$FSTAB" > "$FSTAB.new"
+  mv -f "$FSTAB.new" "$FSTAB"
+  systemctl daemon-reload 2>/dev/null || true
+  say "fstab: /boot is UUID=$new"
+fi
+
+# /boot from the right drive, now
+cur=$(readlink -f "$(findmnt -no SOURCE /boot 2>/dev/null)" 2>/dev/null || true)
+if [ "$cur" != "$(readlink -f "$esp")" ]; then
+  [ -n "$cur" ] && { umount /boot && say "/boot was $cur (another drive); unmounted"; }
+  mkdir -p /boot
+  mount -t vfat -o noatime "$esp" /boot && say "/boot is $esp"
+fi
+
+# GRUB searches for this serial (also when the serial was already unique)
+if [ "$(readlink -f "$(findmnt -no SOURCE /boot 2>/dev/null)" 2>/dev/null)" = "$(readlink -f "$esp")" ]; then
+  fix_grub /boot "$old" "$new"
+fi

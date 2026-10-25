@@ -4,7 +4,7 @@
 Env: ARCH (arm64), LE (work dir: images, sockets, logs), MEM (4G), CPUS (4).
 Each VM's serial output goes to $LE/<name>.log; lines matching SHOW are echoed.
 """
-import os, re, shutil, socket, subprocess, sys, threading, time
+import codecs, os, re, shutil, socket, subprocess, sys, threading, time
 
 ARCH = os.environ.get("ARCH", "arm64")
 LE = os.environ["LE"]
@@ -81,6 +81,7 @@ class VM:
 
     def reader(self):
         partial = ""
+        dec = codecs.getincrementaldecoder("utf-8")(errors="replace")  # keeps a character split across reads
         while True:
             try:
                 d = self.s.recv(65536)
@@ -88,7 +89,7 @@ class VM:
                 break
             if not d:
                 break
-            t = d.decode(errors="replace")
+            t = dec.decode(d)
             self.log.write(t)
             self.log.flush()
             t = ANSI.sub("", t)

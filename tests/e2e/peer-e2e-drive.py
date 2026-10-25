@@ -19,7 +19,7 @@ from e2e_vm import LE, VM, die, link, stamp
 
 DELAY = int(os.environ.get("DELAY", "90"))
 e2e_vm.SHOW = re.compile(r"certificate request|downloaded its certificate|bia-b@web|pki_|requests|MANGO-|Kernel panic")
-READY = r"Ready for commands"
+READY = r"Ready for commands|<-(?:\x1b\[[0-9;]*m)* "  # the agent answered its boot notice (a restored one may not say "ready")
 
 for f in (f"{LE}/a.img", f"{LE}/b.img"):
     if not os.path.exists(f):

@@ -17,6 +17,8 @@
 #   fsck    running from the disk: its root starts with a broken inode checksum
 #           (/usr/bin/df) and the "with errors" state; the boot check (initramfs)
 #           repairs it, then /fsck checks it offline in the rescue image  (carry_fsck)
+#   twin    like disk, but both ESPs are BIABOOT / FAT serial 1234-5678 (as flashed) and
+#           the disk mounts /boot by label: bia-esp-id gives the disk's ESP its own
 #   internet  running from the disk, update the disk from a release served over HTTP
 #             (real bia-<arch>.img stamped 9.9.9; the flash stays attached but is not
 #             newer; /update internet). Needs dist/$ARCH/bia-$ARCH.img (make img).
@@ -57,7 +59,7 @@ do_images() {
 }
 
 scenario_ok() {
-  case ${1:-} in disk|flash|rescue|internet|fsck) ;; *) echo "scenario: disk | flash | rescue | internet | fsck" >&2; exit 2 ;; esac
+  case ${1:-} in disk|flash|rescue|internet|fsck|twin) ;; *) echo "scenario: disk | flash | rescue | internet | fsck | twin" >&2; exit 2 ;; esac
 }
 
 do_prep() { scenario_ok "$1"; image_tool prep "$1"; }
@@ -66,7 +68,7 @@ do_check() { scenario_ok "$1"; image_tool check "$1"; }
 do_run() {
   scenario_ok "$1"
   local boot=disk
-  case $1 in disk|internet|fsck) ;; *) boot=flash ;; esac
+  case $1 in disk|internet|fsck|twin) ;; *) boot=flash ;; esac
   local log=$UT/run-$1.log http=
   if [ "$1" = internet ]; then
     # the "GitHub release": the guest reaches the host's loopback as 10.0.2.2

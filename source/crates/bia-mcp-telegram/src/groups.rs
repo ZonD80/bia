@@ -14,11 +14,11 @@ fn chats_of(u: &tl::enums::Updates) -> Vec<tl::enums::Chat> {
 }
 
 /// Bot-API style id (-100… for supergroups) the other tools take as chat_id.
-fn channel_chat_id(channel_id: i64) -> i64 {
+pub(crate) fn channel_chat_id(channel_id: i64) -> i64 {
     -(channel_id + 1_000_000_000_000)
 }
 
-async fn input_user(client: &Client, target: &str) -> Result<(tl::enums::InputUser, tl::enums::InputPeer), String> {
+pub(crate) async fn input_user(client: &Client, target: &str) -> Result<(tl::enums::InputUser, tl::enums::InputPeer), String> {
     let t = target.trim().trim_start_matches("telegram:");
     let peer = client.resolve(t).await.map_err(|e| format!("{target}: {e}"))?;
     let input = client
@@ -37,12 +37,12 @@ async fn input_user(client: &Client, target: &str) -> Result<(tl::enums::InputUs
     }
 }
 
-enum Group {
+pub(crate) enum Group {
     Super(tl::enums::InputChannel),
     Basic(i64),
 }
 
-async fn group(client: &Client, target: &str) -> Result<(Group, tl::enums::InputPeer), String> {
+pub(crate) async fn group(client: &Client, target: &str) -> Result<(Group, tl::enums::InputPeer), String> {
     let t = target.trim().trim_start_matches("telegram:");
     let peer = client.resolve(t).await.map_err(|e| format!("resolve {target}: {e}"))?;
     let input = client
@@ -62,7 +62,7 @@ async fn group(client: &Client, target: &str) -> Result<(Group, tl::enums::Input
     }
 }
 
-fn kicked() -> tl::enums::ChatBannedRights {
+pub(crate) fn kicked() -> tl::enums::ChatBannedRights {
     tl::enums::ChatBannedRights::ChatBannedRights(tl::types::ChatBannedRights {
         view_messages: true,
         send_messages: true,
@@ -91,7 +91,7 @@ fn kicked() -> tl::enums::ChatBannedRights {
     })
 }
 
-fn no_rights() -> tl::enums::ChatBannedRights {
+pub(crate) fn no_rights() -> tl::enums::ChatBannedRights {
     tl::enums::ChatBannedRights::ChatBannedRights(tl::types::ChatBannedRights {
         view_messages: false,
         send_messages: false,

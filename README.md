@@ -6,7 +6,7 @@ screen is a prompt that talks to an LLM (a cloud model, or optionally one
 running on that machine). The agent
 owns the box: it can run shell commands, manage disks and the network, drive
 Chrome, see and click the desktop, keep passwords and passkeys, answer you on
-Telegram or WhatsApp (including voice calls), schedule work, remember things,
+Telegram or WhatsApp (including voice calls), Messenger or Instagram, schedule work, remember things,
 and update or move itself to another machine.
 
 - **Cloud brain.** Frontier Model Mode (FMM) runs the agent on a cloud model
@@ -77,6 +77,8 @@ where it left off.
 │   │   ├── bia-mcp-screen/    screenshot + mouse/keyboard on display :0
 │   │   ├── bia-mcp-telegram/  Telegram user account (ferogram) + voice calls (tgcalls)
 │   │   ├── bia-mcp-whatsapp/  WhatsApp linked device (whatsapp-rust) + voice calls
+│   │   ├── bia-mcp-meta/      Messenger and Instagram DMs (two MCPs) in front of bia-meta
+│   ├── go/bia-meta/           Go helper on mautrix-meta: messagix, whatsmeow (encrypted chats), instameow
 │   │   ├── bia-mcp-carry/     backup (fold/unfold), machine-to-machine "fly", OS update
 │   │   ├── bia-mcp-lang/      languages heard/spoken: catalog, verified installs, settings
 │   │   ├── bia-speech/        shared on-device speech: VAD, language ID, Whisper, voices
@@ -208,7 +210,7 @@ as `<name>_<tool>`. Rust MCPs can use the `bia-mcp` crate.
 
 Working: x86_64 and arm64 builds, UEFI + Secure Boot (shim), legacy BIOS on
 x86_64, local llama.cpp with GPU backends, FMM, web app (an MCP bus) with mTLS,
-Telegram and WhatsApp (text + voice), Chrome + passkeys, screen control,
+Telegram and WhatsApp (text + voice), Messenger and Instagram DMs, Chrome + passkeys, screen control,
 secrets, memory, schedules, backup / fly / OS update through the rescue image
 (e2e-tested on arm64).
 
