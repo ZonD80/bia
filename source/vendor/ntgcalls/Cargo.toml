@@ -50,7 +50,9 @@ path = "src/lib.rs"
 version = "0.4"
 
 [dependencies.ntgcalls-sys]
-version = "3.0.0"
+# exactly: the bindings must match libntgcalls v3.0.0 (builders/build.sh NTGCALLS_VER);
+# 3.0.5 changed the participants callback
+version = "=3.0.0"
 
 [dependencies.tokio]
 version = "1"

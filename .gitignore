@@ -3,8 +3,7 @@
 **/*.rs.bk
 *.pdb
 
-# --- Lockfiles ----------------------------------------------------------
-Cargo.lock
+# --- Lockfiles (Cargo.lock is committed: releases build the versions tested here) ---
 package-lock.json
 
 # --- Host outputs & caches ----------------------------------------------
