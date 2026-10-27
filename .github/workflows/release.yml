@@ -4,6 +4,7 @@
 #
 # Starts on a pushed tag v<version> (the version in Cargo.toml), or by hand:
 #   gh workflow run release.yml -f only=flashers -f force=true
+#   gh workflow run release.yml -f publish=false     (test build: nothing is released)
 #
 # Secrets: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (notarization), MACOS_CERT_P12 (base64 of
 # the Developer ID Application identity as .p12) and MACOS_CERT_PASSWORD, BIA_TG_API_ID and
@@ -23,6 +24,10 @@ on:
         description: "Rebuild even what the release has (release.sh --force)"
         type: boolean
         default: false
+      publish:
+        description: "Publish the release (off: a test build; the packages stay as run artifacts)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -150,7 +155,7 @@ jobs:
     needs: [linux, macos]
     # what did build is published even when another runner failed (e.g. macOS signing
     # without its secrets); a later run builds only what is still missing
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.publish != false }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
