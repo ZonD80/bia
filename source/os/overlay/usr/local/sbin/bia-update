@@ -114,6 +114,7 @@ fail() { result "$1" "FAIL"; }
 
 # Fail the attended command: message on stdout is what the agent/tool sees.
 refuse() {
+  release_buses
   fail "${1}"
   shift
   say "bia-update: $*"
@@ -431,6 +432,23 @@ live_esp_mount() {
   printf '%s %s\n' "$esp" "$mnt"
 }
 
+# The chat MCPs keep receiving while /home/bia is folded: a message taken in then lands
+# in the live inbox journal and Telegram's catch-up watermark, not in the archive, and
+# the unfold puts the older files back. Stopped (SIGSTOP), they take nothing in;
+# Telegram and WhatsApp keep what arrives for the next boot's catch-up.
+BUSES='/bia-(mcp-(telegram|whatsapp|messenger|instagram)|meta)( |$)'
+
+hold_buses() {
+  pkill -STOP -f "$BUSES" 2>/dev/null || true
+  # a message already written to the agent's pipe gets journaled
+  sleep 1
+}
+
+# also on every refusal (a SIGCONT to a running process does nothing)
+release_buses() {
+  pkill -CONT -f "$BUSES" 2>/dev/null || true
+}
+
 reboot_into_rescue() {
   ok "staged"
   say "bia-update: rebooting into the rescue image"
@@ -661,6 +679,7 @@ start_main() {
     read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
     say "bia-update: folding this machine into $UPDATE"
     rm -f /bia-update/fold.tar.gz /bia-update/rescue-failed /bia-update/rescue.log
+    hold_buses
     if ! run_logged "$bin" --fold-to "$UPDATE/fold.tar.gz" >&2; then
       rm -rf /bia-update/net
       refuse "folding this machine" "the fold failed; nothing was changed"
@@ -698,6 +717,7 @@ start_main() {
   chmod 700 "$UPDATE"
   rm -rf /bia-update/net
   rm -f /bia-update/fold.tar.gz /bia-update/rescue-failed /bia-update/rescue.log
+  hold_buses
   if ! run_logged "$bin" --fold-to "$UPDATE/fold.tar.gz" >&2; then
     refuse "folding this machine" "the fold failed; nothing was changed"
   fi

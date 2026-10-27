@@ -5,6 +5,18 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.4.3
+
+### Changes
+- Telegram messages sent while bia was offline, rebooting or updating now always arrive after it is back, whether or not they were read meanwhile on another device; before, a message sent during an update could be lost.
+- During an OS update the Telegram, WhatsApp, Messenger and Instagram connections pause while the computer is packed up, so messages sent then are delivered after the update instead of getting lost.
+- Chrome starts again after the computer was renamed: a leftover profile lock from the old name kept its debug port closed.
+- Taking a page snapshot, a screenshot or OCR again after waiting is no longer flagged as a pointless repeat, so watching a page load works.
+
+### For bia
+- The first Telegram catch-up after this update may replay older messages (up to 150): the catch-up time could be stuck far in the past, so messages already handled may count as new. Check telegram_history before acting on any that look old, and don't answer the same request twice.
+- If an old SingletonLock rule was written to bia's notes or rules (removing Chrome's lock by hand), drop it: chrome_start and chrome_restart now clear the lock themselves.
+
 ## 1.4.2
 
 ### Changes

@@ -570,7 +570,6 @@ impl Tg {
         };
         let mut text = msg.text().unwrap_or("").to_string();
         let mid = msg.id();
-        watermark::note(chat_id, mid);
         let msg_id = mid.to_string();
         tg.note_msg(mid, chat_id);
         let date = msg.date() as i64;
@@ -1380,22 +1379,24 @@ async fn mark_delivered_read(
     }
 }
 
-/// What was delivered: the last time bia was connected and caught up (`since`, advanced
-/// by a heartbeat while connected) and the newest message id delivered per chat.
-/// Catch-up after a restart delivers every incoming message newer than that, whether or
-/// not it was read meanwhile (e.g. by the owner on their phone).
+/// When bia last had every incoming message: `since`, moved to a few seconds ago whenever
+/// it is connected, caught up and no message is still on its way to the model. Catch-up
+/// after a restart, an update or a dropped connection delivers every incoming message
+/// written after it, by date alone: whether it was read meanwhile (on the owner's phone, or
+/// any other client logged in to this account) does not matter.
 mod watermark {
     use super::Tg;
     use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, OnceLock};
+
+    /// Seconds kept behind `now`: a message Telegram dated just before is still reaching us.
+    const SLACK: i64 = 5;
 
     #[derive(Default, Serialize, Deserialize)]
     struct Mark {
         #[serde(default)]
         since: i64,
-        #[serde(default)]
-        seen: HashMap<String, i32>,
     }
 
     fn path() -> std::path::PathBuf {
@@ -1432,22 +1433,7 @@ mod watermark {
         mark().lock().map(|m| m.since).unwrap_or(0)
     }
 
-    pub fn seen(chat: i64) -> i32 {
-        mark().lock().ok().and_then(|m| m.seen.get(&chat.to_string()).copied()).unwrap_or(0)
-    }
-
-    /// A message of `chat` reached the model.
-    pub fn note(chat: i64, id: i32) {
-        if let Ok(mut m) = mark().lock() {
-            let e = m.seen.entry(chat.to_string()).or_insert(0);
-            if id > *e {
-                *e = id;
-                save(&m);
-            }
-        }
-    }
-
-    /// Everything up to `t` has been delivered.
+    /// Everything written up to `t` has been delivered.
     pub fn advance(t: i64) {
         if let Ok(mut m) = mark().lock() {
             if t > m.since {
@@ -1457,15 +1443,50 @@ mod watermark {
         }
     }
 
-    /// While connected and caught up, move `since` forward once a minute, so the next
-    /// catch-up starts about where this session stopped.
+    static INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+    /// Held while an incoming message is on its way to the model: `since` stays put, so a
+    /// restart meanwhile delivers it again rather than losing it.
+    pub struct Busy;
+
+    pub fn busy() -> Busy {
+        INFLIGHT.fetch_add(1, Ordering::SeqCst);
+        Busy
+    }
+
+    impl Drop for Busy {
+        fn drop(&mut self) {
+            if INFLIGHT.fetch_sub(1, Ordering::SeqCst) == 1 {
+                settle();
+            }
+        }
+    }
+
+    fn caught_up() -> bool {
+        super::CATCHUP_DONE.load(Ordering::SeqCst) && Tg::global().client().is_ok()
+    }
+
+    /// Move `since` up when connected, caught up and nothing is in flight.
+    fn settle() {
+        if INFLIGHT.load(Ordering::SeqCst) == 0 && caught_up() {
+            advance(now() - SLACK);
+        }
+    }
+
+    /// Once a minute: settle, or run the catch-up a reconnect did not run (a stale `since`
+    /// would otherwise stay stale until the next restart).
     pub fn heartbeat() {
         static STARTED: OnceLock<()> = OnceLock::new();
         STARTED.get_or_init(|| {
             std::thread::spawn(|| loop {
                 std::thread::sleep(std::time::Duration::from_secs(60));
-                if super::CATCHUP_DONE.load(std::sync::atomic::Ordering::SeqCst) && Tg::global().client().is_ok() {
-                    advance(now());
+                let tg = Tg::global();
+                if super::CATCHUP_DONE.load(Ordering::SeqCst) {
+                    settle();
+                } else if let Ok(client) = tg.client() {
+                    if tg.phase() == "ready" {
+                        tg.block_on(super::deliver_unread_catchup(&client));
+                    }
                 }
             });
         });
@@ -1486,6 +1507,7 @@ fn message_date(m: &tl::enums::Message) -> i64 {
 /// Skips broadcast channels and banned chats. The first start ever (no watermark yet)
 /// delivers unread messages only.
 async fn deliver_unread_catchup(client: &Client) -> usize {
+    watermark::heartbeat();
     if CATCHUP_DONE.swap(true, Ordering::SeqCst) {
         return 0;
     }
@@ -1501,7 +1523,9 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
             return 0;
         }
     }
-    let started = watermark::now();
+    // live messages finishing meanwhile must not move `since` past the backlog
+    let _busy = watermark::busy();
+    let started = watermark::now() - 5;
     let since = watermark::since();
 
     let dialogs = match client.get_dialogs(CATCHUP_MAX_DIALOGS).await {
@@ -1554,12 +1578,11 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
                 continue;
             }
         };
-        let seen = watermark::seen(chat_id);
         // Newest-first → incoming since we were offline → deliver oldest-first.
         let mut batch: Vec<_> = page
             .messages
             .into_iter()
-            .filter(|m| !m.outgoing() && m.id() > seen)
+            .filter(|m| !m.outgoing())
             .filter(|m| if since > 0 { m.date() as i64 > since } else { true })
             .collect();
         if since == 0 {
@@ -1611,7 +1634,6 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
         }
     }
     watermark::advance(started);
-    watermark::heartbeat();
 
     if delivered > 0 {
         Tg::global().log(format!("catch-up: delivered {delivered} message(s) from while offline"));
@@ -1671,8 +1693,10 @@ async fn run_update_loop(
                     // arrival order.
                     Update::NewMessage(msg) => {
                         let turn = lanes().reserve(&marked_chat_id(msg.peer_id()).to_string());
+                        let busy = watermark::busy();
                         let client = client.clone();
                         Tg::global().rt.spawn(async move {
+                            let _busy = busy;
                             if let Err(e) = Tg::handle_inbound_message(&client, msg, turn).await {
                                 Tg::global().log(format!("inbound error: {e}"));
                             }

@@ -2571,7 +2571,14 @@ impl Tools {
     fn repeat_note(&mut self, name: &str, args: &Value) -> String {
         const KEEP: usize = 8;
         let key = format!("{name} {args}");
-        let times = self.recent_calls.iter().filter(|k| **k == key).count();
+        // A snapshot, screenshot or OCR looks at something that changes by itself (a page
+        // loading, a screen): polling it with other steps between is fine; only the same
+        // look twice in a row is a loop.
+        let times = if observes(name) {
+            self.recent_calls.iter().rev().take_while(|k| **k == key).count()
+        } else {
+            self.recent_calls.iter().filter(|k| **k == key).count()
+        };
         self.recent_calls.push_back(key);
         while self.recent_calls.len() > KEEP {
             self.recent_calls.pop_front();
@@ -3965,6 +3972,18 @@ impl Tools {
     }
 }
 
+/// Functions that look at something changing on its own: chrome_take_snapshot,
+/// chrome_take_screenshot, screen_shot, screen_ocr, chrome_list_pages, console/network lists.
+fn observes(name: &str) -> bool {
+    name.contains("snapshot")
+        || name.contains("screenshot")
+        || name.ends_with("_shot")
+        || name.ends_with("_ocr")
+        || name.ends_with("list_pages")
+        || name.ends_with("console_messages")
+        || name.ends_with("network_requests")
+}
+
 /// say result for a send that is still queued or uploading.
 fn pending_note(id: &str, what: &str, ahead: usize) -> String {
     let ahead = if ahead > 0 {
@@ -4269,6 +4288,18 @@ done
         assert!(note.contains("[repeat]") && note.contains("next step"), "{note}");
         let (_, _, note) = t.guide_call("say", &json!({"message": "hello"})).unwrap();
         assert!(!note.contains("[repeat]"), "{note}");
+        // polling a snapshot or screenshot with a wait between is not a repeat; twice in a row is
+        let none = json!({});
+        let wait = json!({"command": "sleep 12; echo ok"});
+        for f in ["chrome_take_snapshot", "chrome_take_screenshot", "screen_shot", "screen_ocr"] {
+            for _ in 0..4 {
+                let note = t.repeat_note(f, &none);
+                assert!(note.is_empty(), "{f}: {note}");
+                t.repeat_note("bash", &wait);
+            }
+            t.repeat_note(f, &none);
+            assert!(t.repeat_note(f, &none).contains("[repeat]"), "{f} twice in a row");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

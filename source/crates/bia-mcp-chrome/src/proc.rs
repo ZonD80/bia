@@ -129,6 +129,7 @@ fn spawn(bin: &Path) -> Result<u32, String> {
     crate::dialog::prepare();
     // stop() may SIGKILL Chrome; without this the next launch shows "Restore pages?".
     clear_crash_restore_flags(&profile);
+    clear_singleton(&profile);
     let log = log_path();
     if let Some(d) = log.parent() {
         fs::create_dir_all(d).map_err(|e| e.to_string())?;
@@ -303,6 +304,16 @@ pub fn wait_connected(connected: impl Fn() -> bool, secs: u64) -> bool {
 
 fn display() -> String {
     DISPLAY.into()
+}
+
+/// spawn runs only when no Chrome is up, so the profile lock is a leftover. Chrome reads
+/// `SingletonLock -> <hostname>-<pid>` and, when the hostname differs (the machine was
+/// renamed, or the profile came from another one), takes the profile as in use elsewhere:
+/// it does not open the debug port.
+fn clear_singleton(profile: &Path) {
+    for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+        let _ = fs::remove_file(profile.join(f));
+    }
 }
 
 /// Pretend the last exit was clean so Chrome skips the "Restore pages?" interstitial.
