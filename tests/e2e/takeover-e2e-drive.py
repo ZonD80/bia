@@ -10,8 +10,9 @@ the virtual screen. Then takeover.sh and bia-deploy takeover, run on that bia th
 root's shell (/ws/shell), must refuse: a misquoted `ssh host curl … | bash` runs them there.
 
 DEPLOY=1: nothing runs on Ubuntu by itself; this computer's `bia-deploy server` logs in over
-ssh as ubuntu with a password (sudo asks for it too), is refused on first contact until the
-host key is given, plans, takes the server over and saves root's certificate here.
+ssh as ubuntu with a password (sudo asks for it too): first contact trusts the host key, a
+changed key is refused until --host-key names the new one; it plans, takes the server over
+and saves root's certificate here.
 """
 import base64, hashlib, http.server, json, os, re, shutil, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -316,11 +317,21 @@ def deploy_run():
     env = dict(os.environ, BIA_DEPLOY_HOME=home, BIA_RELEASE_URL=f"{host}/rel", BIA_SSH_PASSWORD="ubuntu")
     cmd = [f"{ROOT}/target/release/bia-deploy", "server", "127.0.0.1", "--port", "2222", "--user", "ubuntu",
            "--fmm", f"{ROOT}/fmm.json", "--lang", "en", "--yes", "--no-test", "--no-trust", "--no-wait"]
+    # first contact needs no confirmation: a wrong password gets as far as the login
+    r = subprocess.run(cmd, env={**env, "BIA_SSH_PASSWORD": "wrong"}, capture_output=True, text=True, timeout=180)
+    if r.returncode == 0 or "did not let ubuntu in" not in r.stderr:
+        die("first contact did not reach the login: " + r.stderr[-800:])
+    if os.path.exists(f"{home}/known_hosts.json"):
+        die("a host key was remembered without a successful login")
+    say("first contact goes straight to the login (no host key question)")
+    # a key that changed since it was remembered stops it, naming the new one
+    os.makedirs(home, exist_ok=True)
+    json.dump({"127.0.0.1:2222": "SHA256:stale0000000000000000000000000000000000000000"}, open(f"{home}/known_hosts.json", "w"))
     r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
     m = re.search(r"--host-key (SHA256:\S+)", r.stderr)
-    if r.returncode == 0 or not m:
-        die("bia-deploy did not stop at an unknown host key: " + r.stderr[-800:])
-    say("first contact stops until the host key is given")
+    if r.returncode == 0 or not m or "identity changed" not in r.stderr:
+        die("a changed host key was not refused: " + r.stderr[-800:])
+    say("a changed host key is refused until --host-key names the new one")
     log = open(f"{TE}/deploy.log", "w")
     p = subprocess.run(cmd + ["--host-key", m.group(1)], env=env, stdout=log, stderr=subprocess.STDOUT, text=True, timeout=int(40 * 60 * SCALE))
     out = open(f"{TE}/deploy.log").read()

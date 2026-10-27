@@ -169,7 +169,8 @@ enum Cmd {
         /// Make a new SSH key, print its public half (for the provider) and exit.
         #[arg(long)]
         new_key: bool,
-        /// Trust a server seen for the first time if its host key is this (SHA256:…).
+        /// The server's host key (SHA256:…) to expect. Without it a server seen for the first
+        /// time is trusted and remembered; this also accepts a reinstalled server's new key.
         #[arg(long)]
         host_key: Option<String>,
         /// FMM file (provider, api_key, model, or a ChatGPT sign-in from `chatgpt`).
@@ -821,16 +822,10 @@ fn server(a: ServerArgs) -> Result<()> {
     let s = match ssh::Ssh::connect(&login, a.host_key.as_deref()) {
         Ok(s) => s,
         Err(e) => match e.downcast_ref::<HostKey>() {
-            Some(HostKey::New(fp)) if !a.yes => {
-                eprintln!("   First connection to this server. Its key is {fp}");
-                eprintln!("   (the provider's console can show it: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub)");
-                if ask_line("   Trust it? (yes/no)")? != "yes" {
-                    bail!("not trusted; nothing was changed");
-                }
-                ssh::Ssh::connect(&login, Some(fp))?
-            }
-            Some(HostKey::New(fp)) => bail!("first connection to this server; check its key and pass --host-key {fp}"),
-            _ => return Err(e),
+            Some(HostKey::Changed { now, .. }) => bail!(
+                "{e}. Nothing was changed. If the server was reinstalled, connect again with --host-key {now}"
+            ),
+            None => return Err(e),
         },
     };
     let f = remote::facts(&s)?;

@@ -93,7 +93,7 @@ useSeoMeta({
 })
 
 const flow = [
-  { title: 'Write bia onto a USB stick', text: 'Download the small bia deploy app for Mac, Windows or Linux. Choose how bia should think — usually a cloud brain, or a brain on the stick for powerful computers — and write the stick.' },
+  { title: 'Write bia onto a USB stick', text: 'Download the small bia deploy app for Mac, Windows or Linux. Choose how bia should think — usually a cloud brain, or a brain on the stick for powerful computers — and write the stick. Renting a server instead? The same app puts bia there, no stick needed.' },
   { title: 'Start a computer from the stick', text: 'Plug it into a PC or laptop and switch on. The screen shows bia instead of Windows or a desktop. Nothing on the computer’s own disk is touched unless you ask.' },
   { title: 'Say hello', text: 'Type on the screen, or open bia’s private app from your phone — bia shows you how to get a personal certificate for it.' },
   { title: 'Give it a life', text: 'Ask bia to join WhatsApp, Telegram, Messenger or Instagram, give it a name and a photo, introduce it to the people it will help.' },

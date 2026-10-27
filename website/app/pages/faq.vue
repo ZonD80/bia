@@ -22,7 +22,7 @@
       </div>
     </section>
 
-    <CtaBand title="Still curious?" text="The best way to understand bia is to wake one up. It takes a USB stick and twenty minutes." />
+    <CtaBand title="Still curious?" text="The best way to understand bia is to wake one up. It takes a USB stick or a rented server, and about twenty minutes." />
   </main>
 </template>
 

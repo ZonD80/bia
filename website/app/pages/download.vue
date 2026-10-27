@@ -6,7 +6,7 @@
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Get bia</span>
         </nav>
         <span class="eyebrow">Free software</span>
-        <h1>Get bia onto a USB stick</h1>
+        <h1>Wake your bia</h1>
         <p class="section-lead">
           Download bia deploy for your computer. It writes bia onto a USB stick, then you start any PC or laptop
           from it. It can also put bia on a server you rent, with no commands to type.
@@ -137,7 +137,7 @@
 
 <script setup lang="ts">
 useSeoMeta({
-  title: 'Get bia — write a USB stick',
+  title: 'Wake your bia — on a USB stick or your server',
   description: 'Download bia deploy for Mac, Windows or Linux: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
 })
 

@@ -136,7 +136,10 @@ impl Server {
         });
         match page {
             "hostkey" => {
-                self.host_key = Some(HostKey::New("SHA256:q3Xh1vXo9bK0Q2m7Jd4sJxT1y8fGz6uWcR5pLmN0aE4".into()));
+                self.host_key = Some(HostKey::Changed {
+                    known: "SHA256:q3Xh1vXo9bK0Q2m7Jd4sJxT1y8fGz6uWcR5pLmN0aE4".into(),
+                    now: "SHA256:Zt8bW2xQ0pLr7nYc4Hk1sVd9Ua6Ej3Mf5Gi2Oq8Rw0T".into(),
+                });
                 self.step = Step::HostKey;
             }
             "confirm" => self.step = Step::Confirm,
@@ -523,21 +526,6 @@ impl FlashApp {
     fn host_key_step(&mut self, ui: &mut egui::Ui) {
         let h = self.srv.host_key.clone();
         card(ui, |ui| match &h {
-            Some(HostKey::New(fp)) => {
-                ui.label(egui::RichText::new("First time talking to this server").size(19.0).strong());
-                ui.label("Every server has its own fingerprint. If your provider's page shows one, it should be this:");
-                ui.label(egui::RichText::new(fp).monospace());
-                ui.label(egui::RichText::new("bia remembers it, and warns you if this address ever answers with another one.").small().weak());
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if primary_button(ui, "Trust it and continue", true).clicked() {
-                        self.srv.connect(Some(fp.clone()));
-                    }
-                    if ui.button("Back").clicked() {
-                        self.srv.back_to_login();
-                    }
-                });
-            }
             Some(HostKey::Changed { known, now }) => {
                 let red = ui.visuals().error_fg_color;
                 ui.label(egui::RichText::new("This server's fingerprint changed").size(19.0).strong().color(red));

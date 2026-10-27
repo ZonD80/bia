@@ -24,7 +24,7 @@
       </div>
     </section>
 
-    <CtaBand title="Ready to meet it?" text="Write bia onto a USB stick and wake up a computer you are not using." />
+    <CtaBand title="Ready to meet it?" text="Write bia onto a USB stick for a computer you are not using, or put it on your server." />
   </main>
 </template>
 

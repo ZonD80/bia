@@ -5,6 +5,11 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.5.1
+
+### Changes
+- bia deploy no longer asks to confirm a server's fingerprint the first time it connects: it trusts and remembers it. It still stops if a server it knows answers with a different fingerprint (for example after a reinstall) and asks before going on.
+
 ## 1.5.0
 
 ### Changes

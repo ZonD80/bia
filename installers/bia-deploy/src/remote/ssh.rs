@@ -35,18 +35,18 @@ impl Login {
     }
 }
 
-/// The server's host key is not the one this computer knows (or none is known yet).
-/// The caller shows the fingerprint and connects again with `accept` set to it.
+/// The server's host key is not the one this computer knows for that address (or not the
+/// one the caller expected). The caller shows both and, if the person says the server was
+/// reinstalled, forgets the old one and connects again with `accept` set to the new one.
+/// A server seen for the first time is trusted without asking (and remembered).
 #[derive(Debug, Clone)]
 pub enum HostKey {
-    New(String),
     Changed { known: String, now: String },
 }
 
 impl std::fmt::Display for HostKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HostKey::New(fp) => write!(f, "first connection to this server (its key is {fp})"),
             HostKey::Changed { known, now } => write!(
                 f,
                 "this server's identity changed: it was {known}, now it is {now}. A reinstalled server gets a new one; otherwise someone may be in between"
@@ -108,7 +108,8 @@ impl client::Handler for Client {
             PublicKeyOrCertificate::Certificate(c) => c.public_key().fingerprint(HashAlg::Sha256).to_string(),
         };
         *self.seen.lock().unwrap() = Some(fp.clone());
-        Ok(self.want.as_deref() == Some(fp.as_str()))
+        // nothing known yet: trust on first contact
+        Ok(self.want.as_deref().is_none_or(|w| w == fp))
     }
 }
 
@@ -152,8 +153,9 @@ pub fn quote(s: &str) -> String {
 }
 
 impl Ssh {
-    /// Log in. The host key must be the remembered one, or `accept` (a fingerprint the
-    /// person agreed to); otherwise the error is a [`HostKey`].
+    /// Log in. A server seen for the first time is trusted and its host key remembered;
+    /// after that the key must be the remembered one, or `accept` (a fingerprint the person
+    /// agreed to or expects); otherwise the error is a [`HostKey`].
     pub fn connect(l: &Login, accept: Option<&str>) -> Result<Ssh> {
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
         let known = known(&l.id());
@@ -174,13 +176,9 @@ impl Ssh {
             Err(_) => bail!("{} does not answer on port {} (wrong address or port, or a firewall)", l.host, l.port),
             Ok(Ok(h)) => h,
             Ok(Err(e)) => {
-                if let Some(now) = seen.lock().unwrap().clone() {
-                    if want.as_deref() != Some(now.as_str()) {
-                        return Err(match known {
-                            Some(k) if accept.is_none() => HostKey::Changed { known: k, now },
-                            _ => HostKey::New(now),
-                        }
-                        .into());
+                if let (Some(now), Some(w)) = (seen.lock().unwrap().clone(), want.clone()) {
+                    if w != now {
+                        return Err(HostKey::Changed { known: w, now }.into());
                     }
                 }
                 return Err(anyhow!(e)).with_context(|| format!("cannot connect to {} port {}", l.host, l.port));
@@ -228,7 +226,8 @@ impl Ssh {
                 }
             );
         }
-        if accept.is_some() && known.as_deref() != Some(host_key.as_str()) {
+        // first contact, or a new key the person accepted: remembered once the login worked
+        if known.as_deref() != Some(host_key.as_str()) {
             remember(&l.id(), &host_key)?;
         }
         let mut s = Ssh { rt, handle, user: l.user.clone(), host_key, sudo: Sudo::Root };
