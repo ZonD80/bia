@@ -5,6 +5,9 @@ PLATFORM_arm64 = linux/arm64
 PLATFORM_x86_64 = linux/amd64
 PLATFORM = $(PLATFORM_$(ARCH))
 DOCKER_RUN = docker run --rm --privileged --platform $(PLATFORM) -v $(CURDIR):/work -v bia-cache-$(ARCH):/cache bia-build:$(ARCH)
+# On a Linux host what the container writes stays root's (Docker Desktop maps it to the
+# user): hand dist/ and source/flash/ back before host tools write there (CI runners).
+OWN = $(if $(filter Linux,$(shell uname -s)),$(DOCKER_RUN) chown -R $(shell id -u):$(shell id -g) /work/dist /work/source/flash,true)
 
 NET ?= bridge
 INTERNAL ?= 1
@@ -37,6 +40,7 @@ builder:            ## Debian build container (glibc dynamic agent + MCPs)
 
 build:              ## agent + MCPs + debian rootfs for $(ARCH)
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) all
+	$(OWN)
 	tools/local-files.sh $(ARCH)
 
 rust:
@@ -47,6 +51,7 @@ mcps:
 
 rootfs:
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) rootfs
+	$(OWN)
 	tools/local-files.sh $(ARCH)
 
 local-files:        ## dist/$(ARCH)/bia-$(ARCH).img + local-files.json for the bia-deploy GUI (after a build)

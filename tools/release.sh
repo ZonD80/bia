@@ -278,7 +278,7 @@ docker_flash() { # command
   docker run --rm --platform "$plat" -v "$ROOT":/work -v "bia-cache-$ba":/cache -w /work \
     -e CARGO_TARGET_DIR=/cache/flash-target -e CARGO_PROFILE_RELEASE_DEBUG=0 -e CARGO_PROFILE_RELEASE_STRIP=debuginfo \
     -e RUSTFLAGS="--remap-path-prefix=/work=/bia --remap-path-prefix=/cache/cargo=/cargo --remap-path-prefix=/root=/home" \
-    "bia-build:$ba" bash -lc "export CARGO_HOME=\${CARGO_HOME:-/cache/cargo}; $1"
+    "bia-build:$ba" bash -lc "export CARGO_HOME=\${CARGO_HOME:-/cache/cargo}; $1; rc=\$?; chown -R $(id -u):$(id -g) /work/dist/release 2>/dev/null; exit \$rc"
 }
 
 # A file takeover.sh downloads: size + sha256 into bia-os.json "tools".
