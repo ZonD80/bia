@@ -6,8 +6,12 @@ instructions. The driver downloads root.p12 from the gate page (hostfwd), lets t
 reboot, watches bia's rescue write the disk, waits for bia's web app and checks it
 with that certificate: identity root, the CA the takeover printed, the bootstrap route
 closed, seeds moved into place, bia-net's interfaces, setup instructions handed over,
-the virtual screen. Then takeover.sh and bia-flash takeover, run on that bia through
+the virtual screen. Then takeover.sh and bia-deploy takeover, run on that bia through
 root's shell (/ws/shell), must refuse: a misquoted `ssh host curl … | bash` runs them there.
+
+DEPLOY=1: nothing runs on Ubuntu by itself; this computer's `bia-deploy server` logs in over
+ssh as ubuntu with a password (sudo asks for it too), is refused on first contact until the
+host key is given, plans, takes the server over and saves root's certificate here.
 """
 import base64, hashlib, http.server, json, os, re, shutil, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -24,6 +28,12 @@ GATE_PORT, WEB_PORT = 18444, 18443
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 LAND = bool(os.environ.get("LAND"))
 AGENT_LAND = os.environ.get("LAND") == "agent"
+DEPLOY = bool(os.environ.get("DEPLOY"))
+# DEPLOY: sudo must ask ubuntu's password (cloud images let it sudo without one)
+SUDO_PASSWORD = """rm -f /etc/sudoers.d/90-cloud-init-users
+echo "takeover-e2e: ready for ssh"
+exit 0
+"""
 # NET=onlink: before the takeover Ubuntu switches to a static /32 with an on-link gateway
 # (the Hetzner pattern); the takeover must carry that over or bia is unreachable after it.
 NET = os.environ.get("NET", "dhcp")
@@ -129,6 +139,8 @@ for f in ("go",):
         os.remove(f"{WWW}/{f}")
     except OSError:
         pass
+# takeover.sh lives next to the release files, as in a real release
+shutil.copyfile(f"{WWW}/takeover.sh", f"{WWW}/rel/takeover.sh")
 fmm = json.load(open(f"{ROOT}/fmm.json"))
 config = {
     "fmm": {k: v for k, v in fmm.items() if k in ("provider", "api_key", "model", "base_url", "ctx")},
@@ -152,6 +164,7 @@ exec > >(while IFS= read -r l; do printf '%s\n' "$l" > /dev/kmsg; done) 2>&1
 cd /root
 {ONLINK if NET == "onlink" else ""}
 {'echo "takeover-e2e: ready for ssh"; exit 0' if AGENT_LAND else ""}
+{SUDO_PASSWORD if DEPLOY else ""}
 echo "takeover-e2e: fetching takeover.sh"
 curl -fsS {host}/takeover.sh -o takeover.sh
 curl -fsS {host}/config.json -o config.json
@@ -173,6 +186,12 @@ users:
 runcmd:
   - [bash, -c, "curl -fsS {host}/run.sh | bash"]
 """ if AGENT_LAND else f"""#cloud-config
+password: ubuntu
+chpasswd: {{expire: false}}
+ssh_pwauth: true
+runcmd:
+  - [bash, -c, "curl -fsS {host}/run.sh | bash"]
+""" if DEPLOY else f"""#cloud-config
 password: ubuntu
 chpasswd: {{expire: false}}
 runcmd:
@@ -290,6 +309,43 @@ def agent_land_run():
             fly.proc.kill()
 
 
+def deploy_run():
+    """DEPLOY: bia-deploy server from this computer; root's certificate, CA PEM, CA fingerprint."""
+    home = f"{TE}/deploy-home"
+    shutil.rmtree(home, ignore_errors=True)
+    env = dict(os.environ, BIA_DEPLOY_HOME=home, BIA_RELEASE_URL=f"{host}/rel", BIA_SSH_PASSWORD="ubuntu")
+    cmd = [f"{ROOT}/target/release/bia-deploy", "server", "127.0.0.1", "--port", "2222", "--user", "ubuntu",
+           "--fmm", f"{ROOT}/fmm.json", "--lang", "en", "--yes", "--no-test", "--no-trust", "--no-wait"]
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=180)
+    m = re.search(r"--host-key (SHA256:\S+)", r.stderr)
+    if r.returncode == 0 or not m:
+        die("bia-deploy did not stop at an unknown host key: " + r.stderr[-800:])
+    say("first contact stops until the host key is given")
+    log = open(f"{TE}/deploy.log", "w")
+    p = subprocess.run(cmd + ["--host-key", m.group(1)], env=env, stdout=log, stderr=subprocess.STDOUT, text=True, timeout=int(40 * 60 * SCALE))
+    out = open(f"{TE}/deploy.log").read()
+    print("\n".join("  | " + l for l in out.splitlines()[-25:]), flush=True)
+    if p.returncode != 0:
+        die(f"bia-deploy server failed (exit {p.returncode}), see {TE}/deploy.log")
+    if "root through sudo" not in out or "the server reboots into bia's installer now" not in out:
+        die("bia-deploy did not go through sudo to the reboot")
+    key = fmm.get("api_key", "")
+    if len(key) > 12 and key[6:-4] in out:
+        die("the API key reached bia-deploy's output")
+    known = json.load(open(f"{home}/known_hosts.json"))
+    if known.get("127.0.0.1:2222") != m.group(1):
+        die(f"the host key was not remembered: {known}")
+    fp = re.search(r"CA fingerprint \(SHA-256\): ([0-9a-f]{64})", out)
+    if not fp:
+        die("bia-deploy printed no CA fingerprint")
+    d = f"{home}/servers/127.0.0.1"
+    p12, ca_pem = open(f"{d}/bia-root.p12", "rb").read(), open(f"{d}/ca.crt", "rb").read()
+    if hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca_pem.decode())).hexdigest() != fp.group(1):
+        die("the CA bia-deploy saved does not match the fingerprint")
+    say(f"bia-deploy took the server over: root.p12 ({len(p12)} bytes) and the CA saved here")
+    return p12, ca_pem, fp.group(1)
+
+
 # ---- QEMU: UEFI, no display device, user net with the gate and bia's HTTPS forwarded ----
 shutil.copyfile(f"{FW}/edk2-arm-vars.fd" if ARCH == "arm64" else f"{FW}/edk2-i386-vars.fd", f"{TE}/vars.fd")
 if ARCH == "arm64":
@@ -314,57 +370,65 @@ if os.path.exists(LOG):
 say(f"booting Ubuntu ({ARCH}, {FIRMWARE}, network {NET})")
 proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=open(f"{TE}/qemu.err", "w"))
 try:
+    if DEPLOY:
+        wait_for(r"takeover-e2e: ready for ssh", 15 * 60)
+        say("Ubuntu is up: ubuntu logs in with a password, sudo asks for it")
+        mark = len(ANSI.sub("", serial()))
+        p12, ca_pem, fp = deploy_run()
+        open(f"{TE}/root.p12", "wb").write(p12)
+        open(f"{TE}/ca.pem", "wb").write(ca_pem)
     if AGENT_LAND:
         wait_for(r"takeover-e2e: ready for ssh", 15 * 60)
         say("Ubuntu is up with the flyer's ssh key")
         agent_land_run()
         sys.exit(0)
-    wait_for(r"takeover-e2e: fetching takeover\.sh", 15 * 60)
-    say("cloud-init started the takeover")
-    if LAND:
-        land_run()
-        sys.exit(0)
-    m = wait_for(r"https://\S+?:8443/([0-9a-f]{32})/", 30 * 60, fail=r"(?m)takeover-e2e: takeover exit [1-9]|^error: ")
-    token = m.group(1)
-    # the takeover's stderr (through /dev/kmsg) and its own console copy (announce) can
-    # interleave on the serial line: take the first fingerprint after the heading
-    fp = wait_for(r"(?s)CA fingerprint \(SHA-256\) of the new bia:.*?\b([0-9a-f]{64})\b", 60).group(1)
-    say(f"gate up; CA {fp[:16]}…")
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    p12 = urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/root.p12", context=ctx, timeout=30).read()
-    open(f"{TE}/root.p12", "wb").write(p12)
-    # the gate offers no separate CA: root.p12 carries it
-    ca = subprocess.run(["openssl", "pkcs12", "-in", f"{TE}/root.p12", "-passin", "pass:12345678", "-cacerts", "-nokeys"],
-                        capture_output=True, text=True)
-    m_ca = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", ca.stdout, re.S)
-    if not m_ca:
-        die("root.p12 holds no CA certificate: " + ca.stderr)
-    ca_pem = (m_ca.group(0) + "\n").encode()
-    open(f"{TE}/ca.pem", "wb").write(ca_pem)
-    st404 = 0
-    try:
-        urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/ca.crt", context=ctx, timeout=30)
-    except urllib.error.HTTPError as e:
-        st404 = e.code
-    if st404 != 404:
-        die(f"the gate still serves a separate CA (HTTP {st404 or 200})")
-    der = ssl.PEM_cert_to_DER_cert(ca_pem.decode())
-    if hashlib.sha256(der).hexdigest() != fp:
-        die("the gate's CA does not match the fingerprint the terminal showed")
-    say(f"root.p12 downloaded from the gate ({len(p12)} bytes); the CA inside it matches")
-    wait_for(r"takeover-e2e: takeover exit 0", 120)
-    # the takeover also writes to every console itself (announce), without the gate's secrets
-    mirrored = [l for l in ANSI.sub("", serial()).splitlines() if "bia takeover: " in l]
-    if not any("ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW" in l for l in mirrored) or \
-            not any("root's certificate was downloaded from the gate page" in l for l in mirrored):
-        die(f"the takeover did not announce itself on the console ({len(mirrored)} lines)")
-    if any(token in l for l in mirrored):
-        die("the gate's token reached the console")
-    say(f"the takeover announced itself on the console ({len(mirrored)} lines), without the gate's token")
-    open(f"{WWW}/go", "w").write("go\n")
-    mark = len(ANSI.sub("", serial()))
+    if not DEPLOY:
+        wait_for(r"takeover-e2e: fetching takeover\.sh", 15 * 60)
+        say("cloud-init started the takeover")
+        if LAND:
+            land_run()
+            sys.exit(0)
+        m = wait_for(r"https://\S+?:8443/([0-9a-f]{32})/", 30 * 60, fail=r"(?m)takeover-e2e: takeover exit [1-9]|^error: ")
+        token = m.group(1)
+        # the takeover's stderr (through /dev/kmsg) and its own console copy (announce) can
+        # interleave on the serial line: take the first fingerprint after the heading
+        fp = wait_for(r"(?s)CA fingerprint \(SHA-256\) of the new bia:.*?\b([0-9a-f]{64})\b", 60).group(1)
+        say(f"gate up; CA {fp[:16]}…")
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        p12 = urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/root.p12", context=ctx, timeout=30).read()
+        open(f"{TE}/root.p12", "wb").write(p12)
+        # the gate offers no separate CA: root.p12 carries it
+        ca = subprocess.run(["openssl", "pkcs12", "-in", f"{TE}/root.p12", "-passin", "pass:12345678", "-cacerts", "-nokeys"],
+                            capture_output=True, text=True)
+        m_ca = re.search(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", ca.stdout, re.S)
+        if not m_ca:
+            die("root.p12 holds no CA certificate: " + ca.stderr)
+        ca_pem = (m_ca.group(0) + "\n").encode()
+        open(f"{TE}/ca.pem", "wb").write(ca_pem)
+        st404 = 0
+        try:
+            urllib.request.urlopen(f"https://127.0.0.1:{GATE_PORT}/{token}/ca.crt", context=ctx, timeout=30)
+        except urllib.error.HTTPError as e:
+            st404 = e.code
+        if st404 != 404:
+            die(f"the gate still serves a separate CA (HTTP {st404 or 200})")
+        der = ssl.PEM_cert_to_DER_cert(ca_pem.decode())
+        if hashlib.sha256(der).hexdigest() != fp:
+            die("the gate's CA does not match the fingerprint the terminal showed")
+        say(f"root.p12 downloaded from the gate ({len(p12)} bytes); the CA inside it matches")
+        wait_for(r"takeover-e2e: takeover exit 0", 120)
+        # the takeover also writes to every console itself (announce), without the gate's secrets
+        mirrored = [l for l in ANSI.sub("", serial()).splitlines() if "bia takeover: " in l]
+        if not any("ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW" in l for l in mirrored) or \
+                not any("root's certificate was downloaded from the gate page" in l for l in mirrored):
+            die(f"the takeover did not announce itself on the console ({len(mirrored)} lines)")
+        if any(token in l for l in mirrored):
+            die("the gate's token reached the console")
+        say(f"the takeover announced itself on the console ({len(mirrored)} lines), without the gate's token")
+        open(f"{WWW}/go", "w").write("go\n")
+        mark = len(ANSI.sub("", serial()))
     wait_for(r"bia-rescue: takeover: replacing", 10 * 60, since=mark)
     say("bia's rescue started from the one-shot boot entry")
     wait_for(r"bia-rescue: takeover done", 30 * 60, fail=r"bia-rescue: .*\[ FAIL \]", since=mark)
@@ -419,7 +483,8 @@ try:
     want(len(chain) == 2 and hashlib.sha256(ssl.PEM_cert_to_DER_cert(chain[1])).hexdigest() == fp,
          f"the web app sends the full chain: server certificate, then the CA ({len(chain)} certificate(s))")
     st, agent = get("/v1/pki/agent", ctx=nctx)
-    want(st == 200 and json.loads(agent).get("name") == "te-bia", "agent name from the config, agent CSR published")
+    want(st == 200 and json.loads(agent).get("name") == ("te-bia" if not DEPLOY else json.loads(agent).get("name") or "?"),
+         "agent name from the config, agent CSR published")
 
     def fsget(p):
         from urllib.parse import quote
@@ -440,13 +505,17 @@ try:
     want(st != 200, "seeds were removed from the ESP")
     st, _ = fsget("/home/bia/files/state/fmm.json")
     want(st == 200, "FMM keys seeded")
-    end = time.time() + 5 * 60
-    while True:
-        st, s = fsget("/home/bia/files/state/setup.done.md")
-        if st == 200 or time.time() > end:
-            break
-        time.sleep(5)
-    want(st == 200 and b"Takeover e2e" in s, "setup instructions handed to the model once (setup.done.md)")
+    if DEPLOY:
+        st, _ = fsget("/home/bia/files/state/setup.md")
+        want(st != 200, "bia-deploy hands over no setup instructions")
+    else:
+        end = time.time() + 5 * 60
+        while True:
+            st, s = fsget("/home/bia/files/state/setup.done.md")
+            if st == 200 or time.time() > end:
+                break
+            time.sleep(5)
+        want(st == 200 and b"Takeover e2e" in s, "setup instructions handed to the model once (setup.done.md)")
     st, xlog = fsget("/var/log/Xorg.bia.log")
     want(st == 200 and b"dummy" in xlog.lower(), "no display device: Xorg runs on the virtual screen")
 
@@ -575,9 +644,9 @@ try:
     refused = "this machine already runs bia"
     out, rc = shell(f"curl -fsS {host}/takeover.sh | BIA_RELEASE_URL={host}/rel bash -s -- --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")
     want(rc != 0 and refused in out, f"takeover.sh refuses on bia itself (exit {rc})")
-    out, rc = shell(f"rm -rf /tmp/te-tool && mkdir /tmp/te-tool && curl -fsS {host}/rel/bia-flash-linux-{ARCH}.tar.gz | tar -C /tmp/te-tool -xz && "
-                    f"/tmp/te-tool/bia-flash/bia-flash takeover --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")
-    want(rc != 0 and refused in out, f"bia-flash takeover refuses on bia itself (exit {rc})")
+    out, rc = shell(f"rm -rf /tmp/te-tool && mkdir /tmp/te-tool && curl -fsS {host}/rel/bia-deploy-linux-{ARCH}.tar.gz | tar -C /tmp/te-tool -xz && "
+                    f"/tmp/te-tool/bia-deploy/bia-deploy takeover --land --land-secret {SECRET} --yes --wipe /dev/vda --reboot")
+    want(rc != 0 and refused in out, f"bia-deploy takeover refuses on bia itself (exit {rc})")
     st, _ = get("/v1/whoami")
     want(st == 200, "bia still runs after both refusals")
     if errs:

@@ -37,7 +37,7 @@ else:
     vm.expect("bia-grow moves the model in", r"bia-grow: moving model", T, fail=FAIL)
     vm.expect("model ready", r"bia-grow: [^\n]*\.gguf: ready", T, fail=FAIL)
     if re.search(r"growing BIAROOT over the whole disk", vm.text()):
-        die("bia-flash left BIAROOT short of the disk end", vm)
+        die("bia-deploy left BIAROOT short of the disk end", vm)
 vm.expect("agent up on the FMM keys", READY, T, fail=FAIL)
 time.sleep(10)
 vm.send("/poweroff")

@@ -1,4 +1,4 @@
-//! A complete PKI made before bia runs (`bia-flash takeover`): CA, server certificate
+//! A complete PKI made before bia runs (`bia-deploy takeover`): CA, server certificate
 //! with fixed names and addresses, an active root certificate and auto-approve rules.
 //! The files go onto the ESP and `bia-seed` moves them into `files/state/pki` on first
 //! boot. Because root is already issued, the public first-time root route

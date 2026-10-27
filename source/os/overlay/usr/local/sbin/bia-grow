@@ -1,13 +1,13 @@
 #!/bin/bash
-# Make the root ext4 fill the stick, moving in the model bia-flash left on the
+# Make the root ext4 fill the stick, moving in the model bia-deploy left on the
 # partition tail.
 #
 # A stick written from bia-<arch>.img(.xz) by another tool (Etcher, Rufus, dd)
 # has the image's small GPT: the backup table sits where the image ended and
 # BIAROOT stops there. That is fixed first: backup GPT to the end of the disk,
-# BIAROOT grown over the rest (bia-flash already lays it over the whole stick).
+# BIAROOT grown over the rest (bia-deploy already lays it over the whole stick).
 #
-# bia-flash writes root.img at the start of BIAROOT (it is only as large as the
+# bia-deploy writes root.img at the start of BIAROOT (it is only as large as the
 # OS needs) and streams the chosen GGUF raw onto the end of the same partition,
 # listed in /boot/EFI/bia/models.txt as
 #   <byte offset inside the partition> <size> <sha256 or -> <name>
@@ -58,7 +58,7 @@ grow_partition() {
   start=$(cat "/sys/class/block/$name/start")
   size=$(cat "/sys/class/block/$name/size")
   disk_bytes=$(blockdev --getsize64 "/dev/$disk")
-  # sysfs counts 512-byte sectors. bia-flash (bia_disk::write_gpt) leaves ~5 MiB
+  # sysfs counts 512-byte sectors. bia-deploy (bia_disk::write_gpt) leaves ~5 MiB
   # after BIAROOT for alignment and the backup GPT; an image written by another
   # tool leaves the rest of the stick.
   [ $(( disk_bytes - (start + size) * 512 )) -gt $(( 16 << 20 )) ] || return 0

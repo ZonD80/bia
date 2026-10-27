@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, codesign, and notarize bia-flash (GUI .app + CLI) for macOS.
+# Build, codesign, and notarize bia-deploy (GUI .app + CLI) for macOS.
 # Signing / notarization match ltw-macos/release.sh (AENGIX Developer ID).
 #
 # Usage:
@@ -15,10 +15,10 @@
 #   CODESIGN_IDENTITY       (optional; default AENGIX Developer ID)
 #
 # Artifacts → installers/dist/macos-<arch>/:
-#   bia flash.app
-#   bia-flash-<version>-macos-<arch>.dmg   (notarized + stapled when enabled)
-#   bia-flash                              (CLI binary, signed)
-#   bia-flash-cli-<version>-macos-<arch>.zip  (notarized)
+#   bia deploy.app
+#   bia-deploy-<version>-macos-<arch>.dmg   (notarized + stapled when enabled)
+#   bia-deploy                              (CLI binary, signed)
+#   bia-deploy-cli-<version>-macos-<arch>.zip  (notarized)
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ UNIVERSAL=0
 
 usage() {
   cat <<'EOF'
-Build and notarize bia-flash for macOS (GUI app + CLI).
+Build and notarize bia-deploy for macOS (GUI app + CLI).
 
 Usage:
   installers/macos/release.sh [options]
@@ -130,15 +130,15 @@ VERSION="$(
 if [[ -z "$VERSION" ]]; then
   VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/Cargo.toml" | head -1)"
 fi
-VERSION="${VERSION:-1.4.3}"
+VERSION="${VERSION:-1.5.0}"
 
-APP_BUNDLE_NAME="bia flash.app"
+APP_BUNDLE_NAME="bia deploy.app"
 APP_PATH="$DIST_DIR/$APP_BUNDLE_NAME"
-CLI_NAME="bia-flash"
+CLI_NAME="bia-deploy"
 CLI_PATH="$DIST_DIR/$CLI_NAME"
-STAMPED_DMG_NAME="bia-flash-${VERSION}-macos-${arch}.dmg"
+STAMPED_DMG_NAME="bia-deploy-${VERSION}-macos-${arch}.dmg"
 STAMPED_DMG_PATH="$DIST_DIR/$STAMPED_DMG_NAME"
-CLI_ZIP_NAME="bia-flash-cli-${VERSION}-macos-${arch}.zip"
+CLI_ZIP_NAME="bia-deploy-cli-${VERSION}-macos-${arch}.zip"
 CLI_ZIP_PATH="$DIST_DIR/$CLI_ZIP_NAME"
 
 echo "==> Using signing identity"
@@ -168,10 +168,10 @@ echo "==> Building release binaries (gui feature)"
   if [[ "$UNIVERSAL" -eq 1 ]]; then
     for t in aarch64-apple-darwin x86_64-apple-darwin; do
       rustup target list --installed | grep -qx "$t" || rustup target add "$t"
-      cargo build --release -p bia-flash --features gui --target "$t"
+      cargo build --release -p bia-deploy --features gui --target "$t"
     done
   else
-    cargo build --release -p bia-flash --features gui
+    cargo build --release -p bia-deploy --features gui
   fi
 )
 
@@ -184,14 +184,14 @@ REL="$target_dir/release"
 if [[ "$UNIVERSAL" -eq 1 ]]; then
   REL="$target_dir/universal-apple-darwin/release"
   mkdir -p "$REL"
-  for b in bia-flash bia-flash-gui; do
+  for b in bia-deploy bia-deploy-gui; do
     lipo -create -output "$REL/$b" \
       "$target_dir/aarch64-apple-darwin/release/$b" "$target_dir/x86_64-apple-darwin/release/$b"
     lipo -info "$REL/$b"
   done
 fi
-GUI_BIN="$REL/bia-flash-gui"
-CLI_BIN="$REL/bia-flash"
+GUI_BIN="$REL/bia-deploy-gui"
+CLI_BIN="$REL/bia-deploy"
 [[ -x "$GUI_BIN" ]] || { echo "error: missing $GUI_BIN" >&2; exit 1; }
 [[ -x "$CLI_BIN" ]] || { echo "error: missing $CLI_BIN" >&2; exit 1; }
 
@@ -212,8 +212,8 @@ if [[ "$DO_APP" -eq 1 ]]; then
   cp -f "$INFO_PLIST" "$APP_PATH/Contents/Info.plist"
   cp -f "$MACOS_DIR/AppIcon.icns" "$APP_PATH/Contents/Resources/AppIcon.icns"
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_PATH/Contents/Info.plist"
-  cp -f "$GUI_BIN" "$APP_PATH/Contents/MacOS/bia-flash-gui"
-  chmod 755 "$APP_PATH/Contents/MacOS/bia-flash-gui"
+  cp -f "$GUI_BIN" "$APP_PATH/Contents/MacOS/bia-deploy-gui"
+  chmod 755 "$APP_PATH/Contents/MacOS/bia-deploy-gui"
 
   echo "==> Signing app with $CODESIGN_IDENTITY"
   codesign --force --deep --options runtime --timestamp \
@@ -236,7 +236,7 @@ if [[ "$DO_APP" -eq 1 ]]; then
     "${CREATE_DMG_CMD[@]}" \
       --overwrite \
       --identity="$CODESIGN_IDENTITY" \
-      --dmg-title="bia flash" \
+      --dmg-title="bia deploy" \
       "$APP_PATH" \
       "$DIST_DIR"
     CREATED_DMG_PATH="$(ls -t "$DIST_DIR"/*.dmg 2>/dev/null | head -1 || true)"
@@ -253,7 +253,7 @@ if [[ "$DO_APP" -eq 1 ]]; then
     STAGE="$(mktemp -d)"
     cp -R "$APP_PATH" "$STAGE/"
     ln -s /Applications "$STAGE/Applications"
-    hdiutil create -volname "bia flash" -srcfolder "$STAGE" -ov -format UDZO "$STAMPED_DMG_PATH"
+    hdiutil create -volname "bia deploy" -srcfolder "$STAGE" -ov -format UDZO "$STAMPED_DMG_PATH"
     rm -rf "$STAGE"
   fi
 
@@ -305,14 +305,14 @@ if [[ "$DO_CLI" -eq 1 ]]; then
 fi
 
 cat >"$DIST_DIR/README.txt" <<EOF
-bia flash — macOS ${arch} (v${VERSION})
+bia deploy — macOS ${arch} (v${VERSION})
 
 GUI:
-  Open "bia flash.app", or install from ${STAMPED_DMG_NAME}
+  Open "bia deploy.app", or install from ${STAMPED_DMG_NAME}
 
 CLI:
-  ./bia-flash list
-  ./bia-flash write --disk /dev/rdiskN --arch x86_64 --yes   # downloads the bia image from GitHub
+  ./bia-deploy list
+  ./bia-deploy write --disk /dev/rdiskN --arch x86_64 --yes   # downloads the bia image from GitHub
   Zip: ${CLI_ZIP_NAME}
 
 Signed with Developer ID. Notarization: $([[ "$NOTARIZE" -eq 1 ]] && echo yes || echo skipped).

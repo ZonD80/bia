@@ -75,7 +75,7 @@ request: GET /v1/pki/agent gives a bia's agent CSR, and a certificate request ma
 for the other side); one approval gives access both ways.
 
 Take over a Linux server: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash
-(flags and JSON configs: bia-flash takeover --help; --land --land-secret <secret> makes a land a bia can fly to).
+(flags and JSON configs: bia-deploy takeover --help; --land --land-secret <secret> makes a land a bia can fly to).
 `
 }
 

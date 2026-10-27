@@ -1,6 +1,6 @@
 #!/bin/bash
 # Write a bootable bia stick: a small EFI partition and one ext4 root.
-# New sticks: dist/$ARCH/bia-$ARCH.img (tools/mkimg.sh) written by bia-flash.
+# New sticks: dist/$ARCH/bia-$ARCH.img (tools/mkimg.sh) written by bia-deploy.
 # The root image holds the OS, /home/bia (no model) and the swap file. BIAROOT
 # spans the whole stick; bia-grow fills it with the ext4 on first boot.
 # ERASE=1 wipes the stick. Without ERASE, a stick that already has BIAROOT is
@@ -17,7 +17,7 @@
 #   Local FMM keys (gitignored): ./fmm.json or source/flash/files/state/fmm.json
 #   Optional path: FMM=path/to/fmm.json  (path only — never put the API key in env)
 #   The FMM model is tested (one tool call) before anything is written; NO_TEST=1 skips that.
-# New / erased sticks use installers/bia-flash (cross-platform). In-place refresh of an
+# New / erased sticks use installers/bia-deploy (cross-platform). In-place refresh of an
 # existing BIAROOT stick uses the macOS diskutil path below.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,7 +27,7 @@ FLASH=${FLASH:-source/flash}
 ROOT_MB=${ROOT_MB:-3072}
 ROOTIMG=${ROOTIMG:-dist/$ARCH/root.img}
 MODEL=${MODEL:-}
-# The owner's language for bia-flash --lang (a code like ru, or a name; default: host locale).
+# The owner's language for bia-deploy --lang (a code like ru, or a name; default: host locale).
 BIA_LANG=${BIA_LANG:-}
 # usb (a USB stick or card reader) or sd (an SD card in the Mac's built-in reader)
 MEDIA=${MEDIA:-usb}
@@ -151,7 +151,7 @@ mp() { diskutil info "$1" | awk -F': +' '/Mount Point/ {print $2; exit}'; }
 
 # Existing stick: do not repartition. BIAROOT is the one root filesystem.
 EXISTING=0
-# The model goes onto the raw end of a fresh BIAROOT, so it needs the bia-flash path.
+# The model goes onto the raw end of a fresh BIAROOT, so it needs the bia-deploy path.
 [ -n "$MODEL" ] && ERASE=1
 if [ "${ERASE:-0}" != 1 ]; then
   for s in $(diskutil list "$DISK" | awk '/^ *[0-9]+:/ {print $NF}'); do
@@ -164,7 +164,7 @@ if [ "${ERASE:-0}" != 1 ]; then
 fi
 
 # The stick is the EFI slice plus one ext4 root; there is no second partition
-# for the weights or for swap. bia-flash checks room for MODEL itself.
+# for the weights or for swap. bia-deploy checks room for MODEL itself.
 ESP_MIB=256
 BIOS_MIB=1
 GPT_SLACK_MIB=16
@@ -197,13 +197,13 @@ fi
 
 FLASHDIR="$ROOT/$FLASH"
 
-# ---- bia-flash (preferred for full erase / new sticks) ----
+# ---- bia-deploy (preferred for full erase / new sticks) ----
 if [ "$EXISTING" != 1 ]; then
-  echo "== building bia-flash"
-  cargo build --release -p bia-flash -q
+  echo "== building bia-deploy"
+  cargo build --release -p bia-deploy -q
   target_dir=$(cargo metadata --format-version=1 --no-deps 2>/dev/null \
     | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])')
-  FLASH_BIN="$target_dir/release/bia-flash"
+  FLASH_BIN="$target_dir/release/bia-deploy"
   [ -x "$FLASH_BIN" ] || { echo "missing $FLASH_BIN"; exit 1; }
   fmm_args=()
   fmm_file=""
@@ -228,7 +228,7 @@ if [ "$EXISTING" != 1 ]; then
   [ -n "$BIA_LANG" ] && model_args+=(--lang "$BIA_LANG")
   echo "== unmounting $DISK"
   diskutil unmountDisk force "$DISK" >/dev/null || true
-  echo "== bia-flash write /dev/r$DISK"
+  echo "== bia-deploy write /dev/r$DISK"
   echo "== bia disk image from $ROOTIMG"
   KERNEL=0 OUT="$KERN_DIR/bia-$ARCH.img" tools/mkimg.sh "$ARCH"
   sudo --preserve-env=HF_TOKEN "$FLASH_BIN" write \

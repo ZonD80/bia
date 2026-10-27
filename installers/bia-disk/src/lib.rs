@@ -1,4 +1,4 @@
-//! GPT layout for bia images and sticks (`bia-mkimage`, `bia-flash`).
+//! GPT layout for bia images and sticks (`bia-mkimage`, `bia-deploy`).
 //!
 //! Layout (GPT, 512-byte sectors):
 //!   p1  BIABOOT  EFI System Partition, FAT32, 256 MiB  -> shim + GRUB + vmlinuz + initramfs

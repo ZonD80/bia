@@ -1,23 +1,23 @@
 [package]
-name = "bia-flash"
+name = "bia-deploy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Cross-platform USB stick writer for bia (bia disk image + optional FMM keys and Hugging Face GGUF)"
-default-run = "bia-flash"
+description = "Deploys bia: writes a USB stick or takes over a server over SSH (bia disk image, FMM keys, Hugging Face GGUF)"
+default-run = "bia-deploy"
 
 [[bin]]
-name = "bia-flash"
+name = "bia-deploy"
 path = "src/main.rs"
 
 [[bin]]
-name = "bia-flash-gui"
+name = "bia-deploy-gui"
 path = "src/gui_main.rs"
 required-features = ["gui"]
 
 [features]
 default = []
-gui = ["eframe", "egui", "rfd"]
+gui = ["eframe", "egui", "rfd", "image"]
 
 [dependencies]
 bia-disk = { path = "../bia-disk" }
@@ -34,9 +34,14 @@ base64 = "0.22"
 getrandom = "0.2"
 # xz images (bundled liblzma, multi-threaded decoding)
 liblzma = { version = "0.4", default-features = false, features = ["static", "parallel"] }
+# SSH to a server for a takeover (pure Rust, ring: cross-builds with MinGW)
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa", "flate2"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 eframe = { version = "0.29", optional = true, default-features = true }
 egui = { version = "0.29", optional = true }
+# BIA_DEPLOY_SHOT: the window saves a screenshot of itself (docs, checks)
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 # Native file dialog; on Linux via the XDG portal (no GTK build dependency).
 rfd = { version = "0.15", optional = true, default-features = false, features = ["xdg-portal", "tokio"] }
 

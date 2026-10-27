@@ -20,6 +20,7 @@ pub mod lang;
 pub mod image;
 mod local_files;
 pub mod release;
+pub mod remote;
 pub mod takeover;
 mod write;
 
@@ -33,3 +34,22 @@ pub use fmm::{
 };
 pub use image::{build_image, ImageSources};
 pub use write::{parse_progress, write_stick, FlashOptions, ProgressFn, ESP_MODELS_REL, MODEL_HEADROOM};
+
+/// This app's own folder (ChatGPT registration, SSH keys and known servers, root
+/// certificates of the servers it set up). `BIA_DEPLOY_HOME` replaces it (tests).
+pub fn app_dir() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if let Some(p) = std::env::var_os("BIA_DEPLOY_HOME") {
+        return Some(PathBuf::from(p));
+    }
+    let base = if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    }?;
+    Some(base.join("bia-deploy"))
+}

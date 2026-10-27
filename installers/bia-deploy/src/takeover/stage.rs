@@ -182,7 +182,7 @@ pub fn grub_cfg_uefi(rel: &str, id: &str) -> String {
 /// system instead.
 pub fn grub_hook(id_on_esp: &str) -> String {
     format!(
-        "# bia takeover (bia-flash): remove this block to boot the old system again\nif search --no-floppy --set=bia_hook --file /EFI/bia-takeover/{id_on_esp}; then\n  configfile ($bia_hook)/EFI/bia-takeover/grub.cfg\nfi\n"
+        "# bia takeover (bia-deploy): remove this block to boot the old system again\nif search --no-floppy --set=bia_hook --file /EFI/bia-takeover/{id_on_esp}; then\n  configfile ($bia_hook)/EFI/bia-takeover/grub.cfg\nfi\n"
     )
 }
 

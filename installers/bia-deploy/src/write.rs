@@ -23,7 +23,7 @@ pub const MODEL_HEADROOM: u64 = 512 * 1024 * 1024;
 pub struct FlashOptions {
     /// Whole-disk path (`/dev/rdiskN`, `/dev/sdb`, `\\.\PhysicalDriveN`) or a raw image file.
     pub disk: PathBuf,
-    /// bia disk image, raw or xz (`bia-<arch>.img[.xz]`: a release download or `bia-flash image`).
+    /// bia disk image, raw or xz (`bia-<arch>.img[.xz]`: a release download or `bia-deploy image`).
     pub image: PathBuf,
     /// sha256 of the raw image, checked before the ESP is written (release images).
     pub image_sha256: Option<String>,
@@ -94,7 +94,7 @@ pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
     if (layout.boot_start, layout.boot_len, layout.bios_start, layout.bios_len, layout.root_start)
         != (il.boot_start, il.boot_len, il.bios_start, il.bios_len, il.root_start)
     {
-        bail!("the image's partitions do not match this writer's layout (newer image? update bia-flash)");
+        bail!("the image's partitions do not match this writer's layout (newer image? update bia-deploy)");
     }
     progress(&format!(
         "BIAROOT spans {} MiB; ext4 grows to fill it on first boot",
@@ -608,7 +608,7 @@ pub(crate) mod image_tests {
         assert_eq!(raw_size(&img_xz).unwrap(), size);
         assert_eq!(raw_size(&img).unwrap(), size);
 
-        // Written by bia-flash onto a 600 MiB "stick" with keys.
+        // Written by bia-deploy onto a 600 MiB "stick" with keys.
         let stick = dir.join("stick.img");
         let stick_size = 600u64 << 20;
         let fmm: FmmInput = serde_json::from_value(serde_json::json!({

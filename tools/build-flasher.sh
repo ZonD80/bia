@@ -1,7 +1,7 @@
 #!/bin/bash
-# Build release bia-flash (+ optional GUI) for the host OS.
+# Build release bia-deploy (+ optional GUI) for the host OS.
 #   tools/build-flasher.sh           # CLI only
-#   tools/build-flasher.sh gui       # CLI + bia-flash-gui
+#   tools/build-flasher.sh gui       # CLI + bia-deploy-gui
 # Output: installers/dist/<os>-<arch>/
 #
 # On macOS prefer: installers/macos/release.sh  (Developer ID + notarization)
@@ -14,18 +14,18 @@ if [ "$(uname -s)" = Darwin ] && [ "${1:-}" = gui ] && [ "${FORCE_PLAIN_FLASHER:
 fi
 WITH_GUI=${1:-}
 features=()
-bins=(bia-flash)
+bins=(bia-deploy)
 if [ "$WITH_GUI" = gui ] || [ "$WITH_GUI" = --gui ]; then
   features=(--features gui)
-  bins+=(bia-flash-gui)
+  bins+=(bia-deploy-gui)
 fi
 # Keep the builder's home directory and checkout path out of shipped binaries.
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$PWD=/bia --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
 # The workspace release profile keeps debug=1; shipped installers carry none
 # (on macOS the debug map would list every object file by absolute path).
 export CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_STRIP=debuginfo
-echo "== cargo build --release -p bia-flash ${features[*]:-}"
-cargo build --release -p bia-flash "${features[@]+"${features[@]}"}"
+echo "== cargo build --release -p bia-deploy ${features[*]:-}"
+cargo build --release -p bia-deploy "${features[@]+"${features[@]}"}"
 
 target_dir=$(cargo metadata --format-version=1 --no-deps 2>/dev/null \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["target_directory"])')
@@ -53,31 +53,31 @@ for b in "${bins[@]}"; do
   echo "   $out/$(basename "$src")"
 done
 cat >"$out/README.txt" <<EOF
-bia-flash — write a bootable bia USB stick
+bia-deploy — write a bootable bia USB stick
 
 CLI:
-  bia-flash list
+  bia-deploy list
   # Keys from local gitignored fmm.json (or --fmm path):
   cp fmm.json.example fmm.json   # edit api_key
-  bia-flash write --disk /dev/… --arch x86_64 --yes      # bia image from the latest GitHub release
-  bia-flash write --disk /dev/… --os-image dist/<arch>/bia-<arch>.img --yes   # local build (tools/mkimg.sh)
+  bia-deploy write --disk /dev/… --arch x86_64 --yes      # bia image from the latest GitHub release
+  bia-deploy write --disk /dev/… --os-image dist/<arch>/bia-<arch>.img --yes   # local build (tools/mkimg.sh)
   # Local model from Hugging Face (HF_TOKEN for gated repos):
-  bia-flash search qwen3 4b instruct
-  bia-flash files unsloth/Qwen3-4B-Instruct-2507-GGUF
-  bia-flash write … --model unsloth/Qwen3-4B-Instruct-2507-GGUF:Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+  bia-deploy search qwen3 4b instruct
+  bia-deploy files unsloth/Qwen3-4B-Instruct-2507-GGUF
+  bia-deploy write … --model unsloth/Qwen3-4B-Instruct-2507-GGUF:Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 
 GUI (if built with gui):
-  bia-flash-gui
+  bia-deploy-gui
 
 Use your ChatGPT plan instead of a key (browser sign-in; one per stick):
-  bia-flash chatgpt                       # lists your models
-  bia-flash chatgpt --model <id>          # saves fmm.json for write --fmm
+  bia-deploy chatgpt                       # lists your models
+  bia-deploy chatgpt --model <id>          # saves fmm.json for write --fmm
 Where to get an API key (links per provider):
-  bia-flash keys
+  bia-deploy keys
 List the models an FMM key can use (provider detected from the key):
-  bia-flash models claude
+  bia-deploy models claude
 Wake bia on the FMM model (write does this first; --no-test skips):
-  bia-flash test
+  bia-deploy test
 
 FMM keys are written to EFI/bia/fmm.json on the FAT32 ESP. The agent seeds
 them into /home/bia/files/state/fmm.json on first boot when state is empty.

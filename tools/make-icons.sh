@@ -5,9 +5,9 @@
 #   website/public/icon.svg             favicon (cropped mark, no ground shadow)
 #   website/public/favicon.ico          16/32/48
 #   website/public/apple-touch-icon.png 180, full-bleed panel square (iOS rounds it)
-#   installers/macos/AppIcon.icns       bia flash.app (panel tile, macOS grid)
-#   installers/bia-flash/assets/icon.ico      Windows .exe resource (16…256)
-#   installers/bia-flash/assets/icon-256.png  window icon (egui; Linux/Windows title bar)
+#   installers/macos/AppIcon.icns       bia deploy.app (panel tile, macOS grid)
+#   installers/bia-deploy/assets/icon.ico      Windows .exe resource (16…256)
+#   installers/bia-deploy/assets/icon-256.png  window icon (egui; Linux/Windows title bar)
 #   source/crates/bia-mcp-web/web/icon-192.png          web console notifications + manifest
 #   source/crates/bia-mcp-web/web/apple-touch-icon.png  web console on an iOS home screen
 set -euo pipefail
@@ -17,7 +17,7 @@ CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 [ -x "$CHROME" ] || { echo "need Google Chrome (set CHROME=…)" >&2; exit 1; }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-mkdir -p installers/bia-flash/assets
+mkdir -p installers/bia-deploy/assets
 
 # ---- variants (SVG) ----
 python3 - "$ROOT/brand/potato.svg" "$TMP" <<'PY'
@@ -104,8 +104,8 @@ open(out, "wb").write(head + dirs + b"".join(blobs))
 PY
 }
 ico website/public/favicon.ico 16 32 48
-ico installers/bia-flash/assets/icon.ico 16 32 48 64 128 256
-cp "$TMP/mark-256.png" installers/bia-flash/assets/icon-256.png
+ico installers/bia-deploy/assets/icon.ico 16 32 48 64 128 256
+cp "$TMP/mark-256.png" installers/bia-deploy/assets/icon-256.png
 
 # ---- web console (bia-mcp-web) ----
 scale "$TMP/mark-1024.png" source/crates/bia-mcp-web/web/icon-192.png 192
@@ -121,7 +121,7 @@ done
 iconutil -c icns "$set_dir" -o installers/macos/AppIcon.icns
 
 ls -l website/public/icon.svg website/public/favicon.ico website/public/apple-touch-icon.png \
-  installers/macos/AppIcon.icns installers/bia-flash/assets/icon.ico installers/bia-flash/assets/icon-256.png \
+  installers/macos/AppIcon.icns installers/bia-deploy/assets/icon.ico installers/bia-deploy/assets/icon-256.png \
   source/crates/bia-mcp-web/web/icon-192.png source/crates/bia-mcp-web/web/apple-touch-icon.png
 cp "$TMP/tile-1024.png" "${PREVIEW_DIR:-$TMP}/tile-1024.png" 2>/dev/null || true
 cp "$TMP/mark-1024.png" "${PREVIEW_DIR:-$TMP}/mark-1024.png" 2>/dev/null || true

@@ -8,7 +8,7 @@ pub const ESP_FMM_REL: &str = "EFI/bia/fmm.json";
 /// Host-local lookup order for test / flash keys (never commit these).
 pub const LOCAL_FMM_CANDIDATES: &[&str] = &["fmm.json", "source/flash/files/state/fmm.json"];
 
-/// Where a non-technical user gets a key, for the flasher's help (GUI panel, `bia-flash keys`).
+/// Where a non-technical user gets a key, for the flasher's help (GUI panel, `bia-deploy keys`).
 pub struct KeyGuide {
     pub provider: &'static str,
     pub name: &'static str,
@@ -24,7 +24,7 @@ pub struct KeyGuide {
 pub const KEY_STEPS: &[&str] = &[
     "Open the provider's page and sign up (or sign in).",
     "Add a little credit with a card. A few dollars lasts a long time.",
-    "Press \"Create key\", copy the key, and paste it into bia flash.",
+    "Press \"Create key\", copy the key, and paste it into bia deploy.",
 ];
 
 pub const KEY_GUIDES: &[KeyGuide] = &[
@@ -160,7 +160,7 @@ pub fn list_models(provider: &str, key: &str, base_url: &str) -> Result<Vec<Clou
     };
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
-        .user_agent("bia-flash")
+        .user_agent("bia-deploy")
         .build()
         .into();
     let req = if matches!(provider, "anthropic" | "claude") {
@@ -216,7 +216,7 @@ pub fn default_model(provider: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FmmInput {
     /// Empty: taken from the key's prefix.
     #[serde(default)]

@@ -12,7 +12,7 @@ pub const LOCAL_FILES_NAME: &str = "local-files.json";
 pub struct LocalFiles {
     /// `x86_64` or `arm64`.
     pub arch: String,
-    /// bia disk image (`dist/<arch>/bia-<arch>.img`, from `bia-flash image`).
+    /// bia disk image (`dist/<arch>/bia-<arch>.img`, from `bia-deploy image`).
     pub image: PathBuf,
     /// When the build wrote the file (informational).
     #[serde(default)]

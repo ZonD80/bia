@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build dist/bia.img: 256 MiB EFI + 1 MiB BIOS boot + one ext4 (OS, /home/bia, swap file).
-# The image is the root filesystem plus the ESP (no model; bia-flash adds one to sticks).
+# The image is the root filesystem plus the ESP (no model; bia-deploy adds one to sticks).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 FLASH=${FLASH:-source/flash}

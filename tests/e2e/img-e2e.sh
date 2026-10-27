@@ -4,7 +4,7 @@
 #   tests/e2e/img-e2e.sh images   bia-<arch>.img.xz from dist/<arch>/root.img (overlay scripts,
 #                             agent, carry/system MCPs from the work tree), then the stick:
 #                               MODE=flash  a local "GitHub release" (bia-os.json + .img.xz
-#                                           over HTTP) written by bia-flash onto the whole
+#                                           over HTTP) written by bia-deploy onto the whole
 #                                           stick with ./fmm.json and a Hugging Face model
 #                               MODE=dd     the .img.xz decoded onto a bigger disk as Etcher,
 #                                           Rufus or dd would, plus ./fmm.json copied onto
@@ -47,8 +47,8 @@ do_images() {
   cp "dist/$ARCH/root.img" "$IE/root.img"
   image_tool patch
   tools/esp-kernel.sh "$IE/root.img" "dist/$ARCH"
-  cargo build --release -q -p bia-flash
-  local bf=target/release/bia-flash img=$IE/rel/bia-$ARCH.img
+  cargo build --release -q -p bia-deploy
+  local bf=target/release/bia-deploy img=$IE/rel/bia-$ARCH.img
   rm -rf "$IE/rel" "$IE/cache" "$IE/stick.img"
   mkdir -p "$IE/rel"
   "$bf" image --root "$IE/root.img" --esp source/flash --kern "dist/$ARCH" --arch "$ARCH" --out "$img"
@@ -76,8 +76,8 @@ PY
     local srv=$!
     trap "kill $srv 2>/dev/null || true" EXIT
     sleep 1
-    echo "== bia-flash write from the local release (keys + $MODEL)"
-    BIA_RELEASE_URL=http://127.0.0.1:$port BIA_FLASH_CACHE=$IE/cache \
+    echo "== bia-deploy write from the local release (keys + $MODEL)"
+    BIA_RELEASE_URL=http://127.0.0.1:$port BIA_DEPLOY_CACHE=$IE/cache \
       "$bf" write --disk "$IE/stick.img" --image --size "$stick" --arch "$ARCH" \
       --fmm fmm.json --model "$MODEL" --yes
   else

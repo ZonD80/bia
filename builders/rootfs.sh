@@ -255,7 +255,7 @@ USED=$(du -sxm "$ROOT" | awk '{print $1}')
 FLASH_MB=0
 if [ -d /work/source/flash ]; then
   FLASH_MB=$(du -sxm /work/source/flash | awk '{print $1}')
-  # Models never go into the image (bia-flash puts one on the stick); a dev's
+  # Models never go into the image (bia-deploy puts one on the stick); a dev's
   # local *.gguf in flash/model must not count.
   gguf_mb=0
   while IFS= read -r -d '' f; do
@@ -286,7 +286,7 @@ chmod 1777 "$MNT/tmp"
 if [ -d /work/source/flash ]; then
   echo "== /home/bia from flash/ (MCPs, files; no model)"
   # files/state and files/inbox are machine-local (FMM keys, sessions, conversation):
-  # ship the empty folders only. Keys reach a stick through bia-flash --fmm, never the image.
+  # ship the empty folders only. Keys reach a stick through bia-deploy --fmm, never the image.
   tar_ex=(--exclude=./EFI --exclude=./boot --exclude=./lost+found
     --exclude='./files/state/*' --exclude='./files/inbox/*/*'
     --exclude='.DS_Store' --exclude='._*' --exclude='*.gguf')

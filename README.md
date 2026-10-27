@@ -104,7 +104,7 @@ where it left off.
 ├── installers/
 │   ├── bia-disk/              GPT layout library (ESP + BIOS boot + ext4 root)
 │   ├── bia-mkimage/           host tool: write that layout into an image
-│   ├── bia-flash/             cross-platform USB writer, CLI + egui GUI, FMM keys, HF models
+│   ├── bia-deploy/            USB stick writer and server takeover over SSH, CLI + egui GUI
 │   ├── macos/                 codesign / notarize / DMG release script
 │   └── dist/<os>-<arch>/      built installer binaries (not in git)
 │
@@ -123,7 +123,7 @@ where it left off.
   targets). Docker Desktop (or another Docker engine) with `linux/arm64` and
   `linux/amd64` platforms.
 - QEMU with EDK2 firmware for `make run`.
-- A host Rust toolchain for `bia-mkimage` / `bia-flash`.
+- A host Rust toolchain for `bia-mkimage` / `bia-deploy`.
 - For local inference, a GGUF from Hugging Face picked when flashing
   (`MODEL=repo[:file.gguf] make flash`, or the flasher GUI); otherwise an FMM
   key. Images never contain a model.
@@ -138,11 +138,11 @@ ARCH=x86_64 make builder build
 make image                   # dist/bia.img (16 GiB QEMU flash image) from dist/<arch>
 make run                     # boot it in QEMU (arm64 + hvf on Apple Silicon)
 make run-serial              # same, headless, serial console in this terminal
-make flash                   # write a USB stick with bia-flash (x86_64 by default)
+make flash                   # write a USB stick with bia-deploy (x86_64 by default)
 MODEL=unsloth/Qwen3-4B-Instruct-2507-GGUF make flash   # … plus a GGUF from Hugging Face
 make iso                     # installer ISO without a model (x86_64 by default)
 MODE=dd make img-e2e         # QEMU test of the image (MODE=flash|dd, FIRMWARE=uefi|bios, ARCH)
-NOTARIZE=0 make flasher      # bia-flash CLI + GUI; on macOS also .app / DMG
+NOTARIZE=0 make flasher      # bia-deploy CLI + GUI; on macOS also .app / DMG
 tools/make-icons.sh          # website favicon/icons + flasher .icns/.ico/window icon from brand/potato.svg (macOS, needs Chrome)
 tools/release.sh             # GitHub release v<version>: builds only what is missing (OS per arch, flashers), notarizes, uploads
 make update-e2e              # QEMU end-to-end test of the rescue-image OS update
@@ -162,7 +162,7 @@ Two local files are gitignored and never committed:
 
 | File | Used by | Contents |
 |---|---|---|
-| `fmm.json` (from `fmm.json.example`) | `make flash`, `bia-flash --fmm` | cloud model provider, API key, model |
+| `fmm.json` (from `fmm.json.example`) | `make flash`, `bia-deploy --fmm` | cloud model provider, API key, model |
 | `.env` (from `.env.example`) | `make flasher` on macOS; `make build` | Apple ID / app password for notarization; Telegram `BIA_TG_API_ID` / `BIA_TG_API_HASH` (required for the telegram MCP, compiled into it) |
 
 FMM keys are written onto the stick's ESP (`EFI/bia/fmm.json`) only when you

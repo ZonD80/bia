@@ -2,7 +2,7 @@
 # Release bia on GitHub (zond80/bia): check what the release for this version already
 # has, build only the missing packages, notarize the Mac flasher, upload.
 #
-#   tools/release.sh [-n NOTES] [--only PKG,…]  (NOTES default: this version's Changes in RELEASE_NOTES.md) [--dry-run] [--build-only] [--allow-dirty] [--rebuild-os] [--force]
+#   tools/release.sh [-n NOTES] [--only PKG,…]  (NOTES default: this version's Changes in RELEASE_NOTES.md) [--dry-run] [--build-only] [--publish] [--within PKG,…] [--allow-dirty] [--rebuild-os] [--force]
 #
 #   --only        packages and/or groups, comma-separated:
 #                   flashers = flash-macos,flash-linux,flash-linux-arm64,flash-windows
@@ -10,6 +10,11 @@
 #                   land = land-x86_64,land-arm64
 #                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
+#   --publish     build nothing: upload what --build-only runs left in dist/release/<tag> (their
+#                 .built-* records), merging bia-os.json once (GitHub Actions: builds on several
+#                 runners, one publish job; .github/workflows/release.yml)
+#   --within      like --only, but narrows instead of choosing: a runner's own packages, so a
+#                 workflow can pass the person's --only and its runner's set together
 #   --allow-dirty allow uncommitted/unpushed work (tests; never for a real release)
 #   --force       rebuild every selected package even if the release has it (the OS from
 #                 scratch, as --rebuild-os) and replace its assets; without --only: all of them
@@ -17,21 +22,21 @@
 # Tag: v<workspace version> (Cargo.toml). Packages and their release assets:
 #   os-x86_64      bia-x86_64.img.xz  minimal bia disk image (tools/os-bundle.py: GPT, ESP,
 #                  BIOS GRUB, BIAROOT; no keys, no model). Etcher/Rufus/dd write it as it is
-#                  (bia-grow fills the stick on first boot); bia-flash adds keys and a model
+#                  (bia-grow fills the stick on first boot); bia-deploy adds keys and a model
 #   os-arm64       bia-arm64.img.xz
-#                  (+ bia-os.json, the manifest bia-flash downloads the OS with)
-#   flash-macos    bia-flash-macos-universal.dmg + bia-flash-cli-macos-universal.zip
+#                  (+ bia-os.json, the manifest bia-deploy downloads the OS with)
+#   flash-macos    bia-deploy-macos-universal.dmg + bia-deploy-cli-macos-universal.zip
 #                  (Developer ID signed + notarized; credentials in .env)
-#   flash-linux    bia-flash-linux-x86_64.tar.gz  (built in bia-build:x86_64)
-#   flash-linux-arm64  bia-flash-linux-arm64.tar.gz  (built in bia-build:arm64)
+#   flash-linux    bia-deploy-linux-x86_64.tar.gz  (built in bia-build:x86_64)
+#   flash-linux-arm64  bia-deploy-linux-arm64.tar.gz  (built in bia-build:arm64)
 #   takeover       takeover.sh  replaces a running Linux (a VPS) with bia; downloads the
 #                  Linux flasher for its architecture, checked against bia-os.json "tools"
-#   flash-windows  bia-flash-windows-x86_64.zip   (cross-built with MinGW in bia-build:x86_64)
+#   flash-windows  bia-deploy-windows-x86_64.zip   (cross-built with MinGW in bia-build:x86_64)
 #   land-x86_64    bia-land-x86_64.iso.xz  installer ISO that installs bia and waits to land
 #   land-arm64     bia-land-arm64.iso.xz   (xz: the raw ISO is over GitHub's 2 GiB file limit;
 #                  Etcher and Raspberry Pi Imager write .iso.xz directly)
 # Asset names carry no version, so https://github.com/zond80/bia/releases/latest/download/<name>
-# always points at the newest release (website download links, bia-flash).
+# always points at the newest release (website download links, bia-deploy).
 #
 # Before anything ships, every built file is scanned for the FMM API keys, the Apple
 # app password, $HF_TOKEN and this machine's home path.
@@ -42,7 +47,7 @@ ROOT=$(pwd)
 REPO=zond80/bia
 ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover)
 
-NOTES="" ONLY="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 FORCE=0
+NOTES="" ONLY="" WITHIN="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 PUBLISH=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$SELF"; }
 while [[ $# -gt 0 ]]; do
@@ -51,6 +56,8 @@ while [[ $# -gt 0 ]]; do
     --only) [[ $# -ge 2 ]] || die "--only needs a value (see --help)"; ONLY=$2; shift 2 ;;
     --dry-run) DRY=1; shift ;;
     --build-only) BUILD_ONLY=1; shift ;;
+    --publish) PUBLISH=1; shift ;;
+    --within) [[ $# -ge 2 ]] || die "--within needs a value"; WITHIN=$2; shift 2 ;;
     --allow-dirty) DIRTY=1; shift ;;
     --rebuild-os) REBUILD_OS=1; shift ;;
     --force) FORCE=1; REBUILD_OS=1; shift ;;
@@ -60,10 +67,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ---- what to release: --only packages and groups, in ALL's order, no duplicates ----
-PKGS=("${ALL[@]}")
-if [[ -n "$ONLY" ]]; then
-  want=" "
-  IFS=, read -r -a items <<<"$ONLY"
+expand() { # comma list → " pkg pkg … " (groups expanded)
+  local want=" " i items
+  IFS=, read -r -a items <<<"$1"
   for i in "${items[@]}"; do
     i=${i//[[:space:]]/}
     case $i in
@@ -75,12 +81,24 @@ if [[ -n "$ONLY" ]]; then
          want+="$i " ;;
     esac
   done
-  PKGS=()
-  for p in "${ALL[@]}"; do [[ $want == *" $p "* ]] && PKGS+=("$p"); done
-  [[ ${#PKGS[@]} -gt 0 ]] || die "--only selects nothing"
+  echo "$want"
+}
+PKGS=("${ALL[@]}")
+for sel in "$ONLY" "$WITHIN"; do
+  [[ -n "$sel" ]] || continue
+  want=$(expand "$sel")
+  keep=()
+  for p in "${PKGS[@]}"; do [[ $want == *" $p "* ]] && keep+=("$p"); done
+  PKGS=(${keep[@]+"${keep[@]}"})
+done
+if [[ ${#PKGS[@]} -eq 0 ]]; then
+  [[ -n "$WITHIN" ]] || die "--only selects nothing"
+  echo "== nothing of ${ONLY:-all} is built on this runner ($WITHIN)"
+  exit 0
 fi
 
-for c in gh git python3 xz docker; do command -v "$c" >/dev/null || die "'$c' is required"; done
+# docker only where a package needs it (the macOS runner has none)
+for c in gh git python3 xz; do command -v "$c" >/dev/null || die "'$c' is required"; done
 gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -118,23 +136,24 @@ manifest_has_arch() {
 complete() { # pkg
   case $1 in
     os-*) local a=${1#os-}; has "bia-$a.img.xz" && manifest_has_arch "$a" ;;
-    flash-macos) has bia-flash-macos-universal.dmg && has bia-flash-cli-macos-universal.zip ;;
-    flash-linux) has bia-flash-linux-x86_64.tar.gz && manifest_has_tool bia-flash-linux-x86_64.tar.gz ;;
-    flash-linux-arm64) has bia-flash-linux-arm64.tar.gz && manifest_has_tool bia-flash-linux-arm64.tar.gz ;;
+    flash-macos) has bia-deploy-macos-universal.dmg && has bia-deploy-cli-macos-universal.zip ;;
+    flash-linux) has bia-deploy-linux-x86_64.tar.gz && manifest_has_tool bia-deploy-linux-x86_64.tar.gz ;;
+    flash-linux-arm64) has bia-deploy-linux-arm64.tar.gz && manifest_has_tool bia-deploy-linux-arm64.tar.gz ;;
     takeover) has takeover.sh ;;
-    flash-windows) has bia-flash-windows-x86_64.zip ;;
+    flash-windows) has bia-deploy-windows-x86_64.zip ;;
     land-*) has "bia-land-${1#land-}.iso.xz" ;;
     *) die "unknown package $1" ;;
   esac
 }
 
 TODO=()
-for p in "${PKGS[@]}"; do
+[[ $PUBLISH -eq 1 ]] && PKGS=()
+for p in ${PKGS[@]+"${PKGS[@]}"}; do
   if [[ $FORCE -eq 1 ]]; then echo "   build $p (--force)"; TODO+=("$p")
   elif complete "$p"; then echo "   have  $p"; else echo "   build $p"; TODO+=("$p"); fi
 done
 echo "== release $TAG at ${SHA:0:12} ($([[ $EXISTS -eq 1 ]] && echo exists || echo new)); to build: ${TODO[*]:-nothing}"
-[[ ${#TODO[@]} -gt 0 ]] || { echo "== nothing missing"; exit 0; }
+[[ ${#TODO[@]} -gt 0 || $PUBLISH -eq 1 ]] || { echo "== nothing missing"; exit 0; }
 [[ $DRY -eq 0 ]] || exit 0
 
 # default notes: this version's "Changes" in RELEASE_NOTES.md (the same text bia tells its owner)
@@ -196,10 +215,17 @@ UPLOAD=()
 OS_BUILT=()
 TOOLS_BUILT=()
 
+# the build container of an architecture (make builder), made when this machine has none
+builder() { # arch
+  command -v docker >/dev/null || die "'docker' is required for $1 builds"
+  docker image inspect "bia-build:$1" >/dev/null 2>&1 || { echo "== build container bia-build:$1"; make ARCH="$1" builder; }
+}
+
 SYSTEM_READY=" "
 system() { # arch — build dist/<arch> (root.img and binaries) at most once per run
   local a=$1
   [[ $SYSTEM_READY == *" $a "* ]] && return 0
+  builder "$a"
   if [[ $REBUILD_OS -eq 1 || ! -f "dist/$a/root.img" ]]; then
     echo "== building the $a OS (make ARCH=$a build)"
     make ARCH="$a" build
@@ -237,10 +263,10 @@ build_macos() {
   echo "== macOS flasher (universal, signed, notarized)"
   installers/macos/release.sh --universal
   local d=installers/dist/macos-universal
-  scan "$d/bia-flash" "$d/bia flash.app/Contents/MacOS/bia-flash-gui"
-  cp -f "$d/bia-flash-$VERSION-macos-universal.dmg" "$OUT/bia-flash-macos-universal.dmg"
-  cp -f "$d/bia-flash-cli-$VERSION-macos-universal.zip" "$OUT/bia-flash-cli-macos-universal.zip"
-  UPLOAD+=("$OUT/bia-flash-macos-universal.dmg" "$OUT/bia-flash-cli-macos-universal.zip")
+  scan "$d/bia-deploy" "$d/bia deploy.app/Contents/MacOS/bia-deploy-gui"
+  cp -f "$d/bia-deploy-$VERSION-macos-universal.dmg" "$OUT/bia-deploy-macos-universal.dmg"
+  cp -f "$d/bia-deploy-cli-$VERSION-macos-universal.zip" "$OUT/bia-deploy-cli-macos-universal.zip"
+  UPLOAD+=("$OUT/bia-deploy-macos-universal.dmg" "$OUT/bia-deploy-cli-macos-universal.zip")
 }
 
 # Linux and Windows flashers: built in the builder of their architecture (paths remapped,
@@ -248,6 +274,7 @@ build_macos() {
 docker_flash() { # command
   local ba=${BUILDER_ARCH:-x86_64} plat=linux/amd64
   [[ $ba == arm64 ]] && plat=linux/arm64
+  builder "$ba"
   docker run --rm --platform "$plat" -v "$ROOT":/work -v "bia-cache-$ba":/cache -w /work \
     -e CARGO_TARGET_DIR=/cache/flash-target -e CARGO_PROFILE_RELEASE_DEBUG=0 -e CARGO_PROFILE_RELEASE_STRIP=debuginfo \
     -e RUSTFLAGS="--remap-path-prefix=/work=/bia --remap-path-prefix=/cache/cargo=/cargo --remap-path-prefix=/root=/home" \
@@ -273,23 +300,23 @@ PY
 build_linux() { # arch (x86_64 | arm64)
   local a=${1:-x86_64} s="$ROOT/dist/release/.linux-${1:-x86_64}" st tgz
   echo "== Linux flasher ($a)"
-  BUILDER_ARCH=$a docker_flash "cargo build --release -p bia-flash --features gui && mkdir -p /work/dist/release/.linux-$a && cp /cache/flash-target/release/bia-flash /cache/flash-target/release/bia-flash-gui /work/dist/release/.linux-$a/"
-  scan "$s/bia-flash" "$s/bia-flash-gui"
+  BUILDER_ARCH=$a docker_flash "cargo build --release -p bia-deploy --features gui && mkdir -p /work/dist/release/.linux-$a && cp /cache/flash-target/release/bia-deploy /cache/flash-target/release/bia-deploy-gui /work/dist/release/.linux-$a/"
+  scan "$s/bia-deploy" "$s/bia-deploy-gui"
   st=$(mktemp -d)
-  mkdir -p "$st/bia-flash"
-  cp "$s/bia-flash" "$s/bia-flash-gui" installers/bia-flash/assets/icon-256.png "$st/bia-flash/"
-  cat >"$st/bia-flash/README.txt" <<EOF
-bia flash $VERSION — write a bootable bia USB stick (Linux $a)
+  mkdir -p "$st/bia-deploy"
+  cp "$s/bia-deploy" "$s/bia-deploy-gui" installers/bia-deploy/assets/icon-256.png "$st/bia-deploy/"
+  cat >"$st/bia-deploy/README.txt" <<EOF
+bia deploy $VERSION — write a bootable bia USB stick (Linux $a)
 
-  sudo ./bia-flash-gui        window app (needs root to write the stick)
-  sudo ./bia-flash list
-  sudo ./bia-flash write --disk /dev/sdX --yes   # downloads the bia system from GitHub
-  sudo ./bia-flash takeover   # replace this running Linux (e.g. a VPS) with bia
+  sudo ./bia-deploy-gui        window app (needs root to write the stick)
+  sudo ./bia-deploy list
+  sudo ./bia-deploy write --disk /dev/sdX --yes   # downloads the bia system from GitHub
+  sudo ./bia-deploy takeover   # replace this running Linux (e.g. a VPS) with bia
 
 https://github.com/$REPO
 EOF
-  tgz="$OUT/bia-flash-linux-$a.tar.gz"
-  tar -C "$st" -czf "$tgz" bia-flash
+  tgz="$OUT/bia-deploy-linux-$a.tar.gz"
+  tar -C "$st" -czf "$tgz" bia-deploy
   rm -rf "$st" "$s"
   tool_entry "$tgz"
   UPLOAD+=("$tgz")
@@ -305,20 +332,20 @@ build_takeover() {
 
 build_windows() {
   echo "== Windows flasher (x86_64, MinGW cross build)"
-  docker_flash "command -v x86_64-w64-mingw32-gcc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 >/dev/null; }; rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu; cargo build --release -p bia-flash --features gui --target x86_64-pc-windows-gnu && mkdir -p /work/dist/release/.windows && cp /cache/flash-target/x86_64-pc-windows-gnu/release/bia-flash.exe /cache/flash-target/x86_64-pc-windows-gnu/release/bia-flash-gui.exe /work/dist/release/.windows/"
+  docker_flash "command -v x86_64-w64-mingw32-gcc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 >/dev/null; }; rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu; cargo build --release -p bia-deploy --features gui --target x86_64-pc-windows-gnu && mkdir -p /work/dist/release/.windows && cp /cache/flash-target/x86_64-pc-windows-gnu/release/bia-deploy.exe /cache/flash-target/x86_64-pc-windows-gnu/release/bia-deploy-gui.exe /work/dist/release/.windows/"
   local s="$ROOT/dist/release/.windows" st
-  scan "$s/bia-flash.exe" "$s/bia-flash-gui.exe"
+  scan "$s/bia-deploy.exe" "$s/bia-deploy-gui.exe"
   st=$(mktemp -d)
-  mkdir -p "$st/bia-flash"
-  cp "$s/bia-flash.exe" "$s/bia-flash-gui.exe" "$st/bia-flash/"
-  printf 'bia flash %s - write a bootable bia USB stick (Windows x86_64)\r\n\r\nRun bia-flash-gui.exe as administrator.\r\nThe bia system is downloaded from GitHub.\r\n\r\nhttps://github.com/%s\r\n' "$VERSION" "$REPO" >"$st/bia-flash/README.txt"
-  rm -f "$OUT/bia-flash-windows-x86_64.zip"
-  (cd "$st" && zip -qr "$OUT/bia-flash-windows-x86_64.zip" bia-flash)
+  mkdir -p "$st/bia-deploy"
+  cp "$s/bia-deploy.exe" "$s/bia-deploy-gui.exe" "$st/bia-deploy/"
+  printf 'bia deploy %s - write a bootable bia USB stick (Windows x86_64)\r\n\r\nRun bia-deploy-gui.exe as administrator.\r\nThe bia system is downloaded from GitHub.\r\n\r\nhttps://github.com/%s\r\n' "$VERSION" "$REPO" >"$st/bia-deploy/README.txt"
+  rm -f "$OUT/bia-deploy-windows-x86_64.zip"
+  (cd "$st" && zip -qr "$OUT/bia-deploy-windows-x86_64.zip" bia-deploy)
   rm -rf "$st" "$s"
-  UPLOAD+=("$OUT/bia-flash-windows-x86_64.zip")
+  UPLOAD+=("$OUT/bia-deploy-windows-x86_64.zip")
 }
 
-for p in "${TODO[@]}"; do
+for p in ${TODO[@]+"${TODO[@]}"}; do
   case $p in
     os-*) build_os "${p#os-}" ;;
     land-*) build_land "${p#land-}" ;;
@@ -329,6 +356,31 @@ for p in "${TODO[@]}"; do
     flash-windows) build_windows ;;
   esac
 done
+
+# ---- --build-only leaves a record per run; --publish collects them ----
+if [[ $PUBLISH -eq 1 ]]; then
+  shopt -s nullglob
+  recs=("$OUT"/.built-*)
+  shopt -u nullglob
+  [[ ${#recs[@]} -gt 0 ]] || die "nothing to publish: no .built-* records in $OUT (run --build-only first)"
+  for r in "${recs[@]}"; do
+    while read -r kind val; do
+      case $kind in
+        file) [[ -f "$OUT/$val" ]] || die "$r names $val, which is not in $OUT"; UPLOAD+=("$OUT/$val") ;;
+        os) OS_BUILT+=("$val") ;;
+        tool) TOOLS_BUILT+=("$val") ;;
+      esac
+    done <"$r"
+  done
+  echo "== publishing ${#UPLOAD[@]} files from ${#recs[@]} build(s)"
+elif [[ $BUILD_ONLY -eq 1 ]]; then
+  rec="$OUT/.built-$(date +%s)-$$"
+  {
+    for f in ${UPLOAD[@]+"${UPLOAD[@]}"}; do echo "file $(basename "$f")"; done
+    for a in ${OS_BUILT[@]+"${OS_BUILT[@]}"}; do echo "os $a"; done
+    for t in ${TOOLS_BUILT[@]+"${TOOLS_BUILT[@]}"}; do echo "tool $t"; done
+  } >"$rec"
+fi
 
 # ---- manifest: the existing one plus the architectures built now ----
 if [[ ${#OS_BUILT[@]} -gt 0 || ${#TOOLS_BUILT[@]} -gt 0 ]]; then

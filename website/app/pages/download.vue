@@ -8,15 +8,15 @@
         <span class="eyebrow">Free software</span>
         <h1>Get bia onto a USB stick</h1>
         <p class="section-lead">
-          Download the bia writer for your computer, plug in a USB stick, and follow the three screens. Then start
-          any PC or laptop from the stick.
+          Download bia deploy for your computer. It writes bia onto a USB stick, then you start any PC or laptop
+          from it. It can also put bia on a server you rent, with no commands to type.
         </p>
       </div>
     </section>
 
     <section class="section">
       <div class="container">
-        <h2 class="h2">1. Download the writer</h2>
+        <h2 class="h2">1. Download bia deploy</h2>
         <div class="grid grid--3 hosts">
           <div v-for="host in hosts" :key="host.id" class="card host">
             <h3>{{ host.label }}</h3>
@@ -47,7 +47,7 @@
             <p>
               The smartest answers, using an AI service with your own account. Right now the cheapest good choice
               is DeepSeek V4.1: you pay only for what bia uses, and it runs on any computer. The stick stays small,
-              but bia needs the internet. Paste your key into the writer and it is stored only on your stick.
+              but bia needs the internet. Paste your key into bia deploy and it is stored only on your stick.
             </p>
           </div>
           <div class="card mode">
@@ -64,14 +64,15 @@
         <h2 class="h2">3. Write the stick and start a computer</h2>
         <ol class="final list-check">
           <li>Plug in a USB stick of 8 GB or more. Everything on it will be replaced.</li>
-          <li>Open the writer, pick the stick and the kind of computer it is for, choose the brain, and press Write. The first time, it downloads the bia system for that kind of computer (about 1 GB) and keeps it for the next stick.</li>
+          <li>Open bia deploy and choose the brain: sign in with ChatGPT or paste a key, and press Wake bia up. bia says hello when the brain works.</li>
+          <li>Choose “On a USB stick”, pick the stick and the kind of computer it is for, and press Write. The first time, it downloads the bia system for that kind of computer (about 1 GB) and keeps it for the next stick.</li>
           <li>Plug the stick into the computer that will become bia and switch it on. If it starts its old system instead, open the computer’s start-up menu (often F12, F11, Esc or Option ⌥) and choose the USB stick.</li>
           <li>bia wakes up and greets you. Say hello!</li>
         </ol>
         <div class="note-box tip kinds">
           <p>
             <strong>One stick, one kind of computer.</strong> Ordinary PCs and ARM computers need different
-            systems, so the writer asks which kind the stick is for. Have both? Make one stick for each.
+            systems, so bia deploy asks which kind the stick is for. Have both? Make one stick for each.
           </p>
           <ul>
             <li>
@@ -86,7 +87,7 @@
             </li>
             <li>
               <strong>Not supported:</strong> Macs with Apple chips (M1 and newer) cannot start from a bia
-              stick. They can still run the writer.
+              stick. They can still run bia deploy.
             </li>
           </ul>
           <p>
@@ -96,6 +97,13 @@
             screens show the same code, and once you confirm, its chats, memories, accounts and passwords arrive
             on the mini-PC. Keep the mini-PC online during the move, so bia can reinstall its extra programs in
             their ARM versions. <NuxtLink to="/features/moving">How moving works</NuxtLink>
+          </p>
+        </div>
+        <div class="note-box tip kinds">
+          <p>
+            <strong>A server instead of a stick?</strong> Choose “On my server” after the brain. bia deploy logs in
+            to the server with its password or key, checks it, and replaces its system with bia.
+            <NuxtLink to="/servers#takeover">More about servers</NuxtLink>
           </p>
         </div>
       </div>
@@ -117,7 +125,7 @@
           </div>
           <div class="card">
             <h3>For developers</h3>
-            <p>bia is open source under GPL-3.0. The whole system, including the stick writer, can be built from source on Mac or Linux with Docker.</p>
+            <p>bia is open source under GPL-3.0. The whole system, including bia deploy, can be built from source on Mac or Linux with Docker.</p>
           </div>
         </div>
       </div>
@@ -130,7 +138,7 @@
 <script setup lang="ts">
 useSeoMeta({
   title: 'Get bia — write a USB stick',
-  description: 'Download the bia writer for Mac, Windows or Linux, choose a cloud brain or a brain on the stick, and wake up any computer.',
+  description: 'Download bia deploy for Mac, Windows or Linux: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
 })
 
 import type { FlashHost } from '~/composables/useLatestRelease'

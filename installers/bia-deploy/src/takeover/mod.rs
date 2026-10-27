@@ -1,4 +1,4 @@
-//! `bia-flash takeover`: replace the running Linux (a VPS, a server) with bia, from the
+//! `bia-deploy takeover`: replace the running Linux (a VPS, a server) with bia, from the
 //! GitHub release, with the operator's keys, a new PKI whose root certificate the operator
 //! already holds, the network carried over by MAC address, and optional setup
 //! instructions for bia's model.
@@ -47,6 +47,8 @@ pub struct Args {
     pub no_test: bool,
     pub dry_run: bool,
     pub staging: Option<PathBuf>,
+    /// JSON lines on stdout for a program driving the takeover (bia-deploy over ssh).
+    pub events: bool,
 }
 
 /// Questions on the terminal (`/dev/tty`, so `curl … | sudo bash` works), or none.
@@ -142,6 +144,16 @@ const BIA_MARKERS: [&str; 2] = ["etc/bia-release", "etc/bia-shipped"];
 
 fn bia_marker(root: &Path) -> Option<PathBuf> {
     BIA_MARKERS.iter().map(|m| root.join(m)).find(|p| p.exists())
+}
+
+/// One `--events` line: `{"event": name, ...}` on stdout (the text stays on stderr).
+fn event(on: bool, name: &str, mut v: Value) {
+    if !on {
+        return;
+    }
+    v["event"] = name.into();
+    println!("{v}");
+    std::io::stdout().flush().ok();
 }
 
 fn mib(b: u64) -> String {
@@ -380,7 +392,7 @@ fn takeover(a: Args) -> Result<()> {
             };
             let norm: String = given.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
             if !given.trim().is_empty() && norm.len() < MIN_LAND_SECRET {
-                bail!("the land secret needs at least {MIN_LAND_SECRET} letters and digits (make one with `bia-flash land-secret` or carry_new_land_secret)");
+                bail!("the land secret needs at least {MIN_LAND_SECRET} letters and digits (make one with `bia-deploy land-secret` or carry_new_land_secret)");
             }
             rows.push(Row(
                 "land secret".into(),
@@ -401,16 +413,21 @@ fn takeover(a: Args) -> Result<()> {
         src("land", "default"),
     ));
     let mut ips: Vec<std::net::IpAddr> = vec![];
-    let agent = if land.is_none() {
+    let mut agent = if land.is_none() {
         let fc = cfg.fmm.clone().unwrap_or_default();
         let mut key = fc.api_key.clone().unwrap_or_default();
         if key.trim().is_empty() {
+            if let Some(c) = &fc.chatgpt {
+                key = c.access_token.clone();
+            }
+        }
+        if key.trim().is_empty() {
             if !ask.interactive() {
-                bail!("an FMM API key is required (fmm.api_key in a config, --key or --fmm); see `bia-flash keys`");
+                bail!("an FMM API key is required (fmm.api_key in a config, --key or --fmm); see `bia-deploy keys`");
             }
             key = ask.line("API key for bia's model (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek, Qwen)", "")?;
             if key.is_empty() {
-                bail!("an API key is required; see `bia-flash keys`");
+                bail!("an API key is required; see `bia-deploy keys`");
             }
         }
         let mut fmm = FmmInput {
@@ -420,11 +437,11 @@ fn takeover(a: Args) -> Result<()> {
             base_url: fc.base_url.clone().unwrap_or_default(),
             ctx: fc.ctx.unwrap_or(131_072),
             enabled: Some(true),
-            chatgpt: None,
+            chatgpt: fc.chatgpt.clone(),
         }
         .resolve()?;
         if fc.model.as_deref().unwrap_or("").is_empty() && ask.interactive() {
-            fmm.model = ask.line(&format!("Model ({} ids; `bia-flash models` lists them)", fmm.provider), &fmm.model)?;
+            fmm.model = ask.line(&format!("Model ({} ids; `bia-deploy models` lists them)", fmm.provider), &fmm.model)?;
         }
         rows.push(Row("fmm".into(), format!("{} {} key {}", fmm.provider, fmm.model, config::mask(&fmm.api_key)), src("fmm", "asked")));
 
@@ -432,7 +449,7 @@ fn takeover(a: Args) -> Result<()> {
             Some(l) => l.clone(),
             None => ask.line("Owner's language (code or name)", &crate::lang::host_default())?,
         };
-        let lang = crate::lang::find(&lang_in).with_context(|| format!("unknown language {lang_in:?} (see bia-flash langs)"))?;
+        let lang = crate::lang::find(&lang_in).with_context(|| format!("unknown language {lang_in:?} (see bia-deploy langs)"))?;
         rows.push(Row("lang".into(), format!("{} ({})", lang.name, lang.code), src("lang", if ask.interactive() { "asked" } else { "default: this system's locale" })));
 
         let setup = match &cfg.setup {
@@ -608,6 +625,15 @@ fn takeover(a: Args) -> Result<()> {
     rows.push(Row("RAM".into(), format!("{} of {} needed", mib(mach.ram), mib(need_ram)), "checked".into()));
 
     // ---- summary ----
+    event(
+        a.events,
+        "plan",
+        json!({
+            "disk": disk,
+            "land": land.is_some(),
+            "rows": rows.iter().map(|Row(k, v, s)| json!([k, v, s])).collect::<Vec<_>>(),
+        }),
+    );
     if a.dump_config {
         let mut v = m.value.clone();
         config::merge(&mut v, json!({"disk": disk, "os": cfg.os.clone().unwrap_or_else(|| "latest".into()), "network": {"interfaces": ifaces}}));
@@ -618,7 +644,9 @@ fn takeover(a: Args) -> Result<()> {
                 "pki": {"names": names, "ips": ips.iter().map(|i| i.to_string()).collect::<Vec<_>>()},
             }));
         }
-        println!("{}", serde_json::to_string_pretty(&config::masked(&v, a.show_secrets))?);
+        if !a.events {
+            println!("{}", serde_json::to_string_pretty(&config::masked(&v, a.show_secrets))?);
+        }
         return Ok(());
     }
     say!("\n== bia takeover plan");
@@ -642,7 +670,9 @@ fn takeover(a: Args) -> Result<()> {
     }
 
     // ---- model check, download ----
-    if let Some(ag) = agent.as_ref().filter(|_| !a.no_test) {
+    if let Some(ag) = agent.as_mut().filter(|_| !a.no_test) {
+        // a ChatGPT refresh token rotates: the seed must get the tokens after the refresh
+        ag.fmm.refresh_chatgpt()?;
         say!("== waking {} {} …", ag.fmm.provider, ag.fmm.model);
         let g = crate::test_model(&ag.fmm).context("the model did not answer (fix the key or model, or --no-test)")?;
         say!("\n  bia: {}\n", g.hello);
@@ -651,7 +681,7 @@ fn takeover(a: Args) -> Result<()> {
     let image = match image_path {
         Some(p) => p,
         None => {
-            std::env::set_var("BIA_FLASH_CACHE", stage_dir.join("cache"));
+            std::env::set_var("BIA_DEPLOY_CACHE", stage_dir.join("cache"));
             let tag = cfg.os.clone().unwrap_or_else(|| "latest".into());
             let man = crate::release::manifest(if tag.starts_with("https://") { "latest" } else { &tag })?;
             crate::release::fetch(&man, &mach.arch, &mut |msg| say!("== {msg}"))?.path
@@ -699,7 +729,7 @@ fn takeover(a: Args) -> Result<()> {
         let code = if given.trim().is_empty() { land_secret() } else { given.trim().to_string() };
         let norm: String = code.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_uppercase()).collect();
         if norm.len() < MIN_LAND_SECRET {
-            bail!("the land secret needs at least {MIN_LAND_SECRET} letters and digits (make one with `bia-flash land-secret` or carry_new_land_secret)");
+            bail!("the land secret needs at least {MIN_LAND_SECRET} letters and digits (make one with `bia-deploy land-secret` or carry_new_land_secret)");
         }
         fs::create_dir_all(seed.join("land"))?;
         stage::write_file(&seed.join("land/secret"), format!("{norm}\n").as_bytes())?;
@@ -764,6 +794,8 @@ fn takeover(a: Args) -> Result<()> {
                 eprintln!("   If port {} is blocked from outside, through ssh:", g.port);
                 eprintln!("       ssh root@{host} 'curl -fsk https://127.0.0.1:{}/{}/root.p12' > bia-root.p12", g.port, g.token);
             }
+            let ca_pem = fs::read_to_string(seeded.dir.join("ca.crt")).unwrap_or_default();
+            event(a.events, "gate", json!({"port": g.port, "token": g.token, "ca_sha256": seeded.ca_sha256, "ca_pem": ca_pem, "agent_name": seeded.agent_name}));
             wait_for_root(&g.downloaded, cfg.gate_wait.unwrap_or(0))?;
         }
         if let Some(pem) = &seeded.root_pem {
@@ -813,6 +845,7 @@ fn takeover(a: Args) -> Result<()> {
         say!("   Then open https://<address>/ with root's certificate.");
     }
     say!("   Rebooting without the takeover: remove {} and the boot entry \"bia takeover\".", stage_dir.display());
+    event(a.events, "ready", json!({"disk": disk, "reboot": reboot}));
     if reboot {
         say!("== rebooting into the takeover now; bia's rescue reports on this console next");
         let _ = Command::new("systemctl").arg("reboot").status();

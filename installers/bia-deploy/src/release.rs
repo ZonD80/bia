@@ -3,8 +3,8 @@
 //! raw image. The writer downloads it with resume into a cache and decodes it while it
 //! writes the stick, so the next stick needs no download.
 //!
-//! Cache: `<cache>/bia-flash/os/<tag>/<arch>/bia-<arch>.img.xz` (`BIA_FLASH_CACHE`
-//! overrides `<cache>/bia-flash`).
+//! Cache: `<cache>/bia-deploy/os/<tag>/<arch>/bia-<arch>.img.xz` (`BIA_DEPLOY_CACHE`
+//! overrides `<cache>/bia-deploy`).
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -53,7 +53,7 @@ pub struct OsImage {
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .user_agent("bia-flash")
+        .user_agent("bia-deploy")
         .build()
         .into()
 }
@@ -81,24 +81,24 @@ pub fn arches(m: &Manifest) -> Vec<String> {
 }
 
 pub fn cache_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("BIA_FLASH_CACHE") {
+    if let Some(p) = std::env::var_os("BIA_DEPLOY_CACHE") {
         return PathBuf::from(p);
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         if let Some(h) = home {
-            return h.join("Library/Caches/bia-flash");
+            return h.join("Library/Caches/bia-deploy");
         }
     } else if cfg!(windows) {
         if let Some(p) = std::env::var_os("LOCALAPPDATA") {
-            return PathBuf::from(p).join("bia-flash").join("cache");
+            return PathBuf::from(p).join("bia-deploy").join("cache");
         }
     } else if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {
-        return PathBuf::from(p).join("bia-flash");
+        return PathBuf::from(p).join("bia-deploy");
     } else if let Some(h) = home {
-        return h.join(".cache/bia-flash");
+        return h.join(".cache/bia-deploy");
     }
-    std::env::temp_dir().join("bia-flash")
+    std::env::temp_dir().join("bia-deploy")
 }
 
 fn cache_dir(m: &Manifest, arch: &str) -> PathBuf {
@@ -299,7 +299,7 @@ mod tests {
 
         // Only this test touches these variables.
         std::env::set_var("BIA_RELEASE_URL", serve(rel.clone(), true));
-        std::env::set_var("BIA_FLASH_CACHE", dir.join("cache"));
+        std::env::set_var("BIA_DEPLOY_CACHE", dir.join("cache"));
         let m = manifest("latest").unwrap();
         assert_eq!(m.tag, "v9.9.9");
         assert_eq!(missing_bytes(&m, "x86_64"), m.os["x86_64"].image.size);
@@ -330,7 +330,7 @@ mod tests {
         let d = fs::read(&stick).unwrap();
         assert_eq!(&d[512..520], b"EFI PART");
         std::env::remove_var("BIA_RELEASE_URL");
-        std::env::remove_var("BIA_FLASH_CACHE");
+        std::env::remove_var("BIA_DEPLOY_CACHE");
         fs::remove_dir_all(&dir).ok();
     }
 }

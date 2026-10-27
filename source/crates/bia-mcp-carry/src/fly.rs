@@ -1,7 +1,7 @@
 //! Land announces on UDP. Fly discovers those hosts, then both sides confirm a code
 //! derived from an X25519 handshake before any archive bytes move.
 //!
-//! Over the internet (a server taken over in land mode, `bia-flash takeover --land`)
+//! Over the internet (a server taken over in land mode, `bia-deploy takeover --land`)
 //! nobody sits at the landing machine and there is no shared LAN: the flyer connects
 //! to its address and both prove they know the land secret (`/etc/bia/land.secret`)
 //! with an HMAC over the X25519 handshake instead of comparing a code (protocol

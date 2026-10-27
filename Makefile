@@ -49,7 +49,7 @@ rootfs:
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) rootfs
 	tools/local-files.sh $(ARCH)
 
-local-files:        ## dist/$(ARCH)/bia-$(ARCH).img + local-files.json for the bia-flash GUI (after a build)
+local-files:        ## dist/$(ARCH)/bia-$(ARCH).img + local-files.json for the bia-deploy GUI (after a build)
 	tools/local-files.sh $(ARCH)
 
 img:                ## dist/$(ARCH)/bia-$(ARCH).img: minimal disk image (release bia-<arch>.img.xz; dd/Etcher-able)
@@ -67,12 +67,12 @@ img-e2e:            ## image test: ARCH, FIRMWARE=uefi|bios, MODE=flash|dd (test
 image:              ## dist/bia.img (QEMU flash image) from dist/$(ARCH)/root.img (macOS host)
 	ARCH=$(ARCH) IMAGE_MB=$(IMAGE_MB) ROOT_MB=$(ROOT_MB) tools/mkimage.sh
 
-flash:              ## write a USB stick (x86_64 unless ARCH= is set); uses bia-flash for new sticks
+flash:              ## write a USB stick (x86_64 unless ARCH= is set); uses bia-deploy for new sticks
 	ARCH=$(if $(filter command line,$(origin ARCH)),$(ARCH),x86_64) ROOT_MB=$(ROOT_MB) DISK=$(DISK) YES=$(YES) ERASE=$(ERASE) MODEL="$(MODEL)" BIA_LANG="$(BIA_LANG)" FMM=$(FMM) MEDIA=$(MEDIA) tools/flash.sh
 
 # NOTARIZE=0 make flasher  — codesign only (macOS). Default notarizes when .env has Apple creds.
 NOTARIZE ?= 1
-flasher:            ## host bia-flash (+ GUI); macOS: notarized .app/DMG + CLI zip
+flasher:            ## host bia-deploy (+ GUI); macOS: notarized .app/DMG + CLI zip
 	@if [ "$$(uname -s)" = Darwin ]; then \
 	  if [ "$(NOTARIZE)" = 0 ]; then \
 	    installers/macos/release.sh --no-notarize; \

@@ -1,8 +1,8 @@
 #!/bin/bash
-# End-to-end QEMU test of taking over a running Linux (tools/takeover.sh → bia-flash takeover).
+# End-to-end QEMU test of taking over a running Linux (tools/takeover.sh → bia-deploy takeover).
 #
 #   tests/e2e/takeover-e2e.sh images  local "release" in dist/te-<arch>/www: bia-<arch>.img.xz
-#                                     (work tree overlay, agent, MCPs), the Linux bia-flash
+#                                     (work tree overlay, agent, MCPs), the Linux bia-deploy
 #                                     tarball, bia-os.json with both; the Ubuntu cloud image
 #   tests/e2e/takeover-e2e.sh run     boot Ubuntu (UEFI, no display device) with cloud-init from
 #                                     www/; it runs takeover.sh unattended with a config (./fmm.json
@@ -16,6 +16,8 @@
 # that secret; the server unfolds the agent and boots it (images: also builds fly.img).
 # LAND=agent: no takeover by the test: the flyer's agent gets ssh access to Ubuntu and is
 # asked in plain words to prepare it as a land and fly there (takeover.sh over ssh itself).
+# DEPLOY=1: this computer's `bia-deploy server` takes Ubuntu over through ssh (password login
+# as ubuntu, sudo with that password) instead of cloud-init running takeover.sh.
 # NET=onlink: Ubuntu runs on a static /32 with an on-link gateway before the takeover.
 # FIRMWARE=bios (ARCH=x86_64): SeaBIOS, the takeover goes through GRUB custom.cfg + grub-reboot.
 #
@@ -46,17 +48,17 @@ do_images() {
     trap "umount /mnt/r" EXIT
     bash /work/builders/rescue.sh /mnt/r /mnt/r/usr/local/share/bia/rescue.cpio.gz'
   tools/esp-kernel.sh "$TE/root.img" "dist/$ARCH"
-  cargo build --release -q -p bia-flash
+  cargo build --release -q -p bia-deploy
   local img=$TE/www/rel/bia-$ARCH.img
   rm -f "$img" "$img.xz"
-  target/release/bia-flash image --root "$TE/root.img" --esp source/flash --kern "dist/$ARCH" --arch "$ARCH" --out "$img"
+  target/release/bia-deploy image --root "$TE/root.img" --esp source/flash --kern "dist/$ARCH" --arch "$ARCH" --out "$img"
   echo "== xz -${XZ_LEVEL:-1} -T0"
   xz -"${XZ_LEVEL:-1}" -T0 -k -f "$img"
-  echo "== Linux bia-flash ($ARCH)"
+  echo "== Linux bia-deploy ($ARCH)"
   docker run --rm --platform "$PLATFORM" -v "$ROOT":/work -v "bia-cache-$ARCH":/cache -w /work \
     -e CARGO_TARGET_DIR=/cache/flash-target "bia-build:$ARCH" \
-    bash -lc 'export CARGO_HOME=${CARGO_HOME:-/cache/cargo}; cargo build --release -q -p bia-flash && mkdir -p /work/dist/te-'"$ARCH"'/tool/bia-flash && cp /cache/flash-target/release/bia-flash /work/dist/te-'"$ARCH"'/tool/bia-flash/'
-  tar -C "$TE/tool" -czf "$TE/www/rel/bia-flash-linux-$ARCH.tar.gz" bia-flash
+    bash -lc 'export CARGO_HOME=${CARGO_HOME:-/cache/cargo}; cargo build --release -q -p bia-deploy && mkdir -p /work/dist/te-'"$ARCH"'/tool/bia-deploy && cp /cache/flash-target/release/bia-deploy /work/dist/te-'"$ARCH"'/tool/bia-deploy/'
+  tar -C "$TE/tool" -czf "$TE/www/rel/bia-deploy-linux-$ARCH.tar.gz" bia-deploy
   python3 - "$TE/www/rel" "$ARCH" <<'PY'
 import hashlib, json, os, sys
 d, arch = sys.argv[1:]
@@ -66,7 +68,7 @@ def sha(p):
         while c := f.read(16 << 20):
             h.update(c)
     return h.hexdigest()
-img, xz, tool = f"{d}/bia-{arch}.img", f"{d}/bia-{arch}.img.xz", f"{d}/bia-flash-linux-{arch}.tar.gz"
+img, xz, tool = f"{d}/bia-{arch}.img", f"{d}/bia-{arch}.img.xz", f"{d}/bia-deploy-linux-{arch}.tar.gz"
 json.dump({"version": "1.1.4", "tag": "e2e", "os": {arch: {"image": {
     "file": os.path.basename(xz), "size": os.path.getsize(xz), "sha256": sha(xz),
     "raw_size": os.path.getsize(img), "raw_sha256": sha(img)}}},
@@ -94,9 +96,10 @@ PY
 
 do_run() {
   pgrep -q qemu-system 2>/dev/null && { echo "QEMU is running; stop it first" >&2; exit 1; }
+  [ -z "${DEPLOY:-}" ] || cargo build --release -q -p bia-deploy
   rm -f "$TE/disk.qcow2"
   qemu-img create -q -f qcow2 -F qcow2 -b "$TE/cache/$UBUNTU" "$TE/disk.qcow2" "${DISK_GB:-16}G"
-  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
+  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} DEPLOY=${DEPLOY:-} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
 }
 
 case ${1:-all} in

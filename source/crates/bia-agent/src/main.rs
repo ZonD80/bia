@@ -517,6 +517,11 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
     }
 
+    // Jobs the previous boot left running are lost. Mark them before this boot starts any:
+    // done later, it also took this boot's MCP starts still running (a messenger waiting for
+    // DHCP) for lost, and their start threads then killed the connected servers.
+    let lost_jobs = tools.jobs.lock().unwrap_or_else(|e| e.into_inner()).fail_running_lost();
+
     // MCPs start in the background as jobs (boot does not wait for a messenger restoring its
     // session over the network); each result arrives as system|job:<id>.
     let start = |tools: &mut tools::Tools, name: &str, why: &str| match tools.start_job(name) {
@@ -721,7 +726,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         }
         None => how,
     };
-    // Setup instructions root wrote into the deployment config (bia-flash takeover):
+    // Setup instructions root wrote into the deployment config (bia-deploy takeover):
     // handed to the model once, on the first boot that finds them.
     let setup_path = paths.files.join("state").join("setup.md");
     let setup = std::fs::read_to_string(&setup_path)
@@ -778,12 +783,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         .ensure_id(),
     );
     {
-        let lost = repl
-            .tools
-            .jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .fail_running_lost();
+        let lost = lost_jobs;
         if !lost.is_empty() {
             boot.note(&format!("{} job(s) lost on reboot", lost.len()));
             repl.pending.extend(lost);

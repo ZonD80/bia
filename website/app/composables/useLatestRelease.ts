@@ -1,7 +1,7 @@
-// The bia writer downloads, looked up in the GitHub releases of zond80/bia.
+// The bia deploy downloads, looked up in the GitHub releases of zond80/bia.
 //
 // tools/release.sh fills a release package by package and uses unversioned asset names
-// (bia-flash-macos-universal.dmg, …), so the newest release may not have every writer yet.
+// (bia-deploy-macos-universal.dmg, …), so the newest release may not have every download yet.
 // Each host gets the asset from the newest published release that has it; until the
 // check finishes (or if it fails) the buttons point at the releases page.
 
@@ -14,9 +14,9 @@ const FALLBACK_RELEASE_PAGE = `https://github.com/${REPO}/releases/latest`
 export type FlashHost = 'macos' | 'windows' | 'linux'
 
 export const FLASH_ASSETS: Record<FlashHost, string> = {
-  macos: 'bia-flash-macos-universal.dmg',
-  windows: 'bia-flash-windows-x86_64.zip',
-  linux: 'bia-flash-linux-x86_64.tar.gz',
+  macos: 'bia-deploy-macos-universal.dmg',
+  windows: 'bia-deploy-windows-x86_64.zip',
+  linux: 'bia-deploy-linux-x86_64.tar.gz',
 }
 
 export type LandArch = 'x86_64' | 'arm64'
@@ -99,14 +99,14 @@ function pick<K extends string>(assets: Record<K, string>, releases: GitHubRelea
 }
 
 export function useLatestRelease() {
-  const downloads = useState<Record<FlashHost, FlashDownload>>('bia-flash-downloads', () => unchecked(FLASH_ASSETS))
+  const downloads = useState<Record<FlashHost, FlashDownload>>('bia-deploy-downloads', () => unchecked(FLASH_ASSETS))
   const landDownloads = useState<Record<LandArch, FlashDownload>>('bia-land-downloads', () => unchecked(LAND_ASSETS))
-  // Newest release that has the OS manifest bia-flash writes the stick from.
-  const version = useState<string | null>('bia-flash-version', () => null)
-  const releaseUrl = useState<string>('bia-flash-release-url', () => FALLBACK_RELEASE_PAGE)
-  const loading = useState('bia-flash-loading', () => false)
-  const error = useState<string | null>('bia-flash-error', () => null)
-  const fetched = useState('bia-flash-fetched', () => false)
+  // Newest release that has the OS manifest bia-deploy writes the stick from.
+  const version = useState<string | null>('bia-deploy-version', () => null)
+  const releaseUrl = useState<string>('bia-deploy-release-url', () => FALLBACK_RELEASE_PAGE)
+  const loading = useState('bia-deploy-loading', () => false)
+  const error = useState<string | null>('bia-deploy-error', () => null)
+  const fetched = useState('bia-deploy-fetched', () => false)
 
   async function refresh() {
     loading.value = true
@@ -129,7 +129,7 @@ export function useLatestRelease() {
       const os = releases.find((r) => r.assets.some((a) => a.name === 'bia-os.json'))
       version.value = os ? tagVersion(os.tag_name) : null
       releaseUrl.value = os?.html_url || FALLBACK_RELEASE_PAGE
-      if (!Object.values(next).some((d) => d.available)) error.value = 'No release has a writer download yet'
+      if (!Object.values(next).some((d) => d.available)) error.value = 'No release has a bia deploy download yet'
       else if (!os) error.value = 'No release has the bia system yet'
     } catch {
       downloads.value = unchecked(FLASH_ASSETS)

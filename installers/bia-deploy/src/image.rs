@@ -5,7 +5,7 @@
 //!
 //! Any image writer (Etcher, Rufus, Raspberry Pi Imager, dd) can put it on a stick; on
 //! first boot `bia-grow` moves the backup GPT to the end and grows BIAROOT and ext4 over
-//! the whole stick. `bia-flash write` instead lays the same partitions over the whole
+//! the whole stick. `bia-deploy write` instead lays the same partitions over the whole
 //! stick straight away and adds FMM keys and a model (`write.rs`).
 
 use anyhow::{bail, Context, Result};

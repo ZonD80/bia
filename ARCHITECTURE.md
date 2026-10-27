@@ -15,8 +15,8 @@ agent is the only user-facing program; everything else is there to serve it.
  │    vmlinuz-lts, initramfs-lts           Debian kernel + initramfs      │
  │    bia-rescue/rescue.cpio.gz            offline update overlay         │
  │    bia-rescue/next.cfg                  present only while updating    │
- │    EFI/bia/fmm.json                     optional, seeded by bia-flash  │
- │    EFI/bia/lang.json                    owner's language (bia-flash)   │
+ │    EFI/bia/fmm.json                     optional, seeded by bia-deploy  │
+ │    EFI/bia/lang.json                    owner's language (bia-deploy)   │
  │    EFI/bia/models.txt                   until bia-grow moved the model │
  │ p2 BIABIOS  1 MiB BIOS boot (x86_64 legacy, GRUB core.img)             │
  │ p3 BIAROOT  ext4: Debian + /home/bia (model, MCPs, files) + swapfile   │
@@ -44,7 +44,7 @@ is only as large as its contents.
 
 ### Filling the stick and the model (`bia-grow`)
 
-`bia-flash` makes BIAROOT span the whole stick but writes only `root.img` at its
+`bia-deploy` makes BIAROOT span the whole stick but writes only `root.img` at its
 start. A local model is chosen at flash time from Hugging Face (search, then a
 GGUF file; split GGUFs count as one) and streamed raw onto the end of BIAROOT,
 checked against the Hub's LFS sha256, and listed in `EFI/bia/models.txt`
@@ -56,7 +56,7 @@ listed file into `/home/bia/model/<name>.part` in steps: copy what fits in the
 free space, fsync, `resize2fs` the mounted ext4 up to the first byte not yet
 copied, repeat; then it checks the sha256, renames the file, removes the list
 and grows ext4 to the end of the partition. A step only needs the headroom
-`bia-flash` leaves (512 MiB), not room for a second copy, and an interrupted
+`bia-deploy` leaves (512 MiB), not room for a second copy, and an interrupted
 run resumes from the `.part` file. Without a list it only grows the ext4.
 `bia.toml` uses `file = "auto"`, so the agent picks up the model.
 
@@ -355,7 +355,7 @@ profile). Labels for the top bar go to `bia-labels` next to it. The agent
 syncs once at boot as well. mozc is not used: its server refuses to run as
 root, and the console session is root.
 
-The owner's language can be chosen in the flasher (GUI picker, `bia-flash
+The owner's language can be chosen in the flasher (GUI picker, `bia-deploy
 write --lang`, `BIA_LANG=` for `make flash`; the default is the host locale).
 It goes onto the ESP as `EFI/bia/lang.json`. On first boot the agent makes it
 the default language and enables hearing it. The keyboard is added at once,
@@ -446,17 +446,17 @@ GRUB i386-pc in the disk's BIOS boot partition and powers off for the user to
 remove the stick. The embed does what `grub-bios-setup` does: boot.img in the MBR
 points at core.img, and core.img's first-sector blocklist points at its own
 remaining sectors (grub-mkimage's default only fits core.img at LBA 1).
-`bia-flash` does this natively (`bia_disk::embed_bios_grub`); `mkimage.sh` and
+`bia-deploy` does this natively (`bia_disk::embed_bios_grub`); `mkimage.sh` and
 `bia-migrate` use `grub-bios-embed.py`. `tests/e2e/bios-e2e.sh` (`make bios-e2e`)
 tests the whole path in QEMU (SeaBIOS, x86_64) with a stick written by
-`bia-flash`.
+`bia-deploy`.
 `bia-migrate to-flash` goes the other way. Later updates between the two use
 the rescue image above.
 
 ## Releases and the OS download
 
 The OS ships as one minimal disk image per architecture, `bia-<arch>.img.xz`
-(`tools/mkimg.sh` → `bia-flash image`): GPT, ESP (shim, GRUB, kernel,
+(`tools/mkimg.sh` → `bia-deploy image`): GPT, ESP (shim, GRUB, kernel,
 initramfs, rescue image), the BIOS boot partition with GRUB core.img and
 boot.img in the MBR (x86_64), and BIAROOT holding `root.img`, only as large as
 the system needs. No FMM keys and no model. One x86_64 image boots on both UEFI
@@ -470,7 +470,7 @@ that to a partition named BIAROOT, never to an installed BIADISK. Keys go into
 `EFI/bia/fmm.json` on the ESP by hand; without keys or a model the agent does
 not start.
 
-`bia-flash write` reads the same image (`--os-image`, or downloaded) front to
+`bia-deploy write` reads the same image (`--os-image`, or downloaded) front to
 back, xz-decoded on the fly: it writes a GPT for the whole stick (same
 partition starts as the image's), keeps the image's MBR boot code, copies the
 BIOS boot partition and BIAROOT, streams a Hugging Face model onto the end of
@@ -490,23 +490,23 @@ FMM keys, the Apple app password, `HF_TOKEN` and the home path first.
 release must be a pushed, clean commit. Asset names carry no version, so
 `releases/latest/download/<name>` always works (website download buttons).
 
-`bia-flash` (`src/release.rs`) reads `bia-os.json` from the latest release
+`bia-deploy` (`src/release.rs`) reads `bia-os.json` from the latest release
 (or `--os <tag>`), downloads the `.img.xz` with resume and checks it, and keeps
-it in its cache (`~/Library/Caches/bia-flash`, `%LOCALAPPDATA%\bia-flash\cache`,
-`~/.cache/bia-flash`) so the next stick needs no download. Local builds give
+it in its cache (`~/Library/Caches/bia-deploy`, `%LOCALAPPDATA%\bia-deploy\cache`,
+`~/.cache/bia-deploy`) so the next stick needs no download. Local builds give
 `--os-image dist/<arch>/bia-<arch>.img` (the GUI's advanced field reads
 `dist/<arch>/local-files.json`, written by `make build`).
 
 `tests/e2e/img-e2e.sh` (`make img-e2e`) tests both paths in QEMU: `MODE=flash`
-serves a local release over HTTP and has `bia-flash` write it with keys and a
+serves a local release over HTTP and has `bia-deploy` write it with keys and a
 real Hugging Face model; `MODE=dd` decodes the `.img.xz` onto a bigger disk
 and adds the keys by hand. `FIRMWARE=bios` boots x86_64 under SeaBIOS.
 
 ## Taking over a running Linux
 
-`tools/takeover.sh` (a release asset) downloads `bia-flash-linux-<arch>.tar.gz`,
-checks it against `bia-os.json` `tools` and runs `bia-flash takeover`
-(`installers/bia-flash/src/takeover/`). Its inputs are partial JSON configs
+`tools/takeover.sh` (a release asset) downloads `bia-deploy-linux-<arch>.tar.gz`,
+checks it against `bia-os.json` `tools` and runs `bia-deploy takeover`
+(`installers/bia-deploy/src/takeover/`). Its inputs are partial JSON configs
 (`--config` file or https URL, repeatable, `--config-sha256` pins; objects merge,
 lists replace, later wins), then flags, then detection, then questions on
 `/dev/tty` (none with `--yes`). Fields: `fmm` (`key` alone is enough), `lang`,
@@ -515,7 +515,27 @@ lists replace, later wins), then flags, then detection, then questions on
 `{interfaces: […]}`), `disk`, `wipe`, `os`, `reboot`, `gate_port`.
 `--dump-config` prints the resolved config with secrets masked.
 
-Both `takeover.sh` and `bia-flash takeover` refuse to run on bia itself
+From another computer, `bia-deploy server <host>` (and the GUI's "On my server",
+`installers/bia-deploy/src/remote/`) drives the same takeover over SSH (russh, pure
+Rust): password, key file, pasted OpenSSH/PEM/PuTTY key, or a new ed25519 key made for
+the hosting provider (`remote/keys.rs`, kept in the app folder). The server's host key
+is pinned on first contact (`known_hosts.json` in the app folder; a changed one stops
+the login). A non-root login becomes root with `sudo -k -S` and the login password on
+stdin (`-k`: a cached sudo would hand the password to the command). The config goes to
+a 0600 file under `/root` through stdin, never the command line, and `takeover.sh` runs
+in `--events` mode: JSON lines on stdout (`plan`, `gate` with port, token and CA, `ready`)
+while the text stays on stderr. The first run adds `--dump-config` and gives the plan;
+after the one confirmation the second run has `disk`/`wipe`/`reboot` set. When the gate
+opens, a second SSH channel fetches `root.p12` from `127.0.0.1:<port>` on the server
+itself (no open port needed), saves it with the CA in the app folder
+(`servers/<host>/`), and `remote/trust.rs` imports the certificate and trusts the CA
+(macOS login keychain, Windows user store, Chrome's NSS database on Linux). Then it
+waits until `https://<host>/` answers with that CA (land mode: TCP 4791). The setup
+text is always empty here; land mode sends a land secret made (or pasted) on this
+computer. `DEPLOY=1 tests/e2e/takeover-e2e.sh` tests it: password login as `ubuntu`,
+sudo with that password, first contact refused until `--host-key`.
+
+Both `takeover.sh` and `bia-deploy takeover` refuse to run on bia itself
 (`/etc/bia-release` or `/etc/bia-shipped` exists), with no override: a misquoted
 `ssh root@host curl … | bash` runs the pipe on the bia that typed it, and updating a
 bia is `carry_update`'s job.
@@ -560,7 +580,7 @@ the dummy driver (`xorg-dummy.conf`), so x11vnc and the web display work.
 `--land` (config `land: true` or `{secret}`) takes a server over into land mode
 instead: no keys, PKI or setup are made; the seed carries a land secret that
 `bia-seed` writes to `/etc/bia/land.secret` with `/etc/bia-land-mode` = `wait`. The
-secret is made before the installation (`bia-flash land-secret`, `carry_new_land_secret`:
+secret is made before the installation (`bia-deploy land-secret`, `carry_new_land_secret`:
 28 symbols, 140 bits; supplied ones need 26 letters and digits), so a bia that sets a
 server up over ssh (`takeover.sh … --land --land-secret <S> --yes --wipe <disk>
 --reboot`) knows it for the flight. It survives updates while the server waits (the
@@ -609,7 +629,7 @@ make build  →  builders/build.sh <arch> all
            esp-grub.sh (shim/GRUB into source/flash/EFI) →
            ext4 root.img with source/flash packed into /home/bia + swapfile
 make image  →  tools/mkimage.sh  (host): bia-mkimage GPT → ESP files → dd root.img → grow ext4
-make flash  →  tools/flash.sh → installers/bia-flash (CLI); MODEL=repo[:file] adds a GGUF
+make flash  →  tools/flash.sh → installers/bia-deploy (CLI); MODEL=repo[:file] adds a GGUF
 make iso    →  tools/mkiso.sh
 ```
 
@@ -620,24 +640,27 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
 
 - `bia-disk`: the GPT layout (ESP, BIOS boot, one ext4 root filling the rest).
 - `bia-mkimage`: writes that layout into a file/device for `make image`.
-- `bia-flash`: cross-platform USB writer (CLI + egui GUI). Probes the stick's
+- `bia-deploy`: puts bia on a USB stick or on a server (CLI + egui GUI). The GUI is
+  a wizard: the brain first (ChatGPT or a key, checked by waking bia), then "On a USB
+  stick" or "On my server" (`gui_server.rs`, over `remote/`, see "Taking over a running
+  Linux"). For sticks it probes the stick's
   size and writes the GPT over all of it, `root.img`, the ESP (via `fatfs`) and
   BIOS boot; can seed `EFI/bia/fmm.json` and `EFI/bia/lang.json` (`--lang`,
-  `bia-flash langs`) and put a Hugging Face GGUF on the
-  stick (`bia-flash search` / `files` / `write --model repo[:file]`). The FMM
+  `bia-deploy langs`) and put a Hugging Face GGUF on the
+  stick (`bia-deploy search` / `files` / `write --model repo[:file]`). The FMM
   provider is detected from the pasted key (prefixes `sk-or-`, `sk-ant-`, `xai-`,
   OpenAI `sk-proj-`/`T3BlbkFJ`; `sk-`+32 hex is DeepSeek or Qwen, settled by
   asking each API), then the provider's `/models` list is offered with search
-  (GUI, or `bia-flash models <words>`). For people without a key, the GUI's
-  "How do I get an API key?" panel and `bia-flash keys` give three plain steps and
+  (GUI, or `bia-deploy models <words>`). For people without a key, the GUI's
+  "How do I get an API key?" panel and `bia-deploy keys` give three plain steps and
   key/credit links per provider (`fmm::KEY_GUIDES`). Pressing write first wakes bia on that
   model: one real streamed request, the way the agent makes it, in which the
   model must call a `say` tool with a hello and a "ready" line (`check.rs`).
   The hello is shown before anything is written, the ready line when the stick
   is done; if the model doesn't answer with the tool call, nothing is written
-  (`bia-flash test` alone; `--no-test` / `NO_TEST=1` to flash offline).
+  (`bia-deploy test` alone; `--no-test` / `NO_TEST=1` to flash offline).
   `system_fmm_configure` detects the provider the same way.
-- ChatGPT plan ("Continue with ChatGPT", `installers/bia-flash/src/chatgpt.rs`):
+- ChatGPT plan ("Continue with ChatGPT", `installers/bia-deploy/src/chatgpt.rs`):
   OpenAI's Sign in with ChatGPT for open-source apps. The flasher does the
   browser sign-in (PKCE, loopback `127.0.0.1:1455`, dynamic client registration
   with a per-computer `ext_agent_host_id`, scope `chatgpt.tokens.use.direct`) and
@@ -681,7 +704,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   `files/state/*` and `files/inbox/*/*` (and macOS `.DS_Store`/`._*`), so a
   developer's local FMM key, conversation, passwords or messenger sessions in
   the working tree never land in `root.img`, `bia.img` or an ISO. FMM keys
-  reach a stick only through `bia-flash --fmm` (explicit, per-stick).
+  reach a stick only through `bia-deploy --fmm` (explicit, per-stick).
 - **Host binaries.** The macOS flasher is built with `--remap-path-prefix`
   and without debuginfo, so it carries no builder paths.
 - **Runtime.** All user state (`files/state`: conversation, `passwords.json`,

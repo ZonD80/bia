@@ -33,6 +33,14 @@
           with bia. The server keeps its network settings, so it comes back at the same address.
         </p>
         <pre class="screen screen--cmd">curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash</pre>
+        <div class="note-box tip">
+          <p>
+            <strong>No terminal needed:</strong> <NuxtLink to="/download">bia deploy</NuxtLink> on your Mac, Windows
+            or Linux computer does the same. Choose “On my server”, type the server’s address and its password (or
+            pick its key; bia deploy can also make a key for the provider when you order the server). It shows what
+            it found, asks once, and keeps bia’s key on your computer, ready in the browser.
+          </p>
+        </div>
 
         <h3 class="h3">What happens</h3>
         <ol class="flow">
@@ -90,7 +98,7 @@
               <li><code>setup</code>: instructions for bia, read once when it first wakes up.</li>
               <li><code>pki.names</code> and <code>pki.ips</code>: names and addresses for bia’s web certificate, for example the public address behind NAT.</li>
               <li><code>--config-sha256</code> pins a link to exactly that file.</li>
-              <li><code>--dump-config</code> shows the plan without changing anything; <code>bia-flash takeover --help</code> lists every option.</li>
+              <li><code>--dump-config</code> shows the plan without changing anything; <code>bia-deploy takeover --help</code> lists every option.</li>
             </ul>
           </div>
         </div>
@@ -286,7 +294,7 @@
       </div>
     </section>
 
-    <CtaBand title="Prefer a USB stick?" text="For a computer on your desk, the writer makes a stick in a few minutes." />
+    <CtaBand title="Prefer a USB stick?" text="For a computer on your desk, bia deploy makes a stick in a few minutes." />
   </main>
 </template>
 
@@ -347,7 +355,7 @@ const takeoverSteps = [
 const landSteps = [
   {
     title: 'Get a land secret',
-    text: 'Ask your bia for a new land secret for that server, or run bia-flash land-secret. It is a long code that only you and your bia know.',
+    text: 'Ask your bia for a new land secret for that server, or run bia-deploy land-secret. It is a long code that only you and your bia know.',
   },
   {
     title: 'Take the server over in land mode',

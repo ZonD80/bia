@@ -1,4 +1,4 @@
-//! Deployment config for `bia-flash takeover`: any number of partial JSON configs (files
+//! Deployment config for `bia-deploy takeover`: any number of partial JSON configs (files
 //! or HTTPS URLs; later ones win), then flags. Every field is optional; what is still
 //! missing afterwards is detected, defaulted or asked for (see `mod.rs`).
 //!
@@ -67,6 +67,9 @@ pub struct FmmConf {
     pub base_url: Option<String>,
     #[serde(default)]
     pub ctx: Option<u32>,
+    /// Provider `chatgpt`: the tokens of a "Continue with ChatGPT" sign-in (one bia only).
+    #[serde(default)]
+    pub chatgpt: Option<crate::chatgpt::ChatGptAuth>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -156,7 +159,7 @@ pub fn load(src: &str, pin: Option<&str>) -> Result<Value> {
     let bytes = if src.starts_with("https://") {
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(60)))
-            .user_agent("bia-flash")
+            .user_agent("bia-deploy")
             .build()
             .into();
         let resp = agent.get(src).call().map_err(|e| anyhow!("download the config: {e}"))?;
@@ -202,6 +205,9 @@ pub fn masked(v: &Value, show_secrets: bool) -> Value {
             if let Some(Value::String(s)) = f.get_mut(k) {
                 *s = mask(s);
             }
+        }
+        if let Some(c) = f.get_mut("chatgpt").filter(|c| !c.is_null()) {
+            *c = "<ChatGPT sign-in>".into();
         }
     }
     if let Some(Value::String(s)) = v.pointer_mut("/pki/root/csr") {

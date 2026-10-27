@@ -1,5 +1,5 @@
 #!/bin/bash
-# First boot after a takeover (bia-flash takeover): move what the deployment put on
+# First boot after a takeover (bia-deploy takeover): move what the deployment put on
 # the ESP under EFI/bia/seed/ into place, then delete it from the ESP (it holds the CA
 # key, and FAT has no permissions).
 #

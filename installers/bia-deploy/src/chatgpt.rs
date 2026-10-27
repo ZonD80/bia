@@ -127,16 +127,7 @@ struct LocalAccount {
 }
 
 fn local_path() -> Option<PathBuf> {
-    let base = if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-    }?;
-    Some(base.join("bia-flash").join("chatgpt.json"))
+    Some(crate::app_dir()?.join("chatgpt.json"))
 }
 
 fn load_local() -> Local {
@@ -199,7 +190,7 @@ fn read_target(sock: &std::net::TcpStream) -> Option<String> {
     Some(target)
 }
 
-fn open_browser(url: &str) -> Result<()> {
+pub fn open_browser(url: &str) -> Result<()> {
     let status = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()
     } else if cfg!(target_os = "windows") {
@@ -220,7 +211,7 @@ fn http() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(30)))
         .http_status_as_error(false)
-        .user_agent("bia-flash")
+        .user_agent("bia-deploy")
         .build()
         .into()
 }
@@ -438,9 +429,9 @@ fn sign_in_once(
             .collect();
         let ok = q.iter().any(|(k, _)| k == "code");
         let page = if ok {
-            "<h2>bia is signed in to ChatGPT.</h2><p>You can close this tab and go back to bia flash.</p>"
+            "<h2>bia is signed in to ChatGPT.</h2><p>You can close this tab and go back to bia deploy.</p>"
         } else {
-            "<h2>Sign-in was not completed.</h2><p>Go back to bia flash to try again.</p>"
+            "<h2>Sign-in was not completed.</h2><p>Go back to bia deploy to try again.</p>"
         };
         let html = format!("<!doctype html><meta charset=utf-8><title>bia</title><body style=\"font-family:sans-serif;margin:3em\">{page}</body>");
         let _ = sock.write_all(

@@ -28,7 +28,7 @@ tdie() {
 say "takeover: replacing this machine's system with bia"
 [ -f "$TK/info" ] || tdie "takeover" "no $TK/info: the boot loader did not load the takeover files"
 # info: DISK_PTUUID DISK_SIZE RAW_SIZE RAW_SHA256 XZ_SHA256 ARCH, and on legacy BIOS
-# IMG_FS_UUID IMG_PATH (hex, digits, a plain path; written by bia-flash takeover)
+# IMG_FS_UUID IMG_PATH (hex, digits, a plain path; written by bia-deploy takeover)
 IMG_FS_UUID= IMG_PATH=
 . "$TK/info"
 if [ ! -f "$TK/bia.img.xz" ] && [ -n "$IMG_FS_UUID" ]; then

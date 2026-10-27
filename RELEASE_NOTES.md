@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.5.0
+
+### Changes
+- The bia writer is now called bia deploy, and it can also put bia on a rented server: type the server's address and its password (or pick its key; bia deploy can make a key to give the hosting provider), check what it found, confirm once, and it replaces the server's system with bia. bia's key (root's certificate) is saved and installed on that computer, so the browser opens bia right away. It can also prepare a server as a land for an agent to fly to.
+- bia deploy is now a step-by-step window: first bia's brain (ChatGPT or an API key, checked by waking bia), then where bia goes: a USB stick or a server.
+- Messenger, Instagram and WhatsApp stay connected after a restart. When the network came up slowly, they connected and were then stopped by mistake, staying silent until something woke them.
+
+### For bia
+- If Messenger, Instagram or WhatsApp were restored by hand after reboots, or a watchdog was made for them (for example an MCP that calls restore every few minutes), tell the owner it is no longer needed and remove it once the next reboot shows them connected on their own.
+- The tool that writes sticks and takes over servers is now bia-deploy (bia-deploy land-secret instead of bia-flash land-secret); takeover.sh works as before.
+
 ## 1.4.3
 
 ### Changes

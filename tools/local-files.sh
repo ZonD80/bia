@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build dist/<arch>/bia-<arch>.img (tools/mkimg.sh) and write dist/<arch>/local-files.json
-# naming it, for the bia-flash GUI ("Advanced: local image files" → Choose…). Runs on the
+# naming it, for the bia-deploy GUI ("Advanced: local image files" → Choose…). Runs on the
 # host after the build, so the path is this machine's, not the build container's /work.
 set -euo pipefail
 cd "$(dirname "$0")/.."

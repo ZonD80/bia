@@ -37,7 +37,7 @@ pub fn test_model(input: &FmmInput) -> Result<Greeting> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(120)))
         .http_status_as_error(false)
-        .user_agent("bia-flash")
+        .user_agent("bia-deploy")
         .build()
         .into();
     let start = Instant::now();

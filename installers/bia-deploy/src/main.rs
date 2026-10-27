@@ -1,7 +1,7 @@
-//! bia-flash — write a bootable bia USB stick (or image), optionally with FMM keys and a
-//! GGUF model from Hugging Face.
+//! bia-deploy — put bia on a server over SSH (`server`), or write a bootable bia USB stick
+//! (or image), optionally with FMM keys and a GGUF model from Hugging Face.
 use anyhow::{bail, Context, Result};
-use bia_flash::{
+use bia_deploy::{
     chatgpt, filter_models, hf, list_models, list_removable, probe_key, provider_for_key, test_model, write_stick,
     FlashOptions, FmmInput, KEY_GUIDES, KEY_STEPS, LOCAL_FMM_CANDIDATES,
 };
@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "bia-flash", about = "Write a bootable bia USB stick")]
+#[command(name = "bia-deploy", about = "Put bia on a server over SSH, or write a bootable bia USB stick")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -108,7 +108,7 @@ enum Cmd {
         /// Target whole disk (`/dev/rdiskN`, `/dev/sdb`, `\\.\PhysicalDriveN`) or image path.
         #[arg(long)]
         disk: PathBuf,
-        /// Local bia disk image (`bia-<arch>.img` or `.img.xz`, from `bia-flash image` or a
+        /// Local bia disk image (`bia-<arch>.img` or `.img.xz`, from `bia-deploy image` or a
         /// release). Without it the image is downloaded from the GitHub release named by `--os`.
         #[arg(long)]
         os_image: Option<PathBuf>,
@@ -152,6 +152,54 @@ enum Cmd {
     /// Print a new land secret (140 bits) for `takeover --land --land-secret`: make it
     /// before the takeover, so whoever sets the server up knows it for the flight.
     LandSecret,
+    /// Put bia on a Linux server from this computer, over SSH: everything on its disk is
+    /// replaced. Checks first and changes nothing before you confirm; root's certificate
+    /// is saved here and made trusted, then this waits until the new bia answers.
+    /// Password: BIA_SSH_PASSWORD; key passphrase: BIA_SSH_PASSPHRASE.
+    Server {
+        /// The server's address (IP or DNS name).
+        host: String,
+        #[arg(long, default_value_t = 22)]
+        port: u16,
+        #[arg(long, default_value = "root")]
+        user: String,
+        /// Private key file (OpenSSH, PEM or PuTTY .ppk) instead of a password.
+        #[arg(long)]
+        ssh_key: Option<PathBuf>,
+        /// Make a new SSH key, print its public half (for the provider) and exit.
+        #[arg(long)]
+        new_key: bool,
+        /// Trust a server seen for the first time if its host key is this (SHA256:…).
+        #[arg(long)]
+        host_key: Option<String>,
+        /// FMM file (provider, api_key, model, or a ChatGPT sign-in from `chatgpt`).
+        #[arg(long)]
+        fmm: Option<PathBuf>,
+        /// The owner's language (code or name; default: this computer's).
+        #[arg(long)]
+        lang: Option<String>,
+        /// Land mode: bia waits for one of your bias to fly its agent there.
+        #[arg(long)]
+        land: bool,
+        /// Land mode with this secret (default: a new one, printed).
+        #[arg(long)]
+        land_secret: Option<String>,
+        /// `latest`, a release tag, or an https:// release directory.
+        #[arg(long)]
+        os: Option<String>,
+        /// Do not ask: go ahead after the checks.
+        #[arg(long)]
+        yes: bool,
+        /// Skip the model check here.
+        #[arg(long)]
+        no_test: bool,
+        /// Do not import the certificate into this computer.
+        #[arg(long)]
+        no_trust: bool,
+        /// Do not wait for bia to answer after the reboot.
+        #[arg(long)]
+        no_wait: bool,
+    },
     /// Replace THIS running Linux (a VPS or server) with bia: keys, a new PKI whose root
     /// certificate you download first, the network carried over by MAC address, and
     /// optional setup instructions for bia. Asks for whatever the configs and flags leave
@@ -235,6 +283,9 @@ enum Cmd {
         /// Land mode with this secret instead of a new one.
         #[arg(long)]
         land_secret: Option<String>,
+        /// JSON lines on stdout (plan, gate, ready) for a program driving the takeover.
+        #[arg(long)]
+        events: bool,
     },
 }
 
@@ -243,7 +294,7 @@ fn main() {
         eprintln!("error: {e:#}");
         let msg = format!("{e:#}");
         if msg.contains("key") || msg.contains("no FMM file") {
-            eprintln!("Need an API key? Run: bia-flash keys");
+            eprintln!("Need an API key? Run: bia-deploy keys");
         }
         std::process::exit(1);
     }
@@ -331,12 +382,12 @@ fn run() -> Result<()> {
             }
             let cfg = FmmInput::from_chatgpt(auth, &model, 0).normalize();
             let mut f = chatgpt::open_private(&out).with_context(|| format!("create {}", out.display()))?;
-            f.write_all(&bia_flash::fmm_config_json(&cfg)?)?;
-            eprintln!("== saved {} (provider=chatgpt, model={model}); now: bia-flash write … --fmm {}", out.display(), out.display());
+            f.write_all(&bia_deploy::fmm_config_json(&cfg)?)?;
+            eprintln!("== saved {} (provider=chatgpt, model={model}); now: bia-deploy write … --fmm {}", out.display(), out.display());
             Ok(())
         }
         Cmd::Langs => {
-            for l in bia_flash::lang::languages() {
+            for l in bia_deploy::lang::languages() {
                 println!("{:<4} {}{}", l.code, l.name, if l.voice { "" } else { "  (no voice: text only)" });
             }
             Ok(())
@@ -353,7 +404,7 @@ fn run() -> Result<()> {
                 }
             }
             println!(
-                "\nHave ChatGPT Plus or Pro? No key needed: run `bia-flash chatgpt` to use your plan."
+                "\nHave ChatGPT Plus or Pro? No key needed: run `bia-deploy chatgpt` to use your plan."
             );
             println!(
                 "Put the key in fmm.json (copy fmm.json.example); provider and model can be left out."
@@ -369,7 +420,7 @@ fn run() -> Result<()> {
                 // Renewing rotates the refresh token: save the new set back right away.
                 cfg.refresh_chatgpt()?;
                 let mut f = chatgpt::open_private(&path)?;
-                f.write_all(&bia_flash::fmm_config_json(&cfg)?)?;
+                f.write_all(&bia_deploy::fmm_config_json(&cfg)?)?;
             }
             let g = test_model(&cfg)?;
             println!("bia: {}\nbia: {}\n({})", g.hello, g.ready, g.summary);
@@ -413,7 +464,7 @@ fn run() -> Result<()> {
             Ok(())
         }
         Cmd::Os { tag, arch } => {
-            let m = bia_flash::release::manifest(&tag)?;
+            let m = bia_deploy::release::manifest(&tag)?;
             println!("bia {} (release {})", m.version, m.tag);
             for (a, e) in &m.os {
                 println!(
@@ -421,18 +472,21 @@ fn run() -> Result<()> {
                     e.image.file,
                     e.image.raw_size >> 20,
                     e.image.size >> 20,
-                    bia_flash::release::missing_bytes(&m, a) >> 20
+                    bia_deploy::release::missing_bytes(&m, a) >> 20
                 );
             }
             if let Some(a) = arch {
-                let f = bia_flash::release::fetch(&m, &a, &mut |msg| eprintln!("== {msg}"))?;
+                let f = bia_deploy::release::fetch(&m, &a, &mut |msg| eprintln!("== {msg}"))?;
                 println!("{}", f.path.display());
             }
             Ok(())
         }
         Cmd::LandSecret => {
-            println!("{}", bia_flash::takeover::land_secret());
+            println!("{}", bia_deploy::takeover::land_secret());
             Ok(())
+        }
+        Cmd::Server { host, port, user, ssh_key, new_key, host_key, fmm, lang, land, land_secret, os, yes, no_test, no_trust, no_wait } => {
+            server(ServerArgs { host, port, user, ssh_key, new_key, host_key, fmm, lang, land, land_secret, os, yes, no_test, no_trust, no_wait })
         }
         Cmd::Takeover {
             config,
@@ -461,6 +515,7 @@ fn run() -> Result<()> {
             dry_run,
             land,
             land_secret,
+            events,
         } => {
             // flags are the last config layer
             let mut f = serde_json::Map::new();
@@ -530,7 +585,7 @@ fn run() -> Result<()> {
             } else if land {
                 put("land", true.into());
             }
-            bia_flash::takeover::run(bia_flash::takeover::Args {
+            bia_deploy::takeover::run(bia_deploy::takeover::Args {
                 configs: config,
                 config_sha256,
                 flags: serde_json::Value::Object(f),
@@ -541,12 +596,13 @@ fn run() -> Result<()> {
                 no_test,
                 dry_run,
                 staging,
+                events,
             })
         }
         Cmd::Image { root, esp, kern, arch, out } => {
             let kern_dir = kern.unwrap_or_else(|| root.parent().map_or_else(|| PathBuf::from("."), |p| p.to_path_buf()));
-            let src = bia_flash::ImageSources { root_img: root, esp_src: esp, kern_dir, arch };
-            bia_flash::build_image(&src, &out, &mut (Box::new(|m: &str| eprintln!("== {m}")) as bia_flash::ProgressFn))?;
+            let src = bia_deploy::ImageSources { root_img: root, esp_src: esp, kern_dir, arch };
+            bia_deploy::build_image(&src, &out, &mut (Box::new(|m: &str| eprintln!("== {m}")) as bia_deploy::ProgressFn))?;
             Ok(())
         }
         Cmd::Write {
@@ -565,9 +621,9 @@ fn run() -> Result<()> {
             lang,
         } => {
             let lang = match lang {
-                Some(l) => bia_flash::lang::find(&l)
-                    .with_context(|| format!("unknown language {l:?} (see bia-flash langs)"))?,
-                None => bia_flash::lang::find(&bia_flash::lang::host_default()).context("no English in the catalog")?,
+                Some(l) => bia_deploy::lang::find(&l)
+                    .with_context(|| format!("unknown language {l:?} (see bia-deploy langs)"))?,
+                None => bia_deploy::lang::find(&bia_deploy::lang::host_default()).context("no English in the catalog")?,
             };
             eprintln!(
                 "note: language {} ({}){}",
@@ -654,9 +710,9 @@ fn run() -> Result<()> {
             let (image, image_sha256) = match os_image {
                 Some(p) => (p, None),
                 None => {
-                    let m = bia_flash::release::manifest(&os)?;
+                    let m = bia_deploy::release::manifest(&os)?;
                     eprintln!("== bia {} ({}) for {arch} from GitHub", m.version, m.tag);
-                    let f = bia_flash::release::fetch(&m, &arch, &mut |msg| eprintln!("== {msg}"))?;
+                    let f = bia_deploy::release::fetch(&m, &arch, &mut |msg| eprintln!("== {msg}"))?;
                     (f.path, Some(f.raw_sha256))
                 }
             };
@@ -690,9 +746,135 @@ fn run() -> Result<()> {
                 if let Ok(mut f) = chatgpt::open_private(&path) {
                     let _ = f.write_all(&serde_json::to_vec_pretty(&cfg).unwrap_or_default());
                 }
-                eprintln!("note: the ChatGPT sign-in now lives on this stick; run `bia-flash chatgpt` again for another one");
+                eprintln!("note: the ChatGPT sign-in now lives on this stick; run `bia-deploy chatgpt` again for another one");
             }
             Ok(())
         }
     }
+}
+
+struct ServerArgs {
+    host: String,
+    port: u16,
+    user: String,
+    ssh_key: Option<PathBuf>,
+    new_key: bool,
+    host_key: Option<String>,
+    fmm: Option<PathBuf>,
+    lang: Option<String>,
+    land: bool,
+    land_secret: Option<String>,
+    os: Option<String>,
+    yes: bool,
+    no_test: bool,
+    no_trust: bool,
+    no_wait: bool,
+}
+
+fn ask_line(q: &str) -> Result<String> {
+    eprint!("{q}: ");
+    io::stderr().flush().ok();
+    let mut l = String::new();
+    io::stdin().read_line(&mut l)?;
+    Ok(l.trim().to_string())
+}
+
+fn server(a: ServerArgs) -> Result<()> {
+    use bia_deploy::remote::{self, ssh, Agent, Auth, Deploy, HostKey, Login, Progress};
+    if a.new_key {
+        let k = remote::keys::generate("bia-deploy")?;
+        eprintln!("== new SSH key saved as {} (keep it; --ssh-key uses it)", k.path.display());
+        eprintln!("   Give this public key to the hosting provider when you order the server:");
+        println!("{}", k.public);
+        return Ok(());
+    }
+    let agent = if a.land || a.land_secret.is_some() {
+        let secret = a.land_secret.clone().unwrap_or_else(bia_deploy::takeover::land_secret);
+        Agent::Land { secret }
+    } else {
+        let path = FmmInput::find_local(a.fmm.as_deref())
+            .with_context(|| format!("no FMM file (pass --fmm, or create one of {})", LOCAL_FMM_CANDIDATES.join(", ")))?;
+        let mut fmm = FmmInput::load(&path).with_context(|| format!("load FMM from {}", path.display()))?;
+        fmm.refresh_chatgpt()?;
+        let fmm = fmm.resolve()?;
+        if !a.no_test {
+            eprintln!("== waking {} {} …", fmm.provider, fmm.model);
+            let g = test_model(&fmm).context("the model did not answer (fix the key or model, or --no-test)")?;
+            eprintln!("   bia: {}", g.hello);
+        }
+        let l = a.lang.clone().unwrap_or_else(bia_deploy::lang::host_default);
+        let lang = bia_deploy::lang::find(&l).with_context(|| format!("unknown language {l:?} (see bia-deploy langs)"))?;
+        Agent::New { fmm, lang: lang.code }
+    };
+    let auth = match &a.ssh_key {
+        Some(p) => Auth::Key {
+            pem: std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?,
+            passphrase: std::env::var("BIA_SSH_PASSPHRASE").ok(),
+        },
+        None => Auth::Password(match std::env::var("BIA_SSH_PASSWORD") {
+            Ok(p) => p,
+            Err(_) => bail!("no login: pass --ssh-key, or put the password in BIA_SSH_PASSWORD"),
+        }),
+    };
+    let login = Login { host: a.host.trim().to_string(), port: a.port, user: a.user.clone(), auth };
+    eprintln!("== connecting to {}@{} port {}", login.user, login.host, login.port);
+    let s = match ssh::Ssh::connect(&login, a.host_key.as_deref()) {
+        Ok(s) => s,
+        Err(e) => match e.downcast_ref::<HostKey>() {
+            Some(HostKey::New(fp)) if !a.yes => {
+                eprintln!("   First connection to this server. Its key is {fp}");
+                eprintln!("   (the provider's console can show it: ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub)");
+                if ask_line("   Trust it? (yes/no)")? != "yes" {
+                    bail!("not trusted; nothing was changed");
+                }
+                ssh::Ssh::connect(&login, Some(fp))?
+            }
+            Some(HostKey::New(fp)) => bail!("first connection to this server; check its key and pass --host-key {fp}"),
+            _ => return Err(e),
+        },
+    };
+    let f = remote::facts(&s)?;
+    eprintln!("== {} — {} ({}, {} MiB RAM){}", f.hostname, f.os, f.arch, f.ram_mib, if f.root_login { "" } else { ", root through sudo" });
+    let d = Deploy { host: login.host.clone(), agent: agent.clone(), os: a.os.clone() };
+    eprintln!("== checking the server (nothing changes yet)");
+    let plan = remote::plan(&s, &d, &mut |l| eprintln!("   {l}"))?;
+    eprintln!("\n== plan for {}", f.hostname);
+    for (k, v, src) in &plan.rows {
+        eprintln!("  {k:<19} {v}   [{src}]");
+    }
+    eprintln!("\nEverything on {} of {} is replaced by bia.", plan.disk, f.hostname);
+    if !a.yes && ask_line(&format!("Type the server's name ({}) to go ahead", f.hostname))? != f.hostname {
+        bail!("not confirmed; nothing was changed");
+    }
+    if let Agent::Land { secret } = &agent {
+        eprintln!("\n== land secret (write it down; your bia needs it to fly here):\n\n   {secret}\n");
+    }
+    let done = remote::run(&s, &d, &plan.disk, &|p| match p {
+        Progress::Line(l) => eprintln!("   {l}"),
+        Progress::Certificate(p) => eprintln!("== root's certificate saved: {}", p.display()),
+        Progress::Rebooting => eprintln!("== the server reboots into bia's installer now"),
+    })?;
+    drop(s);
+    if let Some(dir) = &done.folder {
+        eprintln!("   CA fingerprint (SHA-256): {}", done.ca_sha256);
+        if !a.no_trust {
+            let r = remote::trust::install(dir, &format!("bia {}", login.host))?;
+            for l in &r.done {
+                eprintln!("   ok: {l}");
+            }
+            for l in &r.todo {
+                eprintln!("   to do: {l}");
+            }
+        }
+    }
+    if a.no_wait {
+        return Ok(());
+    }
+    eprintln!("== waiting for bia to start at {} (a few minutes)…", login.host);
+    remote::wait_up(&login.host, Some(done.ca_pem.as_str()).filter(|c| !c.is_empty()), std::time::Duration::from_secs(25 * 60), &mut |_| {})?;
+    match &agent {
+        Agent::New { .. } => eprintln!("== bia is up: https://{}/", login.host),
+        Agent::Land { secret } => eprintln!("== bia waits for a flight at {}: tell one of your bias to fly there with land secret {secret}", login.host),
+    }
+    Ok(())
 }

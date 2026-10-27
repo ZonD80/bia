@@ -7,13 +7,13 @@ Builds the minimal bia disk image dist/<arch>/bia-<arch>.img (tools/mkimg.sh: GP
 BIOS GRUB on x86_64, BIAROOT; no keys, no model) and writes into <out-dir>:
 
   bia-<arch>.img.xz   the image, xz -T0 (Etcher, Rufus, Raspberry Pi Imager and dd write
-                      it as it is; bia-flash writes it over the whole stick with keys and
+                      it as it is; bia-deploy writes it over the whole stick with keys and
                       a model)
   os-<arch>.json      this architecture's entry for bia-os.json
 
 --secrets FILE: one byte string per line that must not appear in anything shipped
 (API keys, passwords, home paths); the raw image is scanned before compression.
-The writer (installers/bia-flash/src/release.rs) downloads and checks it.
+The writer (installers/bia-deploy/src/release.rs) downloads and checks it.
 """
 import argparse, hashlib, json, os, subprocess, sys
 

@@ -1,0 +1,162 @@
+# Release bia: tools/release.sh on GitHub's runners. Each runner builds the packages of its
+# own platform (--build-only), and one job publishes them all (--publish), so bia-os.json is
+# merged once. A package the release already has is skipped, as with a local run.
+#
+# Starts on a pushed tag v<version> (the version in Cargo.toml), or by hand:
+#   gh workflow run release.yml -f only=flashers -f force=true
+#
+# Secrets: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (notarization), MACOS_CERT_P12 (base64 of
+# the Developer ID Application identity as .p12) and MACOS_CERT_PASSWORD, BIA_TG_API_ID and
+# BIA_TG_API_HASH (compiled into the Telegram MCP). Variables: APPLE_TEAM_ID, CODESIGN_IDENTITY.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Packages or groups (release.sh --only), e.g. flashers or os-arm64,flash-macos; empty: all"
+        required: false
+        default: ""
+      force:
+        description: "Rebuild even what the release has (release.sh --force)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  ONLY: ${{ inputs.only }}
+  FORCE: ${{ inputs.force && '--force' || '' }}
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            within: os-x86_64,land-x86_64,flash-linux,flash-windows,takeover
+          - runner: ubuntu-24.04-arm
+            within: os-arm64,land-arm64,flash-linux-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} is not v$v (Cargo.toml)"; exit 1; }
+      - name: Room on the disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+          df -h / | tail -1
+      - name: Telegram app credentials (read by builders/build.sh from .env)
+        env:
+          TG_ID: ${{ secrets.BIA_TG_API_ID }}
+          TG_HASH: ${{ secrets.BIA_TG_API_HASH }}
+        run: |
+          umask 077
+          printf 'BIA_TG_API_ID=%s\nBIA_TG_API_HASH=%s\n' "$TG_ID" "$TG_HASH" > .env
+      - name: Build
+        run: tools/release.sh --build-only --within "${{ matrix.within }}" ${ONLY:+--only "$ONLY"} $FORCE
+      - name: Hand the packages to the publish job
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-${{ matrix.runner }}
+          path: |
+            dist/release/*/*
+            dist/release/*/.built-*
+            !dist/release/*/.secrets
+            !dist/release/*/bia-os.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Forget the credentials
+        if: always()
+        run: rm -f .env
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rust for Apple Silicon and Intel
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Signing identity into a keychain of its own
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/bia-signing.keychain-db"
+          kp=$(openssl rand -hex 24)
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kp" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kp" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$kc"
+      - name: xz and create-dmg
+        run: |
+          command -v xz >/dev/null || brew install xz
+          npm install -g create-dmg >/dev/null 2>&1 || true
+      - name: Build, sign, notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          CODESIGN_IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+        run: tools/release.sh --build-only --within flash-macos ${ONLY:+--only "$ONLY"} $FORCE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: built-macos
+          path: |
+            dist/release/*/*
+            dist/release/*/.built-*
+            !dist/release/*/.secrets
+            !dist/release/*/bia-os.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/bia-signing.keychain-db" 2>/dev/null || true
+
+  publish:
+    needs: [linux, macos]
+    # what did build is published even when another runner failed (e.g. macOS signing
+    # without its secrets); a later run builds only what is still missing
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: built-*
+          path: dist/release
+          merge-multiple: true
+      - name: Anything built?
+        id: any
+        run: |
+          if ls dist/release/*/.built-* >/dev/null 2>&1; then echo "go=1" >> "$GITHUB_OUTPUT"; else echo "nothing was built"; fi
+      - name: Publish
+        if: steps.any.outputs.go == '1'
+        run: tools/release.sh --publish

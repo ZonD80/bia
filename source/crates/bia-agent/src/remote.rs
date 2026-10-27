@@ -1,6 +1,6 @@
 //! FMM — Frontier Model Mode: chat with tool calling over HTTP against OpenRouter / OpenAI
 //! (chat completions API), Anthropic (Messages API) or a ChatGPT plan (Responses API, signed in
-//! by bia-flash), streaming the reply. For ChatGPT, bia owns the OAuth session: it renews the
+//! by bia-deploy), streaming the reply. For ChatGPT, bia owns the OAuth session: it renews the
 //! one-hour access token before requests and rotates the 30-day refresh token at least daily.
 use crate::tools::{Msg, Role, ToolCall, ToolSpec};
 use anyhow::{bail, Context, Result};
@@ -26,12 +26,12 @@ pub struct FmmConfig {
     /// Software context budget in tokens. 0 = default (131072).
     #[serde(default)]
     pub ctx: u32,
-    /// Provider `chatgpt`: the sign-in from bia-flash. `api_key` mirrors its access token.
+    /// Provider `chatgpt`: the sign-in from bia-deploy. `api_key` mirrors its access token.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatgpt: Option<ChatGptAuth>,
 }
 
-/// "Sign in with ChatGPT" token set (same shape bia-flash writes).
+/// "Sign in with ChatGPT" token set (same shape bia-deploy writes).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct ChatGptAuth {
     pub client_id: String,

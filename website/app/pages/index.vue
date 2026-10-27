@@ -240,7 +240,7 @@ const showcase = [
 ]
 
 const steps = [
-  { icon: 'usb', title: 'Write a USB stick', text: 'Download the small bia writer for Mac, Windows or Linux and write bia onto any USB stick of 8 GB or more.' },
+  { icon: 'usb', title: 'Write a USB stick', text: 'Download the small bia deploy app for Mac, Windows or Linux and write bia onto any USB stick of 8 GB or more.' },
   { icon: 'power', title: 'Start a computer from it', text: 'Plug the stick into a PC or laptop and switch it on. Instead of the usual desktop, bia wakes up.' },
   { icon: 'wave', title: 'Say hello', text: 'Type on the screen, or open bia’s private app on your phone. Ask it to join WhatsApp, Telegram, Messenger or Instagram, and you’re off.' },
 ]

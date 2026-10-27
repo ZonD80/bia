@@ -51,7 +51,7 @@ const PROVIDERS: &[&str] = &[
     "qwen",
 ];
 
-/// Provider implied by the key's format (same rules as bia-flash `fmm::provider_for_key`).
+/// Provider implied by the key's format (same rules as bia-deploy `fmm::provider_for_key`).
 fn provider_for_key(key: &str) -> Option<&'static str> {
     let k = key.trim();
     if k.starts_with("sk-or-") {

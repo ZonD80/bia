@@ -1,5 +1,5 @@
 //! "Login with ChatGPT" on bia itself: the same Sign in with ChatGPT for open-source apps that
-//! bia-flash does (installers/bia-flash/src/chatgpt.rs), run as a human task so the owner can
+//! bia-deploy does (installers/bia-deploy/src/chatgpt.rs), run as a human task so the owner can
 //! move the cloud brain onto their ChatGPT plan without reflashing.
 //!
 //! Everything happens on bia: this process serves a page at 127.0.0.1 with a "Login with
@@ -447,7 +447,7 @@ fn list_models(access: &str) -> Result<Vec<Model>, String> {
     Ok(parse_models(&v))
 }
 
-/// Models this account may use (`visibility == "list"`), as bia-flash lists them.
+/// Models this account may use (`visibility == "list"`), as bia-deploy lists them.
 fn parse_models(v: &Value) -> Vec<Model> {
     let items = v["data"]
         .as_array()
@@ -473,7 +473,7 @@ fn parse_models(v: &Value) -> Vec<Model> {
 }
 
 /// The ChatGPT model bia suggests: the id containing this, shortest first (`gpt-6.1-sol`
-/// before a longer variant). Same rule as bia-flash `chatgpt::default_model`.
+/// before a longer variant). Same rule as bia-deploy `chatgpt::default_model`.
 const DEFAULT_MODEL: &str = "6.1-sol";
 
 /// The model to preselect: the one asked for, the one in use, else the default above, else

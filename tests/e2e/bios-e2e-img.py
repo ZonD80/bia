@@ -18,7 +18,7 @@ def prep():
     with ut.Img("flash") as f:
         f.mount()
         r = f.root
-        # FMM keys come from bia-flash (EFI/bia/fmm.json, seeded on first boot).
+        # FMM keys come from bia-deploy (EFI/bia/fmm.json, seeded on first boot).
         out = "/work/dist/x86_64"
         if os.path.exists(f"{out}/bia-agent"):
             shutil.copy2(f"{out}/bia-agent", f"{r}/usr/local/sbin/bia-agent")

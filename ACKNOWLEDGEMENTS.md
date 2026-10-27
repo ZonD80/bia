@@ -96,7 +96,7 @@ in `source/crates` and `installers`. Direct dependencies include:
 - RustCrypto: [sha1](https://github.com/RustCrypto/hashes), [sha2](https://github.com/RustCrypto/hashes), [hmac](https://github.com/RustCrypto/MACs), [p256](https://github.com/RustCrypto/elliptic-curves), [rsa](https://github.com/RustCrypto/RSA); [sha1_smol](https://github.com/mitsuhiko/sha1-smol), [rand](https://github.com/rust-random/rand), [base64](https://github.com/marshallpierce/rust-base64)
 - [qrcode](https://github.com/kennytm/qrcode-rust), [image](https://github.com/image-rs/image) — WhatsApp pairing QR
 - [gpt](https://github.com/Quyzi/gpt), [uuid](https://github.com/uuid-rs/uuid), [fatfs](https://github.com/rafalh/rust-fatfs), [walkdir](https://github.com/BurntSushi/walkdir), [clap](https://github.com/clap-rs/clap) — image and stick writers
-- [egui / eframe](https://github.com/emilk/egui) — bia-flash GUI
+- [egui / eframe](https://github.com/emilk/egui) — bia-deploy GUI
 - [mold](https://github.com/rui314/mold) — linker in the build container
 
 The full dependency tree with versions is in `Cargo.lock`.

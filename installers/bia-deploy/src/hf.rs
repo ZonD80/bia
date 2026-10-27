@@ -58,7 +58,7 @@ impl HfModel {
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .user_agent("bia-flash")
+        .user_agent("bia-deploy")
         .build()
         .into()
 }

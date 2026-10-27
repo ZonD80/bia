@@ -187,7 +187,7 @@ start_drivers() {
   ok "drivers"
 }
 
-# A takeover (bia-flash takeover on another Linux) writes a whole bia image instead.
+# A takeover (bia-deploy takeover on another Linux) writes a whole bia image instead.
 if arg bia.takeover >/dev/null; then
   start_drivers
   . /bia-rescue/takeover
