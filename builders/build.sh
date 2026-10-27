@@ -65,7 +65,7 @@ go_meta() {
   local ver
   ver=$(sed -n 's/^version = "\(.*\)"/\1/p' /work/Cargo.toml | head -1)
   echo "== go bia-meta $ver ($(go version))"
-  (cd /work/source/go/bia-meta && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$ver" -o "$OUT/bia-meta" .)
+  (cd /work/source/go/bia-meta && CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -X main.version=$ver" -o "$OUT/bia-meta" .)
   ls -l "$OUT/bia-meta"
 }
 

@@ -111,7 +111,15 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" >/dev/null
           security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
-          security find-identity -v -p codesigning "$kc"
+          # Developer ID certificates are issued by Apple's G2 intermediate, which a fresh
+          # runner lacks: without it the identity does not verify and codesign cannot find it
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$kc" -T /usr/bin/codesign
+          security find-identity -p codesigning "$kc"
+          if ! security find-identity -v -p codesigning "$kc" | grep -q 'Developer ID Application'; then
+            echo "::error::no usable Developer ID Application identity in MACOS_CERT_P12: export it from Keychain Access under My Certificates (certificate with its private key) as .p12"
+            exit 1
+          fi
       - name: xz and create-dmg
         run: |
           command -v xz >/dev/null || brew install xz
