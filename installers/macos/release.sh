@@ -94,6 +94,21 @@ load_env "$MACOS_DIR/.env"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-$DEFAULT_TEAM_ID}"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:-$DEFAULT_CODESIGN_IDENTITY}"
 
+# stapler fetches the ticket from Apple's CloudKit: the connection drops now and then, and a
+# fresh ticket can take a minute to appear there; retry before failing the release.
+staple() { # path
+  local i
+  for i in 1 2 3 4 5 6; do
+    if xcrun stapler staple "$1" && xcrun stapler validate "$1"; then
+      return 0
+    fi
+    echo "    stapling $1 failed (try $i of 6); retrying in $((i * 20)) s" >&2
+    sleep $((i * 20))
+  done
+  echo "error: could not staple the notarization ticket to $1" >&2
+  return 1
+}
+
 require_notarize_credentials() {
   local missing=0
   if [[ -z "${APPLE_ID:-}" ]]; then
@@ -269,8 +284,7 @@ if [[ "$DO_APP" -eq 1 ]]; then
       --team-id "$APPLE_TEAM_ID" \
       --wait
     echo "==> Stapling notarization ticket (DMG + app)"
-    xcrun stapler staple "$STAMPED_DMG_PATH"
-    xcrun stapler validate "$STAMPED_DMG_PATH"
+    staple "$STAMPED_DMG_PATH"
     # Staple the .app as well when possible (offline Gatekeeper for unpacked app).
     xcrun stapler staple "$APP_PATH" 2>/dev/null || true
   else
