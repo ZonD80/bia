@@ -203,12 +203,14 @@ if len(os.environ.get("HF_TOKEN", "")) >= 8:
 # /home/runner/ is in prebuilt libraries made on GitHub Actions and says nothing about anyone
 if not os.environ.get("GITHUB_ACTIONS"):
     out.add(os.path.expanduser("~") + "/")
-open(sys.argv[1], "w").write("\n".join(sorted(out)) + "\n")
+# no empty line: grep -f takes one as a pattern that matches every file
+open(sys.argv[1], "w").write("".join(f"{s}\n" for s in sorted(out) if s))
 os.chmod(sys.argv[1], 0o600)
 PY
 trap 'rm -f "$SECRETS"' EXIT
 scan() { # files…  (raw binaries, before they are packed)
   local f
+  [[ -s "$SECRETS" ]] || return 0
   for f in "$@"; do
     if LC_ALL=C grep -a -q -F -f "$SECRETS" "$f"; then die "a secret or home path is inside $f; not releasing it"; fi
   done
