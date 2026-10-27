@@ -36,7 +36,7 @@ const sections = [
   {
     title: 'The basics',
     items: [
-      { q: 'What is bia, in one sentence?', a: 'A free program you put on a USB stick that turns any computer into a helpful AI personality — it talks with people on WhatsApp, Telegram and phone calls, remembers, uses the computer and the web, and can move to new machines.' },
+      { q: 'What is bia, in one sentence?', a: 'A free operating system that boots on a computer or server, from a USB stick or its own disk, and turns it into a helpful AI personality: it talks with people on WhatsApp, Telegram, Messenger, Instagram and phone calls, remembers, uses the computer and the web, and can move to new machines.' },
       { q: 'Is it a robot?', a: 'It has no body — but it has a computer, a voice, accounts and a memory. Think of it as a very capable assistant who lives inside a computer and never sleeps.' },
       { q: 'Do I need to know how to program?', a: 'No. You speak to bia in your own words, in your own language, and it does the technical work itself. It asks before anything risky.' },
       { q: 'What does it cost?', a: 'bia itself is free software. For thinking, bia uses a cloud brain, and the AI provider charges you directly for what you use. At the moment the cheapest way is DeepSeek V4.1. A brain on the stick has no usage fees, but the computer it needs costs far more than years of cloud use.' },
@@ -58,7 +58,7 @@ const sections = [
     items: [
       { q: 'Which languages does it speak?', a: 'bia understands speech in about a hundred languages and can speak over forty of them out loud. When it meets a new language, it learns it by itself and tells you.' },
       { q: 'Can it answer phone calls?', a: 'Yes — Telegram and WhatsApp voice calls, plus live calls in its own app. After each call, it posts a written summary of what was said.' },
-      { q: 'Does it use my Telegram and WhatsApp?', a: 'It can use an account you give it — your own, or one created for bia. On WhatsApp it joins as a linked device, the same way WhatsApp Web does.' },
+      { q: 'Does it use my Telegram, WhatsApp, Messenger and Instagram?', a: 'It can use an account you give it — your own, or one created for bia. On WhatsApp it joins as a linked device, the same way WhatsApp Web does. For Messenger and Instagram it signs in on facebook.com or instagram.com in its own browser and takes its direct messages from there; Meta may ask for a security check now and then.' },
     ],
   },
   {

@@ -372,13 +372,13 @@ sync
 
 # ---- copy --------------------------------------------------------------------
 # Kept on the destination (excluded paths are never deleted by --delete):
-# its fstab, swap file, machine identity, clock state, the agent's files and
-# /bia-update. Pseudo filesystems keep their directory but not their content.
+# its fstab, hostname, hosts, swap file, machine identity, clock state, the
+# agent's files and /bia-update. Pseudo filesystems keep their directory but not their content.
 EXCLUDES=(
   --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/*
   --exclude=/tmp/* --exclude=/mnt/* --exclude=/media/* --exclude=/lost+found
   --exclude=/swapfile --exclude=/bia-update
-  --exclude=/etc/fstab --exclude=/etc/machine-id --exclude=/var/lib/dbus/machine-id
+  --exclude=/etc/fstab --exclude=/etc/hostname --exclude=/etc/hosts --exclude=/etc/machine-id --exclude=/var/lib/dbus/machine-id
   --exclude=/var/lib/systemd/random-seed
   --exclude=/etc/localtime --exclude=/etc/timezone --exclude=/etc/adjtime
   --exclude=/etc/fake-hwclock.data --exclude=/etc/systemd/timesyncd.conf

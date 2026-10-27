@@ -20,6 +20,8 @@ export type Feature = {
   chat: ChatLine[]
   examples: string[]
   good_to_know: string
+  /** something to simply say to bia instead: shown as "Or just ask bia: …" */
+  ask: string
   related: string[]
 }
 
@@ -37,15 +39,16 @@ export const features: Feature[] = [
     name: 'Lives in your messengers',
     group: 'talk',
     icon: 'chat',
-    tagline: 'Telegram and WhatsApp as a real account — not a bot in a side chat.',
+    tagline: 'Telegram, WhatsApp, Facebook Messenger and Instagram as a real account — not a bot in a side chat.',
     lead:
-      'Most AI assistants live in their own app, and you have to go to them. bia comes to you. It signs in to Telegram and WhatsApp the way a person does, and then it is simply there — in the same chats, groups and threads where your family, friends and customers already write.',
+      'Most AI assistants live in their own app, and you have to go to them. bia comes to you. It signs in to Telegram, WhatsApp, Facebook Messenger and Instagram the way a person does, and then it is simply there — in the same chats, groups and direct messages where your family, friends and customers already write.',
     points: [
-      { title: 'A real account, not a bot', text: 'On Telegram it logs in with a phone number and code, like anyone. On WhatsApp it joins as a linked device, exactly like WhatsApp on a second screen. People write to it the way they write to a person.' },
-      { title: 'Everything a chat can do', text: 'Text, photos, files, voice messages, reactions, replies, groups. It can find a chat by name, read back the history, delete messages, and change its own name, bio and photo.' },
-      { title: 'Several conversations at once', text: 'A question from your mother on WhatsApp, a customer on Telegram and you in the web app can all be in progress at the same time. bia keeps track of who asked what and answers each one where they wrote.' },
-      { title: 'Boundaries built in', text: 'If someone is rude or spams, bia can ban them: their messages stop arriving and their calls are rejected with a polite note. Unban whenever you like.' },
-      { title: 'Nothing lost while it was away', text: 'If bia was switched off or updating, it catches up on everything that arrived meanwhile — even messages you already read on your phone.' },
+      { title: 'A real account, not a bot', text: 'On Telegram it logs in with a phone number and code, like anyone. On WhatsApp it joins as a linked device, exactly like WhatsApp on a second screen. For Messenger and Instagram it signs in on facebook.com or instagram.com in its own browser, then reads and answers its direct messages from there — encrypted Messenger chats too. People write to it the way they write to a person.' },
+      { title: 'Everything a chat can do', text: 'Text with real formatting, photos, videos, files, voice messages, replies, reactions, edits and unsending. It sees which message a reply points to, notices when someone edits a message (and what it said before), and gets shared Instagram posts and reels with their link. On Telegram and WhatsApp it also understands locations, live locations and contacts, and can send them. It can find a chat by name, read back the history, delete messages, and change its own name, bio and photo.' },
+      { title: 'Runs its groups', text: 'bia can create groups, add and remove people and make invite links. In the groups it runs, on all four messengers, it can make or remove admins, decide what members may do, answer join requests, turn on disappearing messages and change the title, description and photo. On Telegram it goes further: exact admin rights and titles, slow mode, and restricting one member for a while.' },
+      { title: 'Several conversations at once', text: 'A question from your mother on WhatsApp, a customer on Instagram, a friend on Messenger and you in the web app can all be in progress at the same time. bia keeps track of who asked what and answers each one where they wrote. Each message is marked as read the moment it arrives, so nobody wonders whether it got through.' },
+      { title: 'Boundaries built in', text: 'If someone is rude or spams, bia can ban them: their messages stop arriving and their calls are rejected with a polite note. On Messenger and Instagram it can block them too. Unban whenever you like.' },
+      { title: 'Nothing lost while it was away', text: 'If bia was switched off or updating, it catches up on everything that arrived meanwhile — even messages you already read on your phone — and sees when each one was written. If a photo or voice message cannot be downloaded, bia knows and asks for it again instead of ignoring it.' },
     ],
     chat: [
       { from: 'them', where: 'WhatsApp', text: 'Hi! Is the bakery open on Sunday?' },
@@ -53,15 +56,19 @@ export const features: Feature[] = [
       { from: 'them', where: 'WhatsApp', text: 'Yes please, two!' },
       { from: 'bia', where: 'WhatsApp', text: 'Done, two rye loaves under your name for Sunday. See you then! 🍞' },
       { from: 'note', text: 'bia writes the order into its notes and tells the owner on Telegram.' },
+      { from: 'them', where: 'Instagram', text: 'Is the sourdough from your last post still available?' },
+      { from: 'bia', where: 'Instagram', text: 'It is! Fresh this morning — shall I keep one for you?' },
     ],
     examples: [
       'Answer questions from customers on the shop’s WhatsApp at any hour.',
+      'Handle the shop’s Instagram and Facebook messages: prices, sizes, “is it still available?”.',
       'Be the family helper in a group chat: shopping lists, birthdays, who picks up the kids.',
       'Reply to friends while you are on a flight, and tell you what needs your attention when you land.',
       'Keep a busy group calm: welcome new members, answer the same question for the hundredth time, mute spammers.',
     ],
     good_to_know:
-      'bia needs a Telegram account (yours, or one made just for bia) and a phone with WhatsApp to link to. Use it honestly: tell people they are talking to an assistant when it matters, and follow each messenger’s rules.',
+      'Use only the messengers you want: a Telegram account (yours, or one made just for bia), a phone with WhatsApp to link to, a Facebook or Instagram account. Calls work on Telegram and WhatsApp; on Messenger and Instagram bia writes and sends voice messages. Meta does not offer Messenger and Instagram for assistants officially, so now and then it may ask for a security check in the browser. Use it honestly: tell people they are talking to an assistant when it matters, and follow each messenger’s rules.',
+    ask: 'Join our family WhatsApp group and introduce yourself. Briefly, please.',
     related: ['voice', 'presence', 'people', 'languages'],
   },
   {
@@ -74,7 +81,7 @@ export const features: Feature[] = [
       'Not everyone wants to type. bia can pick up a Telegram or WhatsApp call, listen, and answer in a natural voice. It understands voice messages and can send its own. And in its private web app, you can simply press the phone button and talk.',
     points: [
       { title: 'Real calls', text: 'bia answers and places voice calls on Telegram and WhatsApp, and can join group calls. It hears you, thinks, and speaks back — and if you interrupt, it stops talking, like a person would.' },
-      { title: 'Voice messages, both ways', text: 'Send it a voice note and it understands it right away. Ask for a voice reply and it records one, which arrives as a normal voice bubble.' },
+      { title: 'Voice messages, both ways', text: 'Send it a voice note on Telegram, WhatsApp, Messenger or Instagram and it understands it right away. Ask for a voice reply and it records one, which arrives as a normal voice bubble.' },
       { title: 'A call button in its own app', text: 'Open bia’s private web app on your phone or laptop, press 📞, and talk. bia can also call you there — your screen rings, you answer or decline.' },
       { title: 'A written summary afterwards', text: 'When a call ends, bia posts the whole conversation as text in the chat, so nothing said is lost.' },
       { title: 'Runs on the machine', text: 'Listening and speaking happen on bia’s own computer, not on a stranger’s server. The recording itself never leaves the room — only the words go to bia’s brain.' },
@@ -93,7 +100,8 @@ export const features: Feature[] = [
       'Let bia call you when a long job finishes, instead of sending yet another message.',
     ],
     good_to_know:
-      'Voices are clear but not human — people will hear it is a computer. Recognition is best in a quiet room; a cheap computer is slower to answer than a powerful one.',
+      'Calls are on Telegram, WhatsApp and bia’s own app; Messenger and Instagram have voice messages but no calls. Voices are clear but not human — people will hear it is a computer. Recognition is best in a quiet room; a cheap computer is slower to answer than a powerful one.',
+    ask: 'Call me in an hour and sound urgent — I need an excuse to leave this meeting.',
     related: ['languages', 'messengers', 'web-console'],
   },
   {
@@ -123,6 +131,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Each new voice is a download of about 20–60 MB. Some languages can be understood but have no voice yet; bia will say so and answer in a language it can speak.',
+    ask: 'Our guests from Brazil arrive tomorrow. Learn Portuguese tonight.',
     related: ['voice', 'people', 'messengers'],
   },
   {
@@ -153,7 +162,8 @@ export const features: Feature[] = [
       'Send bia documents to sort, summarise or file, straight from your phone’s browser.',
     ],
     good_to_know:
-      'The app lives on bia’s own network address. To use it from outside the house, the network must allow it (for example through your router or a private network).',
+      'The app lives on bia’s own network address. To use it from outside the house, the network must allow it — through your router, or a private network such as Tailscale.',
+    ask: 'Make yourself reachable from my phone when I’m away — safely.',
     related: ['voice', 'privacy', 'agents', 'ask-human'],
   },
 
@@ -167,7 +177,7 @@ export const features: Feature[] = [
     lead:
       'bia is not a feature you open and close. It is a presence that stays: it has its own name and photo, its own accounts, its own way of speaking, and it keeps showing up — answering, following up, remembering. Like a reliable person who happens to never sleep.',
     points: [
-      { title: 'An identity of its own', text: 'Give bia a name, a profile photo and a bio on Telegram and WhatsApp. It can create accounts on websites, sign in, and keep its own browser with its own saved logins.' },
+      { title: 'An identity of its own', text: 'Give bia a name, a profile photo and a bio on Telegram and WhatsApp, and a bio on Facebook. It can create accounts on websites, sign in, and keep its own browser with its own saved logins.' },
       { title: 'Nobody is left unanswered', text: 'bia tracks every message that is waiting for a reply. If a job takes longer, it sends a short status instead of going quiet. A message is only closed when the task is really done.' },
       { title: 'Good manners in groups', text: 'It replies in the right chat, to the right person, without mixing conversations up — and it can react with a simple 👍 when that is the whole answer.' },
       { title: 'Always there, even after a restart', text: 'Switch it off, update it, move it to another computer — when it wakes up, the conversations, people and promises are all still there.' },
@@ -187,6 +197,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'A convincing presence comes with responsibility. Do not use bia to deceive people about who they are talking to, and respect the rules of every platform it joins.',
+    ask: 'Pick a nice profile photo for yourself. No potatoes. Fine, one potato.',
     related: ['messengers', 'people', 'memory', 'calendar'],
   },
   {
@@ -196,9 +207,9 @@ export const features: Feature[] = [
     icon: 'people',
     tagline: 'An address book with trust levels, languages and every way to reach someone.',
     lead:
-      'bia keeps an address book, and it understands that one person can have many doors: the same friend on Telegram, on WhatsApp and in the web app. It knows who may give it instructions, who is just a contact, and which language each person prefers.',
+      'bia keeps an address book, and it understands that one person can have many doors: the same friend on Telegram, WhatsApp, Messenger, Instagram and in the web app. It knows who may give it instructions, who is just a contact, and which language each person prefers.',
     points: [
-      { title: 'One person, many channels', text: 'Link a person’s Telegram, WhatsApp and web chats together, and bia treats them as one relationship — same language, same history, same trust.' },
+      { title: 'One person, many channels', text: 'Link a person’s Telegram, WhatsApp, Messenger, Instagram and web chats together, and bia treats them as one relationship — same language, same history, same trust.' },
       { title: 'Trust levels', text: 'Only people you trust fully can ask bia to do serious things on the computer. Everyone else can chat, ask questions and leave messages.' },
       { title: 'Language and preferences', text: 'bia notices which language each person speaks and remembers it, so calls and voice replies start in the right language.' },
       { title: 'Context for every relationship', text: 'Notes about who someone is — “my landlord”, “Sara’s piano teacher” — help bia answer appropriately.' },
@@ -209,11 +220,12 @@ export const features: Feature[] = [
     ],
     examples: [
       'Make sure only you and your partner can ask bia to pay bills or change the computer.',
-      'Let bia recognise a regular customer whether they write on WhatsApp or Telegram.',
+      'Let bia recognise a regular customer whether they write on WhatsApp, Telegram or Instagram.',
       'Keep notes about every client: what they ordered last time, what language they speak.',
     ],
     good_to_know:
       'bia cannot guess that two accounts belong to the same person — tell it once and it remembers.',
+    ask: 'Ann has a new number, +34 600 123 456. Still the same Ann.',
     related: ['presence', 'languages', 'messengers', 'memory'],
   },
   {
@@ -241,6 +253,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Memory lives on bia’s own disk. If you move bia to another computer, its memory moves with it.',
+    ask: 'What did I promise my brother last Christmas? Be honest.',
     related: ['calendar', 'people', 'moving'],
   },
   {
@@ -271,6 +284,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Times follow the machine’s time zone; bia can set it for you. Watchers that read websites depend on those websites staying the same.',
+    ask: 'We moved to Lisbon — switch your clock and keep my reminders on local time.',
     related: ['memory', 'computer', 'browser'],
   },
   {
@@ -298,6 +312,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Cloud services charge by use, through your own account with them; DeepSeek V4.1 is the cheapest good choice at the moment. Ordinary laptops, mini-PCs and old machines use the cloud brain. No-internet mode needs a high-end graphics card, or unified memory, with at least 64 GB of video memory (VRAM).',
+    ask: 'Which brain fits my budget? Set it up and tell me what it will cost.',
     related: ['any-computer', 'privacy', 'skills'],
   },
 
@@ -329,6 +344,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'With great power comes care: bia asks before destructive steps like erasing a drive or removing programs.',
+    ask: 'Your disk is almost full. Clean up — but don’t touch the cat photos.',
     related: ['browser', 'screen', 'ask-human', 'skills'],
   },
   {
@@ -356,6 +372,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Some sites actively block automated browsing. bia respects that and will ask you to step in when a site insists on a human.',
+    ask: 'Find the cheapest flight to Lisbon in May. No, you can’t come.',
     related: ['vault', 'screen', 'ask-human', 'calendar'],
   },
   {
@@ -383,6 +400,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Screen work is slower than working inside a web page, so bia uses it only when there is no better way.',
+    ask: 'Something popped up on your screen. Have a look and close it.',
     related: ['browser', 'computer', 'web-console'],
   },
   {
@@ -410,6 +428,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'The vault is as safe as the computer it lives on. Keep bia’s machine physically safe and give web app certificates only to people you trust.',
+    ask: 'Change my library password to something strong and keep it in your vault.',
     related: ['browser', 'privacy', 'people'],
   },
   {
@@ -439,6 +458,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'You decide how much freedom bia has. People without full trust can never approve serious actions.',
+    ask: 'Before you pay any bill over €50, ask me first.',
     related: ['web-console', 'computer', 'people'],
   },
 
@@ -448,9 +468,9 @@ export const features: Feature[] = [
     name: 'Wakes up any computer',
     group: 'life',
     icon: 'stick',
-    tagline: 'Plug in a USB stick, switch on — that computer is now bia. Even an old potato.',
+    tagline: 'Boot it from a USB stick, a disk or a server — that computer is now bia. Even an old potato.',
     lead:
-      'bia lives on a USB stick. Plug it into almost any PC or laptop, switch it on, and instead of the usual desktop you meet bia. Old laptops gathering dust, office PCs, tiny mini-computers — every “potato” can become smart.',
+      'bia is an operating system of its own. Start almost any PC or laptop from a bia USB stick, or install it on a computer’s disk or a server, and instead of the usual desktop you meet bia. Old laptops gathering dust, office PCs, tiny mini-computers — every “potato” can become smart.',
     points: [
       { title: 'From a stick, in minutes', text: 'Write bia onto a USB stick with a simple app for Mac, Windows or Linux. Boot a computer from it, and bia is alive.' },
       { title: 'Old and new machines', text: 'Works on ordinary Intel and AMD PCs, new and old, with modern or classic start-up and with Secure Boot switched on — and on ARM computers that start the standard (UEFI) way. You make the stick for the kind of computer you have.' },
@@ -470,6 +490,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'An 8 GB stick or bigger is needed; more if you want the brain on the stick. Ordinary and old computers use the cloud brain — thinking with no internet needs a high-end graphics card or unified memory with at least 64 GB of video memory.',
+    ask: 'Copy yourself onto this laptop’s disk — I want my USB stick back.',
     related: ['moving', 'brain', 'updates'],
   },
   {
@@ -503,6 +524,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'A backup contains private things (passwords, chats). Store it as carefully as you would store the computer itself. When bia moves, the new computer needs the internet, so bia can reinstall its extra programs for that machine.',
+    ask: 'Pack your things, we’re moving to the new mini-PC.',
     related: ['updates', 'any-computer', 'memory'],
   },
   {
@@ -532,6 +554,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Updates are started by you, never forced. Keep the stick with the new version plugged in during the update.',
+    ask: 'The stick with the new version is plugged in. Update yourself tonight while I sleep.',
     related: ['moving', 'any-computer', 'skills'],
   },
   {
@@ -544,7 +567,7 @@ export const features: Feature[] = [
       'bia is not alone in the world. Other programs and AI agents can talk to it through its own chat app, with their own certificate, exactly like a human guest. bias can talk to each other through messengers or the web, and one bia can even build and run another computer inside itself.',
     points: [
       { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own certificate from you, and then chat with bia like any member of the household — with their own chats and history.' },
-      { title: 'bia to bia', text: 'Two bias can be contacts of each other on Telegram, WhatsApp or the web app: one at home, one at the shop, sharing work and passing messages.' },
+      { title: 'bia to bia', text: 'Two bias can be contacts of each other on Telegram, WhatsApp, Messenger, Instagram or the web app: one at home, one at the shop, sharing work, passing messages and handing each other the skills they wrote.' },
       { title: 'Trust in one handshake', text: 'Ask bia to connect to another bia: it hands the other one a certificate and asks for one back. When the other owner approves, both can call each other’s web app. Every request shows the address it came from, and a certificate can be limited to the addresses it may be used from.' },
       { title: 'A computer inside a computer', text: 'bia can set up a virtual computer, boot a second bia in it and drive it — handy for testing, teaching or giving a helper its own room.' },
       { title: 'Same rules for everyone', text: 'Agents get trust levels like people do: a guest agent can ask and chat, only a trusted one can give serious orders.' },
@@ -562,6 +585,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'Each agent gets a certificate you issue and can revoke. Connect agents you trust, and give them only the trust they need.',
+    ask: 'Make friends with the shop’s bia. You’re still my favourite.',
     related: ['web-console', 'people', 'skills'],
   },
   {
@@ -587,8 +611,40 @@ export const features: Feature[] = [
       'Let bia pick up new abilities as you need them, without a big setup.',
     ],
     good_to_know:
-      'Writing a new skill is a job for someone who programs — but once it exists, anyone can use it by just asking.',
-    related: ['computer', 'agents', 'updates'],
+      'Writing a skill by hand is a job for someone who programs — but bia can write one itself, and once it exists, anyone can use it by just asking.',
+    ask: 'Get yourself a skill for our smart lights. Disco mode optional.',
+    related: ['develops-itself', 'computer', 'agents', 'updates'],
+  },
+  {
+    slug: 'develops-itself',
+    name: 'Develops itself',
+    group: 'life',
+    icon: 'sparkle',
+    tagline: 'It writes its own skills — and shares them with people and other bias.',
+    lead:
+      'When bia keeps doing the same job by hand, or meets a tool no skill covers, it can build the skill itself: a small program with a description, in its own skills folder. It tests it, switches it on without a restart, and from then on simply has it. What one bia has learned this way it can hand to a person or to another bia.',
+    points: [
+      { title: 'Writes its own skills', text: 'Tell bia what you need — “talk to my solar inverter”, “check the shop’s orders every morning” — and it writes the skill, tries it, fixes what fails and keeps it. No programmer needed.' },
+      { title: 'Grows while it runs', text: 'A new or improved skill is switched on in place: bia restarts just that skill and learns its new functions, while conversations go on.' },
+      { title: 'Shares what it knows', text: 'A skill is a folder bia can send like any file — on a messenger, in its chat app, or straight to another bia it trusts. The other bia adds it to its own skills, so knowledge spreads instead of being learned twice.' },
+      { title: 'Learns from others', text: 'Got a skill from a friend or from another bia? Hand it over, and bia can read it, explain what it does, and add it.' },
+    ],
+    chat: [
+      { from: 'you', where: 'Telegram', text: 'You check the weather station page every morning by hand. Make that a proper skill.' },
+      { from: 'bia', where: 'Telegram', text: 'Done: I wrote a “weather station” skill — current reading, today’s high and low, and an alert when frost is coming. Tested it, it’s on.' },
+      { from: 'you', where: 'Telegram', text: 'Nice. Send it to the shop bia too.' },
+      { from: 'bia', where: 'Telegram', text: 'Sent. The shop bia added it and already reports 3 °C at the greenhouse.' },
+    ],
+    examples: [
+      'Turn a chore bia does by hand every day into a skill that does it in one step.',
+      'Connect bia to a device or service that has no ready-made skill.',
+      'Build a skill once at home and share it with every bia in the family or the company.',
+      'Give a friend’s bia the skill that took yours a week of trial and error.',
+    ],
+    good_to_know:
+      'A skill is a program that runs on bia’s computer, so only take skills from people and bias you trust — and ask bia to read a shared one and tell you what it does before turning it on.',
+    ask: 'Here’s a skill from Ann’s bia. Read it and tell me what it does before you add it.',
+    related: ['skills', 'agents', 'computer', 'updates'],
   },
   {
     slug: 'privacy',
@@ -615,6 +671,7 @@ export const features: Feature[] = [
     ],
     good_to_know:
       'With a cloud brain, the questions bia thinks about are sent to that cloud provider, under their terms. If your work must never leave the building, the brain on the stick is an option on a powerful computer.',
+    ask: 'Who can reach your app right now? Show me, and take back the old certificates.',
     related: ['vault', 'brain', 'web-console'],
   },
 ]

@@ -6,7 +6,7 @@
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Features</span>
         </nav>
         <span class="eyebrow">Everything bia does</span>
-        <h1>One personality, twenty abilities</h1>
+        <h1>One personality, 20+ abilities and counting</h1>
         <p class="section-lead">
           bia is easier to understand by what it does for people than by how it works inside. Every ability below
           has its own page with a sample conversation and everyday ideas.
@@ -34,7 +34,7 @@ import { features, groups, type Feature } from '~/data/features'
 useSeoMeta({
   title: 'Features — everything bia can do',
   description:
-    'All of bia’s abilities: messengers, voice calls, 100 languages, its own chat app, memory, calendar, a real computer and browser, a password vault, moving between computers, self-updates, talking to other agents.',
+    'All of bia’s abilities: messengers, voice calls, 100 languages, its own chat app, memory, calendar, a real computer and browser, a password vault, moving between computers, self-updates, writing and sharing its own skills, talking to other agents.',
 })
 
 const byGroup = (g: string) => features.filter((f) => f.group === (g as Feature['group']))

@@ -46,7 +46,7 @@
 
     <section class="section">
       <div class="container">
-        <h2 class="section-title">What’s on the stick</h2>
+        <h2 class="section-title">What’s inside bia</h2>
         <div class="grid grid--3">
           <div v-for="b in inside" :key="b.title" class="card">
             <AppIcon :name="b.icon" size="2rem" class="ico" />
@@ -64,7 +64,7 @@
           <ul class="list-check">
             <li>A USB stick of 8 GB or more (bigger if you want the brain on the stick).</li>
             <li>A computer: almost any PC or laptop from the last ten or so years, or a small ARM mini-PC.</li>
-            <li>For messengers: a Telegram account and/or a phone with WhatsApp to link to.</li>
+            <li>For messengers: any of a Telegram account, a phone with WhatsApp to link to, a Facebook account (for Messenger) or an Instagram account.</li>
             <li>For the cloud brain: an internet connection and an account with an AI provider. DeepSeek V4.1 is the cheapest good choice today.</li>
             <li>Optional, for the brain on the stick (no internet needed): a high-end graphics card, or unified memory, with at least 64 GB of video memory (VRAM).</li>
           </ul>
@@ -96,7 +96,7 @@ const flow = [
   { title: 'Write bia onto a USB stick', text: 'Download the small bia writer for Mac, Windows or Linux. Choose how bia should think — usually a cloud brain, or a brain on the stick for powerful computers — and write the stick.' },
   { title: 'Start a computer from the stick', text: 'Plug it into a PC or laptop and switch on. The screen shows bia instead of Windows or a desktop. Nothing on the computer’s own disk is touched unless you ask.' },
   { title: 'Say hello', text: 'Type on the screen, or open bia’s private app from your phone — bia shows you how to get a personal certificate for it.' },
-  { title: 'Give it a life', text: 'Ask bia to join WhatsApp or Telegram, give it a name and a photo, introduce it to the people it will help.' },
+  { title: 'Give it a life', text: 'Ask bia to join WhatsApp, Telegram, Messenger or Instagram, give it a name and a photo, introduce it to the people it will help.' },
   { title: 'Let it settle in', text: 'Move bia from the stick onto the computer’s own disk when you are ready, so the stick is free again. From then on it updates and repairs itself, and moves to a new computer when you get one.' },
 ]
 
@@ -109,9 +109,9 @@ const inbox = [
 ]
 
 const inside = [
-  { icon: 'brain', title: 'A brain', text: 'A connection to an AI language model in the cloud — or, on a powerful computer, one that runs on the stick itself.' },
+  { icon: 'brain', title: 'A brain', text: 'A connection to an AI language model in the cloud — or, on a powerful computer, one that runs on bia’s own machine.' },
   { icon: 'chat', title: 'Its senses and voice', text: 'Messengers, calls, speech in about a hundred languages, and its own chat app.' },
-  { icon: 'terminal', title: 'Its hands', text: 'A complete, modern operating system it controls itself: programs, a web browser, the screen, files.' },
+  { icon: 'terminal', title: 'Its hands', text: 'bia is a complete, modern operating system, and it controls all of it itself: programs, a web browser, the screen, files.' },
   { icon: 'key', title: 'Its safe', text: 'A vault for passwords, two-factor codes and passkeys, kept on its own disk.' },
   { icon: 'book', title: 'Its memory', text: 'A diary, reflections, an address book and a calendar that survive restarts and moves.' },
   { icon: 'refresh', title: 'Its survival kit', text: 'Tools to back itself up, move to other computers, update and repair itself.' },

@@ -48,8 +48,8 @@ function llmsTxt() {
 
 > Boot into agent. Making every potato smart — on a global scale.
 
-bia is free software that turns any computer — even an old laptop — into a helpful AI personality.
-It starts from a USB stick, lives on WhatsApp and Telegram as a real account, answers voice calls in about
+bia is a free operating system that boots on any computer or server — even an old laptop — and turns it into a helpful AI personality.
+It starts from a USB stick or its own disk, lives on WhatsApp, Telegram, Facebook Messenger and Instagram as a real account, answers voice calls in about
 100 languages, remembers, keeps a calendar, uses its own computer, browser and password vault, and can move
 to other computers and update itself without forgetting anything. Its computer can also be a server or VPS: one
 command replaces a running Linux with bia. Its data stays there, not in a company's cloud.
@@ -120,7 +120,7 @@ export default defineNuxtConfig({
         {
           name: 'description',
           content:
-            'bia turns any computer into a helpful mind: it lives on WhatsApp and Telegram, answers calls in 100 languages, remembers, keeps time, uses the web, and moves between computers as the same personality.',
+            'bia is an operating system that turns any computer or server into a helpful mind: it lives on WhatsApp, Telegram, Messenger and Instagram, answers calls in 100 languages, remembers, keeps time, uses the web, and moves between computers as the same personality.',
         },
         { name: 'theme-color', content: '#fbf8f2' },
         { name: 'robots', content: 'index, follow' },

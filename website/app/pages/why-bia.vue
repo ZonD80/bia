@@ -80,7 +80,7 @@
 useSeoMeta({
   title: 'Why bia is different from typical AI assistants',
   description:
-    'How bia differs from AI assistants that live inside your PC: a separate mind with its own computer, files and accounts, a real social presence on WhatsApp and Telegram, memory that lasts, background work, moving between computers and self-repair.',
+    'How bia differs from AI assistants that live inside your PC: a separate mind with its own computer, files and accounts, a real social presence on WhatsApp, Telegram, Messenger and Instagram, memory that lasts, background work, moving between computers and self-repair.',
 })
 
 const compare = [
@@ -89,7 +89,7 @@ const compare = [
   { topic: 'Identity', them: 'Acts as you, with your logins', bia: 'Its own name, accounts, phone numbers, contacts and friends' },
   { topic: 'Rules', them: 'Boxed in by a vendor’s sandbox and policies', bia: 'Owns its whole machine; the limits are the ones you set' },
   { topic: 'If something leaks', them: 'Your files and accounts go with it', bia: 'Only what bia itself holds — your own PC was never in reach' },
-  { topic: 'How people reach it', them: 'You go to its app, or it acts like a bot you set up', bia: 'It comes to WhatsApp, Telegram and calls as a person with its own number, not a bot' },
+  { topic: 'How people reach it', them: 'You go to its app, or it acts like a bot you set up', bia: 'It comes to WhatsApp, Telegram, Messenger, Instagram and calls as a person with its own number, not a bot' },
   { topic: 'Memory', them: 'Unknown or complex memory engines with unpredictable results', bia: 'A simple diary and reflections, kept across days, restarts and moves' },
   { topic: 'Doing things', them: 'Installs software that pollutes your computer', bia: 'Installs what it needs on its own computer — yours stays clean' },
   { topic: 'Long tasks', them: 'Usually locked until the task is finished', bia: 'Works in the background and keeps talking' },

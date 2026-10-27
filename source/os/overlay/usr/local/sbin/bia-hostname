@@ -1,0 +1,33 @@
+#!/bin/bash
+# Give this system a hostname of its own: bia-<first 6 hex of /etc/machine-id>.
+#
+# Every image ships /etc/hostname "bia", so several bias on one network (router
+# lease lists, LAN DNS, the carry beacon, ssh prompts) all look the same. Each boot
+# (bia-hostname.service, before the network starts):
+#   - a stock name ("bia" or empty) or an earlier bia-<6 hex> becomes bia-<id>; any
+#     other name is the owner's (or a test's, or bia-land's) and is left alone;
+#   - the name follows machine-id, so it is the same on every boot and update; a
+#     carry fly keeps the receiving machine's machine-id, so each machine keeps its own;
+#   - the "127.0.1.1 <old name>" line of /etc/hosts is renamed with it (libnss-myhostname
+#     resolves the name anyway; the line is for tools that read /etc/hosts directly).
+set -euo pipefail
+HOSTNAME_FILE=${BIA_HOSTNAME_FILE:-/etc/hostname}
+HOSTS=${BIA_HOSTS_FILE:-/etc/hosts}
+MACHINE_ID=${BIA_MACHINE_ID_FILE:-/etc/machine-id}
+say() { echo "bia-hostname: $*"; }
+
+cur=$(tr -d '[:space:]' < "$HOSTNAME_FILE" 2>/dev/null || true)
+[ -z "$cur" ] || [ "$cur" = bia ] || [[ $cur =~ ^bia-[0-9a-f]{6}$ ]] || exit 0
+
+id=$(tr -dc '0-9a-f' < "$MACHINE_ID" 2>/dev/null | head -c 6 || true)
+[ ${#id} -eq 6 ] || { say "no machine-id yet; keeping '${cur:-bia}'"; exit 0; }
+name="bia-$id"
+[ "$cur" != "$name" ] || exit 0
+
+printf '%s\n' "$name" > "$HOSTNAME_FILE"
+old=${cur:-bia}
+if [ -f "$HOSTS" ] && grep -qE "^127\.0\.1\.1[[:space:]]+$old[[:space:]]*\$" "$HOSTS"; then
+  sed -i -E "s/^127\.0\.1\.1[[:space:]]+$old[[:space:]]*\$/127.0.1.1\t$name/" "$HOSTS"
+fi
+[ -n "${BIA_HOSTNAME_FILE:-}" ] || echo "$name" > /proc/sys/kernel/hostname
+say "hostname $name"

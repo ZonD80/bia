@@ -1,0 +1,19 @@
+[Unit]
+Description=Give this system a hostname of its own (bia-<machine-id>)
+# Before the network: dhcpcd sends the hostname to the router.
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target networking.service bia-net.service sysinit.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+ConditionPathExists=/usr/local/sbin/bia-hostname
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-hostname
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=sysinit.target

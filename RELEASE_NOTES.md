@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.4.2
+
+### Changes
+- sudo no longer prints "unable to resolve host bia": the computer always finds its own name now, and updates stopped resetting /etc/hosts and /etc/hostname.
+- Each computer has a name of its own, bia-<6 letters and digits> (for example bia-3f9c21), so several bias on one network no longer all appear as "bia" in the router's list. A name the owner set is kept.
+
+### For bia
+- The hostname changed from "bia" to bia-<id> (`hostname` shows it); if the owner reaches this computer by the name "bia" on the local network (e.g. bia.lan), tell them the new name. The IP address is unchanged.
+
 ## 1.4.1
 
 ### Changes

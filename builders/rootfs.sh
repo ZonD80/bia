@@ -110,7 +110,7 @@ in_chroot apt-get install -y --no-install-recommends \
   bash ca-certificates wget curl bzip2 xz-utils openssh-client \
   python3-minimal \
   wpasupplicant iw \
-  tzdata adduser passwd login sudo \
+  tzdata adduser passwd login sudo libnss-myhostname \
   kbd kexec-tools \
   alsa-utils \
   xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-dummy xauth x11-xserver-utils x11-utils \
@@ -146,6 +146,7 @@ install -m 0755 "$AGENT" "$ROOT/usr/local/sbin/bia-agent"
 
 echo "== systemd enable"
 in_chroot systemctl enable bia-esp-id.service
+in_chroot systemctl enable bia-hostname.service
 in_chroot systemctl enable bia-grow.service
 in_chroot systemctl enable bia-seed.service
 in_chroot systemctl enable bia-net.service

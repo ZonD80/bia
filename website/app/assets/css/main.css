@@ -277,6 +277,14 @@ a.chip:hover {
   border-radius: 0 0.75rem 0.75rem 0;
   color: var(--ink-soft);
 }
+.note-box p { margin: 0; }
+.note-box__ask {
+  margin-top: 0.75rem !important;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--tan);
+  color: var(--ink);
+}
+.note-box__ask q { font-style: italic; }
 
 code {
   font-size: 0.9em;

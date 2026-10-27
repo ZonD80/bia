@@ -44,7 +44,10 @@
         </div>
         <div>
           <h2 class="h-small">Good to know</h2>
-          <p class="note-box">{{ feature.good_to_know }}</p>
+          <div class="note-box">
+            <p>{{ feature.good_to_know }}</p>
+            <p class="note-box__ask">Or just ask bia: <q>{{ feature.ask }}</q></p>
+          </div>
         </div>
       </div>
     </section>

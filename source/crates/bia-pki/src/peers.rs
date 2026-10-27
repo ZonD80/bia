@@ -100,7 +100,7 @@ impl Pki {
     }
 
     /// This bia's agent name: `pki/agent.json` `name`, else `bia-` + the first 6 hex
-    /// characters of its CA fingerprint (every bia's hostname is "bia").
+    /// characters of its CA fingerprint (stable across hostname changes).
     pub fn agent_name(&self) -> String {
         fs::read(self.dir.join("agent.json"))
             .ok()

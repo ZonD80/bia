@@ -7,7 +7,7 @@
           <span class="eyebrow">Boot into agent</span>
           <h1>Turn anything into <em>someone</em>.</h1>
           <p class="hero__lead">
-            bia is a separate mind with a computer of its own. It answers your family on WhatsApp,
+            bia is a separate mind with a computer of its own. It answers your family on WhatsApp and your customers on Instagram,
             understands about a hundred languages on calls, remembers what matters, uses the web and its own
             computer — and when it is time, it moves to a new machine as the same personality.
           </p>
@@ -43,7 +43,7 @@
           <div class="card">
             <AppIcon name="chat" size="2rem" class="what__ico" />
             <h3>It meets people where they are</h3>
-            <p>On WhatsApp, Telegram, phone calls and voice messages — in their own language. Nobody has to install anything.</p>
+            <p>On WhatsApp, Telegram, Facebook Messenger, Instagram, phone calls and voice messages — in their own language. Nobody has to install anything.</p>
           </div>
           <div class="card">
             <AppIcon name="terminal" size="2rem" class="what__ico" />
@@ -86,7 +86,7 @@
     <section class="section">
       <div class="container">
         <span class="eyebrow">Everything it does</span>
-        <h2 class="section-title">Twenty abilities, one personality</h2>
+        <h2 class="section-title">20+ abilities and counting, one personality</h2>
         <p class="section-lead">Each one has its own page with examples. Here is the whole picture.</p>
         <div v-for="(g, key) in groups" :key="key" class="fgroup">
           <div class="fgroup__head">
@@ -213,7 +213,7 @@ import { useCaseGroups } from '~/data/usecases'
 useSeoMeta({
   title: 'bia — turn anything into someone',
   description:
-    'bia is a separate mind with its own computer, files and accounts — not an assistant inside your PC. It lives on WhatsApp and Telegram, answers calls in 100 languages, remembers, keeps time, uses the web — and moves between computers as the same personality.',
+    'bia is a separate mind with its own computer, files and accounts — not an assistant inside your PC. It lives on WhatsApp, Telegram, Messenger and Instagram, answers calls in 100 languages, remembers, keeps time, uses the web — and moves between computers as the same personality.',
 })
 
 const byGroup = (g: string) => features.filter((f) => f.group === (g as Feature['group']))
@@ -240,9 +240,9 @@ const showcase = [
 ]
 
 const steps = [
-  { icon: 'usb', title: 'Write a USB stick', text: 'Download the small bia app for Mac, Windows or Linux and write bia onto any USB stick of 8 GB or more.' },
+  { icon: 'usb', title: 'Write a USB stick', text: 'Download the small bia writer for Mac, Windows or Linux and write bia onto any USB stick of 8 GB or more.' },
   { icon: 'power', title: 'Start a computer from it', text: 'Plug the stick into a PC or laptop and switch it on. Instead of the usual desktop, bia wakes up.' },
-  { icon: 'wave', title: 'Say hello', text: 'Type on the screen, or open bia’s private app on your phone. Ask it to join WhatsApp or Telegram, and you’re off.' },
+  { icon: 'wave', title: 'Say hello', text: 'Type on the screen, or open bia’s private app on your phone. Ask it to join WhatsApp, Telegram, Messenger or Instagram, and you’re off.' },
 ]
 </script>
 
@@ -455,7 +455,7 @@ const steps = [
   .hero__art { min-height: 18rem; order: -1; }
   .hero__bubble { font-size: 0.82rem; max-width: 12rem; }
   /* keep the potato's eye visible on narrow screens */
-  .hero__bubble--b { top: auto; bottom: 22%; right: 0; }
+  .hero__bubble--b { top: auto; bottom: 31%; right: 0; }
 }
 .fred {
   display: grid;
