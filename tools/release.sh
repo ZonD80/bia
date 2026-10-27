@@ -199,7 +199,10 @@ for f in (".env", "installers/macos/.env"):
         pass
 if len(os.environ.get("HF_TOKEN", "")) >= 8:
     out.add(os.environ["HF_TOKEN"])
-out.add(os.path.expanduser("~") + "/")
+# this machine's home path (a developer's /Users/<name>/); not on a CI runner, whose
+# /home/runner/ is in prebuilt libraries made on GitHub Actions and says nothing about anyone
+if not os.environ.get("GITHUB_ACTIONS"):
+    out.add(os.path.expanduser("~") + "/")
 open(sys.argv[1], "w").write("\n".join(sorted(out)) + "\n")
 os.chmod(sys.argv[1], 0o600)
 PY
