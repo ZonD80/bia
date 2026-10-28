@@ -5,7 +5,7 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
-## 1.7.1
+## 1.7.2
 
 ### Changes
 - Before a backup or a move to another computer, bia now checks for earlier backups lying in its files. They would be packed in again and make the archive (and the flight) much bigger, so it stops first and asks whether they can be deleted, or keeps them in when asked to.
@@ -16,6 +16,7 @@ owner, For bia as concrete steps with tool names. Keep each item to one line.
 - A program installed from a .deb file comes back after a move or an update even when that file was deleted: bia rebuilds it from the installed program first. If it cannot, it says plainly that the program must be installed again from its source, instead of a failing install attempt.
 - After a move or an update the computer keeps its timezone, and it sets its clock over the internet (NTP).
 - An update over the internet no longer fails after the whole download on a server where the system for loop devices was not loaded (it loads it first, and at every boot).
+- A short network drop in the middle of a Telegram login no longer sends it back to the start: the code (or the QR) asked for still works.
 - A login QR code (Telegram, WhatsApp) now also pops up in root's web app, the same as the window on bia's screen, so a login can be finished from a phone or another computer.
 - Telegram login by QR code: the Telegram app on a phone scans it, and no login code is needed. bia offers it when codes do not arrive, which Telegram often does to apps like bia even when it says it sent one.
 - Memory keeps what is true now (people, accounts, rules) in its reflections like everything else, instead of a separate list of facts; the existing list is kept as a "facts" topic on the newest day.

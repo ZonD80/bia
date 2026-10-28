@@ -33,6 +33,9 @@ static CATCHUP_DONE: AtomicBool = AtomicBool::new(false);
 
 /// Telegram app credentials, compiled in from the build environment (repo `.env`,
 /// read by builders/build.sh) so they ship in the binary but never in git.
+/// The steps of a login under way (a reconnect keeps them).
+const LOGIN_PHASES: [&str; 5] = ["waiting_code", "waiting_email", "waiting_email_code", "waiting_password", "waiting_qr"];
+
 pub const API_ID: i32 = parse_api_id(env!(
     "BIA_TG_API_ID",
     "set BIA_TG_API_ID in .env (see .env.example)"
@@ -197,6 +200,15 @@ impl Tg {
         self.inner.lock().unwrap().phase = p.into();
     }
 
+    /// Connected, but the session is not logged in: waiting_phone, unless a login is under
+    /// way (a reconnect in the middle of one must not reset it; its token is still good).
+    fn set_unauthorized(&self) {
+        let mut g = self.inner.lock().unwrap();
+        if !LOGIN_PHASES.contains(&g.phase.as_str()) {
+            g.phase = "waiting_phone".into();
+        }
+    }
+
     pub fn call_tx(&self) -> Result<mpsc::UnboundedSender<CallCmd>, String> {
         self.inner
             .lock()
@@ -334,7 +346,7 @@ impl Tg {
                             match tg.block_on(async { c.is_authorized().await }) {
                                 Ok(true) => break,
                                 Ok(false) => {
-                                    tg.set_phase("waiting_phone");
+                                    tg.set_unauthorized();
                                     tg.log("reconnect: session not authorized; need login");
                                     break;
                                 }
@@ -366,7 +378,7 @@ impl Tg {
                                 break;
                             }
                             Ok(false) => {
-                                tg.set_phase("waiting_phone");
+                                tg.set_unauthorized();
                                 tg.log("reconnect: connected but not logged in");
                                 break;
                             }
@@ -516,6 +528,8 @@ impl Tg {
             g.suppress_reconnect = false;
             g.phase = if authorized {
                 "ready".into()
+            } else if LOGIN_PHASES.contains(&g.phase.as_str()) {
+                g.phase.clone()
             } else {
                 "waiting_phone".into()
             };
@@ -857,14 +871,14 @@ impl Tg {
                 self.qr_notice("[telegram] the QR was scanned; this account has a 2FA password: auth=waiting_password, call telegram_submit_password with it");
             }
             Err(e) => {
-                self.set_phase("disconnected");
+                self.set_phase("waiting_phone");
                 self.qr_notice(&format!("[telegram] the QR was scanned, but the 2FA step failed: {e}; start again with telegram_login_qr"));
             }
         }
     }
 
     /// Wait for the scan: check the token every 2 s, a fresh one when it runs out; up to 5 min.
-    fn qr_loop(&self, client: Client, mut token: Vec<u8>, mut expires: i32) {
+    fn qr_loop(&self, first: Client, mut token: Vec<u8>, mut expires: i32) {
         fn unix_now() -> i64 {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
         }
@@ -872,6 +886,8 @@ impl Tg {
         let mut seq = 1u64;
         while std::time::Instant::now() < end && self.phase() == "waiting_qr" {
             std::thread::sleep(std::time::Duration::from_secs(2));
+            // the live connection: after a reconnect the first one is gone
+            let client = self.client().unwrap_or_else(|_| first.clone());
             match self.block_on(client.check_qr_login(token.clone())) {
                 Ok(Some(name)) => {
                     let msg = self.qr_done(&client, &format!("logged in as {name}"));
@@ -897,7 +913,7 @@ impl Tg {
                     Err(e) if e.is("SESSION_PASSWORD_NEEDED") => return self.qr_password(&client),
                     Err(e) => {
                         crate::qr_win::close();
-                        self.set_phase("disconnected");
+                        self.set_phase("waiting_phone");
                         self.qr_notice(&format!("[telegram] QR login stopped: {e}; start again with telegram_login_qr"));
                         return;
                     }
@@ -906,7 +922,7 @@ impl Tg {
         }
         if self.phase() == "waiting_qr" {
             crate::qr_win::close();
-            self.set_phase("disconnected");
+            self.set_phase("waiting_phone");
             self.qr_notice("[telegram] the login QR was not scanned within 5 minutes; telegram_login_qr shows a new one");
         }
     }
@@ -1134,9 +1150,9 @@ impl Tg {
                 }
             }
             Ok(false) => {
-                self.set_phase("waiting_phone");
+                self.set_unauthorized();
                 Ok(format!(
-                    "telegram not logged in ({}); call login(phone)",
+                    "telegram not logged in ({}); call login(phone), or login_qr when codes do not arrive",
                     self.phase()
                 ))
             }

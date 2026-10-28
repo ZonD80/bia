@@ -145,7 +145,7 @@ VERSION="$(
 if [[ -z "$VERSION" ]]; then
   VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$REPO_ROOT/Cargo.toml" | head -1)"
 fi
-VERSION="${VERSION:-1.7.1}"
+VERSION="${VERSION:-1.7.2}"
 
 APP_BUNDLE_NAME="bia deploy.app"
 APP_PATH="$DIST_DIR/$APP_BUNDLE_NAME"
