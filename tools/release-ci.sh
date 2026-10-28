@@ -11,7 +11,8 @@
 #   --retag    the tag exists already: move it to the new commit (deletes it locally and on
 #              GitHub first) to run the release again for the same version
 set -euo pipefail
-cd "$(dirname "$0")/.."
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+cd "$(dirname "$SELF")/.."
 
 YES=0 DRY=0 RETAG=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -20,7 +21,7 @@ while [[ $# -gt 0 ]]; do
     -y|--yes) YES=1 ;;
     --dry-run) DRY=1 ;;
     --retag) RETAG=1 ;;
-    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$SELF"; exit 0 ;;
     *) die "unknown option $1 (see --help)" ;;
   esac
   shift

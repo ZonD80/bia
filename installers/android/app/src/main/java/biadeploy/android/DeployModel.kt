@@ -60,6 +60,9 @@ class DeployModel : ViewModel() {
     private fun brainSig() = listOf(provider, apiKey, model, baseUrl, chatgptEmail ?: "").joinToString("|")
     val brainOk get() = wokeFor == brainSig()
 
+    /** The demo scenes (debug builds): the brain counts as woken. */
+    internal fun markWoken() { wokeFor = brainSig() }
+
     fun brain() = Brain(provider, apiKey, model, baseUrl, ctx, chatgptJson)
 
     private fun work(label: String, block: suspend () -> Unit) {

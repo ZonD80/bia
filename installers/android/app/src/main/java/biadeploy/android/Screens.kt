@@ -54,12 +54,14 @@ fun BiaTheme(content: @Composable () -> Unit) {
 fun App(m: DeployModel) {
     BackHandler(enabled = (m.page == Page.Server && m.step == Step.Login) || m.page == Page.Keys) { m.page = Page.Brain }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        // on a tablet the wizard stays a readable column in the middle
+        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier
-                .fillMaxSize()
+                .widthIn(max = 640.dp)
+                .fillMaxWidth()
                 .systemBarsPadding()
                 .imePadding()
-                .verticalScroll(rememberScrollState())
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -75,6 +77,7 @@ fun App(m: DeployModel) {
                 Page.Keys -> KeysPage(m)
             }
             m.error?.let { ErrorCard(it) }
+        }
         }
     }
 }
@@ -404,7 +407,7 @@ private fun InstalledStep(m: DeployModel) {
 }
 
 @Composable
-private fun KeyCard(folder: String, host: String) {
+private fun KeyCard(folder: String, host: String, savedAt: ULong? = null) {
     val context = LocalContext.current
     var caSaved by remember { mutableStateOf(false) }
     val saveCa = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-x509-ca-cert")) { uri ->
@@ -415,16 +418,24 @@ private fun KeyCard(folder: String, host: String) {
         uri ?: return@rememberLauncherForActivityResult
         runCatching { context.contentResolver.openOutputStream(uri)!!.use { it.write(File(folder, "bia-root.p12").readBytes()) } }
     }
+    // in the list of saved keys: one short card per bia (the page explains them once)
+    if (savedAt != null) {
+        Card {
+            Title("bia at $host")
+            Weak("key saved " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(savedAt.toLong() * 1000)))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton({ installKey(context, folder, host) }) { Text("Install") }
+                OutlinedButton({ share(context, folder, host) }) { Text("Share…") }
+                TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
+            }
+        }
+        return
+    }
     Card {
         Title("bia's key")
-        Text("bia-root.p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password ${p12Password()}).")
+        Text("bia-$host.p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password ${p12Password()}).")
         Text("1. Install it, so the browser can show it to bia:", fontWeight = FontWeight.SemiBold)
-        OutlinedButton({
-            val i = KeyChain.createInstallIntent()
-                .putExtra(KeyChain.EXTRA_PKCS12, File(folder, "bia-root.p12").readBytes())
-                .putExtra(KeyChain.EXTRA_NAME, "bia $host")
-            runCatching { context.startActivity(i) }
-        }) { Text("Install bia's key") }
+        OutlinedButton({ installKey(context, folder, host) }) { Text("Install bia's key") }
         Text("2. Trust bia's certificate authority, so the browser opens bia without a warning:", fontWeight = FontWeight.SemiBold)
         Weak("Android lets apps only hand it over: save it, then in Settings › Security › Encryption & credentials › Install a certificate › CA certificate, pick the saved file.")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -439,6 +450,14 @@ private fun KeyCard(folder: String, host: String) {
         }
         Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); it asks for the password above when it is installed.")
     }
+}
+
+/** bia's key into Android's credential store, for the browser to show to bia. */
+private fun installKey(context: android.content.Context, folder: String, host: String) {
+    val i = KeyChain.createInstallIntent()
+        .putExtra(KeyChain.EXTRA_PKCS12, File(folder, "bia-root.p12").readBytes())
+        .putExtra(KeyChain.EXTRA_NAME, "bia $host")
+    runCatching { context.startActivity(i) }
 }
 
 /** bia's key (and its CA) to the share sheet: copies named after the host, from the cache. */
@@ -464,10 +483,12 @@ private fun share(context: android.content.Context, folder: String, host: String
 @Composable
 private fun KeysPage(m: DeployModel) {
     TextButton({ m.page = Page.Brain }) { Text("‹  Back") }
-    if (m.saved.isEmpty()) {
-        Card { Text("No bia's keys on this phone yet: they are kept here after a deploy.") }
+    Card {
+        Title("bia keys")
+        if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy.")
+        else Weak("Each is root's certificate for one bia, the only way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
     }
-    m.saved.forEach { b -> KeyCard(b.folder, b.host) }
+    m.saved.forEach { b -> KeyCard(b.folder, b.host, b.savedAt) }
 }
 
 private fun open(context: android.content.Context, url: String) {

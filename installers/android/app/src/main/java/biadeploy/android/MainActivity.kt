@@ -14,6 +14,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // store screenshots: made-up data, no network (debug builds only)
+        if (BuildConfig.DEBUG && savedInstanceState == null) intent.getStringExtra("demo")?.let { model.demo(it, filesDir) }
         setContent {
             // the takeover and the wait for bia take minutes: keep the screen (and this app) on
             val running = model.step == Step.Running || (model.step == Step.Installed && model.up == null)

@@ -130,12 +130,13 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           pattern: mcps-*
-          path: mcps-dl
+          # outside the checkout: release.sh builds only from a clean tree
+          path: ${{ runner.temp }}/mcps-dl
           merge-multiple: true
       - name: Build
         run: |
-          if ls mcps-dl/*.tgz >/dev/null 2>&1; then
-            for t in mcps-dl/*.tgz; do tar -xzf "$t"; done
+          if ls "$RUNNER_TEMP"/mcps-dl/*.tgz >/dev/null 2>&1; then
+            for t in "$RUNNER_TEMP"/mcps-dl/*.tgz; do tar -xzf "$t"; done
             export BIA_PREBUILT=1
           fi
           tools/release.sh --build-only --within "${{ matrix.within }}" ${ONLY:+--only "$ONLY"} $FORCE
@@ -288,7 +289,8 @@ jobs:
     needs: [linux, macos, android, ios]
     # what did build is published even when another runner failed (e.g. macOS signing
     # without its secrets); a later run builds only what is still missing
-    if: ${{ !cancelled() && inputs.publish != false }}
+    # a pushed tag has no inputs (and null == false in these expressions): it always publishes
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
