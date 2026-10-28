@@ -946,6 +946,8 @@ pub struct Tools {
     /// the model asked to change the active brain's context window; applied by the REPL after this call
     /// compact the live window into reflections after this turn
     pub pending_reflect: std::cell::Cell<bool>,
+    /// night work on long-term memory (system|dream tasks, calendar reflections, facts)
+    pub dream: Arc<crate::dream::Dream>,
     con: Arc<Console>,
     pub addressbook: crate::addressbook::AddressBook,
     pub buses: crate::buses::Buses,
@@ -995,7 +997,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "memory",
         blurb: "Reflections of the live window.",
-        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages, memory_categories, memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD.",
+        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages(id | ids | from+to, full), memory_categories, memory_facts(topic), memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD. Long-term memory is calendar reflections (n_… ids: a day, week, month, year, each block under a category you chose, one of them the overview) and the facts ledger (f_… ids: what is true now, with its history); you write them at night in [dream task …] messages from system|dream: journal_day, reflect_note, reflect_write, facts_update, category_merge, report_write, task_done. The reflections made when the context fills up (r_… ids) are the day's scratch layer. dream(action) shows or changes when you dream (status, now, on, off, time). memory_rebuild(action) re-reflects the whole journal into a new generation: estimate first, tell root the numbers, start only after root says yes; status, pause, resume, rollback.",
     },
     Branch {
         id: "jobs",
@@ -1056,6 +1058,8 @@ impl Tools {
             &state.join("schedules.json"),
         )));
         crate::schedules::start(schedules.clone(), con.clone());
+        let dream = crate::dream::Dream::open(files_dir);
+        crate::dream::start(dream.clone(), con.clone());
         let (outbox, outbox_lost) = crate::outbox::Outbox::load(&state, con.clone());
         let mut t = Tools {
             specs: vec![],
@@ -1078,6 +1082,7 @@ impl Tools {
             pending_exit: std::cell::Cell::new(None),
             pending_forget: std::cell::Cell::new(false),
             pending_reflect: std::cell::Cell::new(false),
+            dream,
             con,
             addressbook: crate::addressbook::AddressBook::load(&state.join("addressbook.json")),
             buses: crate::buses::Buses::load(&state.join("buses.json")),
@@ -1201,8 +1206,38 @@ impl Tools {
                 &[],
             ),
         );
-        t.add_grouped("memory", "memory_messages", "Dive to original journal messages. Pass a reflection id, or from+to.",
-            obj(json!({"id": {"type": "string"}, "from": {"type": "string"}, "to": {"type": "string"}}), &[]));
+        t.add_grouped("memory", "memory_messages", "Original journal messages: a reflection id, ids=[m_…] or from+to; full=true gives whole messages and tool outputs.",
+            obj(json!({"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}, "from": {"type": "string"}, "to": {"type": "string"}, "full": {"type": "boolean"}}), &[]));
+        t.add_grouped("memory", "memory_facts", "What is true now (the facts ledger), optionally one topic; history=true shows replaced and retired facts too.",
+            obj(json!({"topic": {"type": "string"}, "history": {"type": "boolean"}}), &[]));
+        t.add_grouped("memory", "journal_day", "A dream task's day (date YYYY-MM-DD local) from the journal, page by page; tool outputs are cut (memory_messages full=true).",
+            obj(json!({"date": {"type": "string"}, "page": {"type": "integer"}}), &[]));
+        t.add_grouped("memory", "reflect_note", "A working note in a dream task (text): kept and handed back if the context fills up and the task is posted again.",
+            obj(json!({"text": {"type": "string"}}), &["text"]));
+        t.add_grouped("memory", "reflect_write", "Write one block of the dream task's period: text, category (yours; a new one needs meaning), overview=true for the one that says it in short, sources.",
+            obj(json!({
+                "text": {"type": "string"},
+                "category": {"type": "string", "description": "a category from memory_categories, or a new one"},
+                "meaning": {"type": "string", "description": "one line: what a new category keeps"},
+                "overview": {"type": "boolean", "description": "true for the block that says the period in short (one per period)"},
+                "sources": {"type": "array", "items": {"type": "string"}, "description": "message ids (m_…) or reflection ids it comes from"}
+            }), &["text", "category"]));
+        t.add_grouped("memory", "facts_update", "Change the facts ledger in a dream task: add=[{topic,text,sources,since}], replace=[{id,text,sources,why}], retire=[{id,why}].",
+            obj(json!({
+                "add": {"type": "array", "items": {"type": "object"}},
+                "replace": {"type": "array", "items": {"type": "object"}},
+                "retire": {"type": "array", "items": {"type": "object"}}
+            }), &[]));
+        t.add_grouped("memory", "category_merge", "In a dream task: keep category from as into from now on (two that turned out to be the same); meaning optional.",
+            obj(json!({"from": {"type": "string"}, "into": {"type": "string"}, "meaning": {"type": "string"}}), &["from", "into"]));
+        t.add_grouped("memory", "report_write", "Add text under section (For you, For me, Needs your yes, Questions, …) of the morning report, in a night's dream task.",
+            obj(json!({"section": {"type": "string"}, "text": {"type": "string"}}), &["section", "text"]));
+        t.add_grouped("memory", "task_done", "End the open dream task (note optional); its tool traffic then leaves the live context. Needs the overview first.",
+            obj(json!({"note": {"type": "string"}}), &[]));
+        t.add_grouped("memory", "dream", "When and whether you dream: action=status (default), now, on, off, or time with time=HH:MM local or auto.",
+            obj(json!({"action": {"type": "string"}, "time": {"type": "string"}}), &[]));
+        t.add_grouped("memory", "memory_rebuild", "Re-reflect the whole journal into a new memory generation: action=estimate (first), start (after root's yes), status, pause, resume, rollback.",
+            obj(json!({"action": {"type": "string"}}), &[]));
         t.add_grouped(
             "memory",
             "memory_categories",
@@ -1877,6 +1912,15 @@ impl Tools {
     pub fn expand_call(name: &str, args: &Value) -> (String, Value) {
         let (name, args) = Self::expand_invoke(name, args);
         let (name, args) = if name == "discover" {
+            // discover(arguments={call: "task_done", …}): the call slipped inside its arguments
+            let args = match args.get("arguments") {
+                Some(Value::Object(inner)) if args.get("call").is_none() && inner.get("call").is_some_and(|c| c.is_string()) => {
+                    let mut rest = inner.clone();
+                    let call = rest.remove("call").unwrap_or_default();
+                    json!({"call": call, "arguments": Value::Object(rest)})
+                }
+                _ => args.clone(),
+            };
             let call = args
                 .get("call")
                 .and_then(|v| v.as_str())
@@ -3186,6 +3230,9 @@ impl Tools {
     }
 
     fn builtin(&mut self, name: &str, args: &Value) -> Result<String> {
+        if let Some(r) = crate::dream::tool(&self.dream, name, args) {
+            return r;
+        }
         let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
         match name {
             // the agent runs it (it holds the brain and its settings): Repl::model_config_call
@@ -4168,6 +4215,15 @@ done
         assert!(!only_say(&[via_discover, work.clone()]));
         assert!(!only_say(&[work]));
         assert!(!only_say(&[ToolCall { id: "e".into(), name: "discover".into(), args: json!({"q": "say"}) }]), "a search is a round");
+    }
+
+    #[test]
+    fn a_call_inside_discovers_arguments_runs() {
+        let (name, args) = Tools::expand_call("discover", &json!({"arguments": {"call": "task_done", "note": "week done"}}));
+        assert_eq!(name, "task_done");
+        assert_eq!(args, json!({"note": "week done"}));
+        let (name, _) = Tools::expand_call("discover", &json!({"path": "memory", "arguments": {"x": 1}}));
+        assert_eq!(name, "discover");
     }
 
     #[test]

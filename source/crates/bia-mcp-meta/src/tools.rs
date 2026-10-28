@@ -268,6 +268,33 @@ fn react(a: &Value) -> ToolResult {
     })
 }
 
+/// Meta's protocol as bia-meta speaks it has no join-by-link call; bia's Chrome is signed in
+/// to the same account (bia-meta logs in with its cookies), and joining there is the real
+/// Join button, after which the group arrives like any other chat.
+fn join_group(p: Platform, link: &str) -> ToolResult {
+    let l = link.trim();
+    let bare = l.trim_start_matches("https://").trim_start_matches("http://").trim_start_matches("www.");
+    let ok = match p {
+        Platform::Instagram => bare.starts_with("ig.me/j/") || bare.starts_with("instagram.com/"),
+        _ => bare.starts_with("m.me/j/") || bare.starts_with("messenger.com/") || bare.starts_with("facebook.com/messages/"),
+    };
+    if !ok {
+        return Err(format!(
+            "{l:?} is not a {} group invite link ({})",
+            p.title(),
+            if p == Platform::Instagram { "https://ig.me/j/…" } else { "https://m.me/j/…" }
+        ));
+    }
+    let url = if l.starts_with("http") { l.to_string() } else { format!("https://{bare}") };
+    Ok(format!(
+        "{t} has no join-by-link call here; join it in bia's Chrome, which is signed in to the same {t} account: \
+         chrome_new_page(url=\"{url}\"), press the Join button there (Join chat / Join group), then {n}_chats lists the group \
+         within a minute ({n}_restore if it does not). If the page asks to log in, the {t} session in Chrome ended: log in there first.",
+        t = p.title(),
+        n = p.name()
+    ))
+}
+
 fn delete_messages(a: &Value) -> ToolResult {
     require_login()?;
     let chat = chat_arg(a)?;
@@ -781,6 +808,11 @@ pub fn serve(p: Platform) {
             let m = arg_str(&a, "member")?;
             simple("remove_member", json!({"chat": chat, "member": m}), format!("removed {m} from {}", format_chat(&chat, "")))
         })
+        .tool("join_group", &format!("Join a {t} group by its invite link ({}): this answers how, through bia's Chrome.",
+            if p == Platform::Instagram { "ig.me/j/…" } else { "m.me/j/…" }), obj(json!({
+            "link": {"type": "string", "description": "the group's invite link"}
+        }), &["link"]), move |_ctx, a| join_group(p, a.get("link").and_then(Value::as_str).unwrap_or(""))
+        )
         .tool("leave_group", &format!("Leave a {t} group."), obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             let chat = chat_arg(&a)?;

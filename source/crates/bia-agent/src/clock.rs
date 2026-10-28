@@ -50,6 +50,16 @@ pub fn offset_east_now() -> i32 {
     cfg_lock().offset_east(unix(now()))
 }
 
+/// The machine timezone's offset east of UTC (seconds) at `unix`.
+pub fn offset_east_at(unix: u64) -> i32 {
+    cfg_lock().offset_east(unix)
+}
+
+/// The machine timezone's name (IANA or UTC+N), as configured.
+pub fn timezone_name() -> String {
+    cfg_lock().timezone.clone()
+}
+
 pub fn format_hms(unix_secs: u64, east: i32) -> String {
     let local = (unix_secs as i64 + east as i64).max(0) as u64;
     let t = local % 86400;
@@ -276,7 +286,7 @@ fn split_offset(rest: &str) -> (&str, i64) {
     (rest, 0)
 }
 
-fn days_from_civil(mut y: i64, m: u32, d: u32) -> i64 {
+pub(crate) fn days_from_civil(mut y: i64, m: u32, d: u32) -> i64 {
     y -= if m <= 2 { 1 } else { 0 };
     let era = y.div_euclid(400);
     let yoe = (y - era * 400) as u64;
@@ -286,7 +296,7 @@ fn days_from_civil(mut y: i64, m: u32, d: u32) -> i64 {
     era * 146097 + doe as i64 - 719468
 }
 
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719468;
     let era = z.div_euclid(146097);
     let doe = z.rem_euclid(146097);

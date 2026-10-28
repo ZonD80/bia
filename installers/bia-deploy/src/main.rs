@@ -785,7 +785,7 @@ fn server(a: ServerArgs) -> Result<()> {
     if a.new_key {
         let k = remote::keys::generate("bia-deploy")?;
         eprintln!("== new SSH key saved as {} (keep it; --ssh-key uses it)", k.path.display());
-        eprintln!("   Give this public key to the hosting provider when you order the server:");
+        eprintln!("   Give this public key to the hosting provider when the server for bia is ordered:");
         println!("{}", k.public);
         return Ok(());
     }

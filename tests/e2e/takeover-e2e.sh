@@ -16,6 +16,8 @@
 # that secret; the server unfolds the agent and boots it (images: also builds fly.img).
 # LAND=agent: no takeover by the test: the flyer's agent gets ssh access to Ubuntu and is
 # asked in plain words to prepare it as a land and fly there (takeover.sh over ssh itself).
+# DREAM=1: then the night work on long-term memory with the real brain (dream now on three
+# seeded days, the facts ledger, the live context) and a whole-memory rebuild after root's yes.
 # DEPLOY=1: this computer's `bia-deploy server` takes Ubuntu over through ssh (password login
 # as ubuntu, sudo with that password) instead of cloud-init running takeover.sh.
 # NET=onlink: Ubuntu runs on a static /32 with an on-link gateway before the takeover.
@@ -99,7 +101,7 @@ do_run() {
   [ -z "${DEPLOY:-}" ] || cargo build --release -q -p bia-deploy
   rm -f "$TE/disk.qcow2"
   qemu-img create -q -f qcow2 -F qcow2 -b "$TE/cache/$UBUNTU" "$TE/disk.qcow2" "${DISK_GB:-16}G"
-  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} DEPLOY=${DEPLOY:-} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
+  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} DEPLOY=${DEPLOY:-} DREAM=${DREAM:-} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
 }
 
 case ${1:-all} in

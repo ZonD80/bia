@@ -1,4 +1,5 @@
-//! Groups: create one (a supergroup), add and remove members, leave, invite link.
+//! Groups: create one (a supergroup), join one (invite link or public name), add and remove
+//! members, leave, invite link.
 //! Basic groups (older small chats) are handled with the messages.* calls.
 use crate::client::Tg;
 use ferogram::tl;
@@ -34,6 +35,55 @@ pub(crate) async fn input_user(client: &Client, target: &str) -> Result<(tl::enu
             input.clone(),
         )),
         _ => Err(format!("{target} is not a person")),
+    }
+}
+
+/// What `join_group` was given: an invite link's hash, or a public group's username.
+#[derive(Debug, PartialEq)]
+pub(crate) enum JoinTarget {
+    Invite(String),
+    Public(String),
+}
+
+/// t.me/+HASH, t.me/joinchat/HASH, tg://join?invite=HASH → Invite; @name, t.me/name → Public.
+pub(crate) fn join_target(link: &str) -> Result<JoinTarget, String> {
+    let t = link.trim();
+    let t = t.strip_prefix("https://").or_else(|| t.strip_prefix("http://")).unwrap_or(t);
+    let t = t.strip_prefix("www.").unwrap_or(t);
+    let cut = |s: &str| s.split(['/', '?', '#']).next().unwrap_or("").to_string();
+    if let Some(q) = t.strip_prefix("tg://join?invite=") {
+        return Ok(JoinTarget::Invite(cut(q)));
+    }
+    let path = ["t.me/", "telegram.me/", "telegram.dog/"].iter().find_map(|h| t.strip_prefix(h));
+    let rest = path.unwrap_or(t);
+    let invite = rest.strip_prefix('+').or_else(|| rest.strip_prefix("joinchat/")).map(cut);
+    if let Some(h) = invite {
+        return if h.is_empty() { Err("this invite link has no code after t.me/+".into()) } else { Ok(JoinTarget::Invite(h)) };
+    }
+    let name = cut(rest.trim_start_matches('@'));
+    if name.len() >= 4 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Ok(JoinTarget::Public(name));
+    }
+    Err(format!("{link:?} is not a Telegram group link (t.me/+…, t.me/joinchat/…) or a public @name"))
+}
+
+/// "chat_id … (telegram:…)" and the title of the group (or channel) an Updates carries.
+fn joined_chat(u: &tl::enums::Updates) -> Option<(i64, String, bool)> {
+    chats_of(u).into_iter().find_map(|c| match c {
+        tl::enums::Chat::Channel(c) => Some((channel_chat_id(c.id), c.title, c.broadcast)),
+        tl::enums::Chat::Chat(c) => Some((-c.id, c.title, false)),
+        _ => None,
+    })
+}
+
+fn joined_text(what: &str, u: &tl::enums::Updates) -> String {
+    match joined_chat(u) {
+        Some((id, title, broadcast)) => format!(
+            "{what} the {} \"{title}\": chat_id {id} (telegram:{id}){}",
+            if broadcast { "channel" } else { "group" },
+            if broadcast { "; only its admins post there, bia reads it" } else { "; bia can write there now" }
+        ),
+        None => format!("{what} it; telegram_chats lists it"),
     }
 }
 
@@ -319,6 +369,66 @@ impl Tg {
         })
     }
 
+    /// Join a group or channel by its invite link or public name.
+    pub fn join_group(&self, link: &str) -> Result<String, String> {
+        let target = join_target(link)?;
+        let client = self.require_ready()?;
+        self.block_on(async {
+            match target {
+                JoinTarget::Invite(hash) => {
+                    let req = tl::functions::messages::ImportChatInvite { hash: hash.clone() };
+                    match client.invoke(&req).await {
+                        Ok(tl::enums::messages::ChatInviteJoinResult::Ok(x)) => Ok(joined_text("joined", &x.updates)),
+                        Ok(_) => Err("this link asks for a paid subscription or a bot first; it cannot be joined from here".into()),
+                        Err(e) => {
+                            let m = e.to_string();
+                            if m.contains("INVITE_REQUEST_SENT") {
+                                Ok("asked to join: an admin of the group has to approve it. Once approved the group appears in telegram_chats (and its messages start arriving).".into())
+                            } else if m.contains("USER_ALREADY_PARTICIPANT") {
+                                let check = tl::functions::messages::CheckChatInvite { hash };
+                                match client.invoke(&check).await {
+                                    Ok(tl::enums::ChatInvite::Already(a)) => {
+                                        let (id, title) = match a.chat {
+                                            tl::enums::Chat::Channel(c) => (channel_chat_id(c.id), c.title),
+                                            tl::enums::Chat::Chat(c) => (-c.id, c.title),
+                                            _ => (0, String::new()),
+                                        };
+                                        Ok(format!("already a member of \"{title}\": chat_id {id} (telegram:{id})"))
+                                    }
+                                    _ => Ok("already a member of that group".into()),
+                                }
+                            } else if m.contains("INVITE_HASH_EXPIRED") || m.contains("INVITE_HASH_INVALID") || m.contains("INVITE_HASH_EMPTY") {
+                                Err("this invite link has expired or is wrong; ask for a new one".into())
+                            } else if m.contains("CHANNELS_TOO_MUCH") {
+                                Err("this account is in too many groups and channels (Telegram's limit); leave some first".into())
+                            } else {
+                                Err(format!("join: {m}"))
+                            }
+                        }
+                    }
+                }
+                JoinTarget::Public(name) => {
+                    let (g, _) = group(&client, &format!("@{name}")).await?;
+                    let Group::Super(channel) = g else {
+                        return Err(format!("@{name} is not a public group"));
+                    };
+                    let req = tl::functions::channels::JoinChannel { channel };
+                    match client.invoke(&req).await {
+                        Ok(tl::enums::messages::ChatInviteJoinResult::Ok(x)) => Ok(joined_text("joined", &x.updates)),
+                        Ok(_) => Err("this group asks for a paid subscription or a bot first; it cannot be joined from here".into()),
+                        Err(e) if e.to_string().contains("INVITE_REQUEST_SENT") => {
+                            Ok("asked to join: an admin of the group has to approve it. Once approved the group appears in telegram_chats.".into())
+                        }
+                        Err(e) if e.to_string().contains("CHANNELS_TOO_MUCH") => {
+                            Err("this account is in too many groups and channels (Telegram's limit); leave some first".into())
+                        }
+                        Err(e) => Err(format!("join @{name}: {e}")),
+                    }
+                }
+            }
+        })
+    }
+
     pub fn group_invite_link(&self, chat: &str) -> Result<String, String> {
         let client = self.require_ready()?;
         self.block_on(async {
@@ -332,6 +442,18 @@ impl Tg {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn join_links() {
+        use super::{join_target, JoinTarget::*};
+        assert_eq!(join_target("https://t.me/+AbC-12_x").unwrap(), Invite("AbC-12_x".into()));
+        assert_eq!(join_target("t.me/joinchat/AAAA1234?x=1").unwrap(), Invite("AAAA1234".into()));
+        assert_eq!(join_target("tg://join?invite=QwE").unwrap(), Invite("QwE".into()));
+        assert_eq!(join_target("@rust_ru").unwrap(), Public("rust_ru".into()));
+        assert_eq!(join_target("https://t.me/rust_ru/123").unwrap(), Public("rust_ru".into()));
+        assert!(join_target("t.me/+").is_err());
+        assert!(join_target("hello world").is_err());
+    }
+
     #[test]
     fn supergroup_chat_ids_use_the_minus_100_prefix() {
         assert_eq!(super::channel_chat_id(1_234_567_890), -1_001_234_567_890);

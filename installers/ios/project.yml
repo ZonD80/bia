@@ -1,0 +1,45 @@
+# XcodeGen: `xcodegen` here writes BiaDeploy.xcodeproj (build-core.sh / build-ipa.sh run it).
+# Signing is automatic with the AENGIX team; open the project in Xcode to sign and upload.
+name: BiaDeploy
+options:
+  bundleIdPrefix: biadeploy
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: A59M2YXS84
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "${BIA_VERSION}"
+    CURRENT_PROJECT_VERSION: "${BIA_BUILD_NUMBER}"
+    SWIFT_VERSION: "5.0"
+targets:
+  BiaDeploy:
+    type: application
+    platform: iOS
+    sources:
+      - path: BiaDeploy
+    dependencies:
+      # the Rust core (installers/bia-deploy-mobile), made by build-core.sh
+      - framework: BiaDeployCore.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: biadeploy.ios
+        PRODUCT_NAME: BiaDeploy
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: bia deploy
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: bia deploy connects to the server you name, which can be on your local network.
+        # only standard encryption (SSH, TLS): exempt from export compliance documentation
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ENABLE_BITCODE: NO
+        # the core has an arm64 simulator slice only (Apple silicon Macs)
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64

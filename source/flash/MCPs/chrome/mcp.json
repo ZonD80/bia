@@ -1,6 +1,6 @@
 {
   "name": "chrome",
-  "version": "1.5.1",
+  "version": "1.7.0",
   "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",

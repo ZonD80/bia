@@ -537,6 +537,17 @@ fn main() {
             },
         )
         .tool(
+            "join_group",
+            "Join a Telegram group or channel by its invite link (t.me/+…, t.me/joinchat/…) or public name (@name, t.me/name).",
+            json!({"type": "object", "required": ["link"], "properties": {
+                "link": {"type": "string", "description": "the invite link, or the public group's @name or t.me/name"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Tg::global().join_group(arg_str(&a, "link")?)
+            },
+        )
+        .tool(
             "group_invite_link",
             "An invite link to a Telegram group you administer (anyone with it can join).",
             json!({"type": "object", "required": ["chat_id"], "properties": {

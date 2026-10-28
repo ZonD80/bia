@@ -845,7 +845,7 @@ impl FlashApp {
             }
         };
         let stick = ("💾", "On a USB stick", "Write a stick, then start any PC or Mac from it. bia lives on the stick, or moves onto the computer's disk.");
-        let server = ("☁", "On my server", "A server or VPS you rent from a provider. bia logs in to it and replaces its system; you reach bia from anywhere.");
+        let server = ("☁", "On my server", "A server or VPS rented for bia from a provider. bia logs in to it, replaces its system, and is reachable from anywhere.");
         if wide {
             ui.horizontal_top(|ui| {
                 choice(ui, stick.0, stick.1, stick.2, Page::Stick);

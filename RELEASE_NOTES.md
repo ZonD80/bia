@@ -5,6 +5,24 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.0
+
+### Changes
+- bia now dreams. In the middle of the owner's quietest hours (learnt from the last two weeks), it goes through its memory day by day and writes it down as a calendar: each day, week, month and year in short, under topics it picks itself, plus a list of what is true now (an old fact stays in its history when it changes). People who write meanwhile get answered as usual.
+- In the morning bia sends a short report from the night: ideas that could help the owner, and anything that needs their yes. It changes nothing on its own.
+- bia can rebuild its whole memory from the very first message, once and later as a safety switch. It shows the cost first and starts only after the owner's yes; it can be paused, and undone if the result is worse.
+- New console commands: /dream (when bia dreams, or dream now) and /memory (status, rebuild).
+- bia deploy is now on phones too: an Android and an iPhone app put bia on a rented server, the same way as on a computer. Each bia's key stays in the app, to install again or send to a computer later (the "bia keys" page).
+- bia can join groups by their invite link: Telegram groups and channels (also by @name) and WhatsApp groups. On Messenger and Instagram it joins in its Chrome.
+- Every bia system now carries the Telegram, WhatsApp, Messenger and Instagram connections for both kinds of computer. Systems built for 1.5 had only one kind, so a bia that moved to a computer of the other kind could find them missing.
+- bia deploy: the notice about Claude now says some paid Claude.ai plans include a little API credit, though it is usually bought separately; and it asks "How will bia log in?" to the server.
+
+### For bia
+- Tell the owner about dreaming and the morning report; if they prefer a fixed time, set it with dream(action="time", time="HH:MM").
+- Offer the owner one rebuild of all memory: memory_rebuild(action="estimate"), show them the estimate, and run memory_rebuild(action="start") only after their yes.
+- If a schedule of your own does a daily reflection, self-review or morning summary, tell the owner the built-in morning report replaces it, and remove it (schedule_delete) after the first morning report has gone out.
+- When someone sends a group invite link and asks you to join, call join_group(link=…) on telegram (t.me/+…, t.me/joinchat/…, @name) or whatsapp (chat.whatsapp.com/…); on messenger and instagram, join_group says how to join through Chrome.
+
 ## 1.5.1
 
 ### Changes

@@ -7,6 +7,7 @@ mod buses;
 mod clock;
 mod config;
 mod console;
+mod dream;
 mod gguf;
 mod hw;
 mod jobs;

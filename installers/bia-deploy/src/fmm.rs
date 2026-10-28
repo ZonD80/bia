@@ -45,7 +45,7 @@ pub const KEY_GUIDES: &[KeyGuide] = &[
     KeyGuide {
         provider: "anthropic",
         name: "Anthropic (Claude)",
-        about: "The makers of Claude. A Claude.ai subscription does not include this; API credit is bought separately.",
+        about: "The makers of Claude. Some paid Claude.ai plans include a little API credit, but usually API credit is bought separately.",
         key_url: "https://platform.claude.com/settings/keys",
         pay_url: Some("https://platform.claude.com/settings/billing"),
     },

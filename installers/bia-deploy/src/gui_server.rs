@@ -396,7 +396,7 @@ impl FlashApp {
         card(ui, |ui| {
             ui.label(egui::RichText::new(if self.srv.land { "Which server will receive an agent?" } else { "Which server?" }).size(19.0).strong());
             ui.label(
-                egui::RichText::new("A Linux server you rent (a VPS). Its provider's page shows its address and how to log in. Everything on it will be replaced by bia.")
+                egui::RichText::new("A Linux server rented for bia (a VPS). Its provider's page shows its address and how to log in. Everything on it will be replaced by bia.")
                     .weak(),
             );
             ui.add_space(6.0);
@@ -415,22 +415,22 @@ impl FlashApp {
         });
         ui.add_space(8.0);
         card(ui, |ui| {
-            ui.label(egui::RichText::new("How do you log in?").size(19.0).strong());
+            ui.label(egui::RichText::new("How will bia log in?").size(19.0).strong());
             ui.horizontal_wrapped(|ui| {
                 ui.selectable_value(&mut self.srv.how, How::Password, "🔑  With a password");
                 ui.selectable_value(&mut self.srv.how, How::Key, "📄  With a key file");
-                ui.selectable_value(&mut self.srv.how, How::NewKey, "✨  I need a key");
+                ui.selectable_value(&mut self.srv.how, How::NewKey, "✨  bia needs a key");
             });
             ui.add_space(4.0);
             match self.srv.how {
                 How::Password => {
                     ui.add(egui::TextEdit::singleline(&mut self.srv.password).password(true).hint_text("the server's password").desired_width(300.0));
-                    ui.label(egui::RichText::new("The password is used only now, to log in. It is not saved.").small().weak());
+                    ui.label(egui::RichText::new("bia uses the password only now, to log in; it is not saved.").small().weak());
                 }
                 How::Key => {
                     ui.horizontal(|ui| {
                         if ui.button("Choose the key file…").clicked() {
-                            if let Some(p) = rfd::FileDialog::new().set_title("Choose your private SSH key").pick_file() {
+                            if let Some(p) = rfd::FileDialog::new().set_title("Choose the private SSH key bia logs in with").pick_file() {
                                 match std::fs::read_to_string(&p) {
                                     Ok(t) => {
                                         self.srv.key_text = t;
@@ -475,7 +475,7 @@ impl FlashApp {
     }
 
     fn new_key_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label("When you order a server, the provider asks for an \"SSH key\". bia makes one here; you give the provider its public half, and bia keeps the secret half on this computer.");
+        ui.label("When a server is ordered for bia, the provider asks for an \"SSH key\". bia makes one here: its public half goes to the provider, and bia keeps the secret half on this computer.");
         match self.srv.new_key.clone() {
             None => {
                 if primary_button(ui, "Make a key", true).clicked() {

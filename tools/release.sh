@@ -8,6 +8,7 @@
 #                   flashers = flash-macos,flash-linux,flash-linux-arm64,flash-windows
 #                   os = os-x86_64,os-arm64
 #                   land = land-x86_64,land-arm64
+#                   apps = app-android,app-ios
 #                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
 #   --publish     build nothing: upload what --build-only runs left in dist/release/<tag> (their
@@ -35,6 +36,11 @@
 #   land-x86_64    bia-land-x86_64.iso.xz  installer ISO that installs bia and waits to land
 #   land-arm64     bia-land-arm64.iso.xz   (xz: the raw ISO is over GitHub's 2 GiB file limit;
 #                  Etcher and Raspberry Pi Imager write .iso.xz directly)
+#   app-android    bia-deploy-android.apk + bia-deploy-android.aab  the phone app, signed with
+#                  the Play upload key (installers/android: ~/biaDeployPlayKeys.jks,
+#                  keystore.properties); the .aab is what Play Console takes
+#   app-ios        bia-deploy-ios-unsigned.ipa  not signed (installers/ios/build-ipa.sh with
+#                  IOS_UNSIGNED=1); sideloading tools sign it. App Store builds: build-ipa.sh
 # Asset names carry no version, so https://github.com/zond80/bia/releases/latest/download/<name>
 # always points at the newest release (website download links, bia-deploy).
 #
@@ -45,7 +51,7 @@ SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$SELF")/.."
 ROOT=$(pwd)
 REPO=zond80/bia
-ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover)
+ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover app-android app-ios)
 
 NOTES="" ONLY="" WITHIN="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 PUBLISH=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -77,7 +83,8 @@ expand() { # comma list → " pkg pkg … " (groups expanded)
       flashers|flash) want+="flash-macos flash-linux flash-linux-arm64 flash-windows " ;;
       os) want+="os-x86_64 os-arm64 " ;;
       land) want+="land-x86_64 land-arm64 " ;;
-      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land)"
+      apps) want+="app-android app-ios " ;;
+      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land, apps)"
          want+="$i " ;;
     esac
   done
@@ -142,6 +149,8 @@ complete() { # pkg
     takeover) has takeover.sh ;;
     flash-windows) has bia-deploy-windows-x86_64.zip ;;
     land-*) has "bia-land-${1#land-}.iso.xz" ;;
+    app-android) has bia-deploy-android.apk && has bia-deploy-android.aab ;;
+    app-ios) has bia-deploy-ios-unsigned.ipa ;;
     *) die "unknown package $1" ;;
   esac
 }
@@ -232,12 +241,34 @@ system() { # arch — build dist/<arch> (root.img and binaries) at most once per
   [[ $SYSTEM_READY == *" $a "* ]] && return 0
   builder "$a"
   if [[ $REBUILD_OS -eq 1 || ! -f "dist/$a/root.img" ]]; then
-    echo "== building the $a OS (make ARCH=$a build)"
-    make ARCH="$a" build
+    if [[ -n "${BIA_PREBUILT:-}" && -x "dist/$a/bia-agent" ]]; then
+      # CI: agent and MCPs were built by the mcps stage, both architectures' MCPs are in place
+      echo "== building the $a OS from prebuilt binaries (make ARCH=$a rootfs)"
+      make ARCH="$a" rootfs
+    else
+      echo "== building the $a OS (make ARCH=$a build)"
+      make ARCH="$a" build
+    fi
   else
     echo "== using dist/$a/root.img from $(date -r "dist/$a/root.img" '+%F %R') (--rebuild-os to rebuild)"
   fi
+  both_arches
   SYSTEM_READY+="$a "
+}
+
+# Every image carries every MCP for both architectures (bia moves between machines, and an
+# update copies both). A build fills only its own: the other one must already be in
+# source/flash (a local machine has it from an earlier build; CI downloads it).
+both_arches() {
+  local d m missing=()
+  for d in source/flash/MCPs/*/; do
+    [[ -d "$d/bin" ]] || continue
+    m=$(basename "$d")
+    for r in aarch64 x86_64; do
+      [[ -n "$(find "$d/bin/$r" -type f -perm -u+x 2>/dev/null | head -1)" ]] || missing+=("$m/bin/$r")
+    done
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "MCP binaries missing for: ${missing[*]} (build both architectures first: make ARCH=arm64 rust mcps; make ARCH=x86_64 rust mcps)"
 }
 
 build_os() { # arch
@@ -350,6 +381,28 @@ build_windows() {
   UPLOAD+=("$OUT/bia-deploy-windows-x86_64.zip")
 }
 
+build_android() {
+  echo "== Android app (APK and app bundle, Play upload key)"
+  local d=installers/android lib
+  # one versionCode for both (minutes since 1970: higher than any build Play took before)
+  export BIA_VERSION_CODE=$(( $(date +%s) / 60 ))
+  echo "   versionCode $BIA_VERSION_CODE"
+  "$d/build-apk.sh"
+  BIA_SKIP_CORE=1 "$d/build-aab.sh"
+  for lib in "$d"/app/src/main/jniLibs/*/libbia_deploy_mobile.so; do scan "$lib"; done
+  cp -f "installers/dist/android/bia-deploy-$VERSION.apk" "$OUT/bia-deploy-android.apk"
+  cp -f "installers/dist/android/bia-deploy-$VERSION.aab" "$OUT/bia-deploy-android.aab"
+  UPLOAD+=("$OUT/bia-deploy-android.apk" "$OUT/bia-deploy-android.aab")
+}
+
+build_ios() {
+  echo "== iOS app (unsigned)"
+  IOS_UNSIGNED=1 installers/ios/build-ipa.sh
+  scan installers/ios/build/BiaDeploy.xcarchive/Products/Applications/BiaDeploy.app/BiaDeploy
+  cp -f "installers/dist/ios/bia-deploy-$VERSION-unsigned.ipa" "$OUT/bia-deploy-ios-unsigned.ipa"
+  UPLOAD+=("$OUT/bia-deploy-ios-unsigned.ipa")
+}
+
 for p in ${TODO[@]+"${TODO[@]}"}; do
   case $p in
     os-*) build_os "${p#os-}" ;;
@@ -359,6 +412,8 @@ for p in ${TODO[@]+"${TODO[@]}"}; do
     flash-linux-arm64) build_linux arm64 ;;
     takeover) build_takeover ;;
     flash-windows) build_windows ;;
+    app-android) build_android ;;
+    app-ios) build_ios ;;
   esac
 done
 

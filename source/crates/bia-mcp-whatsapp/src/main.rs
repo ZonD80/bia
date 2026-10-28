@@ -487,6 +487,17 @@ fn main() {
             },
         )
         .tool(
+            "join_group",
+            "Join a WhatsApp group by its invite link (https://chat.whatsapp.com/…).",
+            json!({"type": "object", "required": ["link"], "properties": {
+                "link": {"type": "string", "description": "the group's invite link"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                Wa::global().join_group(arg_str(&a, "link")?)
+            },
+        )
+        .tool(
             "leave_group",
             "Leave a WhatsApp group.",
             json!({"type": "object", "required": ["chat_id"], "properties": {

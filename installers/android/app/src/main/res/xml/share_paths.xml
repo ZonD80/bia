@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the copies made for the share sheet (bia-<host>.p12, bia-<host>-ca.crt), never the
+     servers folder itself. -->
+<paths>
+    <cache-path name="share" path="share/" />
+</paths>

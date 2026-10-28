@@ -19,10 +19,11 @@ members = [
     "installers/bia-disk",
     "installers/bia-mkimage",
     "installers/bia-deploy",
+    "installers/bia-deploy-mobile",
 ]
 
 [workspace.package]
-version = "1.5.1"
+version = "1.7.0"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -60,6 +61,13 @@ inherits = "release"
 lto = false
 codegen-units = 16
 debug = 0
+
+# bia deploy's phone apps (installers/android): no debuginfo, stripped. Bindings are made
+# from an unstripped host build: uniffi-bindgen reads its metadata from the symbols.
+[profile.release-mobile]
+inherits = "release"
+debug = 0
+strip = true
 
 # Patched: accept() waits on PhoneCallWaiting/Accepted until ready phoneCall.
 [patch.crates-io]

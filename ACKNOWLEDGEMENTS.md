@@ -96,10 +96,22 @@ in `source/crates` and `installers`. Direct dependencies include:
 - RustCrypto: [sha1](https://github.com/RustCrypto/hashes), [sha2](https://github.com/RustCrypto/hashes), [hmac](https://github.com/RustCrypto/MACs), [p256](https://github.com/RustCrypto/elliptic-curves), [rsa](https://github.com/RustCrypto/RSA); [sha1_smol](https://github.com/mitsuhiko/sha1-smol), [rand](https://github.com/rust-random/rand), [base64](https://github.com/marshallpierce/rust-base64)
 - [qrcode](https://github.com/kennytm/qrcode-rust), [image](https://github.com/image-rs/image) — WhatsApp pairing QR
 - [gpt](https://github.com/Quyzi/gpt), [uuid](https://github.com/uuid-rs/uuid), [fatfs](https://github.com/rafalh/rust-fatfs), [walkdir](https://github.com/BurntSushi/walkdir), [clap](https://github.com/clap-rs/clap) — image and stick writers
-- [egui / eframe](https://github.com/emilk/egui) — bia-deploy GUI
+- [egui / eframe](https://github.com/emilk/egui), [rfd](https://github.com/PolyMeilex/rfd) — bia-deploy GUI and its file dialogs
+- [russh](https://github.com/Eugeny/russh) — bia-deploy's SSH client for taking over a server
+- [liblzma](https://github.com/portable-network-archive/liblzma-rs) ([XZ Utils](https://tukaani.org/xz/)) — unpacking the OS image while writing it
+- [UniFFI](https://github.com/mozilla/uniffi-rs) — the bia deploy core as a library for the phone apps (Kotlin and Swift bindings)
 - [mold](https://github.com/rui314/mold) — linker in the build container
 
 The full dependency tree with versions is in `Cargo.lock`.
+
+## Phone apps (bia deploy for Android and iOS)
+
+| Project | Used for |
+|---|---|
+| [Kotlin](https://kotlinlang.org/), [Jetpack Compose](https://developer.android.com/compose) / [Material 3](https://m3.material.io/), [AndroidX](https://developer.android.com/jetpack/androidx) (Activity, Lifecycle, Browser Custom Tabs, Core), [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines) | the Android app |
+| [JNA](https://github.com/java-native-access/jna) | loading the Rust core on Android (bundled in the APK) |
+| [Android SDK, NDK](https://developer.android.com/ndk) and [Gradle](https://gradle.org/), [cargo-ndk](https://github.com/bbqsrc/cargo-ndk) | building the Android app and its Rust core |
+| [SwiftUI](https://developer.apple.com/xcode/swiftui/) / Xcode, [XcodeGen](https://github.com/yonaskolb/XcodeGen) | the iOS app and its project file |
 
 ## Development and website
 

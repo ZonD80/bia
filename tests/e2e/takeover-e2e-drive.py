@@ -30,6 +30,11 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 LAND = bool(os.environ.get("LAND"))
 AGENT_LAND = os.environ.get("LAND") == "agent"
 DEPLOY = bool(os.environ.get("DEPLOY"))
+# DREAM=1: after the checks, the night work on long-term memory with the real brain: three
+# seeded past days are reflected (dream now), the facts ledger follows a change, the live
+# context sheds the work; then a whole-memory rebuild after root's yes, answering a
+# message in the middle of it.
+DREAM = bool(os.environ.get("DREAM"))
 # DEPLOY: sudo must ask ubuntu's password (cloud images let it sudo without one)
 SUDO_PASSWORD = """rm -f /etc/sudoers.d/90-cloud-init-users
 echo "takeover-e2e: ready for ssh"
@@ -357,6 +362,195 @@ def deploy_run():
     return p12, ca_pem, fp.group(1)
 
 
+def dream_stage(shell, get, fsget, want, cctx):
+    """DREAM: night memory work on the running bia (real brain from ./fmm.json)."""
+    import datetime
+
+    def post(path, obj):
+        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}{path}", method="POST", data=json.dumps(obj).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            r = urllib.request.urlopen(req, context=cctx, timeout=30)
+            return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    def fsjson(path):
+        st, b = fsget(path)
+        return json.loads(b) if st == 200 else None
+
+    def nodes(gen):
+        st, b = fsget(f"/home/bia/files/state/memory/gen-{gen}/nodes.jsonl")
+        return [json.loads(l) for l in b.decode().splitlines() if l.strip()] if st == 200 else []
+
+    def chat(text):
+        st, b = post("/v1/chats/action", {"t": "send", "chat": "main", "text": text})
+        if st != 200:
+            die(f"chat send: HTTP {st} {b[:200]!r}")
+        return json.loads(b).get("m", {}).get("ts", 0)
+
+    def reply_after(ts, timeout, pat=None):
+        end = time.time() + timeout * SCALE
+        while time.time() < end:
+            st, b = get("/v1/chats/main/messages?limit=20")
+            if st == 200:
+                for m in json.loads(b, strict=False).get("messages", []):
+                    if m.get("ts", 0) > ts and m.get("from") != "root" and (pat is None or re.search(pat, m.get("text", ""), re.I)):
+                        return m["text"]
+            time.sleep(10)
+        return None
+
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    days = [today - datetime.timedelta(days=n) for n in (3, 2, 1)]
+    convo = [
+        [("root", "Hi bia. Please note: my dentist is Dr. Ruiz, Calle Mayor 12, Madrid. My gym day is Tuesday."),
+         ("bia", "Noted: your dentist is Dr. Ruiz at Calle Mayor 12, and you go to the gym on Tuesdays."),
+         ("tool", "bash", "Filesystem 1K-blocks Used Available\n" + "/dev/vda2 30000000 1200000 28800000 4% /\n" * 120),
+         ("root", "Remind me to buy olive oil this weekend."),
+         ("bia", "I'll remind you on Saturday morning to buy olive oil.")],
+        [("root", "I'm planning a trip to Lisbon on November 20th with my sister Ana."),
+         ("bia", "A trip to Lisbon on November 20th with Ana, noted. Shall I look at trains?"),
+         ("root", "Not yet, maybe next week.")],
+        [("root", "Change of plans: my gym day is now Thursday, not Tuesday anymore."),
+         ("bia", "Got it: gym on Thursdays from now on."),
+         ("root", "And I keep forgetting to water the plants on Sundays, it happened again."),
+         ("bia", "Would a reminder every Sunday at 10:00 help?")],
+    ]
+    seed = []
+    for d, rows in zip(days, convo):
+        t = datetime.datetime.combine(d, datetime.time(9, 0), datetime.timezone.utc)
+        for i, r in enumerate(rows):
+            at = (t + datetime.timedelta(minutes=17 * i)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if r[0] == "root":
+                seed.append({"role": "user", "name": "", "content": f"root|web|{at}|{at}|e2e{d}{i}|{r[1]}", "call_id": ""})
+            elif r[0] == "bia":
+                seed.append({"role": "assistant", "name": "", "content": r[1], "call_id": ""})
+            else:
+                seed.append({"role": "tool", "name": r[1], "content": r[2], "call_id": f"c{i}"})
+    def put(path, data):
+        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}/v1/fs/put?path={path}&overwrite=1", method="POST", data=data)
+        try:
+            return urllib.request.urlopen(req, context=cctx, timeout=30).status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    seeder = f"""import json
+p = '/home/bia/files/state/journal.jsonl'
+rows = [json.loads(l) for l in open(p) if l.strip()]
+n = max([int(r['id'][2:]) for r in rows if r['id'].startswith('m_')] or [0])
+seed = json.load(open('/home/bia/files/tmp/dream-seed.json'))
+for x in seed:
+    n += 1
+    x['id'] = 'm_%d' % n
+# the past days come first: the journal is in time order
+open(p, 'w').write(''.join(json.dumps(r) + '\\n' for r in seed + rows))
+g = '/home/bia/files/state/memory/gen-1/meta.json'
+m = json.load(open(g))
+m['start_day'] = '{days[0]}'
+json.dump(m, open(g, 'w'))
+"""
+    ok = put("/home/bia/files/tmp/dream-seed.json", json.dumps(seed).encode()) == 200 and put("/home/bia/files/tmp/dream-seed.py", seeder.encode()) == 200
+    want(ok, "seed files uploaded")
+    # the shell belongs to the agent's unit: the seed runs as a unit of its own, stops bia,
+    # writes the journal and starts bia again
+    out, rc = shell("systemd-run --unit=dream-seed --no-block sh -c 'systemctl stop bia && python3 /home/bia/files/tmp/dream-seed.py && chown -R bia:bia /home/bia/files/state; systemctl start bia' && echo started")
+    if rc != 0:
+        want(False, "seed unit started")
+        print(out[-1500:])
+        return
+    time.sleep(15)
+    end = time.time() + 300 * SCALE
+    seeded = False
+    while time.time() < end:
+        try:
+            m = fsjson("/home/bia/files/state/memory/gen-1/meta.json") or {}
+            st, _ = get("/v1/whoami")
+            if st == 200 and m.get("start_day") == str(days[0]):
+                seeded = True
+                break
+        except Exception:
+            pass
+        time.sleep(5)
+    want(seeded, "three past days seeded into the journal; memory generation 1 starts on " + str(days[0]))
+    if not seeded:
+        return
+    time.sleep(30)
+
+    ts = chat("This is a test of your night work. Please start dreaming now (dream tool, action now) and tell me when you begin.")
+    say("asked bia to dream now")
+    end = time.time() + 40 * 60 * SCALE
+    done = set()
+    while time.time() < end:
+        ns = nodes(1)
+        done = {n["period"] for n in ns if n.get("overview") and n.get("level") == "day"}
+        state = fsjson("/home/bia/files/state/memory/dream.json") or {}
+        if all(str(d) in done for d in days) and not state.get("night") and not state.get("open"):
+            break
+        time.sleep(20)
+    ns = nodes(1)
+    want(all(str(d) in done for d in days), f"the three seeded days are reflected, each with an overview ({sorted(done)})")
+    cats = fsjson("/home/bia/files/state/memory/gen-1/categories.json") or {}
+    want(cats and all(c.get("meaning") or c.get("merged_into") for c in cats.values()), f"categories chosen by the model, each with its meaning ({', '.join(cats)})")
+    facts = fsjson("/home/bia/files/state/memory/gen-1/facts.json") or []
+    cur = [f for f in facts if f["status"] == "current"]
+    # the model may put "gym" in the topic and only the day in the text
+    gym_now = [f for f in cur if re.search(r"gym", f["topic"] + " " + f["text"], re.I)]
+    gym_old = [f for f in facts if f["status"] != "current" and re.search(r"tuesday", f["text"], re.I)]
+    # "Thursday (changed from Tuesday)" is right; a current gym fact on Tuesday alone is not
+    want(any(re.search(r"thursday", f["text"], re.I) for f in gym_now) and not any(re.search(r"tuesday", f["text"], re.I) and not re.search(r"thursday", f["text"], re.I) for f in gym_now),
+         f"the facts ledger has the gym on Thursday now ({[f['text'] for f in gym_now]})")
+    want(bool(gym_old), "the Tuesday gym fact is kept in its history (replaced or retired), not deleted")
+    want(any(re.search(r"ruiz", f["text"], re.I) for f in cur), "the dentist is a current fact")
+    print("  ..   facts:", "; ".join(f"[{f['topic']}] {f['text']}" for f in cur)[:600], flush=True)
+    # the spine is swapped in when the agent next goes idle
+    end = time.time() + 5 * 60 * SCALE
+    while True:
+        st, conv = fsget("/home/bia/files/state/conversation.json")
+        c = conv.decode(errors="replace") if st == 200 else ""
+        if "bundle=calendar" in c or time.time() > end:
+            break
+        time.sleep(15)
+    want('"journal_day"' not in c and "[dream task day:" not in c, "the night's tool work left the live context")
+    want("dreamed: day:" in c or "bundle=calendar" in c, "the live context keeps a short line per task / starts from the calendar memory")
+    want("bundle=calendar" in c, "after the night the live context starts from the calendar reflections")
+    for n in ns:
+        if n.get("overview") and n.get("level") == "day":
+            print(f"  ..   {n['period']} {n['category']}: {n['text'][:160]!r}", flush=True)
+
+    # a whole rebuild, after root's yes
+    ts = chat("How much would a full rebuild of your memory cost? Please show me the estimate (memory_rebuild, action estimate) but do not start it yet.")
+    r = reply_after(ts, 10 * 60, r"token")
+    want(r is not None, "bia shows the rebuild estimate in tokens")
+    if r:
+        print("  ..  ", r[:300].replace("\n", " "), flush=True)
+    state = fsjson("/home/bia/files/state/memory/dream.json") or {}
+    want(not state.get("rebuild"), "the rebuild did not start before root said yes")
+    ts = chat("Yes, start the rebuild now.")
+    end = time.time() + 10 * 60 * SCALE
+    started = False
+    while time.time() < end:
+        state = fsjson("/home/bia/files/state/memory/dream.json") or {}
+        if state.get("rebuild") or state.get("current_gen") == 2:
+            started = True
+            break
+        time.sleep(10)
+    want(started, "after root's yes the rebuild runs (generation 2)")
+    if started:
+        ts = chat("Quick question while you work: what is 17 plus 25?")
+        r = reply_after(ts, 10 * 60, r"\b42\b")
+        want(r is not None, "a message in the middle of the rebuild is answered")
+        end = time.time() + 45 * 60 * SCALE
+        while time.time() < end:
+            state = fsjson("/home/bia/files/state/memory/dream.json") or {}
+            if state.get("current_gen") == 2 and not state.get("rebuild"):
+                break
+            time.sleep(20)
+        state = fsjson("/home/bia/files/state/memory/dream.json") or {}
+        want(state.get("current_gen") == 2 and state.get("previous_gen") == 1, "the rebuild finished and memory switched to generation 2 (generation 1 kept for rollback)")
+        done2 = {n["period"] for n in nodes(2) if n.get("overview") and n.get("level") == "day"}
+        want(all(str(d) in done2 for d in days), f"generation 2 reflects the seeded days again ({sorted(done2)})")
+
+
 # ---- QEMU: UEFI, no display device, user net with the gate and bia's HTTPS forwarded ----
 shutil.copyfile(f"{FW}/edk2-arm-vars.fd" if ARCH == "arm64" else f"{FW}/edk2-i386-vars.fd", f"{TE}/vars.fd")
 if ARCH == "arm64":
@@ -660,6 +854,8 @@ try:
     want(rc != 0 and refused in out, f"bia-deploy takeover refuses on bia itself (exit {rc})")
     st, _ = get("/v1/whoami")
     want(st == 200, "bia still runs after both refusals")
+    if DREAM:
+        dream_stage(shell, get, fsget, want, cctx)
     if errs:
         die(f"{len(errs)} check(s) failed")
     say("PASS takeover e2e")

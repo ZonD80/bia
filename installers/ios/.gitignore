@@ -1,0 +1,7 @@
+# made by build-core.sh from the Rust core
+BiaDeployCore.xcframework/
+BiaDeploy/Generated/
+build/
+dist/
+*.xcuserstate
+xcuserdata/

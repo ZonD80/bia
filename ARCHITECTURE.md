@@ -129,7 +129,8 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `mcp.rs` | MCP client over stdio, discovery of `/home/bia/MCPs/*/mcp.json`, `boot_tool` |
 | `jobs.rs`, `bash.rs` | every MCP call and shell command is a job; results return as `system|job:<id>|…` envelopes; PTY shells as root or `bia` |
 | `outbox.rs` | telegram/whatsapp sends, edits, reactions and deletes: per-chat FIFO worker threads, local `o<n>` ids mapped to platform ids |
-| `memory.rs` | append-only journal + time-ranged categorized reflections (`/reflect`) |
+| `memory.rs` | append-only journal + time-ranged categorized reflections of the live window (`/reflect`) |
+| `dream.rs` | long-term memory: calendar reflections (day, week, month, year), the facts ledger and the morning report, written by the model at night in `system|dream` tasks; whole-memory rebuild (`/dream`, `/memory`) |
 | `schedules.rs` | calendar of tasks/reminders, delivered as `system|schedule` with catch-up after boot |
 | `state.rs` | `files/state/conversation.json` (fsynced, `.bak` fallback) |
 | `buses.rs`, `addressbook.rs` | buses (console built in; web, telegram, whatsapp from their MCPs), channels, contacts with trust levels |
@@ -192,6 +193,56 @@ Built-in tools: `bash`, `say`, `discover`, `set_model_config`, `job_*`/`list_job
 an MCP's function definitions as a `system` message, so the cached prompt
 prefix stays valid. Keyword matches in a request can load a server too.
 Loaded servers persist with the conversation.
+
+### Long-term memory and dreaming
+
+The journal (`files/state/journal.jsonl`) keeps every message and tool result. When
+the live context fills up, `memory_reflect` compacts its oldest part into categorized
+reflections for that stretch of time; those are custom periods, cut wherever the
+context ran out. Long-term memory is a calendar on top of the journal, written by the
+model itself (`dream.rs`), in generations `files/state/memory/gen-<n>/`:
+`nodes.jsonl` (a reflection per day, week, month and year, each block under a
+category the model chose, one of them the period's overview), `facts.json` (the facts
+ledger: what is true now; a changed fact is `replaced` or `retired` with why and when,
+never deleted), `categories.json` (each category with its meaning, or `merged_into`),
+`empty.json` (days with no messages). `dream.json` holds the schedule and progress.
+
+When: the quiet window is learnt from root's own messages over the last 14 days
+(root's identity, or a contact with root trust, on any bus), in 15-minute slots: the
+longest stretch around the clock with root active on at most a tenth of the days, at
+least 2 h; with fewer than 5 days of history, 02:00–06:00. Dreaming starts in the
+window's middle (or at `/dream time HH:MM`), and each task waits until nobody wrote
+for 20 minutes (`/dream now` and `dream(action="now")` skip the wait).
+
+How: the scheduler thread posts one task at a time as a `system|dream` message
+(`[dream task day:2026-10-27] …`), in dependency order: days with messages, then each
+week, month and year whose days are done. It is a regular turn, so people who write
+meanwhile are answered as usual. The model reads with `journal_day` (the day's digest,
+paged at about a quarter of the context; long tool results cut, with a
+`memory_messages(ids, full=true)` hint; secrets masked), `memory_messages`,
+`memory_list` / `memory_get` / `memory_facts`, and writes with `reflect_write` (new
+categories need their meaning), `facts_update` (add / replace / retire),
+`category_merge`, `reflect_note` (notes that survive a context reset during the
+task), `report_write` (the morning report, `files/reports/morning-<date>.md`: sections
+such as "For you" and "Needs your yes"; proposals never change settings themselves),
+and ends with `task_done` (refused until an overview exists; the third refusal writes
+a minimal one). After `task_done` the task message and its dream tool traffic are
+removed from the live context, leaving one `dreamed: <task>` line. A task with no
+dream tool call for 5 minutes is posted again as a reminder, and after two reminders
+it is closed (with a minimal overview if none was written), so a night never stalls.
+
+After the night the start of the live context is rebuilt from the calendar: current
+facts, last month, this month's weeks and this week's days (overviews, as memory
+stubs with `bundle=calendar`), plus today's own reflections. The agent's idle wait
+wakes every 30 s to apply this and the pruning, so the next message already sees it.
+In the morning (when root first writes, or at the window's end) a `morning:` task
+tells root about the report with the file attached.
+
+Rebuild (`memory_rebuild`, `/memory rebuild`): re-reflects the whole journal into a new
+generation. `estimate` shows the tasks and the tokens it would take; `start` works
+only after root's own yes, written after the estimate. It runs task after task between
+conversations, can be paused and resumed, and switches `current_gen` when done,
+keeping the previous generation for `rollback`. No morning report during a rebuild.
 
 ### Web
 
@@ -287,9 +338,9 @@ into `/home/bia/MCPs`.
 | `secrets` | passwords, TOTP/HOTP, WebAuthn passkeys (ES256) in `files/state/passwords.json`; 1Password CSV/JSON import, CXF export |
 | `chrome` | Google Chrome on profile `~/.config/bia-chrome` with remote debugging; force-installed CRX extension proxies WebAuthn to `secrets`; page automation through Google's `chrome-devtools-mcp` (vendored Node); native GTK file dialogs are announced (`[file dialog opened]`) and answered with `chrome_choose_files` (xdotool on :0; for a folder it waits for Chrome's in-window "Upload N files?" prompt and returns its words with x,y for the model to click; test: `tests/integration/chrome-dialog-test.sh`) |
 | `screen` | screenshot, mouse and keyboard on `:0` (xdotool/scrot); `screen_ocr` lists the words on screen (or a region) with their center x,y (`bia-ocr`: PaddleOCR PP-OCRv5 mobile on the image's onnxruntime, recognizers for Chrome's languages plus English, sha256-pinned models downloaded on first use into `files/ocr/models`; test: `tests/integration/screen-ocr-test.sh`) |
-| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`) and their administration (`group_info`, `set_admin` with named rights and a title, `group_permissions` for what members may do plus slow mode, join approval, history for new members, protected content and disappearing messages, `restrict_member`, `set_group_info`, `join_requests` / `answer_join_request`); deletes are for everyone unless `revoke=false` |
-| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools) and their administration (`group_info`, `set_admin`, `group_permissions`: who may send / edit info / add, join approval, disappearing messages; `set_group_info`, `join_requests` / `answer_join_request`); deletes are for everyone unless `revoke=false` |
-| `messenger` | Facebook Messenger as the account signed in to bia's Chrome (cookies read over Chrome's DevTools port, no password); classic and end-to-end encrypted chats (encrypted ones over WhatsApp's protocol as a registered device); text, files, voice messages (TTS → AAC), replies, edits, reactions, unsends, read marks, typing; search and resolve (names, profile links, ids); groups (create, add/remove, leave, `group_info`, `set_admin`, `set_group_info`; encrypted groups also `group_permissions` and join requests, like WhatsApp); bans, Meta blocks, message requests, mute; the Facebook bio (`set_profile`, the GraphQL mutation fbchat-v2 uses; name and photo stay in Chrome); no calls. Chat ids: a person's Facebook id, `t<thread>` for a classic group, `<id>@g.us` for an encrypted one |
+| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`) and their administration (`group_info`, `set_admin` with named rights and a title, `group_permissions` for what members may do plus slow mode, join approval, history for new members, protected content and disappearing messages, `restrict_member`, `set_group_info`, `join_requests` / `answer_join_request`, `join_group` by invite link or public name); deletes are for everyone unless `revoke=false` |
+| `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools) and their administration (`group_info`, `set_admin`, `group_permissions`: who may send / edit info / add, join approval, disappearing messages; `set_group_info`, `join_requests` / `answer_join_request`, `join_group` by `chat.whatsapp.com` link); deletes are for everyone unless `revoke=false` |
+| `messenger` | Facebook Messenger as the account signed in to bia's Chrome (cookies read over Chrome's DevTools port, no password); classic and end-to-end encrypted chats (encrypted ones over WhatsApp's protocol as a registered device); text, files, voice messages (TTS → AAC), replies, edits, reactions, unsends, read marks, typing; search and resolve (names, profile links, ids); groups (create, add/remove, leave, `group_info`, `set_admin`, `set_group_info`; encrypted groups also `group_permissions` and join requests, like WhatsApp); bans, Meta blocks, message requests, mute; `join_group` (here and in `instagram`) answers how: the protocol has no join-by-link call, so bia opens the link in its own Chrome, signed in to the same account, and presses Join; the Facebook bio (`set_profile`, the GraphQL mutation fbchat-v2 uses; name and photo stay in Chrome); no calls. Chat ids: a person's Facebook id, `t<thread>` for a classic group, `<id>@g.us` for an encrypted one |
 | `instagram` | Instagram DMs the same way (session from Chrome); shared posts and reels as `[shared]` lines with their link; also pins (chat or message); unsend only (no remove-for-me). Chat id: the thread key (a DM's is the other person's id) |
 | `lang` | languages bia hears and speaks: catalog (`catalog.json`, sha256-pinned), on-demand installs into `files/speech`, voices, speech settings, transcribe/synthesize files |
 | `carry` | `fold`/`unfold` backups of `/home/bia`; `fly` to a machine in land mode (UDP discovery, X25519 handshake, confirmed code); `update` and `rescue` (see below); `morph` |
@@ -489,6 +540,21 @@ FMM keys, the Apple app password, `HF_TOKEN` and the home path first.
 `bia-os.json` lists each image with its download and raw size and SHA-256; the
 release must be a pushed, clean commit. Asset names carry no version, so
 `releases/latest/download/<name>` always works (website download buttons).
+The phone apps are packages too: `app-android` (`bia-deploy-android.apk` and `.aab`,
+signed with the Play upload key) and `app-ios` (`bia-deploy-ios-unsigned.ipa`).
+
+The release runs on GitHub Actions (`.github/workflows/release.yml`, on a pushed tag
+`v<version>` or by hand; `tools/release-ci.sh` commits everything as `<version>`, tags
+and pushes, after checking the release notes, the tag and that no key files go in). Each runner builds its own packages with `release.sh
+--build-only --within <its packages>` and leaves `.built-*` records; one `publish` job
+runs `release.sh --publish`, which uploads them and merges `bia-os.json` once. Jobs:
+`mcps` (agent and MCPs on an x86_64 and an arm64 runner), `linux` (images, land ISOs,
+Linux and Windows flashers, `takeover.sh`; both start from both `mcps` sets with
+`BIA_PREBUILT=1`, so every image carries the MCPs of both architectures, which an
+update copies; `release.sh` refuses an image missing one), `macos` (the Mac flasher,
+signed and notarized from secrets in a keychain of its own), `android` and `ios`.
+Secrets: the Apple ID and app password, the Developer ID `.p12`, the Telegram app
+credentials, the Play keystore and its `keystore.properties`.
 
 `bia-deploy` (`src/release.rs`) reads `bia-os.json` from the latest release
 (or `--os <tag>`), downloads the `.img.xz` with resume and checks it, and keeps
@@ -693,6 +759,27 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   Claude subscriptions are not offered: Anthropic's terms forbid third-party apps
   from using Free/Pro/Max credentials.
   `installers/macos/release.sh` signs, notarizes and packages it as .app/DMG.
+- Phone apps: bia deploy for Android (`installers/android`, `biadeploy.android`,
+  Kotlin + Jetpack Compose) and iOS (`installers/ios`, `biadeploy.ios`, SwiftUI,
+  project from XcodeGen). Server only (no sticks on a phone): the same wizard, brain
+  then server, with the Rust core of the desktop app as a library
+  (`installers/bia-deploy-mobile`, UniFFI 0.32: `Server.connect/plan/run`, `wake`,
+  `chatgpt_sign_in`, keys, `saved_bias`). Android loads it through JNA from the APK
+  (arm64-v8a and x86_64, profile `release-mobile`, stripped; bindings generated from a
+  host build); iOS links it from `BiaDeployCore.xcframework` (device and Apple-silicon
+  simulator). Pages that talk to the core's loopback listener (the ChatGPT sign-in,
+  bia's key as a configuration profile on iOS) open in a Custom Tab or an in-app
+  Safari view, so the app keeps running; the core retries OpenAI requests for 90 s,
+  since Android keeps a background app off the network while that page is in front.
+  Each deployed bia's key and CA stay in the app's folder (`servers/<host>/`); the
+  "bia keys" page lists them to install again or send through the share sheet
+  (`bia-<host>.p12`, `bia-<host>-ca.crt`; Android shares copies through a
+  FileProvider limited to the cache's `share/`). Builds: `build-apk.sh`,
+  `build-aab.sh` (Play upload key `~/biaDeployPlayKeys.jks` + `keystore.properties`,
+  made by `generate-keystore.sh`; versionCode is the build time in minutes, so it rises
+  with every build) and `build-ipa.sh` (automatic signing with team A59M2YXS84 for App
+  Store Connect, or `IOS_UNSIGNED=1` for an unsigned IPA). Nothing is uploaded to the
+  stores by the scripts.
 
 ## Security and private data
 

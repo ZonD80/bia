@@ -1,0 +1,27 @@
+[package]
+name = "bia-deploy-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "bia deploy for Android and iOS: the server path of bia-deploy (brain check, ChatGPT sign-in, SSH takeover) for Kotlin and Swift (UniFFI)"
+
+[lib]
+name = "bia_deploy_mobile"
+# cdylib: Android's .so; staticlib: the iOS XCFramework; lib: uniffi-bindgen reads it
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+# Kotlin and Swift bindings from the built library (android/build-*.sh, ios/build-*.sh)
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+bia-deploy = { path = "../bia-deploy" }
+uniffi = "0.32"
+anyhow.workspace = true
+serde_json.workspace = true
+base64 = "0.22"

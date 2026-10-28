@@ -285,6 +285,8 @@ impl Repl {
                 }
                 continue;
             }
+            self.after_dream_calls();
+            self.dream_spine();
             self.con.write(&format!(
                 "\n{}{} ",
                 self.con.c(BGREEN, "->"),
@@ -292,14 +294,13 @@ impl Repl {
             ));
             let ib = loop {
                 let now = crate::clock::unix(crate::clock::now());
+                // wake now and then also for the night's work: a task closed or the calendar
+                // spine waiting since the scheduler ended the night while bia sat idle
                 let wait = self
                     .tools
                     .unanswered
                     .secs_until_due(now)
-                    .map(|s| s.clamp(1, crate::unanswered::TICK_SECS));
-                let Some(wait) = wait else {
-                    break self.con.read_inbound();
-                };
+                    .map_or(DREAM_IDLE_SECS, |s| s.clamp(1, crate::unanswered::TICK_SECS).min(DREAM_IDLE_SECS));
                 match self
                     .con
                     .read_inbound_timeout(std::time::Duration::from_secs(wait))
@@ -309,6 +310,8 @@ impl Repl {
                         if let Some(n) = self.unanswered_due() {
                             break Some(n);
                         }
+                        self.after_dream_calls();
+                        self.dream_spine();
                     }
                 }
             };
@@ -572,6 +575,16 @@ impl Repl {
     }
 
     fn ensure_room(&mut self) {
+        if self.need_watermark() {
+            if let Some(key) = self.tools.dream.reset_open() {
+                // reading the journal filled the window: no reflection of that reading; the
+                // task is posted again with the model's notes
+                self.prune_dream(&key, "the context filled up; this task comes again with your notes");
+                if !self.need_watermark() {
+                    return;
+                }
+            }
+        }
         for _ in 0..4 {
             let lim = self.ctx_budget();
             if lim == 0 {
@@ -977,6 +990,108 @@ impl Repl {
     }
 
     /// Things the model scheduled with tools: forgetting the conversation.
+    /// A dream task ended (task_done passed): out with its work from the live context.
+    fn after_dream_calls(&mut self) {
+        if let Some(f) = self.tools.dream.take_finished() {
+            self.prune_dream(&f.key, &f.note);
+        }
+    }
+
+    /// Remove a dream task's traffic from the live context: its task message, the calls of
+    /// the dream tools and their results (the journal keeps all of it). What was said to
+    /// people meanwhile stays. One short line says what was done.
+    fn prune_dream(&mut self, key: &str, note: &str) {
+        let marker = format!("[dream task {key}]");
+        let Some(start) = self
+            .history
+            .iter()
+            .position(|m| m.role == Role::User && m.content.contains(&marker))
+        else {
+            return;
+        };
+        let mut drop_calls = std::collections::HashSet::new();
+        let mut kept = Vec::with_capacity(self.history.len());
+        for (i, mut m) in std::mem::take(&mut self.history).into_iter().enumerate() {
+            if i < start {
+                kept.push(m);
+                continue;
+            }
+            if i == start {
+                continue;
+            }
+            match m.role {
+                Role::Assistant if !m.tool_calls.is_empty() => {
+                    let (dream, other): (Vec<ToolCall>, Vec<ToolCall>) = m
+                        .tool_calls
+                        .into_iter()
+                        .partition(|c| crate::dream::DREAM_TOOLS.contains(&crate::tools::Tools::expand_call(&c.name, &c.args).0.as_str()));
+                    drop_calls.extend(dream.into_iter().map(|c| c.id));
+                    if other.is_empty() {
+                        continue;
+                    }
+                    m.tool_calls = other;
+                    kept.push(m);
+                }
+                Role::Tool if drop_calls.contains(&m.call_id) => {}
+                // the task posted again (a reminder after it stalled)
+                Role::User if m.content.contains(&marker) => {}
+                _ => kept.push(m),
+            }
+        }
+        self.history = kept;
+        let line = if note.is_empty() { format!("dreamed: {key}") } else { format!("dreamed: {key}: {note}") };
+        let m = Msg::user(envelope(
+            ID_SYSTEM,
+            crate::dream::CH_DREAM,
+            crate::clock::now(),
+            &crate::console::mint_msg_id(),
+            &line,
+        ));
+        self.push_history(m);
+        self.tools.forget_schemas();
+        if let Some(l) = self.llm.as_mut() {
+            l.reset();
+        }
+        self.fmm_ctx_used = self.history_token_estimate();
+        self.save_state(false);
+    }
+
+    /// After a night (a rebuild switch, a rollback): the memory stubs at the start of the
+    /// live context become the calendar's (facts, last month, this month's weeks, this
+    /// week's days); today's own reflections and everything after them stay.
+    fn dream_spine(&mut self) {
+        let Some(stubs) = self.tools.dream.take_spine() else { return };
+        let today = crate::dream::Day::of(crate::clock::unix(crate::clock::now())).start();
+        let spine = self.spine_len();
+        let mut old = std::mem::take(&mut self.history);
+        let tail = old.split_off(spine);
+        let mut fresh = vec![];
+        for body in stubs {
+            let mut m = Msg::user(envelope(ID_SYSTEM, CH_CONSOLE, crate::clock::now(), &crate::console::mint_msg_id(), &body));
+            m.name = crate::memory::stub_name().into();
+            m.id = self.memory.next_msg_id();
+            fresh.push(m);
+        }
+        // today's reflections (made when the context filled up) are not in the calendar yet
+        fresh.extend(old.into_iter().filter(|m| {
+            crate::memory::stub_field(&m.content, "bundle").is_some_and(|b| b != "calendar")
+                && crate::memory::envelope_body(&m.content)
+                    .strip_prefix("reflection ")
+                    .and_then(|r| r.split_whitespace().next())
+                    .and_then(crate::clock::parse_rfc3339)
+                    .is_some_and(|t| t >= today)
+        }));
+        self.history = fresh;
+        self.history.extend(tail);
+        self.tools.forget_schemas();
+        if let Some(l) = self.llm.as_mut() {
+            l.reset();
+        }
+        self.fmm_ctx_used = self.history_token_estimate();
+        self.save_state(false);
+        self.con.writeln(&self.con.c(GRAY, "  [memory: the live context starts from the calendar reflections again]"));
+    }
+
     fn after_turn(&mut self) {
         self.tools.reap_dead_mcps();
         if self.tools.pending_forget.take() {
@@ -1059,8 +1174,39 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/fsck      check and repair this disk offline: reboots into the rescue image (e2fsck -f -y), then back here\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/dream [now|on|off|time HH:MM|time auto]  when bia dreams (works on long-term memory at night); now starts it at once\n/memory [status|rebuild|rebuild yes|pause|resume|rollback]  long-term memory: re-reflect the whole journal (rebuild shows the estimate, rebuild yes starts it)\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/fsck      check and repair this disk offline: reboots into the rescue image (e2fsck -f -y), then back here\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
+            "dream" => {
+                let action = it.next().unwrap_or("status");
+                let time = it.next().unwrap_or("");
+                let r = crate::dream::tool(&self.tools.dream, "dream", &serde_json::json!({"action": action, "time": time}))
+                    .unwrap_or_else(|| Ok(String::new()));
+                self.con.writeln(&self.con.c(GRAY, &match r {
+                    Ok(t) => t,
+                    Err(e) => format!("dream: {e:#}"),
+                }));
+            }
+            "memory" => {
+                let action = match (it.next().unwrap_or("status"), it.next()) {
+                    ("rebuild", Some("yes")) => {
+                        // the person at the console is root, saying yes to the estimate
+                        self.tools.dream.note_human(true);
+                        "start"
+                    }
+                    ("rebuild", _) => "estimate",
+                    (a, _) => a,
+                };
+                let r = crate::dream::tool(&self.tools.dream, "memory_rebuild", &serde_json::json!({"action": action}))
+                    .unwrap_or_else(|| Ok(String::new()));
+                let mut text = match r {
+                    Ok(t) => t,
+                    Err(e) => format!("memory: {e:#}"),
+                };
+                if action == "estimate" && !text.starts_with("memory:") {
+                    text.push_str("\nType /memory rebuild yes to start it.");
+                }
+                self.con.writeln(&self.con.c(GRAY, &text));
+            }
             "tools" => {
                 let visible: Vec<String> = self.tools.visible_specs().iter().map(|t| t.name.clone()).collect();
                 for s in &self.tools.specs {
@@ -2286,6 +2432,9 @@ now: {now}", done.join("\n")), failed)
         if ib.identity != ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) {
             // a person wrote: a new task gets a fresh round budget
             self.human_seq += 1;
+            let root = ib.identity == crate::tools::ID_ROOT
+                || self.tools.addressbook.find_for(&ib.identity, &ib.channel).is_some_and(|c| c.trust == "root");
+            self.tools.dream.note_human(root);
         }
         if ib.channel.starts_with(crate::jobs::PREFIX) {
             self.on_job_envelope(ib);
@@ -2417,6 +2566,7 @@ now: {now}", done.join("\n")), failed)
     }
 
     fn turn_inner(&mut self, messages: Vec<Inbound>) {
+        self.tools.dream.set_ctx(self.ctx_budget(), self.live_tokens());
         self.record_outbox_notes();
         for ib in &messages {
             self.record_inbound(ib);
@@ -2503,6 +2653,8 @@ now: {now}", done.join("\n")), failed)
                     }
                 }
                 self.run_calls(&calls);
+            self.after_dream_calls();
+                self.after_dream_calls();
                 if self.tools.fired_job.get() {
                     // Wait outside for the job; keep queued messages so they arrive with it.
                     if self.deliver_ready(false) > 0 {
@@ -2877,6 +3029,8 @@ struct Printer {
 }
 
 const THINK_END: &str = "</think>";
+/// The idle wait wakes this often to finish the night's work (pruning, the calendar spine).
+const DREAM_IDLE_SECS: u64 = 30;
 
 impl Printer {
     fn new(

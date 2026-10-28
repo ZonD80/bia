@@ -190,7 +190,18 @@ fn read_target(sock: &std::net::TcpStream) -> Option<String> {
     Some(target)
 }
 
+/// How an app opens the sign-in page itself (the phone apps: a Custom Tab, an in-app
+/// Safari view); without one the system browser is started.
+static OPENER: std::sync::OnceLock<Box<dyn Fn(&str) -> bool + Send + Sync>> = std::sync::OnceLock::new();
+
+pub fn set_browser_opener(f: Box<dyn Fn(&str) -> bool + Send + Sync>) {
+    let _ = OPENER.set(f);
+}
+
 pub fn open_browser(url: &str) -> Result<()> {
+    if let Some(open) = OPENER.get() {
+        return if open(url) { Ok(()) } else { bail!("could not open the sign-in page") };
+    }
     let status = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()
     } else if cfg!(target_os = "windows") {
@@ -216,6 +227,25 @@ fn http() -> ureq::Agent {
         .into()
 }
 
+/// A request that could not reach the server is tried again for a while. On a phone the
+/// sign-in page is in front when the token is fetched, and Android keeps a background app
+/// off the network (Data Saver, battery savers: the name lookup fails) until it is back.
+fn send_retry(
+    what: &str,
+    mut send: impl FnMut() -> Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<ureq::http::Response<ureq::Body>> {
+    let end = std::time::Instant::now() + Duration::from_secs(90);
+    loop {
+        match send() {
+            Ok(r) => return Ok(r),
+            Err(ureq::Error::Io(_) | ureq::Error::HostNotFound | ureq::Error::ConnectionFailed) if std::time::Instant::now() < end => {
+                std::thread::sleep(Duration::from_secs(3))
+            }
+            Err(e) => return Err(anyhow::Error::new(e).context(format!("reach {what}"))),
+        }
+    }
+}
+
 /// POST a form to the token endpoint; returns the JSON body or the OAuth error.
 fn token_request(form: &[(&str, &str)]) -> Result<Value> {
     let body = form
@@ -223,11 +253,9 @@ fn token_request(form: &[(&str, &str)]) -> Result<Value> {
         .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
         .collect::<Vec<_>>()
         .join("&");
-    let resp = http()
-        .post(TOKEN_URL)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .send(body)
-        .context("reach auth.openai.com")?;
+    let resp = send_retry("auth.openai.com", || {
+        http().post(TOKEN_URL).header("Content-Type", "application/x-www-form-urlencoded").send(&body)
+    })?;
     let status = resp.status().as_u16();
     let text = resp.into_body().read_to_string().unwrap_or_default();
     let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
@@ -552,11 +580,9 @@ pub fn default_model(models: &[crate::fmm::CloudModel]) -> Option<&crate::fmm::C
 
 /// Models this ChatGPT account may use (`visibility == "list"`).
 pub fn list_models(access_token: &str) -> Result<Vec<crate::fmm::CloudModel>> {
-    let resp = http()
-        .get(&format!("{RESOURCE}/models"))
-        .header("Authorization", &format!("Bearer {access_token}"))
-        .call()
-        .context("reach api.openai.com")?;
+    let resp = send_retry("api.openai.com", || {
+        http().get(&format!("{RESOURCE}/models")).header("Authorization", &format!("Bearer {access_token}")).call()
+    })?;
     let status = resp.status().as_u16();
     let text = resp.into_body().read_to_string().unwrap_or_default();
     if status >= 400 {

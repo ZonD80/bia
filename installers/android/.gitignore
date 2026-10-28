@@ -1,0 +1,11 @@
+# signing: the keystore lives in ~/biaDeployPlayKeys.jks, its passwords here (never committed)
+keystore.properties
+local.properties
+.gradle/
+build/
+app/build/
+.idea/
+*.iml
+# made by build-common.sh from the Rust core
+app/src/main/jniLibs/
+app/src/main/java/uniffi/

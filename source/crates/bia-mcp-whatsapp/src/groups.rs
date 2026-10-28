@@ -4,8 +4,8 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore_binary::JidExt;
 use crate::client::key_of_jid;
 use whatsapp_rust::{
-    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, MemberAddMode,
-    MembershipApprovalMode, PreviousDescription,
+    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, JoinGroupResult,
+    MemberAddMode, MembershipApprovalMode, PreviousDescription,
 };
 
 /// What happened to each person: (added, not added with why).
@@ -48,6 +48,19 @@ fn report(head: String, added: &[String], failed: &[String], link: Option<String
         out.push_str(&format!("\ninvite link: {l}"));
     }
     out
+}
+
+/// A chat.whatsapp.com link as whatsapp-rust takes it (scheme added when it was left out).
+fn invite_link_url(link: &str) -> Result<String, String> {
+    let l = link.trim();
+    let l = if l.starts_with("chat.whatsapp.com/") { format!("https://{l}") } else { l.to_string() };
+    if l.contains("chat.whatsapp.com/") || l.contains("code=") {
+        Ok(l)
+    } else if !l.is_empty() && l.chars().all(|c| c.is_ascii_alphanumeric()) {
+        Ok(link_url(l))
+    } else {
+        Err(format!("{link:?} is not a WhatsApp group link (https://chat.whatsapp.com/…)"))
+    }
 }
 
 fn link_url(code_or_url: String) -> String {
@@ -206,6 +219,41 @@ impl Wa {
                 .await
                 .map_err(|e| format!("leave: {e}"))?;
             Ok(format!("left {gid}"))
+        })
+    }
+
+    /// Join a group by its invite link (chat.whatsapp.com/…).
+    pub fn join_group(&self, link: &str) -> Result<String, String> {
+        let client = self.require_ready()?;
+        let code = invite_link_url(link)?;
+        self.block_on(async {
+            // the title first: the join answers with the group's id only
+            let title = client.groups().get_invite_info(&code).await.ok().map(|m| m.subject);
+            let named = |jid: &Jid| match &title {
+                Some(t) if !t.is_empty() => format!("\"{t}\" ({jid})"),
+                _ => jid.to_string(),
+            };
+            match client.groups().join_with_invite_code(&code).await {
+                Ok(JoinGroupResult::Joined(jid)) => Ok(format!("joined the group {}: chat_id {jid}; bia can write there now", named(&jid))),
+                Ok(JoinGroupResult::PendingApproval(jid)) => Ok(format!(
+                    "asked to join the group {}: an admin has to approve it; once approved its messages start arriving",
+                    named(&jid)
+                )),
+                Err(e) => {
+                    let m = e.to_string();
+                    let l = m.to_ascii_lowercase();
+                    // server errors print as code=NNN, text='…'
+                    if l.contains("code=409") {
+                        Ok(format!("already a member of that group{}", title.map(|t| format!(" \"{t}\"")).unwrap_or_default()))
+                    } else if l.contains("code=410") || l.contains("code=406") || l.contains("code=404") {
+                        Err("this invite link was reset or is wrong; ask for a new one".into())
+                    } else if l.contains("code=401") || l.contains("code=403") {
+                        Err("this account was removed from that group and cannot join it with a link".into())
+                    } else {
+                        Err(format!("join: {m}"))
+                    }
+                }
+            }
         })
     }
 

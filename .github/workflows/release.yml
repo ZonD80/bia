@@ -1,6 +1,8 @@
 # Release bia: tools/release.sh on GitHub's runners. Each runner builds the packages of its
 # own platform (--build-only), and one job publishes them all (--publish), so bia-os.json is
 # merged once. A package the release already has is skipped, as with a local run.
+# Every OS image carries the MCPs of both architectures: the mcps jobs build the agent and
+# MCPs on each architecture's runner first, and both image jobs start from both sets.
 #
 # Starts on a pushed tag v<version> (the version in Cargo.toml), or by hand:
 #   gh workflow run release.yml -f only=flashers -f force=true
@@ -8,7 +10,10 @@
 #
 # Secrets: APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD (notarization), MACOS_CERT_P12 (base64 of
 # the Developer ID Application identity as .p12) and MACOS_CERT_PASSWORD, BIA_TG_API_ID and
-# BIA_TG_API_HASH (compiled into the Telegram MCP). Variables: APPLE_TEAM_ID, CODESIGN_IDENTITY.
+# BIA_TG_API_HASH (compiled into the Telegram MCP), ANDROID_KEYSTORE_B64 (base64 of
+# ~/biaDeployPlayKeys.jks, the Play upload key) and ANDROID_KEYSTORE_PROPERTIES (its
+# keystore.properties). The iOS app is published unsigned (no Apple secrets for it).
+# Variables: APPLE_TEAM_ID, CODESIGN_IDENTITY.
 name: release
 
 on:
@@ -42,7 +47,53 @@ env:
   FORCE: ${{ inputs.force && '--force' || '' }}
 
 jobs:
+  # agent + MCPs for one architecture; skipped when only apps are built
+  mcps:
+    if: ${{ !inputs.only || contains(inputs.only, 'os') || contains(inputs.only, 'land') }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+            rarch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            rarch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - name: Room on the disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker system prune -af >/dev/null
+      - name: Telegram app credentials (read by builders/build.sh from .env)
+        env:
+          TG_ID: ${{ secrets.BIA_TG_API_ID }}
+          TG_HASH: ${{ secrets.BIA_TG_API_HASH }}
+        run: |
+          umask 077
+          printf 'BIA_TG_API_ID=%s\nBIA_TG_API_HASH=%s\n' "$TG_ID" "$TG_HASH" > .env
+      - name: Build agent and MCPs (${{ matrix.arch }})
+        run: |
+          make ARCH=${{ matrix.arch }} builder
+          make ARCH=${{ matrix.arch }} rust
+          make ARCH=${{ matrix.arch }} mcps
+          sudo chown -R "$(id -u):$(id -g)" dist source/flash
+      - name: Pack (a tar keeps the executable bits an artifact would drop)
+        run: tar -czf mcps-${{ matrix.arch }}.tgz dist/${{ matrix.arch }} source/flash/MCPs/*/bin/${{ matrix.rarch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mcps-${{ matrix.arch }}
+          path: mcps-${{ matrix.arch }}.tgz
+          retention-days: 3
+      - name: Forget the credentials
+        if: always()
+        run: rm -f .env
+
   linux:
+    needs: mcps
+    if: ${{ !cancelled() && needs.mcps.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
@@ -74,8 +125,20 @@ jobs:
         run: |
           umask 077
           printf 'BIA_TG_API_ID=%s\nBIA_TG_API_HASH=%s\n' "$TG_ID" "$TG_HASH" > .env
+      - name: Agent and MCPs of both architectures
+        if: ${{ needs.mcps.result == 'success' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mcps-*
+          path: mcps-dl
+          merge-multiple: true
       - name: Build
-        run: tools/release.sh --build-only --within "${{ matrix.within }}" ${ONLY:+--only "$ONLY"} $FORCE
+        run: |
+          if ls mcps-dl/*.tgz >/dev/null 2>&1; then
+            for t in mcps-dl/*.tgz; do tar -xzf "$t"; done
+            export BIA_PREBUILT=1
+          fi
+          tools/release.sh --build-only --within "${{ matrix.within }}" ${ONLY:+--only "$ONLY"} $FORCE
       - name: Hand the packages to the publish job
         uses: actions/upload-artifact@v7
         with:
@@ -151,8 +214,78 @@ jobs:
         if: always()
         run: security delete-keychain "$RUNNER_TEMP/bia-signing.keychain-db" 2>/dev/null || true
 
+  # the phone apps: APK and app bundle on Linux (Play upload key), the IPA on macOS (unsigned)
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: NDK and cargo-ndk
+        run: |
+          ndk=$(sed -n 's/^NDK_VERSION="\${NDK_VERSION:-\(.*\)}"/\1/p' installers/android/build-common.sh)
+          # yes ends on SIGPIPE, which pipefail would count: check the NDK instead
+          yes 2>/dev/null | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" >/dev/null || true
+          [ -d "$ANDROID_HOME/ndk/$ndk" ] || { echo "::error::NDK $ndk did not install"; exit 1; }
+          cargo install cargo-ndk --locked
+      - name: Play upload key
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PROPERTIES: ${{ secrets.ANDROID_KEYSTORE_PROPERTIES }}
+        run: |
+          [ -n "$KEYSTORE_B64" ] || { echo "::error::ANDROID_KEYSTORE_B64 is not set"; exit 1; }
+          umask 077
+          echo "$KEYSTORE_B64" | base64 --decode > "$HOME/biaDeployPlayKeys.jks"
+          printf '%s\n' "$KEYSTORE_PROPERTIES" > installers/android/keystore.properties
+      - name: Build
+        run: tools/release.sh --build-only --within app-android ${ONLY:+--only "$ONLY"} $FORCE
+      - uses: actions/upload-artifact@v7
+        with:
+          name: built-android
+          path: |
+            dist/release/*/*
+            dist/release/*/.built-*
+            !dist/release/*/.secrets
+            !dist/release/*/bia-os.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Forget the key
+        if: always()
+        run: rm -f "$HOME/biaDeployPlayKeys.jks" installers/android/keystore.properties
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Rust for iOS, XcodeGen
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+          command -v xcodegen >/dev/null || brew install xcodegen
+      - name: Build
+        run: tools/release.sh --build-only --within app-ios ${ONLY:+--only "$ONLY"} $FORCE
+      - uses: actions/upload-artifact@v7
+        with:
+          name: built-ios
+          path: |
+            dist/release/*/*
+            dist/release/*/.built-*
+            !dist/release/*/.secrets
+            !dist/release/*/bia-os.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 3
+
   publish:
-    needs: [linux, macos]
+    needs: [linux, macos, android, ios]
     # what did build is published even when another runner failed (e.g. macOS signing
     # without its secrets); a later run builds only what is still missing
     if: ${{ !cancelled() && inputs.publish != false }}

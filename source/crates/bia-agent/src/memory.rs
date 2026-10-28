@@ -179,6 +179,11 @@ impl Store {
             .collect()
     }
 
+    /// The whole journal in order (assistant and tool rows carry no time of their own).
+    pub fn journal_all(&self) -> Vec<JournalMsg> {
+        read_jsonl::<JournalMsg>(&self.dir.join(JOURNAL))
+    }
+
     pub fn journal_by_ids(&self, ids: &[String]) -> Vec<JournalMsg> {
         let all = read_jsonl::<JournalMsg>(&self.dir.join(JOURNAL));
         ids.iter()
@@ -505,11 +510,20 @@ pub fn tool_list(dir: &Path, args: &Value) -> Result<String> {
         .and_then(|v| v.as_str())
         .map(normalize_category);
     let depth = args.get("depth").and_then(|v| v.as_u64()).map(|n| n as u32);
+    // long-term memory first: the calendar reflections written at night
+    let calendar = if depth.is_none() { crate::dream::list_nodes(dir, from, to, cat.as_deref()) } else { vec![] };
     let recs = st.list(from, to, cat.as_deref(), depth);
-    if recs.is_empty() {
+    if recs.is_empty() && calendar.is_empty() {
         return Ok("(no reflections in that range)".into());
     }
     let mut lines = vec![];
+    if !calendar.is_empty() {
+        lines.push("calendar (long-term memory):".to_string());
+        lines.extend(calendar);
+        if !recs.is_empty() {
+            lines.push("reflections made when the context filled up:".to_string());
+        }
+    }
     for r in recs {
         let preview: String = r.text.chars().take(180).collect();
         lines.push(format!(
@@ -528,6 +542,9 @@ pub fn tool_list(dir: &Path, args: &Value) -> Result<String> {
 
 pub fn tool_get(dir: &Path, args: &Value) -> Result<String> {
     let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if id.starts_with("n_") {
+        return crate::dream::get_node(dir, id).ok_or_else(|| anyhow::anyhow!("no reflection {id}"));
+    }
     if id.is_empty() {
         bail!("id required");
     }
@@ -588,7 +605,15 @@ pub fn tool_tree(dir: &Path, args: &Value) -> Result<String> {
 pub fn tool_messages(dir: &Path, args: &Value) -> Result<String> {
     let st = Store::open(dir);
     let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("").trim();
-    let rows = if !id.is_empty() {
+    let full = args.get("full").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ids: Vec<String> = args
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim().to_string())).collect())
+        .unwrap_or_default();
+    let rows = if !ids.is_empty() {
+        st.journal_by_ids(&ids)
+    } else if !id.is_empty() {
         let r = st
             .get(id)
             .ok_or_else(|| anyhow::anyhow!("no reflection {id}"))?;
@@ -622,6 +647,21 @@ pub fn tool_messages(dir: &Path, args: &Value) -> Result<String> {
         return Ok("(no messages)".into());
     }
     let mut lines = vec![];
+    if full {
+        // whole messages (tool outputs included), up to ~60k characters per call
+        let mut used = 0usize;
+        for m in rows {
+            let body = crate::dream::redact(&m.content);
+            if used > 0 && used + body.len() > 60_000 {
+                lines.push(format!("… more: ask again with ids from {} on", m.id));
+                break;
+            }
+            used += body.len();
+            let label = if m.name.is_empty() { m.role.clone() } else { format!("{} {}", m.role, m.name) };
+            lines.push(format!("--- {} {}\n{}", m.id, label, body));
+        }
+        return Ok(lines.join("\n"));
+    }
     for m in rows.into_iter().take(80) {
         let preview: String = m.content.chars().take(240).collect();
         lines.push(format!(
@@ -637,6 +677,15 @@ pub fn tool_messages(dir: &Path, args: &Value) -> Result<String> {
 pub fn tool_categories(dir: &Path) -> Result<String> {
     let st = Store::open(dir);
     let cats = st.categories();
+    let calendar = crate::dream::categories_text(dir);
+    if !calendar.is_empty() {
+        let mut out = format!("long-term memory (name, blocks, meaning):\n{calendar}");
+        if !cats.is_empty() {
+            out.push_str("\nused when the context filled up: ");
+            out.push_str(&cats.iter().map(|(c, n)| format!("{c} {n}")).collect::<Vec<_>>().join(", "));
+        }
+        return Ok(out);
+    }
     if cats.is_empty() {
         return Ok("(none yet; categories appear when you reflect)".into());
     }
