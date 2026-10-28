@@ -175,9 +175,27 @@ pub fn refresh(
             }
         }
     }
+    // still missing (its .deb was deleted): rebuild it from the installed files, on the
+    // live system only (dpkg-repack reads this system's dpkg database)
+    let mut repacked = 0;
+    if !missing.is_empty() && base == Path::new("/") && fs::create_dir_all(&store).is_ok() {
+        missing.retain(|(n, v, a)| {
+            let ok = Command::new("dpkg-repack")
+                .arg(n)
+                .current_dir(&store)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+                && list(&store).iter().any(|d| d.name == *n && d.version == *v && d.arch == *a);
+            if ok {
+                repacked += 1;
+            }
+            !ok
+        });
+    }
     let absent: Vec<String> = missing.iter().map(|(n, v, _)| format!("{n} {v}")).collect();
     ctx.log(format!(
-        "fold: custom debs kept {kept}, removed {dropped} (gone or in a repository), added {added}{}",
+        "fold: custom debs kept {kept}, removed {dropped} (gone or in a repository), added {added}, rebuilt {repacked} with dpkg-repack{}",
         if absent.is_empty() {
             String::new()
         } else {

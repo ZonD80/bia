@@ -997,7 +997,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "memory",
         blurb: "Reflections of the live window.",
-        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages(id | ids | from+to, full), memory_categories, memory_facts(topic), memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD. Long-term memory is calendar reflections (n_… ids: a day, week, month, year, each block under a category you chose, one of them the overview) and the facts ledger (f_… ids: what is true now, with its history); you write them at night in [dream task …] messages from system|dream: journal_day, reflect_note, reflect_write, facts_update, category_merge, report_write, task_done. The reflections made when the context fills up (r_… ids) are the day's scratch layer. dream(action) shows or changes when you dream (status, now, on, off, time). memory_rebuild(action) re-reflects the whole journal into a new generation: estimate first, tell root the numbers, start only after root says yes; status, pause, resume, rollback.",
+        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages(id | ids | from+to, full), memory_categories, memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD. Long-term memory is calendar reflections (n_… ids: a day, week, month, year, each block under a category you chose, one of them the overview; what is true now lives in such blocks too, and the newest period's block wins); you write them at night in [dream task …] messages from system|dream: journal_day, reflect_note, reflect_write, category_merge, report_write, task_done. The reflections made when the context fills up (r_… ids) are the day's scratch layer. dream(action) shows or changes when you dream (status, now, on, off, time). memory_rebuild(action) re-reflects the whole journal into a new generation: estimate first, tell root the numbers, start only after root says yes; status, pause, resume, rollback.",
     },
     Branch {
         id: "jobs",
@@ -1006,8 +1006,8 @@ const BRANCHES: &[Branch] = &[
     },
     Branch {
         id: "machine",
-        blurb: "Context window, reboot, poweroff, forget.",
-        guide: "set_model_config shows or changes how you run: context (tokens, reloads you; on failure the previous window is restored), max_tool_rounds (rounds in a row before a status), and the local model's sampling (temperature, top_p, top_k, min_p, repeat_penalty, repeat_last_n; cloud FMM models keep their own). Only the fields you pass change. reboot and poweroff only when root asks; the conversation is saved and resumes. forget only when root asks to start over. Act with tools first; do not ask root for something you can look up. Changing network, packages, files, disks, or your own logins needs no extra confirmation.",
+        blurb: "Context window, updating one MCP, reboot, poweroff, forget.",
+        guide: "set_model_config shows or changes how you run: context (tokens, reloads you; on failure the previous window is restored), max_tool_rounds (rounds in a row before a status), and the local model's sampling (temperature, top_p, top_k, min_p, repeat_penalty, repeat_last_n; cloud FMM models keep their own). Only the fields you pass change. mcp_update shows what a release has for each MCP, and updates one (or all) from GitHub without a system update: it checks the archive, restarts the MCP and puts the old one back if the new one does not start. reboot and poweroff only when root asks; the conversation is saved and resumes. forget only when root asks to start over. Act with tools first; do not ask root for something you can look up. Changing network, packages, files, disks, or your own logins needs no extra confirmation.",
     },
 ];
 
@@ -1208,8 +1208,6 @@ impl Tools {
         );
         t.add_grouped("memory", "memory_messages", "Original journal messages: a reflection id, ids=[m_…] or from+to; full=true gives whole messages and tool outputs.",
             obj(json!({"id": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}, "from": {"type": "string"}, "to": {"type": "string"}, "full": {"type": "boolean"}}), &[]));
-        t.add_grouped("memory", "memory_facts", "What is true now (the facts ledger), optionally one topic; history=true shows replaced and retired facts too.",
-            obj(json!({"topic": {"type": "string"}, "history": {"type": "boolean"}}), &[]));
         t.add_grouped("memory", "journal_day", "A dream task's day (date YYYY-MM-DD local) from the journal, page by page; tool outputs are cut (memory_messages full=true).",
             obj(json!({"date": {"type": "string"}, "page": {"type": "integer"}}), &[]));
         t.add_grouped("memory", "reflect_note", "A working note in a dream task (text): kept and handed back if the context fills up and the task is posted again.",
@@ -1222,12 +1220,6 @@ impl Tools {
                 "overview": {"type": "boolean", "description": "true for the block that says the period in short (one per period)"},
                 "sources": {"type": "array", "items": {"type": "string"}, "description": "message ids (m_…) or reflection ids it comes from"}
             }), &["text", "category"]));
-        t.add_grouped("memory", "facts_update", "Change the facts ledger in a dream task: add=[{topic,text,sources,since}], replace=[{id,text,sources,why}], retire=[{id,why}].",
-            obj(json!({
-                "add": {"type": "array", "items": {"type": "object"}},
-                "replace": {"type": "array", "items": {"type": "object"}},
-                "retire": {"type": "array", "items": {"type": "object"}}
-            }), &[]));
         t.add_grouped("memory", "category_merge", "In a dream task: keep category from as into from now on (two that turned out to be the same); meaning optional.",
             obj(json!({"from": {"type": "string"}, "into": {"type": "string"}, "meaning": {"type": "string"}}), &["from", "into"]));
         t.add_grouped("memory", "report_write", "Add text under section (For you, For me, Needs your yes, Questions, …) of the morning report, in a night's dream task.",
@@ -1246,6 +1238,10 @@ impl Tools {
         );
         t.add_grouped("memory", "memory_reflect", "Request an immediate reflection of the current live window (same as automatic compact when context is full). Writes 2+ categorized memories for the period (summary, facts, …).",
             obj(json!({}), &[]));
+        t.add_grouped("machine", "mcp_update", "Update an MCP from a bia release on GitHub without updating the whole system. No name: list each MCP of the release (latest, or version) next to the installed one. name=<mcp> (or all: every MCP the release has newer): download its archive (checked against the release's sha256), put it in place, restart it; if it does not start, the previous one is put back. Its running jobs are cut off by the restart. For a system update use carry_update.", obj(json!({
+            "name": {"type": "string", "description": "the MCP to update (telegram, whatsapp, …), or all; omit to see what the release has"},
+            "version": {"type": "string", "description": "a release like 1.7.1; default: the latest"}
+        }), &[]));
         t.add_grouped("machine", "reboot", "Reboot. Your conversation is saved and resumes after boot. Only call when root asked you to reboot.", obj(json!({}), &[]));
         t.add_grouped("machine", "poweroff", "Power yourself off. Your conversation is saved and resumes at the next boot. Only call when root asked you to shut down.", obj(json!({}), &[]));
         t.add_grouped("machine", "forget", "Forget the whole conversation after this turn: history, context and the saved state are erased and you start from scratch. Only call when root asks for it (e.g. 'forget everything', 'start over').", obj(json!({}), &[]));
@@ -1443,6 +1439,54 @@ impl Tools {
             Some(block) => format!("restarted mcp/{name}. {block}"),
             None => format!("restarted mcp/{name}; its functions are unchanged. Call by name: {}", names.join(", ")),
         })
+    }
+
+    /// mcp_update: one MCP (or all newer ones) from a release, restarted; the previous
+    /// folder comes back when the new one does not start.
+    fn mcp_update(&mut self, name: Option<&str>, version: Option<&str>) -> Result<String> {
+        use crate::mcp_update as up;
+        let root = self.mcp_search_roots().remove(0);
+        let rel = up::release(version)?;
+        let name = name.map(str::trim).unwrap_or("");
+        if name.is_empty() {
+            return Ok(up::check(&root, &rel, env!("CARGO_PKG_VERSION")));
+        }
+        let names: Vec<String> = if name == "all" {
+            rel.mcps
+                .iter()
+                .filter(|(n, e)| up::installed_version(&root, n).is_some_and(|v| up::newer(&e.version, &v)))
+                .map(|(n, _)| n.clone())
+                .collect()
+        } else {
+            vec![name.to_string()]
+        };
+        if names.is_empty() {
+            return Ok(format!("every installed MCP is as new as release {} has it", rel.tag));
+        }
+        let mut out = vec![];
+        for n in names {
+            let staged = match up::install(&root, &rel, &n) {
+                Ok(s) => s,
+                Err(e) => {
+                    out.push(format!("mcp/{n}: not updated: {e:#}"));
+                    continue;
+                }
+            };
+            match self.restart_mcp(&n) {
+                Ok(msg) => out.push(format!("mcp/{n}: {} → {} from {}. {msg}", if staged.from.is_empty() { "new" } else { &staged.from }, staged.to, rel.tag)),
+                Err(e) => {
+                    let back = match up::rollback(&root, &n) {
+                        Ok(()) => match self.restart_mcp(&n) {
+                            Ok(_) => format!("the previous {} is back and running", staged.from),
+                            Err(e2) => format!("the previous {} is back but did not start either: {e2:#}", staged.from),
+                        },
+                        Err(e2) => format!("putting the previous one back failed: {e2:#}"),
+                    };
+                    out.push(format!("mcp/{n}: the new {} did not start ({e:#}); {back}. It may need a newer bia system (carry_update).", staged.to));
+                }
+            }
+        }
+        Ok(out.join("\n"))
     }
 
     fn remember_block(&mut self, name: &str, hash: String) {
@@ -3237,6 +3281,7 @@ impl Tools {
         match name {
             // the agent runs it (it holds the brain and its settings): Repl::model_config_call
             "set_model_config" => bail!("set_model_config is run by the agent loop"),
+            "mcp_update" => self.mcp_update(s("name").as_deref(), s("version").as_deref()),
             "memory_list" => crate::memory::tool_list(&self.files_dir.join("state"), args),
             "memory_get" => crate::memory::tool_get(&self.files_dir.join("state"), args),
             "memory_tree" => crate::memory::tool_tree(&self.files_dir.join("state"), args),

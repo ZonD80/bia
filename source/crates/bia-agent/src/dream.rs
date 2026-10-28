@@ -4,13 +4,14 @@
 //! `system|dream` tasks into the normal conversation, one at a time: reflect a past day from
 //! the journal, a week from its days, a month, a year, and in the morning tell root what it
 //! found. The model works them with tools (journal_day, memory_messages full, reflect_write,
-//! facts_update, report_write, task_done) like any task; people who write meanwhile are
-//! answered as usual. When a task ends its tool traffic leaves the live context (the journal
-//! keeps it). After a night the live context starts again from the calendar memory: current
-//! facts, last month, this month's weeks, this week's days, today's reflections.
+//! report_write, task_done) like any task; people who write meanwhile are answered as usual.
+//! When a task ends its tool traffic leaves the live context (the journal keeps it). After a
+//! night the live context starts again from the calendar memory: last month, this month's
+//! weeks, this week's days, today's reflections. What is true now is not a store of its own:
+//! the model keeps it in blocks under categories it chooses, like everything else.
 //!
-//! Memory lives in generations (state/memory/gen-N): nodes (calendar reflections), the facts
-//! ledger and the categories the model chose. `memory_rebuild` re-reflects the whole journal
+//! Memory lives in generations (state/memory/gen-N): nodes (calendar reflections) and the
+//! categories the model chose. `memory_rebuild` re-reflects the whole journal
 //! into a new generation and switches to it when done; `rollback` goes back. The reflections
 //! made when the context fills up (memory.rs) stay as they are: a daytime scratch layer.
 use crate::console::{Console, Inbound};
@@ -35,10 +36,8 @@ pub const DREAM_TOOLS: &[&str] = &[
     "memory_get",
     "memory_tree",
     "memory_categories",
-    "memory_facts",
     "reflect_note",
     "reflect_write",
-    "facts_update",
     "category_merge",
     "report_write",
     "task_done",
@@ -51,7 +50,8 @@ const STALL_SECS: u64 = 5 * 60;
 const STALL_NUDGES: u32 = 2;
 /// Owner activity looked at for the quiet window.
 const WINDOW_DAYS: u64 = 14;
-/// Days of owner activity needed before the window is trusted (else 03:00).
+/// Days of owner activity needed before the window is trusted (else the fallback below:
+/// dreaming starts in its middle, 04:00).
 const WINDOW_MIN_DAYS: u32 = 5;
 /// Quiet window: the fallback when the owner's pattern is unknown.
 const FALLBACK_START_MIN: u32 = 2 * 60;
@@ -238,25 +238,6 @@ pub struct Node {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Fact {
-    pub id: String,
-    pub topic: String,
-    pub text: String,
-    /// local date it became true (or was learned)
-    pub since: String,
-    #[serde(default)]
-    pub sources: Vec<String>,
-    /// current, replaced or retired
-    pub status: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaced_by: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub why: String,
-    #[serde(default)]
-    pub changed_at: String,
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Category {
     #[serde(default)]
@@ -304,14 +285,6 @@ impl Gen {
 
     fn add_node(&self, n: &Node) -> Result<()> {
         append_jsonl(&self.dir.join("nodes.jsonl"), n)
-    }
-
-    fn facts(&self) -> Vec<Fact> {
-        std::fs::read(self.dir.join("facts.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-    }
-
-    fn save_facts(&self, f: &[Fact]) -> Result<()> {
-        write_atomic(&self.dir.join("facts.json"), &serde_json::to_vec_pretty(f)?)
     }
 
     fn categories(&self) -> BTreeMap<String, Category> {
@@ -499,6 +472,7 @@ impl Dream {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
+        migrate_facts(&root);
         if st.current_gen == 0 || Gen::open(&root, st.current_gen).is_none() {
             // the first generation starts today: days before it come with memory_rebuild
             let id = st.current_gen.max(1);
@@ -967,9 +941,9 @@ Long work is paused now and then: for this task nobody needs a status, so do not
                 let n_pages = pages(&rows, self.page_chars()).len().max(1);
                 format!(
                     "[dream task {key}] Reflect the day {d} ({tz}, local midnight to midnight) into long-term memory: {} messages, {n_pages} page(s).\n\
-1. Read it: journal_day(page=1 … {n_pages}). Tool outputs there are cut; memory_messages(ids=[…], full=true) gives anything in full. Older memory: memory_facts, memory_list, memory_get.\n\
+1. Read it: journal_day(page=1 … {n_pages}). Tool outputs there are cut; memory_messages(ids=[…], full=true) gives anything in full. Older memory: memory_list, memory_get.\n\
 2. Write it with reflect_write: one block with overview=true (the day in short: what happened and what mattered), then the blocks you find worth keeping, each under a category you choose (memory_categories lists them with their meaning; reuse one when it fits, give meaning for a new one). Cite message ids in sources.\n\
-3. Keep the facts current with facts_update: add what is new, replace what changed (the old one stays in its history), retire what stopped being true. A conflict you cannot settle: keep both and report_write(section=\"Questions\", …).\n\
+3. What is true now (people, accounts, rules, preferences, promises) goes in a block too, under a category you choose. When something changed, write the new state and what it replaced (was …, now … since …): later periods are read first, so the newest block wins. A conflict you cannot settle: write both and report_write(section=\"Questions\", …).\n\
 4. {report}\n\
 {common}{notes_s}\nThen task_done.",
                     rows.len(),
@@ -998,7 +972,7 @@ Long work is paused now and then: for this task nobody needs a status, so do not
                 format!(
                     "[dream task {key}] Reflect {what} ({tz}) from its {child_level}s:\n{}\n\
 memory_get(id) reads any of them in full (other categories too: memory_list), memory_messages the raw messages when a summary seems wrong or thin. \
-Write it with reflect_write: overview=true for the period in short, then the blocks worth keeping (your categories; category_merge when two turned out to be the same). facts_update if the period shows something the days missed. {report}\n\
+Write it with reflect_write: overview=true for the period in short, then the blocks worth keeping (your categories; category_merge when two turned out to be the same), including what holds true across the period or changed in it, if the days missed it. {report}\n\
 {common}{notes_s}\nThen task_done.",
                     if children.is_empty() { "(no reflections below it)".into() } else { children.join("\n") },
                     tz = tz_label()
@@ -1223,7 +1197,18 @@ impl Dream {
         if st.rebuild.is_some() {
             return "a memory rebuild is running; it covers this".into();
         }
-        let morning = Day::of(now()).to_string();
+        let today = Day::of(now());
+        let morning = today.to_string();
+        // say so when there is nothing to do (right after a rebuild, every day is reflected)
+        if let Some(g) = self.gen(st.current_gen) {
+            if self.next_task(&g, today).is_none() {
+                return format!(
+                    "nothing to dream about: every day up to {} is reflected in generation {} (the next night picks up today)",
+                    today.add(-1),
+                    g.meta.id
+                );
+            }
+        }
         st.night_done = String::new();
         st.night = Some(morning);
         st.night_now = true;
@@ -1234,7 +1219,7 @@ impl Dream {
 
 // ---------------------------------------------------------------- the live context after a night
 
-/// Stubs for the live context: current facts, last month, this month's weeks, this week's
+/// Stubs for the live context: last month, this month's weeks, this week's
 /// days (each its overview), oldest first. Today's reflections stay as they are.
 fn spine(g: &Gen, t: u64, max_chars: usize) -> Vec<String> {
     let today = Day::of(t);
@@ -1272,15 +1257,7 @@ fn spine(g: &Gen, t: u64, max_chars: usize) -> Vec<String> {
         d = d.add(1);
     }
     let mut stubs: Vec<String> = vec![];
-    let facts = facts_text(&g.facts(), None, max_chars / 2);
-    if !facts.trim().is_empty() {
-        stubs.push(format!(
-            "reflection {} .. {} [id=facts category=facts depth=1 bundle=calendar]\nWhat is true now (facts ledger; memory_facts for all):\n{facts}",
-            crate::clock::rfc3339_unix(g.facts().iter().filter_map(|f| Day::parse(&f.since)).min().map(|d| d.start()).unwrap_or(t)),
-            crate::clock::rfc3339_unix(t)
-        ));
-    }
-    let mut used = stubs.iter().map(|s| s.len()).sum::<usize>();
+    let mut used = 0usize;
     for n in out {
         let depth = match n.level.as_str() {
             "day" => 1,
@@ -1307,32 +1284,53 @@ fn spine(g: &Gen, t: u64, max_chars: usize) -> Vec<String> {
     stubs
 }
 
-fn facts_text(facts: &[Fact], topic: Option<&str>, max: usize) -> String {
-    let mut by: BTreeMap<String, Vec<&Fact>> = BTreeMap::new();
-    for f in facts.iter().filter(|f| f.status == "current") {
-        if topic.is_some_and(|t| !f.topic.eq_ignore_ascii_case(t)) {
+/// 1.7.0 kept a facts ledger (gen-N/facts.json) beside the reflections. What is true now is
+/// a block like any other since: each generation's current facts become one `facts` block on
+/// its newest reflected day, and the file is kept as facts.json.migrated.
+fn migrate_facts(root: &Path) {
+    let Ok(rd) = std::fs::read_dir(root) else { return };
+    for e in rd.flatten() {
+        let dir = e.path();
+        let file = dir.join("facts.json");
+        let Some(id) = e.file_name().to_str().and_then(|n| n.strip_prefix("gen-")).and_then(|n| n.parse().ok()) else { continue };
+        if !file.is_file() {
             continue;
         }
-        by.entry(f.topic.clone()).or_default().push(f);
-    }
-    let mut out = String::new();
-    for (topic, list) in by {
-        let head = format!("{topic}:\n");
-        if out.len() + head.len() > max {
-            out.push_str("… (memory_facts for the rest)\n");
-            break;
-        }
-        out.push_str(&head);
-        for f in list {
-            let line = format!("- {} {} (since {})\n", f.id, f.text, f.since);
-            if out.len() + line.len() > max {
-                out.push_str("… (memory_facts for the rest)\n");
-                return out;
+        let Some(g) = Gen::open(root, id) else { continue };
+        let facts: Vec<Value> = std::fs::read(&file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let current: Vec<&Value> = facts.iter().filter(|f| f["status"].as_str() == Some("current")).collect();
+        let day = g.nodes().into_iter().filter(|n| n.overview && n.level == "day").map(|n| n.period).max();
+        if let (false, Some(day)) = (current.is_empty(), day.as_deref().and_then(Day::parse)) {
+            let mut by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for f in &current {
+                let since = f["since"].as_str().unwrap_or("");
+                let text = f["text"].as_str().unwrap_or("").trim();
+                by.entry(f["topic"].as_str().unwrap_or("other").to_string())
+                    .or_default()
+                    .push(if since.is_empty() { text.to_string() } else { format!("{text} (since {since})") });
             }
-            out.push_str(&line);
+            let text: String = by.iter().map(|(t, v)| format!("{t}: {}\n", v.join("; "))).collect();
+            let task = Task::Day(day);
+            let (t_start, t_end) = task.span();
+            let sources = current.iter().flat_map(|f| f["sources"].as_array().cloned().unwrap_or_default()).filter_map(|v| v.as_str().map(String::from)).collect();
+            let _ = g.add_node(&Node {
+                id: format!("n_facts_{}", day.to_string().replace('-', "")),
+                level: "day".into(),
+                period: task.period(),
+                t_start,
+                t_end,
+                category: "facts".into(),
+                overview: false,
+                text: format!("What was true by {day} (carried over from the facts list of bia 1.7.0):\n{text}"),
+                sources,
+                created_at: crate::clock::rfc3339_now(),
+            });
+            let mut cats = g.categories();
+            cats.entry("facts".into()).or_insert_with(|| Category { meaning: "what is true now: people, accounts, rules, preferences, promises".into(), merged_into: None });
+            let _ = g.save_categories(&cats);
         }
+        let _ = std::fs::rename(&file, dir.join("facts.json.migrated"));
     }
-    out
 }
 
 // ---------------------------------------------------------------- tools
@@ -1356,15 +1354,13 @@ fn auto_overview(g: &Gen, task: &Task) -> Result<()> {
 }
 
 pub fn tool(d: &Dream, name: &str, args: &Value) -> Option<Result<String>> {
-    if matches!(name, "journal_day" | "memory_facts" | "reflect_note" | "reflect_write" | "facts_update" | "category_merge" | "report_write") {
+    if matches!(name, "journal_day" | "reflect_note" | "reflect_write" | "category_merge" | "report_write") {
         d.touch();
     }
     Some(match name {
         "journal_day" => d.t_journal_day(args),
-        "memory_facts" => d.t_facts(args),
         "reflect_note" => d.t_note(args),
         "reflect_write" => d.t_write(args),
-        "facts_update" => d.t_facts_update(args),
         "category_merge" => d.t_merge(args),
         "report_write" => d.t_report(args),
         "task_done" => d.t_done(args),
@@ -1423,29 +1419,6 @@ impl Dream {
         Ok(out)
     }
 
-    fn t_facts(&self, a: &Value) -> Result<String> {
-        let g = self.current().ok_or_else(|| anyhow!("no memory generation"))?;
-        let topic = Some(s(a, "topic")).filter(|t| !t.is_empty());
-        let facts = g.facts();
-        if a.get("history").and_then(|v| v.as_bool()).unwrap_or(false) {
-            let mut out = String::new();
-            for f in facts.iter().filter(|f| topic.is_none_or(|t| f.topic.eq_ignore_ascii_case(t))) {
-                out.push_str(&format!(
-                    "{} [{}] {} {} (since {}){}{}\n",
-                    f.id,
-                    f.topic,
-                    f.status,
-                    f.text,
-                    f.since,
-                    f.replaced_by.as_ref().map(|r| format!(" → {r}")).unwrap_or_default(),
-                    if f.why.is_empty() { String::new() } else { format!(" ({})", f.why) }
-                ));
-            }
-            return Ok(if out.is_empty() { "(no facts yet)".into() } else { out });
-        }
-        let t = facts_text(&facts, topic, 60_000);
-        Ok(if t.is_empty() { "(no facts yet)".into() } else { t })
-    }
 
     fn t_note(&self, a: &Value) -> Result<String> {
         let text = redact(s(a, "text"));
@@ -1513,79 +1486,6 @@ impl Dream {
         })?;
         let _ = o;
         Ok(format!("saved {id} ({} {}, {cat}{})", task.level(), task.period(), if overview { ", overview" } else { "" }))
-    }
-
-    fn t_facts_update(&self, a: &Value) -> Result<String> {
-        let (_, g, task) = self.open_or_err()?;
-        let since_default = task.days().0.to_string();
-        let mut facts = g.facts();
-        let mut done = vec![];
-        let next_id = |facts: &[Fact]| format!("f_{}", facts.len() + 1);
-        for x in a.get("add").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-            let text = redact(s(&x, "text"));
-            if text.is_empty() {
-                continue;
-            }
-            let topic = Some(s(&x, "topic")).filter(|t| !t.is_empty()).unwrap_or("general").to_string();
-            let id = next_id(&facts);
-            facts.push(Fact {
-                id: id.clone(),
-                topic,
-                text,
-                since: Day::parse(s(&x, "since")).map(|d| d.to_string()).unwrap_or(since_default.clone()),
-                sources: list(&x, "sources"),
-                status: "current".into(),
-                replaced_by: None,
-                why: String::new(),
-                changed_at: crate::clock::rfc3339_now(),
-            });
-            done.push(format!("added {id}"));
-        }
-        for x in a.get("replace").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-            let old = s(&x, "id").to_string();
-            let text = redact(s(&x, "text"));
-            let Some(i) = facts.iter().position(|f| f.id == old && f.status == "current") else {
-                done.push(format!("{old}: no current fact with that id"));
-                continue;
-            };
-            if text.is_empty() {
-                continue;
-            }
-            let id = next_id(&facts);
-            let topic = Some(s(&x, "topic")).filter(|t| !t.is_empty()).map(|t| t.to_string()).unwrap_or(facts[i].topic.clone());
-            facts[i].status = "replaced".into();
-            facts[i].replaced_by = Some(id.clone());
-            facts[i].changed_at = crate::clock::rfc3339_now();
-            facts.push(Fact {
-                id: id.clone(),
-                topic,
-                text,
-                since: Day::parse(s(&x, "since")).map(|d| d.to_string()).unwrap_or(since_default.clone()),
-                sources: list(&x, "sources"),
-                status: "current".into(),
-                replaced_by: None,
-                why: s(&x, "why").to_string(),
-                changed_at: crate::clock::rfc3339_now(),
-            });
-            done.push(format!("{old} → {id}"));
-        }
-        for x in a.get("retire").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-            let old = s(&x, "id");
-            match facts.iter_mut().find(|f| f.id == old && f.status == "current") {
-                Some(f) => {
-                    f.status = "retired".into();
-                    f.why = s(&x, "why").to_string();
-                    f.changed_at = crate::clock::rfc3339_now();
-                    done.push(format!("retired {old}"));
-                }
-                None => done.push(format!("{old}: no current fact with that id")),
-            }
-        }
-        if done.is_empty() {
-            bail!("nothing to do: pass add=[{{topic, text, sources, since}}], replace=[{{id, text, sources, why}}] or retire=[{{id, why}}]");
-        }
-        g.save_facts(&facts)?;
-        Ok(done.join(", "))
     }
 
     fn t_merge(&self, a: &Value) -> Result<String> {
@@ -1745,8 +1645,7 @@ impl Dream {
         if let Some(g) = self.gen(st.current_gen) {
             let nodes = g.nodes();
             let days = nodes.iter().filter(|n| n.overview && n.level == "day").count();
-            let facts = g.facts().iter().filter(|f| f.status == "current").count();
-            out.push(format!("memory: generation {}, {days} day(s) reflected since {}, {facts} current fact(s), {} categories", g.meta.id, g.meta.start_day, g.categories().len()));
+            out.push(format!("memory: generation {}, {days} day(s) reflected since {}, {} categories", g.meta.id, g.meta.start_day, g.categories().len()));
         }
         out.join("\n")
     }
@@ -2086,11 +1985,7 @@ mod tests {
         assert!(d.t_write(&json!({"text": "x", "category": "garden"})).is_err());
         assert!(d.t_done(&json!({})).is_err(), "no overview yet");
         d.t_write(&json!({"text": "the day", "category": "summary", "meaning": "the period in short", "overview": true, "sources": ["m_1"]})).unwrap();
-        d.t_facts_update(&json!({"add": [{"topic": "home", "text": "lives in Madrid", "sources": ["m_1"]}]})).unwrap();
-        d.t_facts_update(&json!({"replace": [{"id": "f_1", "text": "lives in Barcelona", "why": "moved"}]})).unwrap();
-        let f = d.t_facts(&json!({})).unwrap();
-        assert!(f.contains("Barcelona") && !f.contains("Madrid"), "{f}");
-        assert!(d.t_facts(&json!({"history": true})).unwrap().contains("replaced lives in Madrid"));
+        assert!(super::tool(&d, "facts_update", &json!({})).is_none(), "no separate facts store");
         d.t_report(&json!({"section": "For you", "text": "a gym reminder on Mondays"})).unwrap();
         d.t_report(&json!({"section": "For you", "text": "second idea"})).unwrap();
         let rep = std::fs::read_to_string(d.report_path(Day::parse("2026-10-02").unwrap())).unwrap();
@@ -2143,6 +2038,28 @@ mod tests {
         assert_eq!(d.take_finished().unwrap().key, "day:2026-10-01");
         let g = d.gen(1).unwrap();
         assert!(g.nodes().iter().any(|n| n.overview && n.period == "2026-10-01"));
+        let _ = std::fs::remove_dir_all(&files);
+    }
+
+    #[test]
+    fn a_facts_ledger_becomes_a_facts_block() {
+        let files = tmp("facts");
+        let root = files.join("state/memory");
+        let g = Gen::create(&root, 1, Day::parse("2026-10-01").unwrap()).unwrap();
+        let (a, b) = Task::Day(Day::parse("2026-10-02").unwrap()).span();
+        g.add_node(&Node { id: "n_1".into(), level: "day".into(), period: "2026-10-02".into(), t_start: a, t_end: b, category: "summary".into(), overview: true, text: "the day".into(), sources: vec![], created_at: String::new() }).unwrap();
+        std::fs::write(g.dir.join("facts.json"), serde_json::to_vec(&json!([
+            {"id": "f_1", "topic": "gym", "text": "gym on Tuesday", "since": "2026-10-01", "status": "replaced"},
+            {"id": "f_2", "topic": "gym", "text": "gym on Thursday", "since": "2026-10-02", "status": "current", "sources": ["m_7"]},
+            {"id": "f_3", "topic": "dentist", "text": "Dr. Ruiz", "since": "", "status": "current"}
+        ])).unwrap()).unwrap();
+        let _d = Dream::open(&files);
+        let block = g.nodes().into_iter().find(|n| n.category == "facts").expect("a facts block");
+        assert_eq!(block.period, "2026-10-02");
+        assert!(block.text.contains("gym: gym on Thursday (since 2026-10-02)") && block.text.contains("dentist: Dr. Ruiz") && !block.text.contains("Tuesday"), "{}", block.text);
+        assert_eq!(block.sources, ["m_7"]);
+        assert!(g.categories().contains_key("facts"));
+        assert!(!g.dir.join("facts.json").exists() && g.dir.join("facts.json.migrated").exists());
         let _ = std::fs::remove_dir_all(&files);
     }
 

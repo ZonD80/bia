@@ -6,7 +6,7 @@ use ferogram::reactions::InputReactions;
 use ferogram::tl;
 use ferogram::update::Update;
 use ferogram::{
-    BinaryFileBackend, Client, ExponentialBackoff, InputMessage, LoginToken, PasswordToken,
+    BinaryFileBackend, Client, CodeDelivery, ExponentialBackoff, InputMessage, LoginToken, PasswordToken,
     SendCodeOutcome, SessionBackend, SignInError, ShutdownToken,
 };
 use serde::{Deserialize, Serialize};
@@ -64,6 +64,8 @@ pub struct Cfg {
 struct AuthPending {
     login: Option<LoginToken>,
     password: Option<PasswordToken>,
+    /// a code went to this address to verify it as the login email (`submit_email`)
+    email_setup: Option<String>,
 }
 
 struct Inner {
@@ -139,6 +141,7 @@ impl Tg {
                     auth: AuthPending {
                         login: None,
                         password: None,
+                        email_setup: None,
                     },
                     banned: read_bans(),
                     phase: "disconnected".into(),
@@ -749,12 +752,199 @@ impl Tg {
                     let _ = client.save_session().await;
                     Ok(format!("auth: ready — welcome back, {name}"))
                 }
-                Ok(SendCodeOutcome::CodeRequired(token)) => {
-                    self.inner.lock().unwrap().auth.login = Some(token);
-                    self.set_phase("waiting_code");
-                    Ok("auth: waiting_code — waiting for login code (call submit_code)".into())
-                }
+                Ok(SendCodeOutcome::CodeRequired(token)) => Ok(self.code_pending(token)),
                 Err(e) => Err(format!("request_login_code: {e}")),
+            }
+        })
+    }
+
+    /// Keep the token and say where the code went, in words the model can pass on.
+    fn code_pending(&self, token: LoginToken) -> String {
+        let where_ = match &token.delivery {
+            CodeDelivery::App => "as a message from \"Telegram\" in the Telegram app on another device signed in to this account (not by SMS)".to_string(),
+            CodeDelivery::Sms => "by SMS".into(),
+            CodeDelivery::Call => "by a phone call that reads it out".into(),
+            CodeDelivery::FlashCall => "by a flash call: the code is in the caller's number".into(),
+            CodeDelivery::MissedCall => "by a missed call: the code is the last digits of the caller's number".into(),
+            CodeDelivery::FragmentSms { url } => format!("to the anonymous number on Fragment: it shows at {url}"),
+            CodeDelivery::Email { pattern } => format!("by email to {pattern}"),
+            CodeDelivery::SetUpEmailRequired => String::new(),
+            CodeDelivery::Unknown | CodeDelivery::Other(_) => "(Telegram did not say how)".into(),
+        };
+        let setup = token.delivery == CodeDelivery::SetUpEmailRequired;
+        let resend = match (&token.next, token.timeout) {
+            (Some(n), Some(t)) => format!(" If it does not arrive, telegram_resend_code sends it again by {n} (after {t} s)."),
+            (Some(n), None) => format!(" If it does not arrive, telegram_resend_code sends it again by {n}."),
+            _ => String::new(),
+        };
+        self.inner.lock().unwrap().auth.login = Some(token);
+        if setup {
+            self.set_phase("waiting_email");
+            return "auth: waiting_email — Telegram sends no login code to this account until it has a login email. \
+                    Choose the address (the account's own; you know whose account this is), then call \
+                    telegram_submit_email(email=…): a verification code goes there first."
+                .into();
+        }
+        self.set_phase("waiting_code");
+        format!("auth: waiting_code — the login code was sent {where_}. Get it from there, then call telegram_submit_code.{resend} If no code arrives within a couple of minutes (Telegram often holds codes back for apps like this one, even when it says it sent them), stop waiting and log in by QR instead: telegram_login_qr (the Telegram app on a signed-in phone scans it; no code at all).")
+    }
+
+    /// Log in by QR (Telegram app on a signed-in phone: Settings > Devices > Link Desktop
+    /// Device), no code at all. The QR carries tg://login?token=…; tokens last ~30 s, so a
+    /// thread shows a fresh one until it is scanned, then finishes the login (or asks for the
+    /// 2FA password) and tells the agent.
+    pub fn login_qr(&self) -> Result<String, String> {
+        let client = self.ensure_connected()?;
+        if self.block_on(client.is_authorized()).unwrap_or(false) {
+            self.set_phase("ready");
+            return Ok("already logged in".into());
+        }
+        let first = self.block_on(client.export_login_token()).map_err(|e| self.qr_error(&e))?;
+        if first.0.is_empty() {
+            return Ok(self.qr_done(&client, "logged in"));
+        }
+        self.set_phase("waiting_qr");
+        let shown = Self::show_qr(&first.0, 1, first.1);
+        std::thread::spawn(move || Tg::global().qr_loop(client, first.0, first.1));
+        Ok(format!(
+            "auth: waiting_qr — {shown}\nThe login finishes by itself once it is scanned (a system|telegram line says so); then telegram_status shows auth=ready. With a 2FA password, auth becomes waiting_password: call telegram_submit_password."
+        ))
+    }
+
+    fn show_qr(token: &[u8], seq: u64, expires: i32) -> String {
+        fn unix_now() -> i64 {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+        }
+        use base64::Engine;
+        let link = format!("tg://login?token={}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token));
+        let secs = (expires as i64 - unix_now()).max(5) as u64;
+        match crate::qr_win::show(&link, "", seq, secs) {
+            Ok(notice) => notice,
+            Err(e) => format!(
+                "[telegram qr #{seq}] PNG at {} (no window: {e}). Scan it in the Telegram app of that account: Settings > Devices > Link Desktop Device. qr-string: {link}",
+                crate::qr_win::png_path().display()
+            ),
+        }
+    }
+
+    fn qr_error(&self, e: &ferogram::InvocationError) -> String {
+        if e.is("SESSION_PASSWORD_NEEDED") {
+            return "SESSION_PASSWORD_NEEDED".into();
+        }
+        format!("telegram QR login: {e}")
+    }
+
+    fn qr_done(&self, client: &Client, how: &str) -> String {
+        crate::qr_win::close();
+        self.set_phase("ready");
+        let _ = self.block_on(client.save_session());
+        format!("auth: ready — {how} by QR")
+    }
+
+    fn qr_notice(&self, text: &str) {
+        if let Some(ctx) = self.ctx_clone() {
+            ctx.inbound("system", "telegram", "", text);
+        }
+        self.log(text.to_string());
+    }
+
+    fn qr_password(&self, client: &Client) {
+        crate::qr_win::close();
+        match self.block_on(client.get_password_info()) {
+            Ok(pw) => {
+                self.inner.lock().unwrap().auth.password = Some(pw);
+                self.set_phase("waiting_password");
+                self.qr_notice("[telegram] the QR was scanned; this account has a 2FA password: auth=waiting_password, call telegram_submit_password with it");
+            }
+            Err(e) => {
+                self.set_phase("disconnected");
+                self.qr_notice(&format!("[telegram] the QR was scanned, but the 2FA step failed: {e}; start again with telegram_login_qr"));
+            }
+        }
+    }
+
+    /// Wait for the scan: check the token every 2 s, a fresh one when it runs out; up to 5 min.
+    fn qr_loop(&self, client: Client, mut token: Vec<u8>, mut expires: i32) {
+        fn unix_now() -> i64 {
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        let mut seq = 1u64;
+        while std::time::Instant::now() < end && self.phase() == "waiting_qr" {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            match self.block_on(client.check_qr_login(token.clone())) {
+                Ok(Some(name)) => {
+                    let msg = self.qr_done(&client, &format!("logged in as {name}"));
+                    self.qr_notice(&format!("[telegram] {msg}"));
+                    return;
+                }
+                Err(e) if e.is("SESSION_PASSWORD_NEEDED") => return self.qr_password(&client),
+                _ => {}
+            }
+            if unix_now() + 3 >= expires as i64 {
+                match self.block_on(client.export_login_token()) {
+                    Ok((t, _)) if t.is_empty() => {
+                        let msg = self.qr_done(&client, "logged in");
+                        self.qr_notice(&format!("[telegram] {msg}"));
+                        return;
+                    }
+                    Ok((t, exp)) => {
+                        token = t;
+                        expires = exp;
+                        seq += 1;
+                        let _ = Self::show_qr(&token, seq, expires);
+                    }
+                    Err(e) if e.is("SESSION_PASSWORD_NEEDED") => return self.qr_password(&client),
+                    Err(e) => {
+                        crate::qr_win::close();
+                        self.set_phase("disconnected");
+                        self.qr_notice(&format!("[telegram] QR login stopped: {e}; start again with telegram_login_qr"));
+                        return;
+                    }
+                }
+            }
+        }
+        if self.phase() == "waiting_qr" {
+            crate::qr_win::close();
+            self.set_phase("disconnected");
+            self.qr_notice("[telegram] the login QR was not scanned within 5 minutes; telegram_login_qr shows a new one");
+        }
+    }
+
+    /// Telegram asked for a login email: send its verification code there.
+    pub fn submit_email(&self, email: &str) -> Result<String, String> {
+        let client = self.ensure_connected()?;
+        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending login; call telegram_login(phone) first".to_string())?;
+        if token.delivery != CodeDelivery::SetUpEmailRequired {
+            return Err("Telegram did not ask for a login email for this login; send the code with telegram_submit_code".into());
+        }
+        self.block_on(async {
+            match client.setup_login_email(&token, email).await {
+                Ok((pattern, len)) => {
+                    self.inner.lock().unwrap().auth.email_setup = Some(pattern.clone());
+                    self.set_phase("waiting_email_code");
+                    Ok(format!("auth: waiting_email_code — a {len}-digit code went to {pattern} to confirm it as the login email. Get it from that mailbox, then call telegram_submit_code."))
+                }
+                Err(e) if e.is("EMAIL_INVALID") => Err("Telegram does not accept this email address; use another one".into()),
+                Err(e) => Err(format!("setup_login_email: {e}")),
+            }
+        })
+    }
+
+    /// The code did not arrive: Telegram sends it again, by the next method it offers.
+    pub fn resend_code(&self) -> Result<String, String> {
+        let client = self.ensure_connected()?;
+        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending login; call telegram_login(phone) first".to_string())?;
+        self.block_on(async {
+            match client.resend_code(&token, Some("the code did not arrive")).await {
+                Ok(SendCodeOutcome::CodeRequired(t)) => Ok(self.code_pending(t)),
+                Ok(SendCodeOutcome::AlreadyAuthorized(name)) => {
+                    self.set_phase("ready");
+                    let _ = client.save_session().await;
+                    Ok(format!("auth: ready — welcome back, {name}"))
+                }
+                Err(e) if e.is("SEND_CODE_UNAVAILABLE") => Err("Telegram has no other way to send this code. Log in by QR instead: telegram_login_qr (no code needed)".into()),
+                Err(e) => Err(format!("resend_code: {e}")),
             }
         })
     }
@@ -769,8 +959,29 @@ impl Tg {
             .login
             .clone()
             .ok_or_else(|| "no pending login; call login(phone) first".to_string())?;
+        // the code that confirms a new login email: then Telegram sends the login code itself
+        if self.inner.lock().unwrap().auth.email_setup.is_some() {
+            return self.block_on(async {
+                match client.verify_login_email(&token, code).await {
+                    Ok(SendCodeOutcome::CodeRequired(t)) => {
+                        self.inner.lock().unwrap().auth.email_setup = None;
+                        Ok(format!("login email confirmed. {}", self.code_pending(t)))
+                    }
+                    Ok(SendCodeOutcome::AlreadyAuthorized(name)) => {
+                        self.inner.lock().unwrap().auth.email_setup = None;
+                        self.set_phase("ready");
+                        let _ = client.save_session().await;
+                        Ok(format!("auth: ready — welcome, {name}"))
+                    }
+                    Err(e) if e.is("CODE_INVALID") || e.is("EMAIL_CODE_*") => Err("invalid or expired email code".into()),
+                    Err(e) => Err(format!("verify_login_email: {e}")),
+                }
+            });
+        }
+        let by_email = matches!(token.delivery, CodeDelivery::Email { .. });
         self.block_on(async {
-            match client.sign_in(&token, code).await {
+            let signed = if by_email { client.sign_in_email(&token, code).await } else { client.sign_in(&token, code).await };
+            match signed {
                 Ok(name) => {
                     self.set_phase("ready");
                     self.inner.lock().unwrap().auth.login = None;
@@ -785,7 +996,7 @@ impl Tg {
                             .into(),
                     )
                 }
-                Err(SignInError::InvalidCode) => Err("invalid or expired code".into()),
+                Err(SignInError::InvalidCode) => Err("invalid or expired code: ask for it again (telegram_resend_code), or log in by QR without a code: telegram_login_qr".into()),
                 Err(SignInError::SignUpRequired) => {
                     Err("phone not registered; sign up in the official Telegram app first".into())
                 }
@@ -878,6 +1089,7 @@ impl Tg {
             g.auth = AuthPending {
                 login: None,
                 password: None,
+                email_setup: None,
             };
         }
         CATCHUP_DONE.store(false, Ordering::SeqCst);

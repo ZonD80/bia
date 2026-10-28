@@ -9,7 +9,7 @@
         <h1>Wake your bia</h1>
         <p class="section-lead">
           Download bia deploy for your computer. It writes bia onto a USB stick, then you start any PC or laptop
-          from it. It can also put bia on a server you rent, with no commands to type.
+          from it. It can also put bia on a server you rent, with no commands to type, and so can its phone app.
         </p>
       </div>
     </section>
@@ -30,6 +30,21 @@
               {{ buttonText(host) }}
             </a>
             <p v-if="downloads[host.id].available" class="host__ver">Version {{ downloads[host.id].version }}</p>
+          </div>
+        </div>
+        <h3 class="phones__title">Or from your phone</h3>
+        <p class="phones__lead">The phone app puts bia on a server you rent (no stick from a phone).</p>
+        <div class="grid grid--3 hosts phones">
+          <div class="card host">
+            <h3>Android</h3>
+            <p class="host__note">Phones and tablets</p>
+            <a class="btn btn--primary host__btn" :href="PLAY_URL" target="_blank" rel="noopener">Get it on Google Play</a>
+            <p class="host__ver"><a :href="APK_URL">or download the APK</a> from the latest release</p>
+          </div>
+          <div class="card host host--soon">
+            <h3>iPhone</h3>
+            <p class="host__note">iPhone and iPad</p>
+            <span class="btn btn--ghost host__btn" aria-disabled="true">Coming soon to the App Store</span>
           </div>
         </div>
         <p v-if="version" class="release-note">
@@ -138,12 +153,17 @@
 <script setup lang="ts">
 useSeoMeta({
   title: 'Wake your bia — on a USB stick or your server',
-  description: 'Download bia deploy for Mac, Windows or Linux: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
+  description: 'Download bia deploy for Mac, Windows, Linux or Android: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
 })
 
 import type { FlashHost } from '~/composables/useLatestRelease'
 
 type Host = { id: FlashHost; label: string; note: string }
+
+// the phone apps (server only); the iPhone one is not in the App Store yet
+const PLAY_URL = 'https://play.google.com/store/apps/details?id=biadeploy.android'
+// the same app, signed with the same key, straight from GitHub (no Play Store needed)
+const APK_URL = 'https://github.com/ZonD80/bia/releases/latest/download/bia-deploy-android.apk'
 
 const hosts: Host[] = [
   { id: 'macos', label: 'Mac', note: 'Apple Silicon and Intel' },
@@ -170,6 +190,9 @@ function buttonText(host: Host): string {
 .host__note { color: var(--mute); }
 .host__btn { width: 100%; }
 .host__btn.is-busy { opacity: 0.7; pointer-events: none; }
+.phones__title { font-size: 1.2rem; margin: 2rem 0 0.25rem; }
+.phones__lead { color: var(--mute); margin: 0 0 1rem; }
+.host--soon .host__btn { cursor: default; opacity: 0.7; }
 .host__ver { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--mute); text-align: center; }
 .release-note { margin: 1rem 0 0; font-size: 0.9rem; color: var(--mute); }
 .release-note--warn { color: #9a6a12; }

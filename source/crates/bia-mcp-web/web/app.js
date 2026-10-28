@@ -454,7 +454,7 @@ async function start(who) {
   connect();
   window.addEventListener('hashchange', route);
   route();
-  if (S.root) { pollTasks(); setInterval(pollTasks, 4000); pollStatus(); setInterval(pollStatus, 5000); }
+  if (S.root) { pollTasks(); setInterval(pollTasks, 4000); pollStatus(); setInterval(pollStatus, 5000); pollQr(); setInterval(pollQr, 3000); }
   if (who.days_left !== undefined && who.days_left < 30) toast(`Your certificate expires in ${who.days_left} days — renew it in Settings`, true);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRead(); updateTitle(); sendActive(); });
   window.addEventListener('focus', () => { maybeRead(); sendActive(); });
@@ -2533,6 +2533,33 @@ async function pollTasks() {
   const changed = JSON.stringify(tasks.map(t => t.id)) !== JSON.stringify(S.tasks.map(t => t.id));
   S.tasks = tasks;
   if (changed) { renderChatList(); renderTaskbar(); renderTasks(); updateTitle(); }
+}
+// ---------- login QRs (Telegram, WhatsApp): a popup while an MCP shows one ----------
+// The same QR as the window on bia's screen; it follows the rotation and closes once the
+// login is done (the MCP deletes its qr.png). Hide keeps it closed until the next login.
+const QR = {};
+async function pollQr() {
+  let j;
+  try { j = await GET('/v1/qr'); } catch { return; }
+  const live = new Set();
+  for (const q of j.qr || []) {
+    live.add(q.bus);
+    let p = QR[q.bus];
+    if (!p) {
+      const img = h('img', { class: 'qrimg', alt: q.title + ' login QR' });
+      const back = h('div', { class: 'modal-back' }, h('div', { class: 'modal' },
+        h('div', { class: 'mhead' }, ic('key'), q.title + ' login'),
+        h('div', { class: 'mbody qrbody' }, img, h('p', null, q.hint), h('p', { class: 'muted' }, 'It changes every half a minute; this picture follows it.')),
+        h('div', { class: 'mfoot' }, h('button', { class: 'btn flat', onclick: () => { p.hidden = true; back.remove(); } }, 'Hide'))));
+      p = QR[q.bus] = { back, img, v: 0, hidden: false };
+      document.body.appendChild(back);
+      blip();
+    }
+    if (p.v !== q.v) { p.v = q.v; p.img.src = '/v1/qr/' + q.bus + '.png?v=' + q.v; }
+  }
+  for (const bus of Object.keys(QR)) {
+    if (!live.has(bus)) { QR[bus].back.remove(); delete QR[bus]; }
+  }
 }
 async function pollStatus() {
   try {

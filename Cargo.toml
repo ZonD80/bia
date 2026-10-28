@@ -23,7 +23,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.7.0"
+version = "1.7.1"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -74,3 +74,6 @@ strip = true
 tgcalls = { path = "source/vendor/tgcalls" }
 # Patched: sync ExternalFrameSender for the paced TTS/silence audio thread.
 ntgcalls = { path = "source/vendor/ntgcalls" }
+# Patched: email login (CodeDelivery on LoginToken, sign_in_email, setup_login_email,
+# verify_login_email), which 0.6.5 has in the TL schema but no client calls for.
+ferogram = { path = "source/vendor/ferogram" }

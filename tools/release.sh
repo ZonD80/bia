@@ -39,6 +39,9 @@
 #   app-android    bia-deploy-android.apk + bia-deploy-android.aab  the phone app, signed with
 #                  the Play upload key (installers/android: ~/biaDeployPlayKeys.jks,
 #                  keystore.properties); the .aab is what Play Console takes
+#   mcps           mcp-<name>.tar.gz per shipped MCP (the whole folder, both architectures'
+#                  binaries, as in /home/bia/MCPs; + "mcps" in bia-os.json: version, size,
+#                  sha256): a bia updates one MCP with mcp_update, without a system update
 #   app-ios        bia-deploy-ios-unsigned.ipa  not signed (installers/ios/build-ipa.sh with
 #                  IOS_UNSIGNED=1); sideloading tools sign it. App Store builds: build-ipa.sh
 # Asset names carry no version, so https://github.com/zond80/bia/releases/latest/download/<name>
@@ -51,7 +54,7 @@ SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$SELF")/.."
 ROOT=$(pwd)
 REPO=zond80/bia
-ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover app-android app-ios)
+ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover mcps app-android app-ios)
 
 NOTES="" ONLY="" WITHIN="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 PUBLISH=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -135,6 +138,11 @@ manifest_has_tool() {
   gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
     | python3 -c "import json,sys; sys.exit(0 if '$1' in json.load(sys.stdin).get('tools', {}) else 1)"
 }
+manifest_has_mcps() {
+  has bia-os.json || return 1
+  gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
+    | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('mcps') else 1)"
+}
 manifest_has_arch() {
   has bia-os.json || return 1
   gh release download "$TAG" -R "$REPO" -p bia-os.json -O - 2>/dev/null \
@@ -151,6 +159,13 @@ complete() { # pkg
     land-*) has "bia-land-${1#land-}.iso.xz" ;;
     app-android) has bia-deploy-android.apk && has bia-deploy-android.aab ;;
     app-ios) has bia-deploy-ios-unsigned.ipa ;;
+    mcps)
+      local d
+      for d in source/flash/MCPs/*/; do
+        [[ -f "$d/mcp.json" ]] || continue
+        has "mcp-$(basename "$d").tar.gz" || return 1
+      done
+      manifest_has_mcps ;;
     *) die "unknown package $1" ;;
   esac
 }
@@ -228,6 +243,7 @@ scan() { # files…  (raw binaries, before they are packed)
 UPLOAD=()
 OS_BUILT=()
 TOOLS_BUILT=()
+MCPS_BUILT=()
 
 # the build container of an architecture (make builder), made when this machine has none
 builder() { # arch
@@ -269,6 +285,12 @@ both_arches() {
     done
   done
   [[ ${#missing[@]} -eq 0 ]] || die "MCP binaries missing for: ${missing[*]} (build both architectures first: make ARCH=arm64 rust mcps; make ARCH=x86_64 rust mcps)"
+  # chrome's page tools: Node for both architectures and chrome-devtools-mcp
+  for r in aarch64 x86_64; do
+    [[ -x source/flash/MCPs/chrome/runtime/$r/node ]] || missing+=("chrome/runtime/$r/node")
+  done
+  [[ -f source/flash/MCPs/chrome/devtools/build/src/bin/chrome-devtools-mcp.js ]] || missing+=("chrome/devtools")
+  [[ ${#missing[@]} -eq 0 ]] || die "chrome MCP payload missing: ${missing[*]} (tools/fetch-chrome-devtools.sh)"
 }
 
 build_os() { # arch
@@ -381,6 +403,38 @@ build_windows() {
   UPLOAD+=("$OUT/bia-deploy-windows-x86_64.zip")
 }
 
+# Each shipped MCP as its own archive: the folder as /home/bia/MCPs holds it (both
+# architectures' binaries, chrome's Node and devtools), for mcp_update on a running bia.
+build_mcps() {
+  echo "== MCP archives"
+  tools/fetch-chrome-devtools.sh >/dev/null
+  both_arches
+  local d name out
+  for d in source/flash/MCPs/*/; do
+    [[ -f "$d/mcp.json" ]] || continue
+    name=$(basename "$d")
+    while IFS= read -r -d '' f; do scan "$f"; done < <(find "$d" -path '*/bin/*' -type f -print0)
+    out="$OUT/mcp-$name.tar.gz"
+    rm -f "$out"
+    # telegram/lib is patch-mcp's local copy of libntgcalls (git-ignored, not shipped)
+    tar -C source/flash/MCPs --exclude='.DS_Store' --exclude='._*' --exclude='*.packstamp' \
+      --exclude='telegram/lib' -czf "$out" "$name"
+    python3 - "$out" "$d/mcp.json" "$OUT/mcpentry-$name.json" <<'PY'
+import hashlib, json, os, sys
+f, manifest, out = sys.argv[1:]
+h = hashlib.sha256()
+with open(f, "rb") as fh:
+    for b in iter(lambda: fh.read(1 << 20), b""):
+        h.update(b)
+version = json.load(open(manifest)).get("version", "")
+json.dump({"version": version, "file": os.path.basename(f), "size": os.path.getsize(f), "sha256": h.hexdigest()}, open(out, "w"))
+PY
+    echo "   mcp-$name.tar.gz $(du -h "$out" | cut -f1)"
+    MCPS_BUILT+=("$name")
+    UPLOAD+=("$out")
+  done
+}
+
 build_android() {
   echo "== Android app (APK and app bundle, Play upload key)"
   local d=installers/android lib
@@ -412,6 +466,7 @@ for p in ${TODO[@]+"${TODO[@]}"}; do
     flash-linux-arm64) build_linux arm64 ;;
     takeover) build_takeover ;;
     flash-windows) build_windows ;;
+    mcps) build_mcps ;;
     app-android) build_android ;;
     app-ios) build_ios ;;
   esac
@@ -429,6 +484,7 @@ if [[ $PUBLISH -eq 1 ]]; then
         file) [[ -f "$OUT/$val" ]] || die "$r names $val, which is not in $OUT"; UPLOAD+=("$OUT/$val") ;;
         os) OS_BUILT+=("$val") ;;
         tool) TOOLS_BUILT+=("$val") ;;
+        mcp) MCPS_BUILT+=("$val") ;;
       esac
     done <"$r"
   done
@@ -439,20 +495,23 @@ elif [[ $BUILD_ONLY -eq 1 ]]; then
     for f in ${UPLOAD[@]+"${UPLOAD[@]}"}; do echo "file $(basename "$f")"; done
     for a in ${OS_BUILT[@]+"${OS_BUILT[@]}"}; do echo "os $a"; done
     for t in ${TOOLS_BUILT[@]+"${TOOLS_BUILT[@]}"}; do echo "tool $t"; done
+    for m in ${MCPS_BUILT[@]+"${MCPS_BUILT[@]}"}; do echo "mcp $m"; done
   } >"$rec"
 fi
 
 # ---- manifest: the existing one plus the architectures built now ----
-if [[ ${#OS_BUILT[@]} -gt 0 || ${#TOOLS_BUILT[@]} -gt 0 ]]; then
+if [[ ${#OS_BUILT[@]} -gt 0 || ${#TOOLS_BUILT[@]} -gt 0 || ${#MCPS_BUILT[@]} -gt 0 ]]; then
   old="$OUT/bia-os.old.json"
   rm -f "$old"
   [[ $EXISTS -eq 1 ]] && has bia-os.json && gh release download "$TAG" -R "$REPO" -p bia-os.json -O "$old"
-  python3 - "$OUT" "$VERSION" "$TAG" "$old" ${OS_BUILT[@]+"${OS_BUILT[@]}"} -- ${TOOLS_BUILT[@]+"${TOOLS_BUILT[@]}"} <<'PY'
+  python3 - "$OUT" "$VERSION" "$TAG" "$old" ${OS_BUILT[@]+"${OS_BUILT[@]}"} -- ${TOOLS_BUILT[@]+"${TOOLS_BUILT[@]}"} -- ${MCPS_BUILT[@]+"${MCPS_BUILT[@]}"} <<'PY'
 import json, os, sys
 out, version, tag, old = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 rest = sys.argv[5:]
 sep = rest.index("--")
-arches, tools = rest[:sep], rest[sep + 1:]
+arches, rest = rest[:sep], rest[sep + 1:]
+sep = rest.index("--")
+tools, mcps = rest[:sep], rest[sep + 1:]
 m = json.load(open(old)) if os.path.isfile(old) else {}
 m.update({"version": version, "tag": tag})
 m.setdefault("os", {})
@@ -463,8 +522,12 @@ for a in arches:
 m.setdefault("tools", {})
 for t in tools:
     m["tools"][t] = json.load(open(f"{out}/tool-{t}.json"))
+# one archive per MCP (mcp_update on a running bia)
+m.setdefault("mcps", {})
+for n in mcps:
+    m["mcps"][n] = json.load(open(f"{out}/mcpentry-{n}.json"))
 json.dump(m, open(f"{out}/bia-os.json", "w"), indent=2)
-print("== bia-os.json:", ", ".join(sorted(m["os"])), "| tools:", ", ".join(sorted(m["tools"])) or "-")
+print("== bia-os.json:", ", ".join(sorted(m["os"])), "| tools:", ", ".join(sorted(m["tools"])) or "-", "| mcps:", ", ".join(sorted(m["mcps"])) or "-")
 PY
   UPLOAD+=("$OUT/bia-os.json")
 fi

@@ -16,6 +16,10 @@
 #                             keys seeded, model in /home/bia/model (flash), BIOS GRUB (x86_64)
 #   tests/e2e/img-e2e.sh all      images + run + check
 #
+# DECOY=1 (run): a second disk, attached before the stick, holds the release image as a
+# taken-over server or a dd-written disk would: the same labels (BIABOOT, BIAROOT). The
+# stick must still boot itself: its kernel gets root=PARTUUID of the stick's root.
+#
 # Env: ARCH (arm64), MODE (flash), FIRMWARE (uefi; bios needs ARCH=x86_64), STICK_GB (8),
 #      MODEL (bartowski/SmolLM2-135M-Instruct-GGUF:SmolLM2-135M-Instruct-Q4_K_M.gguf),
 #      XZ_LEVEL (1; releases use 6), MEM (4G), CPUS (4), TIMEOUT (minutes per boot phase, 30)
@@ -89,7 +93,11 @@ PY
 }
 
 do_run() {
-  ARCH=$ARCH LE=$IE MODE=$MODE FIRMWARE=$FIRMWARE MODEL=$MODEL MEM=${MEM:-4G} CPUS=${CPUS:-4} \
+  if [ -n "${DECOY:-}" ]; then
+    echo "== decoy disk: the release image (same labels as the stick)"
+    xz -dc "$IE/rel/bia-$ARCH.img.xz" >"$IE/decoy.img"
+  fi
+  DECOY=${DECOY:-} ARCH=$ARCH LE=$IE MODE=$MODE FIRMWARE=$FIRMWARE MODEL=$MODEL MEM=${MEM:-4G} CPUS=${CPUS:-4} \
     TIMEOUT=${TIMEOUT:-30} python3 "$ROOT/tests/e2e/img-e2e-drive.py"
 }
 

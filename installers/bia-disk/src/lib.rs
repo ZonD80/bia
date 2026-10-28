@@ -24,6 +24,15 @@ pub struct Layout {
     pub bios_len: u64,
     pub root_start: u64,
     pub root_len: u64,
+    /// The disk's and the three partitions' GUIDs (random each time a GPT is written).
+    pub disk_guid: u128,
+    pub part_guids: [u128; 3],
+}
+
+/// `0123abcd-…` as blkid prints a GPT GUID.
+pub fn guid_text(g: u128) -> String {
+    let h = format!("{g:032x}");
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
 /// macOS `/dev/rdisk*` (and some other char devices) report 0 from `seek(End)`.
@@ -131,6 +140,8 @@ where
         bios_len: (p_bios.last_lba - p_bios.first_lba + 1) * 512,
         root_start: p_root.first_lba * 512,
         root_len: (p_root.last_lba - p_root.first_lba + 1) * 512,
+        disk_guid: disk.guid().as_u128(),
+        part_guids: [p_boot.part_guid.as_u128(), p_bios.part_guid.as_u128(), p_root.part_guid.as_u128()],
     };
     disk.write().context("write GPT")?;
     Ok(layout)

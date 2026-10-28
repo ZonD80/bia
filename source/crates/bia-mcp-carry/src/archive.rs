@@ -74,7 +74,7 @@ fn rel_ok(path: &Path) -> bool {
         && path.components().all(|c| matches!(c, Component::Normal(_)))
 }
 
-pub fn fold(ctx: &Ctx, path: Option<&str>, force: bool) -> Result<String, String> {
+pub fn fold(ctx: &Ctx, path: Option<&str>, force: bool, include_backups: bool) -> Result<String, String> {
     let dest = match path.map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => under_files(Path::new(p))?,
         None => {
@@ -82,6 +82,9 @@ pub fn fold(ctx: &Ctx, path: Option<&str>, force: bool) -> Result<String, String
             under_files(Path::new(&format!("carry/fold-{secs}.tar.gz")))?
         }
     };
+    if !include_backups {
+        refuse_old_backups(Path::new("/"), Some(&dest), "carry_fold")?;
+    }
     let packed = fold_shared(ctx, Path::new("/"), &dest, force, true, Some("carry_fold"))?;
     ctx.log(format!("fold: {}", packed.path.display()));
     Ok(format!(
@@ -89,6 +92,60 @@ pub fn fold(ctx: &Ctx, path: Option<&str>, force: bool) -> Result<String, String
         packed.path.display(),
         packed.gzip_len,
         packed.unpacked
+    ))
+}
+
+/// Earlier fold archives under /home/bia/files (carry/*.tar.gz, any *.unfold-<bytes>.tar.gz),
+/// biggest first: a new fold would pack each of them again.
+pub fn old_backups(base: &Path, dest: Option<&Path>) -> Vec<(PathBuf, u64)> {
+    let files = base.join("home/bia/files");
+    let carry = files.join("carry");
+    let mut out = vec![];
+    let mut stack = vec![files.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Ok(m) = fs::symlink_metadata(&p) else { continue };
+            if m.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if !m.is_file() || dest.is_some_and(|d| same_file(&p, d)) {
+                continue;
+            }
+            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            if (p.starts_with(&carry) && name.ends_with(".tar.gz")) || unfolded_size(&p).is_some() {
+                out.push((p, m.len()));
+            }
+        }
+    }
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out
+}
+
+/// A fold refuses while older backups sit inside what it packs: the model asks the owner
+/// (or follows its rules) to delete them, or folds them in with include_backups=true.
+pub fn refuse_old_backups(base: &Path, dest: Option<&Path>, tool: &str) -> Result<(), String> {
+    let old = old_backups(base, dest);
+    if old.is_empty() {
+        return Ok(());
+    }
+    let total: u64 = old.iter().map(|(_, n)| n).sum();
+    let home = base.join("home/bia");
+    let list = old
+        .iter()
+        .take(10)
+        .map(|(p, n)| format!("  {} ({})", p.strip_prefix(&home).unwrap_or(p).display(), crate::fly::human_bytes(*n)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let more = if old.len() > 10 { format!("\n  … and {} more", old.len() - 10) } else { String::new() };
+    Err(format!(
+        "not started: /home/bia/files holds {} earlier backup(s), {} in all, and they would be packed into this archive too:\n{list}{more}\n\
+         Ask the owner whether to delete them (copies kept elsewhere, such as a cloud drive, make them safe to remove), or do what your rules say about old backups. \
+         Delete the ones that may go (rm), then call {tool} again; or call {tool} with include_backups=true to pack them in as well.",
+        old.len(),
+        crate::fly::human_bytes(total)
     ))
 }
 
@@ -599,8 +656,11 @@ fn put_back_mcp_programs(ctx: &Ctx, stash: &Path) -> Result<(), String> {
 /// SSH host keys. Files the image itself ships (`/etc/bia-shipped`) are left out.
 fn etc_members(base: &Path, m: &mut Members) -> Result<(), String> {
     let shipped = shipped_set_at(base);
+    // the timezone is the owner's choice even though the image ships one (UTC): always carry it
+    let always = ["etc/timezone", "etc/localtime"];
     let specs = [
         "timezone",
+        "localtime",
         "hostname",
         "machine-id",
         "network/interfaces",
@@ -617,7 +677,7 @@ fn etc_members(base: &Path, m: &mut Members) -> Result<(), String> {
         if src.is_dir() {
             let prune = rel == "etc/systemd/system";
             m.walk(base, Path::new(&rel), None, &|r| !(prune && shipped.contains(r)))?;
-        } else if src.exists() && !shipped.contains(&rel) {
+        } else if src.exists() && (always.contains(&rel.as_str()) || !shipped.contains(&rel)) {
             m.file(base, &rel);
         }
     }
@@ -949,6 +1009,11 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
         .collect();
     // (package name, apt-get argument)
     let mut items: Vec<(String, String)> = Vec::new();
+    // a package no repository provides (empty origin, in a manifest that records origins)
+    // and whose .deb was not kept cannot come from apt: reported, never passed to it (one
+    // unknown name fails apt-get's whole batch)
+    let origins_known = pkgs.iter().any(|p| !p.origin.is_empty());
+    let mut no_deb: Vec<String> = Vec::new();
     for p in pkgs {
         // Same image on both sides is the usual case: nothing to fetch.
         if is_installed(&p.name) {
@@ -957,6 +1022,11 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
         let deb = usable
             .iter()
             .find(|d| d.name == p.name && (p.version.is_empty() || d.version == p.version));
+        if deb.is_none() && origins_known && p.origin.is_empty() {
+            ctx.log(format!("unfold: {} is not in any repository and its .deb was not kept: install it again from where it came from", pkg_label(p)));
+            no_deb.push(p.name.clone());
+            continue;
+        }
         let arg = deb.map(|d| d.path.to_string_lossy().into_owned()).unwrap_or_else(|| p.name.clone());
         items.push((p.name.clone(), arg));
     }
@@ -971,8 +1041,10 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
     }
     let dep_args: Vec<String> = deps.iter().map(|d| d.path.to_string_lossy().into_owned()).collect();
     if items.is_empty() && dep_args.is_empty() {
-        ctx.log(format!("unfold: all {} manual packages are already installed", pkgs.len()));
-        return vec![];
+        if no_deb.is_empty() {
+            ctx.log(format!("unfold: all {} manual packages are already installed", pkgs.len()));
+        }
+        return no_deb;
     }
     let local = items.iter().filter(|(n, a)| a != n).count();
     ctx.log(format!(
@@ -993,7 +1065,7 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
     if !update {
         if local == 0 {
             ctx.log("unfold: apt-get update failed; package names were not installed");
-            return items.into_iter().map(|(n, _)| n).collect();
+            return no_deb.into_iter().chain(items.into_iter().map(|(n, _)| n)).collect();
         }
         ctx.log("unfold: apt-get update failed; installing from kept .debs, names may fail");
     }
@@ -1007,9 +1079,10 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
     all.extend(dep_args.iter().cloned());
     if apt_get_install(ctx, &all, "unfold: apt") {
         mark_deps_auto();
-        return vec![];
+        return no_deb;
     }
     let mut failed = clear_broken(ctx);
+    failed.extend(no_deb.iter().cloned());
     let n = items.len();
     for (i, (name, arg)) in items.iter().enumerate() {
         if failed.contains(name) {
@@ -1975,6 +2048,30 @@ curl:
         assert!(has("home/bia/files/carry"));
         assert!(!has("home/bia/files/carry/fold.tar.gz"));
         assert_eq!(m.files, 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn earlier_backups_stop_a_fold_until_asked() {
+        let dir = std::env::temp_dir().join(format!("bia-carry-old-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let files = dir.join("home/bia/files");
+        fs::create_dir_all(files.join("carry")).unwrap();
+        fs::create_dir_all(files.join("drive")).unwrap();
+        fs::write(files.join("notes.txt"), b"not a backup").unwrap();
+        assert!(super::refuse_old_backups(&dir, None, "carry_fold").is_ok(), "nothing to ask about");
+        fs::write(files.join("carry/fold-1.unfold-4821.tar.gz"), vec![0u8; 3000]).unwrap();
+        fs::write(files.join("carry/old.tar.gz"), vec![0u8; 1000]).unwrap();
+        fs::write(files.join("drive/home.unfold-99.tar.gz"), vec![0u8; 2000]).unwrap();
+        fs::write(files.join("drive/photos.tar.gz"), b"someone's own tar, not a fold").unwrap();
+        let old = super::old_backups(&dir, None);
+        assert_eq!(old.len(), 3, "{old:?}");
+        assert!(old[0].0.ends_with("carry/fold-1.unfold-4821.tar.gz"), "biggest first");
+        let e = super::refuse_old_backups(&dir, None, "carry_fly").unwrap_err();
+        assert!(e.contains("3 earlier backup(s), 6.0 KB") && e.contains("files/carry/old.tar.gz") && e.contains("carry_fly with include_backups=true"), "{e}");
+        // the archive being written is not an earlier backup
+        let dest = files.join("carry/old.tar.gz");
+        assert_eq!(super::old_backups(&dir, Some(&dest)).len(), 2);
         let _ = fs::remove_dir_all(&dir);
     }
 

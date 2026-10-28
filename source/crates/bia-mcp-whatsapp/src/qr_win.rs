@@ -190,7 +190,7 @@ pub fn show(code: &str, _art: &str, seq: u64, timeout_secs: u64) -> Result<Strin
     }
     let png = png_path();
     Ok(format!(
-        "[whatsapp qr #{seq}] PNG at {} (temporary; deleted when linked). Also opened on display :0 in window \"{TITLE}\" (valid ~{timeout_secs}s; refreshes when it rotates). Scan with WhatsApp > Settings > Linked devices > Link a device.",
+        "[whatsapp qr #{seq}] PNG at {} (temporary; deleted when linked). Also opened on display :0 in window \"{TITLE}\" and as a popup in root's web app (valid ~{timeout_secs}s; refreshes when it rotates). Scan with WhatsApp > Settings > Linked devices > Link a device.",
         png.display()
     ))
 }

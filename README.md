@@ -24,6 +24,17 @@ and update or move itself to another machine.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.
 
+### Get bia
+
+- **Computer (Mac, Windows, Linux):** bia deploy writes a USB stick or puts bia on a
+  server: [latest release](https://github.com/ZonD80/bia/releases/latest), or
+  [ownbia.com/download](https://ownbia.com/download).
+- **Android:** bia deploy puts bia on a server from the phone:
+  [Google Play](https://play.google.com/store/apps/details?id=biadeploy.android), or the
+  [APK](https://github.com/ZonD80/bia/releases/latest/download/bia-deploy-android.apk) from the latest release.
+- **iPhone:** coming soon to the App Store.
+- **A Linux server over ssh:** `curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash`
+
 ### Lineage
 
 bia is the successor of two earlier projects:

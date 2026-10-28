@@ -39,6 +39,7 @@ builder:            ## Debian build container (glibc dynamic agent + MCPs)
 	docker build --platform $(PLATFORM) -t bia-build:$(ARCH) builders
 
 build:              ## agent + MCPs + debian rootfs for $(ARCH)
+	tools/fetch-chrome-devtools.sh
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) all
 	$(OWN)
 	tools/local-files.sh $(ARCH)
@@ -50,6 +51,7 @@ mcps:
 	$(DOCKER_RUN) /work/builders/build.sh $(ARCH) mcps
 
 rootfs:
+	tools/fetch-chrome-devtools.sh
 	$(DOCKER_RUN) env ROOT_MB=$(ROOT_MB) /work/builders/build.sh $(ARCH) rootfs
 	$(OWN)
 	tools/local-files.sh $(ARCH)

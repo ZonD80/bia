@@ -262,7 +262,7 @@ pub fn land(ctx: &Ctx, port: u16, timeout: Duration) -> Result<String, String> {
 
 /// Fold this agent and send it to a landing machine (on this network by default); with `secret` (the landing machine's land secret) the flight is `BIA2`:
 /// mutual proof instead of a code, and the archive encrypted.
-pub fn fly_with(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration, secret: Option<&str>) -> Result<String, String> {
+pub fn fly_with(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Duration, secret: Option<&str>, include_backups: bool) -> Result<String, String> {
     let mut secret = secret.map(normalize_secret).filter(|s| !s.is_empty());
     if secret.is_none() {
         // a server this agent made a land secret for (carry_new_land_secret(host=…))
@@ -276,6 +276,9 @@ pub fn fly_with(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Durat
     }
     if secret.is_some() && host.map(str::trim).unwrap_or("").is_empty() {
         return Err("a flight with a land secret needs host: the address of the machine waiting for it".into());
+    }
+    if !include_backups {
+        crate::archive::refuse_old_backups(std::path::Path::new("/"), None, "carry_fly")?;
     }
     let _hold = acquire()?;
     // Fold before looking for the other machine: a fold that fails (no space) must
@@ -472,7 +475,7 @@ fn progress_line(done: u64, len: u64, took: Duration) -> String {
 }
 
 /// Decimal units, as disks and download pages show them: 950 B, 12.3 MB, 3.4 GB.
-fn human_bytes(n: u64) -> String {
+pub(crate) fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut v = n as f64;
     let mut u = 0;

@@ -124,6 +124,19 @@ pub fn build_image(src: &ImageSources, out: &Path, progress: &mut ProgressFn) ->
             }
         }
         prune_wrong_arch(&root, x86)?;
+        // The image's own GPT GUIDs: every raw copy (dd, Etcher, a takeover) starts with
+        // them, so bia-esp-id gives a disk that still has them new ones on its first boot.
+        let ids = format!(
+            "# GPT GUIDs of the release image; bia-esp-id replaces them on a disk that still has them\ndisk={}\np1={}\np2={}\np3={}\n",
+            bia_disk::guid_text(layout.disk_guid),
+            bia_disk::guid_text(layout.part_guids[0]),
+            bia_disk::guid_text(layout.part_guids[1]),
+            bia_disk::guid_text(layout.part_guids[2]),
+        );
+        let bia_dir = ensure_fat_dir(&root, Path::new("EFI/bia"))?;
+        let mut f = bia_dir.create_file("image-ids").context("create EFI/bia/image-ids")?;
+        f.truncate()?;
+        f.write_all(ids.as_bytes()).context("write EFI/bia/image-ids")?;
     }
     file.seek(SeekFrom::Start(layout.boot_start))?;
     file.write_all(esp.get_ref())?;
@@ -203,6 +216,9 @@ pub fn parse_layout(head: &[u8]) -> Result<bia_disk::Layout> {
         bios_len: bios.2,
         root_start: root.1,
         root_len: root.2,
+        // read from an image to copy its partitions; a write lays out a GPT of its own
+        disk_guid: 0,
+        part_guids: [0; 3],
     })
 }
 

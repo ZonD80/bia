@@ -27,6 +27,12 @@ final class DeployModel: ObservableObject {
 
     private var brainSig: String { [provider, apiKey, model, baseUrl, chatgptEmail ?? ""].joined(separator: "|") }
     var brainOk: Bool { wokeFor == brainSig }
+    /// The demo scenes (debug builds): the brain counts as woken, and the key as checked (no
+    /// network: the made-up key is never sent to a provider).
+    func markWoken() {
+        keyChecked = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        wokeFor = brainSig
+    }
     var brain: Brain { Brain(provider: provider, apiKey: apiKey, model: model, baseUrl: baseUrl, ctx: ctx, chatgptJson: chatgptJson) }
 
     private func message(_ e: Error) -> String {

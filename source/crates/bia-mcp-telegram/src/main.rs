@@ -3,6 +3,7 @@ mod calls;
 mod client;
 mod group_admin;
 mod groups;
+mod qr_win;
 mod speech;
 mod tts;
 
@@ -114,7 +115,7 @@ fn main() {
     let server = Server::new("telegram", env!("CARGO_PKG_VERSION"))
         .tool(
             "login",
-            "Start Telegram login. phone is the number with country code, for example +420123456789. Then ask the user for the code and call telegram_submit_code.",
+            "Start Telegram login. phone is the number with country code, for example +420123456789. The answer says where the code went (the Telegram app on another device, SMS, email, …): get the code from there and call telegram_submit_code. If Telegram first wants a login email (auth: waiting_email), call telegram_submit_email. When codes do not arrive, use telegram_login_qr instead (no code needed).",
             json!({"type": "object", "required": ["phone"], "properties": {
                 "phone": {"type": "string", "description": "phone number with country code, for example +420123456789"}
             }}),
@@ -125,11 +126,38 @@ fn main() {
         )
         .tool(
             "submit_code",
-            "Send the login code the user read from their phone or Telegram app.",
+            "Send the login code (from the Telegram app, SMS, a call or email), or the code that confirms a new login email after telegram_submit_email.",
             json!({"type": "object", "required": ["code"], "properties": {"code": {"type": "string"}}}),
             |ctx, a| {
                 Tg::global().set_ctx(ctx.clone());
                 Tg::global().submit_code(arg_str(&a, "code")?)
+            },
+        )
+        .tool(
+            "login_qr",
+            "Log in to Telegram by scanning a QR code, without any code by app, SMS or email: shows the QR in a Telegram QR window on display :0 and as a PNG (/home/bia/files/telegram/qr.png). Scan it in the Telegram app of that account on a phone where it is signed in: Settings > Devices > Link Desktop Device. It refreshes until scanned (up to 5 minutes); a system|telegram line says when the login is done or needs the 2FA password (telegram_submit_password). Use it when login codes do not arrive.",
+            json!({"type": "object", "properties": {}}),
+            |ctx, _| {
+                Tg::global().set_ctx(ctx.clone());
+                Tg::global().login_qr()
+            },
+        )
+        .tool(
+            "submit_email",
+            "Telegram wants a login email for this account before it sends a code (auth: waiting_email): send the email address for this account. A code goes there; pass it to telegram_submit_code, and Telegram then sends the login code itself.",
+            json!({"type": "object", "required": ["email"], "properties": {"email": {"type": "string", "description": "the login email for this account"}}}),
+            |ctx, a| {
+                Tg::global().set_ctx(ctx.clone());
+                Tg::global().submit_email(arg_str(&a, "email")?)
+            },
+        )
+        .tool(
+            "resend_code",
+            "The login code did not arrive: Telegram sends it again by its next method (often SMS, then a call). The answer says where it went. If Telegram offers no other method, or it still does not arrive, use telegram_login_qr.",
+            json!({"type": "object", "properties": {}}),
+            |ctx, _| {
+                Tg::global().set_ctx(ctx.clone());
+                Tg::global().resend_code()
             },
         )
         .tool(

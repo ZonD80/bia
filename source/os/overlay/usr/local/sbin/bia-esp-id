@@ -1,5 +1,6 @@
 #!/bin/bash
-# Give this system's ESP a FAT serial of its own, and use it.
+# Give this system's ESP a FAT serial of its own, and use it; and its disk GPT GUIDs of
+# its own (see unique_gpt).
 #
 # Every bia disk starts from the same image, so every ESP has the same label
 # (BIABOOT) and FAT serial (1234-5678). With a second bia drive attached (an update
@@ -158,3 +159,40 @@ fi
 if [ "$(readlink -f "$(findmnt -no SOURCE /boot 2>/dev/null)" 2>/dev/null)" = "$(readlink -f "$esp")" ]; then
   fix_grub /boot "$old" "$new"
 fi
+
+# --- this disk's GPT GUIDs ---
+# GRUB gives the kernel its root by PARTUUID (p3 on the disk it booted from). Every raw
+# copy of a release image (dd, Etcher, a takeover, the rescue) starts with the image's
+# GUIDs, listed in EFI/bia/image-ids, so two such drives would boot each other's system.
+# A disk that still has them, or shares a partition GUID with another drive, gets new
+# random ones. Only the table changes (the kernel is not told: the running system keeps
+# its view); the next boot finds the root by the new GUID.
+unique_gpt() {
+  local disk=$1 ids=$2 n g p3 stock=0 shared=0 others
+  command -v sfdisk >/dev/null 2>&1 || return 0
+  [ "$(blkid -p -s PTTYPE -o value "$disk" 2>/dev/null)" = gpt ] || return 0
+  if [ -f "$ids" ]; then
+    p3=$(sed -n 's/^p3=//p' "$ids" | tr 'A-F' 'a-f')
+    [ -n "$p3" ] && [ "$(sfdisk --part-uuid "$disk" 3 2>/dev/null | tr 'A-F' 'a-f')" = "$p3" ] && stock=1
+  fi
+  others=$(lsblk -nrpo NAME,PKNAME,PARTUUID 2>/dev/null | awk -v d="$disk" '$2 != d && $3 != "" {print tolower($3)}')
+  for n in $(lsblk -nrpo NAME,PKNAME "$disk" 2>/dev/null | awk -v d="$disk" '$2 == d {print $1}' | sed 's/.*[^0-9]//'); do
+    g=$(sfdisk --part-uuid "$disk" "$n" 2>/dev/null | tr 'A-F' 'a-f')
+    [ -n "$g" ] && grep -qx "$g" <<<"$others" && shared=1
+  done
+  [ "$stock" = 1 ] || [ "$shared" = 1 ] || return 0
+  say "$disk: GPT GUIDs $([ "$stock" = 1 ] && echo "are the release image's" || echo "are shared with another drive"); giving it new ones"
+  sfdisk --no-reread --no-tell-kernel --disk-id "$disk" "$(cat /proc/sys/kernel/random/uuid)" >/dev/null 2>&1 \
+    || say "$disk: could not set a new disk GUID"
+  for n in $(lsblk -nrpo NAME,PKNAME "$disk" 2>/dev/null | awk -v d="$disk" '$2 == d {print $1}' | sed 's/.*[^0-9]//'); do
+    g=$(cat /proc/sys/kernel/random/uuid)
+    old=$(sfdisk --part-uuid "$disk" "$n" 2>/dev/null)
+    if sfdisk --no-reread --no-tell-kernel --part-uuid "$disk" "$n" "$g" >/dev/null 2>&1; then
+      say "$disk partition $n: GUID $old -> $g"
+    else
+      say "$disk partition $n: could not set a new GUID (keeps $old)"
+    fi
+  done
+  sync
+}
+unique_gpt "/dev/$parent" /boot/EFI/bia/image-ids

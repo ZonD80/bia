@@ -309,7 +309,9 @@ fn is_public(method: &str, path: &str) -> bool {
 
 /// Routes only identity `root` may use.
 fn root_only(path: &str) -> bool {
-    path == "/gui"
+    path == "/v1/qr"
+        || path.starts_with("/v1/qr/")
+        || path == "/gui"
         || path.starts_with("/gui/")
         || path == "/websockify"
         || path.starts_with("/v1/fs/")
@@ -882,6 +884,10 @@ impl Web {
                 }
                 return;
             }
+        }
+        if method == "GET" && (path == "/v1/qr" || path.starts_with("/v1/qr/")) {
+            qr_http(&self.files, path, stream);
+            return;
         }
         match (method, path) {
             ("GET", "/v1/whoami") => respond_json(
@@ -2666,6 +2672,35 @@ fn send_file(stream: &mut dyn Write, p: &Path, name: &str, attachment: bool, ran
     let _ = stream.flush();
 }
 
+/// Login QRs the chat MCPs are showing (each writes its current one to files/<bus>/qr.png
+/// and deletes it once logged in): root's app shows them in a popup, as the screen does in
+/// a window. A file older than two minutes is a leftover (the QRs rotate every ~20–30 s).
+const QR_BUSES: [(&str, &str, &str); 2] = [
+    ("telegram", "Telegram", "Scan it in the Telegram app of that account: Settings › Devices › Link Desktop Device."),
+    ("whatsapp", "WhatsApp", "Scan it in WhatsApp on the phone: Settings › Linked devices › Link a device."),
+];
+
+fn qr_http(files: &std::path::Path, path: &str, stream: &mut dyn Write) {
+    let fresh = |bus: &str| {
+        let p = files.join(bus).join("qr.png");
+        let m = std::fs::metadata(&p).ok()?.modified().ok()?;
+        let age = std::time::SystemTime::now().duration_since(m).unwrap_or_default();
+        (age < std::time::Duration::from_secs(120)).then(|| (p, m.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)))
+    };
+    if path == "/v1/qr" {
+        let list: Vec<Value> = QR_BUSES
+            .iter()
+            .filter_map(|(bus, title, hint)| fresh(bus).map(|(_, v)| json!({"bus": bus, "title": title, "hint": hint, "v": v})))
+            .collect();
+        return respond_json(stream, json!({ "qr": list }));
+    }
+    let bus = path.trim_start_matches("/v1/qr/").trim_end_matches(".png");
+    match QR_BUSES.iter().find(|(b, _, _)| *b == bus).and_then(|(b, _, _)| fresh(b)).and_then(|(p, _)| std::fs::read(p).ok()) {
+        Some(png) => respond(stream, 200, "image/png", &png, None),
+        None => respond(stream, 404, "text/plain; charset=utf-8", b"no QR is shown", None),
+    }
+}
+
 pub(crate) fn respond_json(stream: &mut dyn Write, v: Value) {
     let b = v.to_string();
     respond(
@@ -2872,5 +2907,35 @@ mod request_json_tests {
     fn no_text_no_field() {
         let v = request_json(&req(bia_pki::RequestStatus::Approved, ""));
         assert!(v.get("message").is_none() && v.get("reason").is_none());
+    }
+}
+
+#[cfg(test)]
+mod qr_tests {
+    use super::*;
+
+    #[test]
+    fn login_qrs_for_root_only_while_fresh() {
+        assert!(root_only("/v1/qr") && root_only("/v1/qr/telegram.png"));
+        let dir = std::env::temp_dir().join(format!("bia-web-qr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("telegram")).unwrap();
+        std::fs::write(dir.join("telegram/qr.png"), b"\x89PNG fake").unwrap();
+        std::fs::create_dir_all(dir.join("whatsapp")).unwrap();
+        let old = dir.join("whatsapp/qr.png");
+        std::fs::write(&old, b"old").unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(600);
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(past).unwrap();
+        let mut out = Vec::new();
+        qr_http(&dir, "/v1/qr", &mut out);
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.contains("\"bus\":\"telegram\"") && !text.contains("whatsapp"), "a leftover QR is not shown: {text}");
+        let mut png = Vec::new();
+        qr_http(&dir, "/v1/qr/telegram.png", &mut png);
+        assert!(String::from_utf8_lossy(&png).starts_with("HTTP/1.1 200") && png.ends_with(b"\x89PNG fake"));
+        let mut gone = Vec::new();
+        qr_http(&dir, "/v1/qr/whatsapp.png", &mut gone);
+        assert!(String::from_utf8_lossy(&gone).starts_with("HTTP/1.1 404"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

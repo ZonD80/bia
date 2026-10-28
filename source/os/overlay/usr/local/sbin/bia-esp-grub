@@ -148,13 +148,35 @@ if [ -z \"\$root\" ]; then
   search --no-floppy --set=root --file $search_file
 fi"
   fi
-  # No insmod of disk modules: signed GRUB only runs modules baked into the EFI binary.
+  # The kernel's root: the root partition (p3) on the disk GRUB booted from, by PARTUUID.
+  # Another bia drive (a stick and a taken-over or imaged disk) carries the same labels,
+  # and root=LABEL= would mount whichever the kernel sees first.
+  local cmdline=$CMDLINE root_block=""
+  if [[ $cmdline == *"root=LABEL=$ROOTLABEL"* ]]; then
+    cmdline=${cmdline/root=LABEL=$ROOTLABEL/root=\$bia_root}
+    root_block="set bia_root=LABEL=$ROOTLABEL
+regexp --set=1:bia_disk '^(.*),[^,]*\$' \"\$root\"
+if [ -n \"\$bia_disk\" ]; then
+  probe --set=bia_label --label (\$bia_disk,gpt3)
+  if [ \"\$bia_label\" = \"$ROOTLABEL\" ]; then
+    probe --set=bia_part --part-uuid (\$bia_disk,gpt3)
+    if [ -n \"\$bia_part\" ]; then set bia_root=PARTUUID=\$bia_part; fi
+  fi
+fi"
+  fi
+  # No insmod of disk modules: signed GRUB only runs modules baked into the EFI binary
+  # (Debian's has search, probe, regexp and test).
+  # GRUB starts with $root on the ESP it was loaded from: search only when the kernel is
+  # not there (the search lines stay unindented: bia-esp-id rewrites them).
   cat > "$out" <<EOF
 set default=0
 set timeout=10
+if [ ! -f $search_file ]; then
 $search_block
+fi
+$root_block
 menuentry "$ENTRY_TITLE" {
-  linux $KPATH $CMDLINE
+  linux $KPATH $cmdline
   initrd $IPATH
 }
 EOF

@@ -14,6 +14,7 @@ mod jobs;
 mod llama_srv;
 mod llm;
 mod mcp;
+mod mcp_update;
 mod memory;
 mod outbox;
 mod release;

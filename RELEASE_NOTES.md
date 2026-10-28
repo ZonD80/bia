@@ -5,6 +5,31 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.1
+
+### Changes
+- Before a backup or a move to another computer, bia now checks for earlier backups lying in its files. They would be packed in again and make the archive (and the flight) much bigger, so it stops first and asks whether they can be deleted, or keeps them in when asked to.
+- A move to another computer shows its progress in plain units on both screens: how much has arrived, the speed and about how long is left.
+- bia can update a single connection or tool (for example only Telegram) from a new release, without updating the whole system; if the new one does not start, the old one comes back.
+- Chrome's page tools are in every bia system again: systems built on GitHub could lack the program they run on.
+- A bia stick now always starts its own system: with a disk in the computer that also holds bia (a server taken over, a disk written from a release image), it could start the disk's system instead. Each bia disk also gets partition IDs of its own on its first boot.
+- A program installed from a .deb file comes back after a move or an update even when that file was deleted: bia rebuilds it from the installed program first. If it cannot, it says plainly that the program must be installed again from its source, instead of a failing install attempt.
+- After a move or an update the computer keeps its timezone, and it sets its clock over the internet (NTP).
+- An update over the internet no longer fails after the whole download on a server where the system for loop devices was not loaded (it loads it first, and at every boot).
+- A login QR code (Telegram, WhatsApp) now also pops up in root's web app, the same as the window on bia's screen, so a login can be finished from a phone or another computer.
+- Telegram login by QR code: the Telegram app on a phone scans it, and no login code is needed. bia offers it when codes do not arrive, which Telegram often does to apps like bia even when it says it sent one.
+- Memory keeps what is true now (people, accounts, rules) in its reflections like everything else, instead of a separate list of facts; the existing list is kept as a "facts" topic on the newest day.
+- Telegram login works for accounts that log in by email: bia says where the login code went (the Telegram app on another device, SMS, a call or email), can ask Telegram to send it again another way, and when Telegram first wants a login email it sets one up and confirms it with the code sent there.
+
+### For bia
+- mcp_update (machine branch) lists what the latest release has for each MCP and updates one, or all that are newer, with a check and a rollback. Use it when a release fixes one MCP; a system update (carry_update) still brings everything at once.
+- If chrome page tools fail with "missing …/runtime/…/node" or "…chrome-devtools-mcp.js", run mcp_update(name="chrome").
+- carry_fold and carry_fly now refuse while earlier backups (files/carry/*.tar.gz, *.unfold-*.tar.gz) are in /home/bia/files. If a schedule of yours makes regular backups, delete the older ones once they are safely copied elsewhere (for example after the upload), or tell the owner and use include_backups=true where they want old backups kept inside.
+- If you wrote a rule about cleaning files/carry before a move, keep it: carry_fly now asks the same question itself.
+- When a Telegram code does not arrive within a couple of minutes, use telegram_login_qr: show the owner the QR (a window on your screen, and files/telegram/qr.png to send) and ask them to scan it in Telegram › Settings › Devices › Link Desktop Device.
+- memory_facts and facts_update are gone: write what is true now with reflect_write in a dream task, under a category such as facts, stating what it replaced. Your earlier facts are in a facts block on the newest reflected day.
+- Telegram login: telegram_login now says where the code went; get it from there. With auth: waiting_email, choose the login email for that account (yours or its owner's: you know whose account it is), call telegram_submit_email, then pass the code from that email to telegram_submit_code. If a code never arrives, call telegram_resend_code. If a Telegram login was left waiting for a code that never came, offer to try again.
+
 ## 1.7.0
 
 ### Changes

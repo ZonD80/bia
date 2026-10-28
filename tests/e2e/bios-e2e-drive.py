@@ -35,8 +35,11 @@ NET = ["-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
 
 
 def legacy_boot(vm, root_label):
-    """SeaBIOS -> GRUB i386-pc -> kernel with root=LABEL=<root_label>, no UEFI anywhere."""
-    vm.expect(f"kernel booted root=LABEL={root_label}", rf"Command line:[^\n]*root=LABEL={root_label}", T)
+    """SeaBIOS -> GRUB i386-pc -> kernel with the root on its own disk, no UEFI anywhere.
+
+    GRUB passes root=PARTUUID of p3 on the disk it booted from when that partition is
+    <root_label> (the image layout), else root=LABEL=<root_label>."""
+    vm.expect(f"kernel booted with its own root ({root_label})", rf"Command line:[^\n]*root=(?:PARTUUID=[0-9a-f-]+|LABEL={root_label})", T)
     m = vm.expect("firmware is SeaBIOS (no UEFI)", r"DMI: [^\n]*BIOS ([^\n]*)", 300)
     bios = m.group(1).strip()
     if "edk2" in bios.lower() or "ovmf" in bios.lower() or re.search(r"efi: EFI v", vm.text()):

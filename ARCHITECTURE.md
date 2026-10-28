@@ -23,9 +23,9 @@ agent is the only user-facing program; everything else is there to serve it.
  │             spans the rest of the stick; ext4 grows into it at boot    │
  │             (BIADISK on an internal disk installed by bia-migrate)     │
  └───────────────────────────────────────────────────────────────────────┘
-                 │ GRUB → kernel → initramfs → root=LABEL=…
+                 │ GRUB → kernel → initramfs → root=PARTUUID=… (p3 of GRUB's disk)
                  ▼
- systemd ── bia-esp-id.service   (own FAT serial for this drive's ESP; /boot by it)
+ systemd ── bia-esp-id.service   (own FAT serial for this drive's ESP; /boot by it; own GPT GUIDs)
         ├── bia-grow.service     (ext4 over the whole stick; moves in a flashed model)
         ├── bia-update.service   (finishes a pending OS update, unfolds agent)
         ├── bia.service ─ bia-session ─ Xorg :0 + openbox + tint2 + kitty
@@ -65,8 +65,17 @@ run resumes from the `.part` file. Without a list it only grows the ext4.
 1. Firmware loads `shim` → Debian-signed GRUB (UEFI), or GRUB `core.img` from
    BIABIOS (legacy BIOS, x86_64). Stock Secure Boot works because no binary is
    modified; the Debian kernel keeps its signature.
-2. GRUB boots `vmlinuz-lts` + `initramfs-lts` with
-   `root=LABEL=BIAROOT rootwait net.ifnames=0 console=tty0 console=ttyS0`.
+2. GRUB boots `vmlinuz-lts` + `initramfs-lts` from the ESP it was started from (it
+   searches by serial or label only when that ESP has no kernel) with
+   `root=PARTUUID=<p3 of that disk> rootwait net.ifnames=0 console=tty0 console=ttyS0`:
+   `grub.cfg` (`bia-esp-grub`) probes partition 3 of its own disk and passes its GUID when
+   it carries the expected label (`BIAROOT`, `BIADISK`), else `root=LABEL=…` as before. A
+   second bia drive with the same labels (a stick in a taken-over server, an image written
+   with dd) can no longer lend its root. Raw copies of one release image start with the
+   image's GUIDs (`bia-deploy image` lists them in `EFI/bia/image-ids`); `bia-esp-id` gives
+   such a disk, or one that shares a partition GUID with another drive, new random GUIDs
+   on its first boot (`sfdisk --no-tell-kernel`: the running system keeps its view).
+   `bia-deploy write` lays out a fresh GPT, so a stick it writes has its own GUIDs anyway.
    A **rescue hook** (`bia-rescue-hook`) appended to every bia `grub.cfg` boots
    the rescue image instead while `bia-rescue/next.cfg` exists.
 3. The stock Debian initramfs mounts the root named on the command line:
@@ -130,7 +139,8 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `jobs.rs`, `bash.rs` | every MCP call and shell command is a job; results return as `system|job:<id>|…` envelopes; PTY shells as root or `bia` |
 | `outbox.rs` | telegram/whatsapp sends, edits, reactions and deletes: per-chat FIFO worker threads, local `o<n>` ids mapped to platform ids |
 | `memory.rs` | append-only journal + time-ranged categorized reflections of the live window (`/reflect`) |
-| `dream.rs` | long-term memory: calendar reflections (day, week, month, year), the facts ledger and the morning report, written by the model at night in `system|dream` tasks; whole-memory rebuild (`/dream`, `/memory`) |
+| `mcp_update.rs` | one MCP from a release's `mcp-<name>.tar.gz` (checked, swapped in, rolled back if it does not start): `mcp_update` |
+| `dream.rs` | long-term memory: calendar reflections (day, week, month, year) and the morning report, written by the model at night in `system|dream` tasks; whole-memory rebuild (`/dream`, `/memory`) |
 | `schedules.rs` | calendar of tasks/reminders, delivered as `system|schedule` with catch-up after boot |
 | `state.rs` | `files/state/conversation.json` (fsynced, `.bak` fallback) |
 | `buses.rs`, `addressbook.rs` | buses (console built in; web, telegram, whatsapp from their MCPs), channels, contacts with trust levels |
@@ -202,9 +212,11 @@ reflections for that stretch of time; those are custom periods, cut wherever the
 context ran out. Long-term memory is a calendar on top of the journal, written by the
 model itself (`dream.rs`), in generations `files/state/memory/gen-<n>/`:
 `nodes.jsonl` (a reflection per day, week, month and year, each block under a
-category the model chose, one of them the period's overview), `facts.json` (the facts
-ledger: what is true now; a changed fact is `replaced` or `retired` with why and when,
-never deleted), `categories.json` (each category with its meaning, or `merged_into`),
+category the model chose, one of them the period's overview; what is true now is such a
+block too, written as it stands with what it replaced, and the newest period wins: there is
+no separate facts store; 1.7.0's `facts.json` is turned into a `facts` block on the newest
+reflected day and kept as `facts.json.migrated`), `categories.json` (each category with
+its meaning, or `merged_into`),
 `empty.json` (days with no messages). `dream.json` holds the schedule and progress.
 
 When: the quiet window is learnt from root's own messages over the last 14 days
@@ -220,9 +232,8 @@ week, month and year whose days are done. It is a regular turn, so people who wr
 meanwhile are answered as usual. The model reads with `journal_day` (the day's digest,
 paged at about a quarter of the context; long tool results cut, with a
 `memory_messages(ids, full=true)` hint; secrets masked), `memory_messages`,
-`memory_list` / `memory_get` / `memory_facts`, and writes with `reflect_write` (new
-categories need their meaning), `facts_update` (add / replace / retire),
-`category_merge`, `reflect_note` (notes that survive a context reset during the
+`memory_list` / `memory_get`, and writes with `reflect_write` (new categories need
+their meaning), `category_merge`, `reflect_note` (notes that survive a context reset during the
 task), `report_write` (the morning report, `files/reports/morning-<date>.md`: sections
 such as "For you" and "Needs your yes"; proposals never change settings themselves),
 and ends with `task_done` (refused until an overview exists; the third refusal writes
@@ -231,8 +242,7 @@ removed from the live context, leaving one `dreamed: <task>` line. A task with n
 dream tool call for 5 minutes is posted again as a reminder, and after two reminders
 it is closed (with a minimal overview if none was written), so a night never stalls.
 
-After the night the start of the live context is rebuilt from the calendar: current
-facts, last month, this month's weeks and this week's days (overviews, as memory
+After the night the start of the live context is rebuilt from the calendar: last month, this month's weeks and this week's days (overviews, as memory
 stubs with `bundle=calendar`), plus today's own reflections. The agent's idle wait
 wakes every 30 s to apply this and the pruning, so the next message already sees it.
 In the morning (when root first writes, or at the window's end) a `morning:` task
@@ -245,6 +255,12 @@ conversations, can be paused and resumed, and switches `current_gen` when done,
 keeping the previous generation for `rollback`. No morning report during a rebuild.
 
 ### Web
+
+Login QRs: the telegram and whatsapp MCPs write their current QR to
+`files/<bus>/qr.png` (and show it in a kitty window on :0); the web MCP lists the fresh
+ones (`GET /v1/qr`, root only, files older than 2 min ignored) and serves them
+(`/v1/qr/<bus>.png`); root's app polls every 3 s and shows a popup that follows the
+rotation and closes when the MCP deletes the file after the login.
 
 The web app is the `web` MCP (`source/crates/bia-mcp-web`), a bus like telegram
 and whatsapp. It has nothing to do with the console: the console is the
@@ -338,12 +354,12 @@ into `/home/bia/MCPs`.
 | `secrets` | passwords, TOTP/HOTP, WebAuthn passkeys (ES256) in `files/state/passwords.json`; 1Password CSV/JSON import, CXF export |
 | `chrome` | Google Chrome on profile `~/.config/bia-chrome` with remote debugging; force-installed CRX extension proxies WebAuthn to `secrets`; page automation through Google's `chrome-devtools-mcp` (vendored Node); native GTK file dialogs are announced (`[file dialog opened]`) and answered with `chrome_choose_files` (xdotool on :0; for a folder it waits for Chrome's in-window "Upload N files?" prompt and returns its words with x,y for the model to click; test: `tests/integration/chrome-dialog-test.sh`) |
 | `screen` | screenshot, mouse and keyboard on `:0` (xdotool/scrot); `screen_ocr` lists the words on screen (or a region) with their center x,y (`bia-ocr`: PaddleOCR PP-OCRv5 mobile on the image's onnxruntime, recognizers for Chrome's languages plus English, sha256-pinned models downloaded on first use into `files/ocr/models`; test: `tests/integration/screen-ocr-test.sh`) |
-| `telegram` | a real Telegram user via ferogram; voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`) and their administration (`group_info`, `set_admin` with named rights and a title, `group_permissions` for what members may do plus slow mode, join approval, history for new members, protected content and disappearing messages, `restrict_member`, `set_group_info`, `join_requests` / `answer_join_request`, `join_group` by invite link or public name); deletes are for everyone unless `revoke=false` |
+| `telegram` | a real Telegram user via ferogram (vendored in `source/vendor/ferogram` with email login added: `LoginToken.delivery`, `sign_in_email`, `setup_login_email`, `verify_login_email`); login says where the code went (the app on another device, SMS, call, Fragment, email), `telegram_resend_code` asks for the next method, and an account Telegram makes set up a login email first goes through `telegram_submit_email` and its verification code; `telegram_login_qr` logs in with no code at all (tg://login?token= QR in a "Telegram QR" window and `files/telegram/qr.png`, refreshed before each ~30 s token expires, polled every 2 s, then 2FA through `submit_password`; every code answer points to it, since Telegram often reports a code "sent by app" for third-party API ids and delivers nothing) (no passkey login: ferogram's schema has none); voice calls via tgcalls/ntgcalls; speech through `bia-speech`; locations, venues and contacts in and out (`send_location`, `send_contact`); groups (`create_group`, `add_members`, `remove_member`, `leave_group`, `group_invite_link`) and their administration (`group_info`, `set_admin` with named rights and a title, `group_permissions` for what members may do plus slow mode, join approval, history for new members, protected content and disappearing messages, `restrict_member`, `set_group_info`, `join_requests` / `answer_join_request`, `join_group` by invite link or public name); deletes are for everyone unless `revoke=false` |
 | `whatsapp` | WhatsApp linked device via whatsapp-rust (QR pairing in a kitty window), voice calls via its VoIP plane; speech through `bia-speech`; locations and contacts in and out (`send_location`, `send_contact`); groups (same five tools) and their administration (`group_info`, `set_admin`, `group_permissions`: who may send / edit info / add, join approval, disappearing messages; `set_group_info`, `join_requests` / `answer_join_request`, `join_group` by `chat.whatsapp.com` link); deletes are for everyone unless `revoke=false` |
 | `messenger` | Facebook Messenger as the account signed in to bia's Chrome (cookies read over Chrome's DevTools port, no password); classic and end-to-end encrypted chats (encrypted ones over WhatsApp's protocol as a registered device); text, files, voice messages (TTS → AAC), replies, edits, reactions, unsends, read marks, typing; search and resolve (names, profile links, ids); groups (create, add/remove, leave, `group_info`, `set_admin`, `set_group_info`; encrypted groups also `group_permissions` and join requests, like WhatsApp); bans, Meta blocks, message requests, mute; `join_group` (here and in `instagram`) answers how: the protocol has no join-by-link call, so bia opens the link in its own Chrome, signed in to the same account, and presses Join; the Facebook bio (`set_profile`, the GraphQL mutation fbchat-v2 uses; name and photo stay in Chrome); no calls. Chat ids: a person's Facebook id, `t<thread>` for a classic group, `<id>@g.us` for an encrypted one |
 | `instagram` | Instagram DMs the same way (session from Chrome); shared posts and reels as `[shared]` lines with their link; also pins (chat or message); unsend only (no remove-for-me). Chat id: the thread key (a DM's is the other person's id) |
 | `lang` | languages bia hears and speaks: catalog (`catalog.json`, sha256-pinned), on-demand installs into `files/speech`, voices, speech settings, transcribe/synthesize files |
-| `carry` | `fold`/`unfold` backups of `/home/bia`; `fly` to a machine in land mode (UDP discovery, X25519 handshake, confirmed code); `update` and `rescue` (see below); `morph` |
+| `carry` | `fold`/`unfold` backups of `/home/bia` (`fold` and `fly` refuse while earlier backups, `files/carry/*.tar.gz` or `*.unfold-*.tar.gz`, lie under `files`, listing them for the model to clear with the owner; `include_backups=true` packs them in; transfers report size, speed and time left every 5 s); `fly` to a machine in land mode (UDP discovery, X25519 handshake, confirmed code); `update` and `rescue` (see below); `morph` |
 
 ### Messenger and Instagram
 
@@ -540,6 +556,16 @@ FMM keys, the Apple app password, `HF_TOKEN` and the home path first.
 `bia-os.json` lists each image with its download and raw size and SHA-256; the
 release must be a pushed, clean commit. Asset names carry no version, so
 `releases/latest/download/<name>` always works (website download buttons).
+Each shipped MCP is a package too (`mcps`): `mcp-<name>.tar.gz` is its whole folder as
+`/home/bia/MCPs` holds it (both architectures' binaries, chrome's Node and
+chrome-devtools-mcp), and `bia-os.json` lists it under `"mcps"` with version, size and
+sha256. On a running bia, `mcp_update` (agent, `mcp_update.rs`) lists the latest release's
+MCPs against the installed ones and updates one or all newer: it downloads and checks the
+archive, unpacks it over a copy of the installed folder (files the image added, such as
+chrome's native host, stay), swaps it in with the old folder kept as `.<name>.prev`, and
+restarts the MCP as `discover(restart=true)` does; if that fails the old folder comes back.
+The chrome payload is git-ignored and fetched by `tools/fetch-chrome-devtools.sh` before
+every `make build`/`make rootfs`; `rootfs.sh` refuses an image without it.
 The phone apps are packages too: `app-android` (`bia-deploy-android.apk` and `.aab`,
 signed with the Play upload key) and `app-ios` (`bia-deploy-ios-unsigned.ipa`).
 

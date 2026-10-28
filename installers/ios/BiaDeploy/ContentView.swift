@@ -24,9 +24,22 @@ struct ContentView: View {
                 if let e = model.error { ErrorCard(text: e) }
             }
             .padding(16)
+            // on an iPad the wizard stays a readable column in the middle
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
         }
         .background(Color(.systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
+        #if DEBUG
+        .task {
+            // store screenshots: `-demo <scene>` (made-up data, no network)
+            if let scene = UserDefaults.standard.string(forKey: "demo") {
+                let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                    .appendingPathComponent("bia-deploy", isDirectory: true)
+                model.demo(scene, appDir: dir)
+            }
+        }
+        #endif
     }
 }
 
@@ -386,8 +399,28 @@ struct KeyCard: View {
     @ObservedObject var model: DeployModel
     let folder: String
     let host: String
+    /// set in the list of saved keys: one short card per bia (the page explains them once)
+    var savedAt: Date? = nil
 
     var body: some View {
+        if let savedAt {
+            Card {
+                Text("bia at \(host)").font(.title3.weight(.semibold))
+                Text("key saved \(savedAt.formatted(date: .abbreviated, time: .omitted))").font(.subheadline).foregroundStyle(.secondary)
+                HStack {
+                    Button("Install") { model.installProfile(folder: folder, host: host) }.buttonStyle(.bordered)
+                    ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
+                        Label("Share…", systemImage: "square.and.arrow.up")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        } else {
+            full
+        }
+    }
+
+    private var full: some View {
         Card {
             Text("bia's key").font(.title3.weight(.semibold))
             Text("bia-\(host).p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password \(p12Password())).")
@@ -422,9 +455,17 @@ struct KeysPage: View {
     @ObservedObject var model: DeployModel
     var body: some View {
         Button("‹  Back") { model.page = .brain }
-        if model.saved.isEmpty {
-            Card { Text("No bia's keys on this phone yet: they are kept here after a deploy.") }
+        Card {
+            Text("bia keys").font(.title3.weight(.semibold))
+            if model.saved.isEmpty {
+                Text("No bia's keys on this phone yet: they are kept here after a deploy.")
+            } else {
+                Text("Each is root's certificate for one bia, the only way into it (password \(p12Password())). Install offers it to this device as a profile; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
         }
-        ForEach(model.saved, id: \.folder) { b in KeyCard(model: model, folder: b.folder, host: b.host) }
+        ForEach(model.saved, id: \.folder) { b in
+            KeyCard(model: model, folder: b.folder, host: b.host, savedAt: Date(timeIntervalSince1970: TimeInterval(b.savedAt)))
+        }
     }
 }

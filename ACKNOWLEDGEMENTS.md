@@ -67,7 +67,7 @@ QEMU) and Yaaia's communication features (messengers, calls, contacts,
 
 | Project | Used for |
 |---|---|
-| [ferogram](https://crates.io/crates/ferogram) | Telegram MTProto user client |
+| [ferogram](https://crates.io/crates/ferogram) | Telegram MTProto user client (vendored with an email-login patch, `source/vendor/ferogram`) |
 | [tgcalls](https://github.com/ankit-chaubey/tgcalls) | Telegram voice calls (vendored with a patch in `source/vendor/tgcalls`) |
 | [NTgCalls](https://github.com/pytgcalls/ntgcalls) | native call media library, LGPL-3.0 (vendored binding in `source/vendor/ntgcalls`, `libntgcalls.so` shipped) |
 | [whatsapp-rust](https://crates.io/crates/whatsapp-rust) | WhatsApp linked-device client and VoIP |

@@ -31,7 +31,7 @@ LAND = bool(os.environ.get("LAND"))
 AGENT_LAND = os.environ.get("LAND") == "agent"
 DEPLOY = bool(os.environ.get("DEPLOY"))
 # DREAM=1: after the checks, the night work on long-term memory with the real brain: three
-# seeded past days are reflected (dream now), the facts ledger follows a change, the live
+# seeded past days are reflected (dream now), a changed fact is written as it is now, the live
 # context sheds the work; then a whole-memory rebuild after root's yes, answering a
 # message in the middle of it.
 DREAM = bool(os.environ.get("DREAM"))
@@ -491,17 +491,14 @@ json.dump(m, open(g, 'w'))
     want(all(str(d) in done for d in days), f"the three seeded days are reflected, each with an overview ({sorted(done)})")
     cats = fsjson("/home/bia/files/state/memory/gen-1/categories.json") or {}
     want(cats and all(c.get("meaning") or c.get("merged_into") for c in cats.values()), f"categories chosen by the model, each with its meaning ({', '.join(cats)})")
-    facts = fsjson("/home/bia/files/state/memory/gen-1/facts.json") or []
-    cur = [f for f in facts if f["status"] == "current"]
-    # the model may put "gym" in the topic and only the day in the text
-    gym_now = [f for f in cur if re.search(r"gym", f["topic"] + " " + f["text"], re.I)]
-    gym_old = [f for f in facts if f["status"] != "current" and re.search(r"tuesday", f["text"], re.I)]
-    # "Thursday (changed from Tuesday)" is right; a current gym fact on Tuesday alone is not
-    want(any(re.search(r"thursday", f["text"], re.I) for f in gym_now) and not any(re.search(r"tuesday", f["text"], re.I) and not re.search(r"thursday", f["text"], re.I) for f in gym_now),
-         f"the facts ledger has the gym on Thursday now ({[f['text'] for f in gym_now]})")
-    want(bool(gym_old), "the Tuesday gym fact is kept in its history (replaced or retired), not deleted")
-    want(any(re.search(r"ruiz", f["text"], re.I) for f in cur), "the dentist is a current fact")
-    print("  ..   facts:", "; ".join(f"[{f['topic']}] {f['text']}" for f in cur)[:600], flush=True)
+    # what is true now lives in the reflections themselves (no separate facts store): the day
+    # the gym moved says Thursday, and the dentist is remembered somewhere
+    last = str(days[-1])
+    gym = [n for n in ns if n.get("period") == last and re.search(r"gym", n.get("text", ""), re.I)]
+    want(any(re.search(r"thursday", n["text"], re.I) for n in gym), f"the reflection of {last} has the gym on Thursday now ({[n['text'][:120] for n in gym]})")
+    want(any(re.search(r"ruiz", n.get("text", ""), re.I) for n in ns), "the dentist (Dr. Ruiz) is in the reflections")
+    want(not fsjson("/home/bia/files/state/memory/gen-1/facts.json"), "no separate facts store")
+    print("  ..   blocks:", "; ".join(f"[{n['period']} {n['category']}] {n['text'][:80]}" for n in ns if not n.get("overview"))[:600], flush=True)
     # the spine is swapped in when the agent next goes idle
     end = time.time() + 5 * 60 * SCALE
     while True:

@@ -105,12 +105,12 @@ in_chroot apt-get install -y --no-install-recommends \
   "$KPKG" initramfs-tools \
   $BOOT_PKGS \
   e2fsprogs dosfstools exfatprogs ntfs-3g \
-  util-linux fdisk parted mount procps rsync \
+  util-linux fdisk parted mount procps rsync dpkg-repack \
   efibootmgr \
   bash ca-certificates wget curl bzip2 xz-utils openssh-client \
   python3-minimal \
   wpasupplicant iw \
-  tzdata adduser passwd login sudo libnss-myhostname \
+  tzdata systemd-timesyncd adduser passwd login sudo libnss-myhostname \
   kbd kexec-tools \
   alsa-utils \
   xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-dummy xauth x11-xserver-utils x11-utils \
@@ -184,6 +184,16 @@ for d in /work/source/flash/MCPs/*; do
     exit 1
   fi
 done
+# chrome's page tools run chrome-devtools-mcp on a vendored Node (git-ignored, fetched by
+# tools/fetch-chrome-devtools.sh): without them the image's Chrome starts but cannot drive pages
+if [ -d /work/source/flash/MCPs/chrome ]; then
+  for f in "runtime/$FILEARCH/node" devtools/build/src/bin/chrome-devtools-mcp.js; do
+    if [ ! -f "/work/source/flash/MCPs/chrome/$f" ]; then
+      echo "MCP chrome has no $f — run tools/fetch-chrome-devtools.sh before rootfs"
+      exit 1
+    fi
+  done
+fi
 rm -f "$OUT/chrome-native-host" "$OUT/chrome-user"
 if [ -x "$OUT/bia-mcp-chrome" ] && [ -d /work/source/flash/MCPs/chrome ]; then
   stage=$(mktemp -d)

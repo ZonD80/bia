@@ -546,6 +546,10 @@ net_stage() {
   for c in curl xz losetup sha256sum python3 rsync; do
     command -v "$c" >/dev/null 2>&1 || refuse "internet" "$c is missing; update from a flash stick instead"
   done
+  # the image is opened through loop devices: make sure they exist before the download
+  # (a disk set up on another host, e.g. a VM taken over, may not have loaded the module)
+  modprobe loop 2>/dev/null || true
+  [ -e /dev/loop-control ] || refuse "loop devices" "this kernel has no loop devices (modprobe loop failed): the downloaded image could not be opened"
   arch=$(release_arch)
   mkdir -p "$NET"
   chmod 700 "$UPDATE"

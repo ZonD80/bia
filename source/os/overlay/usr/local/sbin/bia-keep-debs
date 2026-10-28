@@ -28,6 +28,10 @@ keep() {
   local cwd
   cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null) || cwd=/
   mkdir -p "$STORE" || return 0
+  [ -f "$STORE/README.txt" ] || printf '%s\n' \
+    "bia's copies of packages installed from a .deb file (dpkg -i, apt install ./file.deb)." \
+    "A move or an update reinstalls them from here: no repository has them. Do not delete" \
+    "them while the package is installed; a fold removes the ones no longer installed." >"$STORE/README.txt" 2>/dev/null || true
   while IFS= read -r -d '' deb; do
     case $deb in
       *.deb) ;;

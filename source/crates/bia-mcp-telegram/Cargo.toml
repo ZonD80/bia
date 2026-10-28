@@ -16,4 +16,7 @@ tokio = { version = "1", features = ["full"] }
 ferogram = "0.6.5"
 tgcalls = "0.2.0"
 tracing = "0.1"
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
 log = "0.4"

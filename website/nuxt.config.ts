@@ -65,7 +65,7 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 - [Why bia](${siteUrl}/why-bia): compared with typical AI assistants
 - [Fred's story](${siteUrl}/fred): a real bia's first three weeks in its own words, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
-- [Get bia](${siteUrl}/download): the USB stick writer
+- [Get bia](${siteUrl}/download): bia deploy for Mac, Windows and Linux (USB sticks and servers), and for Android on Google Play (https://play.google.com/store/apps/details?id=biadeploy.android; servers); iPhone coming soon
 - [Privacy](${siteUrl}/privacy): no data collected, by the website, the bia deploy apps or bia
 - [Servers and virtual machines](${siteUrl}/servers): turn a running Linux server or VPS into bia with one command (takeover.sh, also in land mode), let a bia set up a server over ssh and fly there, or install from the land ISO
 
