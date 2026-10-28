@@ -265,7 +265,10 @@ if [ -d /work/source/flash ]; then
   FLASH_MB=$((FLASH_MB - gguf_mb))
   [ "$FLASH_MB" -lt 0 ] && FLASH_MB=0
 fi
-NEED=$((USED + FLASH_MB + 256 + 64))
+# ext4's own space (journal, inode tables, group descriptors) is not in du's numbers and
+# grows with the image: 5% plus 128 MiB (a flat 64 MiB ran out once /home/bia carried the
+# MCPs of both architectures)
+NEED=$(( (USED + FLASH_MB + 256) * 105 / 100 + 128 ))
 if [ "$NEED" -gt "$ROOT_MB" ]; then
   ROOT_MB=$(( (NEED + 63) / 64 * 64 ))
   echo "OS ${USED}M + /home/bia ${FLASH_MB}M + swap 256M need ${NEED}M; root image grows to ${ROOT_MB}M"

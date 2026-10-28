@@ -329,7 +329,7 @@ fn fly_archive(ctx: &Ctx, host: Option<&str>, port: Option<u16>, timeout: Durati
     publish_code(ctx, &code);
     let decision = wait_decision(ctx, Duration::from_secs(180));
     finish_confirm(ctx, &mut stream, decision)?;
-    ctx.log(format!("fly: sending {len} bytes"));
+    ctx.log(format!("fly: sending {}", human_bytes(len)));
     send_archive(ctx, &mut stream, archive, len)?;
     let mut ack = [0u8; 1];
     read_full(ctx, &stream, &mut ack, Duration::from_secs(120))?;
@@ -422,6 +422,7 @@ fn send_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path, len: 
     let mut buf = vec![0u8; 64 * 1024];
     let mut sent = 0u64;
     let mut last = Instant::now();
+    let rate = Rate::start();
     while left > 0 {
         ctx.check_cancel()?;
         let n = buf.len().min(left as usize);
@@ -430,15 +431,65 @@ fn send_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path, len: 
         hasher.update(&buf[..n]);
         left -= n as u64;
         sent += n as u64;
-        if last.elapsed() >= Duration::from_secs(1) {
-            ctx.log(format!("fly: sent {sent} / {len} bytes"));
+        if last.elapsed() >= PROGRESS_EVERY {
+            ctx.log(format!("fly: sent {}", rate.line(sent, len)));
             last = Instant::now();
         }
     }
     let dig = hasher.finalize();
     stream.write_all(&dig).map_err(|e| e.to_string())?;
-    ctx.log(format!("fly: sent {len} bytes"));
+    ctx.log(format!("fly: sent {}", human_bytes(len)));
     Ok(())
+}
+
+/// How often a transfer reports: a line a second scrolls a serial or VNC console too fast.
+const PROGRESS_EVERY: Duration = Duration::from_secs(5);
+
+/// `1.2 GB of 3.4 GB (35%) · 12.3 MB/s · about 3 min left`, speed averaged since the start.
+struct Rate(Instant);
+
+impl Rate {
+    fn start() -> Self {
+        Rate(Instant::now())
+    }
+
+    fn line(&self, done: u64, len: u64) -> String {
+        progress_line(done, len, self.0.elapsed())
+    }
+}
+
+fn progress_line(done: u64, len: u64, took: Duration) -> String {
+    let pct = if len == 0 { 100 } else { done.saturating_mul(100) / len };
+    let mut out = format!("{} of {} ({pct}%)", human_bytes(done), human_bytes(len));
+    let secs = took.as_secs_f64();
+    if secs >= 1.0 && done > 0 {
+        let speed = done as f64 / secs;
+        out.push_str(&format!(" · {}/s", human_bytes(speed as u64)));
+        let left = (len.saturating_sub(done)) as f64 / speed;
+        out.push_str(&format!(" · about {} left", human_duration(left as u64)));
+    }
+    out
+}
+
+/// Decimal units, as disks and download pages show them: 950 B, 12.3 MB, 3.4 GB.
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    if u == 0 { format!("{n} B") } else if v >= 100.0 { format!("{v:.0} {}", UNITS[u]) } else { format!("{v:.1} {}", UNITS[u]) }
+}
+
+/// 45 s, 3 min, 1 h 20 min.
+fn human_duration(s: u64) -> String {
+    match s {
+        0..=59 => format!("{} s", s.max(1)),
+        60..=3599 => format!("{} min", (s + 30) / 60),
+        _ => format!("{} h {} min", s / 3600, (s % 3600) / 60),
+    }
 }
 
 fn recv_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path) -> Result<(), String> {
@@ -454,6 +505,7 @@ fn recv_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path) -> Re
     let mut buf = vec![0u8; 64 * 1024];
     let mut got = 0u64;
     let mut last = Instant::now();
+    let rate = Rate::start();
     while left > 0 {
         ctx.check_cancel()?;
         let n = buf.len().min(left as usize);
@@ -462,8 +514,8 @@ fn recv_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path) -> Re
         hasher.update(&buf[..n]);
         left -= n as u64;
         got += n as u64;
-        if last.elapsed() >= Duration::from_secs(1) {
-            ctx.log(format!("land: received {got} / {len} bytes"));
+        if last.elapsed() >= PROGRESS_EVERY {
+            ctx.log(format!("land: received {}", rate.line(got, len)));
             last = Instant::now();
         }
     }
@@ -475,7 +527,7 @@ fn recv_archive(ctx: &Ctx, stream: &mut TcpStream, path: &std::path::Path) -> Re
         return Err("archive checksum did not match".into());
     }
     file.flush().map_err(|e| e.to_string())?;
-    ctx.log(format!("land: received {len} bytes"));
+    ctx.log(format!("land: received {}, checksum good", human_bytes(len)));
     Ok(())
 }
 
@@ -725,6 +777,7 @@ fn send_archive_secret(ctx: &Ctx, stream: &mut TcpStream, ch: &mut Secure, path:
     let (mut left, mut sent) = (len, 0u64);
     let mut buf = vec![0u8; FRAME];
     let mut last = Instant::now();
+    let rate = Rate::start();
     while left > 0 {
         ctx.check_cancel()?;
         let n = buf.len().min(left as usize);
@@ -733,13 +786,13 @@ fn send_archive_secret(ctx: &Ctx, stream: &mut TcpStream, ch: &mut Secure, path:
         hasher.update(&buf[..n]);
         left -= n as u64;
         sent += n as u64;
-        if last.elapsed() >= Duration::from_secs(1) {
-            ctx.log(format!("fly: sent {sent} / {len} bytes"));
+        if last.elapsed() >= PROGRESS_EVERY {
+            ctx.log(format!("fly: sent {}", rate.line(sent, len)));
             last = Instant::now();
         }
     }
     ch.send(stream, &hasher.finalize())?;
-    ctx.log(format!("fly: sent {len} bytes (encrypted)"));
+    ctx.log(format!("fly: sent {} (encrypted)", human_bytes(len)));
     Ok(())
 }
 
@@ -752,6 +805,7 @@ fn recv_archive_secret(ctx: &Ctx, stream: &TcpStream, ch: &mut Secure, path: &st
     let mut file = File::create(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     let (mut got, mut last) = (0u64, Instant::now());
+    let rate = Rate::start();
     while got < len {
         ctx.check_cancel()?;
         let chunk = ch.recv(ctx, stream, Duration::from_secs(120))?;
@@ -761,8 +815,8 @@ fn recv_archive_secret(ctx: &Ctx, stream: &TcpStream, ch: &mut Secure, path: &st
         file.write_all(&chunk).map_err(|e| e.to_string())?;
         hasher.update(&chunk);
         got += chunk.len() as u64;
-        if last.elapsed() >= Duration::from_secs(1) {
-            ctx.log(format!("land: received {got} / {len} bytes"));
+        if last.elapsed() >= PROGRESS_EVERY {
+            ctx.log(format!("land: received {}", rate.line(got, len)));
             last = Instant::now();
         }
     }
@@ -772,7 +826,7 @@ fn recv_archive_secret(ctx: &Ctx, stream: &TcpStream, ch: &mut Secure, path: &st
         return Err("archive checksum did not match".into());
     }
     file.flush().map_err(|e| e.to_string())?;
-    ctx.log(format!("land: received {len} bytes"));
+    ctx.log(format!("land: received {}, checksum good", human_bytes(len)));
     Ok(())
 }
 
@@ -990,6 +1044,23 @@ fn ipv4_of(sa: *const libc::sockaddr) -> Option<Ipv4Addr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_reads_like_a_person_would_say_it() {
+        assert_eq!(human_bytes(950), "950 B");
+        assert_eq!(human_bytes(12_345_678), "12.3 MB");
+        assert_eq!(human_bytes(3_400_000_000), "3.4 GB");
+        assert_eq!(human_bytes(250_000_000), "250 MB");
+        assert_eq!(human_duration(45), "45 s");
+        assert_eq!(human_duration(170), "3 min");
+        assert_eq!(human_duration(4800), "1 h 20 min");
+        // 1.2 GB of 3.4 GB in 100 s: 12 MB/s, 2.2 GB to go → about 3 min
+        assert_eq!(
+            progress_line(1_200_000_000, 3_400_000_000, Duration::from_secs(100)),
+            "1.2 GB of 3.4 GB (35%) · 12.0 MB/s · about 3 min left"
+        );
+        assert_eq!(progress_line(0, 3_400_000_000, Duration::ZERO), "0 B of 3.4 GB (0%)");
+    }
 
     fn pair() -> (TcpStream, TcpStream) {
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
