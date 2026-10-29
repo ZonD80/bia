@@ -140,7 +140,7 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `outbox.rs` | telegram/whatsapp sends, edits, reactions and deletes: per-chat FIFO worker threads, local `o<n>` ids mapped to platform ids |
 | `memory.rs` | append-only journal + time-ranged categorized reflections of the live window (`/reflect`) |
 | `mcp_update.rs` | one MCP from a release's `mcp-<name>.tar.gz` (checked, swapped in, rolled back if it does not start): `mcp_update` |
-| `dream.rs` | long-term memory: calendar reflections (day, week, month, year) and the morning report, written by the model at night in `system|dream` tasks; whole-memory rebuild (`/dream`, `/memory`) |
+| `dream.rs` | long-term memory: calendar reflections (day, week, month, year), the nightly update check and the morning message, written by the model at night in `system|dream` tasks; whole-memory rebuild (`/dream`, `/memory`) |
 | `schedules.rs` | calendar of tasks/reminders, delivered as `system|schedule` with catch-up after boot |
 | `state.rs` | `files/state/conversation.json` (fsynced, `.bak` fallback) |
 | `buses.rs`, `addressbook.rs` | buses (console built in; web, telegram, whatsapp from their MCPs), channels, contacts with trust levels |
@@ -234,25 +234,36 @@ paged at about a quarter of the context; long tool results cut, with a
 `memory_messages(ids, full=true)` hint; secrets masked), `memory_messages`,
 `memory_list` / `memory_get`, and writes with `reflect_write` (new categories need
 their meaning), `category_merge`, `reflect_note` (notes that survive a context reset during the
-task), `report_write` (the morning report, `files/reports/morning-<date>.md`: sections
-such as "For you" and "Needs your yes"; proposals never change settings themselves),
-and ends with `task_done` (refused until an overview exists; the third refusal writes
+task), and ends with `task_done` (refused until an overview exists; the third refusal writes
 a minimal one). After `task_done` the task message and its dream tool traffic are
 removed from the live context, leaving one `dreamed: <task>` line. A task with no
 dream tool call for 5 minutes is posted again as a reminder, and after two reminders
 it is closed (with a minimal overview if none was written), so a night never stalls.
 
+The night's last task, `updates:<morning>` (also on a night with nothing to reflect), checks
+for a newer bia: `mcp_update()` says whether the latest release is newer than this system and
+lists its MCPs. The model does what root said about updates, from its context and memory
+(install them itself, only MCPs, ask first, never). Without such an instruction it installs
+nothing. When it may install, MCPs go through
+`mcp_update(name="all")` and the system through `carry_update(from="internet")`; the task stays
+open across the update's reboots and ends with `task_done` after it. It writes no memory and
+needs no overview.
+
 After the night the start of the live context is rebuilt from the calendar: last month, this month's weeks and this week's days (overviews, as memory
 stubs with `bundle=calendar`), plus today's own reflections. The agent's idle wait
 wakes every 30 s to apply this and the pruning, so the next message already sees it.
-In the morning (when root first writes, or at the window's end) a `morning:` task
-tells root about the report with the file attached.
+Whatever the model wants to tell root, it writes down itself during the night, where and
+how it likes, including what to improve; an improvement that is not risky (its own scripts,
+notes, MCPs) it may make itself, while settings, accounts, schedules and software root relies
+on stay untouched. The dream does not track any of it. In the morning (when root first writes, or at
+the window's end) a `morning:` task asks the model to tell root what it wrote down, with its
+file attached, or nobody when there is nothing.
 
 Rebuild (`memory_rebuild`, `/memory rebuild`): re-reflects the whole journal into a new
 generation. `estimate` shows the tasks and the tokens it would take; `start` works
 only after root's own yes, written after the estimate. It runs task after task between
 conversations, can be paused and resumed, and switches `current_gen` when done,
-keeping the previous generation for `rollback`. No morning report during a rebuild.
+keeping the previous generation for `rollback`. No morning notes during a rebuild.
 
 ### Web
 

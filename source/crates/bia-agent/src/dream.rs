@@ -2,9 +2,10 @@
 //!
 //! In the owner's quietest hours (learned from when root writes, all buses), a thread posts
 //! `system|dream` tasks into the normal conversation, one at a time: reflect a past day from
-//! the journal, a week from its days, a month, a year, and in the morning tell root what it
-//! found. The model works them with tools (journal_day, memory_messages full, reflect_write,
-//! report_write, task_done) like any task; people who write meanwhile are answered as usual.
+//! the journal, a week from its days, a month, a year, then check for a newer bia (and update
+//! when root said so), and in the morning tell root what it found. The model works them with tools (journal_day, memory_messages full, reflect_write,
+//! task_done) like any task, and writes down what to tell root in the morning itself, wherever it
+//! likes (the dream does not track it); people who write meanwhile are answered as usual.
 //! When a task ends its tool traffic leaves the live context (the journal keeps it). After a
 //! night the live context starts again from the calendar memory: last month, this month's
 //! weeks, this week's days, today's reflections. What is true now is not a store of its own:
@@ -39,8 +40,8 @@ pub const DREAM_TOOLS: &[&str] = &[
     "reflect_note",
     "reflect_write",
     "category_merge",
-    "report_write",
     "task_done",
+    "mcp_update",
 ];
 
 /// No nightly task starts while a person wrote less than this long ago.
@@ -48,6 +49,8 @@ const QUIET_SECS: u64 = 20 * 60;
 /// An open task with no dream tool call this long is reminded; after this many reminders it closes.
 const STALL_SECS: u64 = 5 * 60;
 const STALL_NUDGES: u32 = 2;
+/// The same for a task without dream tools (the update check runs updates; the morning one talks).
+const CHORE_STALL_SECS: u64 = 60 * 60;
 /// Owner activity looked at for the quiet window.
 const WINDOW_DAYS: u64 = 14;
 /// Days of owner activity needed before the window is trusted (else the fallback below:
@@ -149,8 +152,11 @@ pub enum Task {
     Week(Day),
     Month(i64, u32),
     Year(i64),
-    /// tell root about the night's report (the date the night ended)
+    /// tell root what the model wrote down for them at night, if anything (the date the night ended)
     Morning(Day),
+    /// the night's last task: is a newer bia out, and what did the owner say to do then
+    /// (the morning it is for)
+    Updates(Day),
 }
 
 impl Task {
@@ -161,6 +167,7 @@ impl Task {
             Task::Month(y, m) => format!("month:{y:04}-{m:02}"),
             Task::Year(y) => format!("year:{y:04}"),
             Task::Morning(d) => format!("morning:{d}"),
+            Task::Updates(d) => format!("updates:{d}"),
         }
     }
 
@@ -175,6 +182,7 @@ impl Task {
             }
             "year" => Task::Year(v.parse().ok()?),
             "morning" => Task::Morning(Day::parse(v)?),
+            "updates" => Task::Updates(Day::parse(v)?),
             _ => return None,
         })
     }
@@ -186,13 +194,14 @@ impl Task {
             Task::Month(..) => "month",
             Task::Year(_) => "year",
             Task::Morning(_) => "morning",
+            Task::Updates(_) => "updates",
         }
     }
 
     /// The period's name as nodes keep it: 2026-10-27, week 2026-10-26, 2026-10, 2026.
     fn period(&self) -> String {
         match self {
-            Task::Day(d) | Task::Week(d) | Task::Morning(d) => d.to_string(),
+            Task::Day(d) | Task::Week(d) | Task::Morning(d) | Task::Updates(d) => d.to_string(),
             Task::Month(y, m) => format!("{y:04}-{m:02}"),
             Task::Year(y) => format!("{y:04}"),
         }
@@ -201,7 +210,7 @@ impl Task {
     /// Local first day and the day after the last.
     fn days(&self) -> (Day, Day) {
         match *self {
-            Task::Day(d) | Task::Morning(d) => (d, d.add(1)),
+            Task::Day(d) | Task::Morning(d) | Task::Updates(d) => (d, d.add(1)),
             Task::Week(d) => (d, d.add(7)),
             Task::Month(y, m) => {
                 let first = Day { y, m, d: 1 };
@@ -214,6 +223,11 @@ impl Task {
     fn span(&self) -> (u64, u64) {
         let (a, b) = self.days();
         (a.start(), b.start())
+    }
+
+    /// Not a reflection: ends without an overview and writes no memory.
+    fn chore(&self) -> bool {
+        matches!(self, Task::Morning(_) | Task::Updates(_))
     }
 }
 
@@ -380,7 +394,7 @@ struct Open {
     /// reminders after it stalled
     #[serde(default)]
     nudges: u32,
-    /// the morning report this task writes to (night runs)
+    /// the morning this night's task is for (night runs)
     #[serde(default)]
     report_day: String,
 }
@@ -397,7 +411,6 @@ struct Rebuild {
 struct Report {
     /// local date of the morning it is for
     day: String,
-    path: String,
     /// when the night's work ended (root writing after this gets it)
     night_end: u64,
     /// minute of the window's end that day (deliver by then)
@@ -437,6 +450,9 @@ struct State {
     /// when the last rebuild estimate was shown (start needs root's yes after it)
     #[serde(default)]
     estimate_at: u64,
+    /// the morning (local date) whose night checked for updates
+    #[serde(default)]
+    updates_done: String,
 }
 
 /// What a finished task leaves in the live context.
@@ -447,7 +463,6 @@ pub struct Finished {
 
 pub struct Dream {
     state_dir: PathBuf,
-    files_dir: PathBuf,
     root: PathBuf,
     st: Mutex<State>,
     /// last human message (any) and last message from the owner (root trust)
@@ -481,7 +496,6 @@ impl Dream {
         }
         let d = Arc::new(Dream {
             state_dir,
-            files_dir: files_dir.to_path_buf(),
             root,
             st: Mutex::new(st),
             last_human: AtomicU64::new(0),
@@ -675,7 +689,7 @@ impl Dream {
         }
         let mut w = st.window.clone().unwrap_or_default();
         if let Some(f) = st.settings.fixed_time.as_deref().and_then(parse_hhmm) {
-            // a fixed time: dream then; the morning report is due four hours later
+            // a fixed time: dream then; the morning message is due four hours later
             w.start = (f + 1440 - 60) % 1440;
             w.end = (f + 240) % 1440;
         }
@@ -924,7 +938,7 @@ impl Dream {
     fn task_text(&self, g: &Gen, t: &Task, notes: &[String], rebuild: bool) -> String {
         let key = t.key();
         let common = "People may write while you do this: answer them as usual (if someone wants something long, you may say you are sorting your memory and will be back shortly), then continue here. \
-Do not change settings, schedules or software during this work: proposals go to report_write(section=\"Needs your yes\"). Never copy secrets (keys, passwords, codes) into memory. \
+Nothing risky during this work: no changes to settings, accounts, schedules or software that root relies on. Never copy secrets (keys, passwords, codes) into memory. \
 Long work is paused now and then: for this task nobody needs a status, so do not message anyone about it; just go on.";
         let notes_s = if notes.is_empty() {
             String::new()
@@ -932,9 +946,9 @@ Long work is paused now and then: for this task nobody needs a status, so do not
             format!("\nThe context filled up before; your notes so far:\n- {}\n", notes.join("\n- "))
         };
         let report = if rebuild {
-            "This is a rebuild of all memory: no morning report; leave report_write out."
+            "This is a rebuild of all memory: nothing for root in the morning.".to_string()
         } else {
-            "Ideas worth telling the owner in the morning (something to improve, a routine to take off them, a problem you noticed in your own work): report_write(section, text). Only when there is something worth saying; otherwise write nothing."
+            "Anything you want to tell root in the morning, including what to improve, if anything: write it down yourself, where and how you like; in the morning you are asked to tell them. An improvement that is not risky (your own scripts, notes, an MCP of your own) you may make yourself and tell them about; anything risky stays a suggestion.".to_string()
         };
         match t {
             Task::Day(d) => {
@@ -945,7 +959,7 @@ Long work is paused now and then: for this task nobody needs a status, so do not
                     "[dream task {key}] Reflect the day {d} ({tz}, local midnight to midnight) into long-term memory: {} messages, {n_pages} page(s).\n\
 1. Read it: journal_day(page=1 … {n_pages}). Tool outputs there are cut; memory_messages(ids=[…], full=true) gives anything in full. Older memory: memory_list, memory_get.\n\
 2. Write it with reflect_write: one block with overview=true (the day in short: what happened and what mattered), then the blocks you find worth keeping, each under a category you choose (memory_categories lists them with their meaning; reuse one when it fits, give meaning for a new one). Cite message ids in sources.\n\
-3. What is true now (people, accounts, rules, preferences, promises) goes in a block too, under a category you choose. When something changed, write the new state and what it replaced (was …, now … since …): later periods are read first, so the newest block wins. A conflict you cannot settle: write both and report_write(section=\"Questions\", …).\n\
+3. What is true now (people, accounts, rules, preferences, promises) goes in a block too, under a category you choose. When something changed, write the new state and what it replaced (was …, now … since …): later periods are read first, so the newest block wins. A conflict you cannot settle: write both.\n\
 4. {report}\n\
 {common}{notes_s}\nThen task_done.",
                     rows.len(),
@@ -980,19 +994,19 @@ Write it with reflect_write: overview=true for the period in short, then the blo
                     tz = tz_label()
                 )
             }
-            Task::Morning(d) => {
-                let path = self.report_path(*d);
-                format!(
-                    "[dream task {key}] Good morning task: last night you wrote {path}. Tell root about it in a few lines, in their language, on the chat they use most, with the file attached (say files=[\"{path}\"]). Then task_done.",
-                    path = path.display()
-                )
-            }
+            Task::Updates(_) => format!(
+                "[dream task {key}] Check for a newer bia: discover(path=\"machine\", enable=true) if mcp_update is not enabled yet, then mcp_update() (no name) shows the newest release next to this system and its MCPs.\n\
+1. Up to date: task_done(note=\"up to date\").\n\
+2. Something newer: do what root told you about updates (look in your context and memory: memory_categories, then memory_list or memory_get of the rules and preferences; root may have said to install them yourself, only MCPs, only at night, ask first, or never). With no such instruction, do not install anything.\n\
+3. When root told you to install updates yourself: MCPs with mcp_update(name=\"all\"); the system with carry_update(from=\"internet\"): not while someone is in a call or waiting for an answer. The system update reboots several times; after it finish this task with task_done.\n\
+People may write meanwhile: answer them as usual, then continue here. Do not change anything else. Then task_done."
+            ),
+            Task::Morning(_) => format!(
+                "[dream task {key}] Good morning task: if you wrote down anything for root last night, tell them in a few lines, in their language, on the chat they use most, with your file attached if you wrote one (say files=[…]). If there is nothing, tell nobody. Then task_done."
+            ),
         }
     }
 
-    fn report_path(&self, d: Day) -> PathBuf {
-        self.files_dir.join("reports").join(format!("morning-{d}.md"))
-    }
 }
 
 fn one_line(s: &str, max: usize) -> String {
@@ -1046,13 +1060,14 @@ impl Dream {
         }
         // the open task stalled (the model went idle without task_done): remind it, then close it
         if let Some(o) = st.open.clone() {
-            if t.saturating_sub(o.posted_at.max(o.touched)) < STALL_SECS || quiet_for < 120 {
+            let task = Task::parse(&o.key)?;
+            let stall = if task.chore() { CHORE_STALL_SECS } else { STALL_SECS };
+            if t.saturating_sub(o.posted_at.max(o.touched)) < stall || quiet_for < 120 {
                 return None;
             }
             let g = self.gen(o.gen)?;
-            let task = Task::parse(&o.key)?;
             if o.nudges >= STALL_NUDGES {
-                if !o.overview && !matches!(task, Task::Morning(_)) {
+                if !o.overview && !task.chore() {
                     let _ = auto_overview(&g, &task);
                 }
                 st.open = None;
@@ -1101,10 +1116,10 @@ impl Dream {
         let w = self.window(&mut st);
         let minute = local_minute(t);
 
-        // the morning: tell root about the night's report
+        // the morning: the model tells root what it noted for them at night, if anything
         if let Some(rep) = st.report.clone() {
             let due = (self.last_root.load(Ordering::SeqCst) > rep.night_end) || (rep.day == today.to_string() && minute >= rep.due_min && minute < rep.due_min + 180);
-            if !rep.posted && due && Path::new(&rep.path).exists() {
+            if !rep.posted && due {
                 let day = Day::parse(&rep.day).unwrap_or(today);
                 let g = self.gen(st.current_gen)?;
                 if let Some(r) = st.report.as_mut() {
@@ -1126,21 +1141,16 @@ impl Dream {
             let g = self.gen(st.current_gen)?;
             match self.next_task(&g, today) {
                 Some(task) => return Some(self.post(&mut st, &g, task, false, morning)),
+                None if st.updates_done != morning => {
+                    st.updates_done = morning.clone();
+                    return Some(self.post(&mut st, &g, Task::Updates(Day::parse(&morning).unwrap_or(today)), false, morning));
+                }
                 None => {
                     st.night = None;
                     st.night_now = false;
                     st.night_done = morning.clone();
                     st.spine = true;
-                    let path = self.report_path(Day::parse(&morning).unwrap_or(today));
-                    if path.exists() {
-                        st.report = Some(Report {
-                            day: morning,
-                            path: path.display().to_string(),
-                            night_end: t,
-                            due_min: w.end,
-                            posted: false,
-                        });
-                    }
+                    st.report = Some(Report { day: morning, night_end: t, due_min: w.end, posted: false });
                     self.save(&st);
                     return None;
                 }
@@ -1167,6 +1177,12 @@ impl Dream {
             Some(task) => {
                 st.night = Some(morning.to_string());
                 Some(self.post(&mut st, &g, task, false, morning.to_string()))
+            }
+            // nothing to reflect: the night still checks for updates
+            None if st.updates_done != morning.to_string() => {
+                st.night = Some(morning.to_string());
+                st.updates_done = morning.to_string();
+                Some(self.post(&mut st, &g, Task::Updates(morning), false, morning.to_string()))
             }
             None => {
                 st.night_done = morning.to_string();
@@ -1356,7 +1372,7 @@ fn auto_overview(g: &Gen, task: &Task) -> Result<()> {
 }
 
 pub fn tool(d: &Dream, name: &str, args: &Value) -> Option<Result<String>> {
-    if matches!(name, "journal_day" | "reflect_note" | "reflect_write" | "category_merge" | "report_write") {
+    if matches!(name, "journal_day" | "reflect_note" | "reflect_write" | "category_merge") {
         d.touch();
     }
     Some(match name {
@@ -1364,7 +1380,6 @@ pub fn tool(d: &Dream, name: &str, args: &Value) -> Option<Result<String>> {
         "reflect_note" => d.t_note(args),
         "reflect_write" => d.t_write(args),
         "category_merge" => d.t_merge(args),
-        "report_write" => d.t_report(args),
         "task_done" => d.t_done(args),
         "memory_rebuild" => d.t_rebuild(args),
         "dream" => d.t_dream(args),
@@ -1436,8 +1451,8 @@ impl Dream {
 
     fn t_write(&self, a: &Value) -> Result<String> {
         let (o, g, task) = self.open_or_err()?;
-        if matches!(task, Task::Morning(_)) {
-            bail!("the morning task only tells root about the report");
+        if task.chore() {
+            bail!("this task writes no memory");
         }
         let text = redact(s(a, "text"));
         if text.is_empty() {
@@ -1513,44 +1528,9 @@ impl Dream {
         Ok(format!("{from} is now kept as {into} (older blocks keep their label and point there)"))
     }
 
-    fn t_report(&self, a: &Value) -> Result<String> {
-        let (o, _, task) = self.open_or_err()?;
-        if self.st.lock().unwrap().rebuild.as_ref().is_some_and(|r| r.gen == o.gen) {
-            bail!("a rebuild writes no morning report");
-        }
-        if matches!(task, Task::Morning(_)) {
-            bail!("the report is already written");
-        }
-        let section = s(a, "section");
-        let text = redact(s(a, "text"));
-        if section.is_empty() || text.is_empty() {
-            bail!("section and text are required");
-        }
-        let day = Day::parse(&o.report_day).unwrap_or(Day::of(now()));
-        let path = self.report_path(day);
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let mut body = std::fs::read_to_string(&path).unwrap_or_default();
-        if body.is_empty() {
-            body = format!("# Morning {day}\n");
-        }
-        let head = format!("\n## {section}\n");
-        if let Some(i) = body.find(&head) {
-            let after = i + head.len();
-            let end = body[after..].find("\n## ").map(|k| after + k).unwrap_or(body.len());
-            body.insert_str(end, &format!("\n{text}\n"));
-        } else {
-            body.push_str(&format!("{head}\n{text}\n"));
-        }
-        write_atomic(&path, body.as_bytes())?;
-        own_like_parent(&path, &self.files_dir);
-        Ok(format!("added to {} ({section})", path.display()))
-    }
-
     fn t_done(&self, a: &Value) -> Result<String> {
         let (o, g, task) = self.open_or_err()?;
-        if !matches!(task, Task::Morning(_)) && !o.overview {
+        if !task.chore() && !o.overview {
             let fails = {
                 let mut st = self.st.lock().unwrap();
                 let f = st.open.as_mut().map(|o| {
@@ -1844,17 +1824,6 @@ fn write_atomic(p: &Path, b: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Files bia reads (reports) belong to the account that owns files/.
-fn own_like_parent(p: &Path, files: &Path) {
-    use std::os::unix::fs::MetadataExt;
-    if let Ok(m) = std::fs::metadata(files) {
-        let _ = std::os::unix::fs::chown(p, Some(m.uid()), Some(m.gid()));
-        if let Some(d) = p.parent() {
-            let _ = std::os::unix::fs::chown(d, Some(m.uid()), Some(m.gid()));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1988,11 +1957,6 @@ mod tests {
         assert!(d.t_done(&json!({})).is_err(), "no overview yet");
         d.t_write(&json!({"text": "the day", "category": "summary", "meaning": "the period in short", "overview": true, "sources": ["m_1"]})).unwrap();
         assert!(super::tool(&d, "facts_update", &json!({})).is_none(), "no separate facts store");
-        d.t_report(&json!({"section": "For you", "text": "a gym reminder on Mondays"})).unwrap();
-        d.t_report(&json!({"section": "For you", "text": "second idea"})).unwrap();
-        let rep = std::fs::read_to_string(d.report_path(Day::parse("2026-10-02").unwrap())).unwrap();
-        assert_eq!(rep.matches("## For you").count(), 1, "{rep}");
-        assert!(rep.contains("gym") && rep.contains("second idea"));
         assert!(d.t_done(&json!({"note": "ok"})).unwrap().contains("day:2026-10-01 done"));
         assert_eq!(d.take_finished().unwrap().key, "day:2026-10-01");
         assert!(d.open_task().is_none());
@@ -2011,6 +1975,41 @@ mod tests {
         assert!(text.contains("day:2026-10-01"), "{text}");
         assert_eq!(d.open_task().as_deref(), Some("day:2026-10-01"));
         assert!(d.tick().is_none(), "one task at a time");
+        let _ = std::fs::remove_dir_all(&files);
+    }
+
+    #[test]
+    fn the_night_ends_with_an_update_check() {
+        let files = tmp("updates");
+        journal(&files, "2026-10-01", 1);
+        let d = Dream::open(&files);
+        Gen::create(&d.root, 1, Day::parse("2026-10-01").unwrap()).unwrap();
+        d.start_now();
+        let today = Day::of(now());
+        // the reflections first (the day, its week and month), the check last
+        let mut seen = vec![];
+        let text = loop {
+            let text = d.tick().expect("a task");
+            if text.starts_with("[dream task updates:") {
+                break text;
+            }
+            seen.push(d.open_task().unwrap());
+            d.t_write(&json!({"text": "the period", "category": "summary", "meaning": "the period in short", "overview": true})).unwrap();
+            d.t_done(&json!({})).unwrap();
+            assert!(seen.len() < 10, "{seen:?}");
+        };
+        assert_eq!(seen[0], "day:2026-10-01");
+        assert!(text.contains(&format!("[dream task updates:{today}]")) && text.contains("mcp_update()") && text.contains("what root told you"), "{text}");
+        // no memory, no overview needed
+        assert!(d.t_write(&json!({"text": "x", "category": "summary"})).is_err());
+        assert!(d.t_done(&json!({"note": "asked root"})).unwrap().contains("updates:"));
+        assert!(d.tick().is_none(), "the night ends");
+        // the night is over; the morning asks the model to tell root whatever it noted
+        d.st.lock().unwrap().report.as_mut().expect("a morning is due").night_end -= 10;
+        d.note_human(true);
+        let morning = d.tick().expect("the morning task");
+        assert!(morning.starts_with(&format!("[dream task morning:{today}]")) && morning.contains("If there is nothing, tell nobody"), "{morning}");
+        assert!(d.st.lock().unwrap().night.is_none());
         let _ = std::fs::remove_dir_all(&files);
     }
 

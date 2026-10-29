@@ -209,7 +209,10 @@ mod prompt_tests {
     use super::*;
 
     fn load_toml(body: &str) -> Config {
-        let dir = std::env::temp_dir().join(format!("bia-cfg-{}-{}", std::process::id(), body.len()));
+        // one folder per call: tests run in parallel, and two bodies can be the same length
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("bia-cfg-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("bia.toml");
         std::fs::write(&p, body).unwrap();

@@ -96,7 +96,11 @@ pub fn newer(a: &str, b: &str) -> bool {
 
 /// Each MCP of the release next to what is installed.
 pub fn check(root: &Path, rel: &Release, system: &str) -> String {
-    let mut out = vec![format!("release {} (this system is bia {system}):", rel.tag)];
+    let mut out = vec![if newer(&rel.tag, system) {
+        format!("release {} is newer than this system (bia {system}): carry_update(from=\"internet\") installs it (several reboots). Its MCPs:", rel.tag)
+    } else {
+        format!("release {} (this system is bia {system}, up to date):", rel.tag)
+    }];
     for (name, e) in &rel.mcps {
         let line = match installed_version(root, name) {
             None => format!("  {name}: not installed here ({} available)", e.version),

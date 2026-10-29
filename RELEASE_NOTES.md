@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.7
+
+### Changes
+- Every night, after sorting its memory, bia checks whether a newer bia is out. It does what the owner told it about updates: installs them itself only if told to.
+- The morning message after a night is bia's own: it tells what it found worth saying, in its own form, including what could be improved. Small, safe improvements to its own work it now makes itself and tells about.
+
+### For bia
+- Each night ends with a [dream task updates:…]: mcp_update() shows whether a newer release is out. If root has not told you how to handle updates, ask root once whether you should install them yourself (MCPs, the system, or ask each time) and remember the answer.
+- report_write is gone: at night, write down what you want to tell root yourself (a file where and how you like); the morning task asks you to tell them, with the file attached.
+
 ## 1.7.6
 
 ### Changes

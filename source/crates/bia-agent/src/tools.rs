@@ -1002,7 +1002,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "memory",
         blurb: "Reflections of the live window.",
-        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages(id | ids | from+to, full), memory_categories, memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD. Long-term memory is calendar reflections (n_… ids: a day, week, month, year, each block under a category you chose, one of them the overview; what is true now lives in such blocks too, and the newest period's block wins); you write them at night in [dream task …] messages from system|dream: journal_day, reflect_note, reflect_write, category_merge, report_write, task_done. The reflections made when the context fills up (r_… ids) are the day's scratch layer. dream(action) shows or changes when you dream (status, now, on, off, time). memory_rebuild(action) re-reflects the whole journal into a new generation: estimate first, tell root the numbers, start only after root says yes; status, pause, resume, rollback.",
+        guide: "memory_list(from, to, category, depth), memory_get(id), memory_tree(from, to), memory_messages(id | ids | from+to, full), memory_categories, memory_reflect (compact the live window now). from/to are RFC 3339 UTC or YYYY-MM-DD. Long-term memory is calendar reflections (n_… ids: a day, week, month, year, each block under a category you chose, one of them the overview; what is true now lives in such blocks too, and the newest period's block wins); you write them at night in [dream task …] messages from system|dream: journal_day, reflect_note, reflect_write, category_merge, task_done. The reflections made when the context fills up (r_… ids) are the day's scratch layer. dream(action) shows or changes when you dream (status, now, on, off, time). memory_rebuild(action) re-reflects the whole journal into a new generation: estimate first, tell root the numbers, start only after root says yes; status, pause, resume, rollback.",
     },
     Branch {
         id: "jobs",
@@ -1227,8 +1227,6 @@ impl Tools {
             }), &["text", "category"]));
         t.add_grouped("memory", "category_merge", "In a dream task: keep category from as into from now on (two that turned out to be the same); meaning optional.",
             obj(json!({"from": {"type": "string"}, "into": {"type": "string"}, "meaning": {"type": "string"}}), &["from", "into"]));
-        t.add_grouped("memory", "report_write", "Add text under section (For you, For me, Needs your yes, Questions, …) of the morning report, in a night's dream task.",
-            obj(json!({"section": {"type": "string"}, "text": {"type": "string"}}), &["section", "text"]));
         t.add_grouped("memory", "task_done", "End the open dream task (note optional); its tool traffic then leaves the live context. Needs the overview first.",
             obj(json!({"note": {"type": "string"}}), &[]));
         t.add_grouped("memory", "dream", "When and whether you dream: action=status (default), now, on, off, or time with time=HH:MM local or auto.",
@@ -1243,7 +1241,7 @@ impl Tools {
         );
         t.add_grouped("memory", "memory_reflect", "Request an immediate reflection of the current live window (same as automatic compact when context is full). Writes 2+ categorized memories for the period (summary, facts, …).",
             obj(json!({}), &[]));
-        t.add_grouped("machine", "mcp_update", "Update an MCP from a bia release on GitHub without updating the whole system. No name: list each MCP of the release (latest, or version) next to the installed one. name=<mcp> (or all: every MCP the release has newer): download its archive (checked against the release's sha256), put it in place, restart it; if it does not start, the previous one is put back. Its running jobs are cut off by the restart. For a system update use carry_update.", obj(json!({
+        t.add_grouped("machine", "mcp_update", "Update an MCP from a bia release on GitHub without updating the whole system. No name: say whether the release is newer than this system and list each MCP of it (latest, or version) next to the installed one. name=<mcp> (or all: every MCP the release has newer): download its archive (checked against the release's sha256), put it in place, restart it; if it does not start, the previous one is put back. Its running jobs are cut off by the restart. For a system update use carry_update.", obj(json!({
             "name": {"type": "string", "description": "the MCP to update (telegram, whatsapp, …), or all; omit to see what the release has"},
             "version": {"type": "string", "description": "a release like 1.7.1; default: the latest"}
         }), &[]));
