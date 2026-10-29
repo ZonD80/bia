@@ -16,5 +16,6 @@ ring = "0.17"
 sha2 = "0.10"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
+base64 = "0.22"
 x509-parser = "0.16"
 time = { version = "0.3", default-features = false, features = ["std"] }

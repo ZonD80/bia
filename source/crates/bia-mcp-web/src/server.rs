@@ -5,6 +5,7 @@ use crate::bus::Bus;
 use base64::Engine;
 use bia_pki::{CertProblem, ClientId, Pki};
 use rustls::ServerConnection;
+use crate::tlspipe::SharedTls;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -50,93 +51,6 @@ const PROTECTED: &[&str] = &[
     "/home/bia",
     "/home/bia/files",
 ];
-
-/// Cloneable TLS stream shared by a reader and a writer thread. Blocking socket reads
-/// happen outside the lock, so a WebSocket writer is never stuck behind an idle reader.
-#[derive(Clone)]
-struct SharedTls {
-    inner: Arc<Mutex<(ServerConnection, TcpStream)>>,
-    raw: Arc<TcpStream>,
-}
-
-impl SharedTls {
-    fn new(conn: ServerConnection, tcp: TcpStream) -> std::io::Result<Self> {
-        let raw = Arc::new(tcp.try_clone()?);
-        Ok(SharedTls {
-            inner: Arc::new(Mutex::new((conn, tcp))),
-            raw,
-        })
-    }
-
-    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
-        self.raw.set_read_timeout(dur)
-    }
-
-    fn set_nodelay(&self, nodelay: bool) -> std::io::Result<()> {
-        self.raw.set_nodelay(nodelay)
-    }
-
-    fn peer_addr(&self) -> std::io::Result<std::net::SocketAddr> {
-        self.raw.peer_addr()
-    }
-
-    fn shutdown(&self) {
-        let _ = self.raw.shutdown(std::net::Shutdown::Both);
-    }
-}
-
-fn flush_tls(conn: &mut ServerConnection, tcp: &mut TcpStream) -> std::io::Result<()> {
-    while conn.wants_write() {
-        conn.write_tls(tcp)?;
-    }
-    Ok(())
-}
-
-impl Read for SharedTls {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut raw = vec![0u8; 16 * 1024];
-        loop {
-            {
-                let mut g = self.inner.lock().unwrap();
-                match g.0.reader().read(buf) {
-                    Ok(n) => return Ok(n),
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                    Err(e) => return Err(e),
-                }
-            }
-            let n = (&*self.raw).read(&mut raw)?;
-            let mut g = self.inner.lock().unwrap();
-            let (conn, tcp) = &mut *g;
-            let mut slice = &raw[..n];
-            loop {
-                let k = conn.read_tls(&mut slice)?;
-                conn.process_new_packets()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-                if k == 0 || slice.is_empty() {
-                    break;
-                }
-            }
-            flush_tls(conn, tcp)?;
-        }
-    }
-}
-
-impl Write for SharedTls {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut g = self.inner.lock().unwrap();
-        let (conn, tcp) = &mut *g;
-        let n = conn.writer().write(buf)?;
-        flush_tls(conn, tcp)?;
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let mut g = self.inner.lock().unwrap();
-        let (conn, tcp) = &mut *g;
-        conn.writer().flush()?;
-        flush_tls(conn, tcp)
-    }
-}
 
 pub struct Web {
     con: Arc<Bus>,
@@ -290,8 +204,11 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/skills/web-console/SKILL.md"
             | "/v1/pki/ca"
             | "/v1/pki/agent"
-            | "/v1/pki/bootstrap",
+            | "/v1/pki/bootstrap"
+            | "/v1/bridge",
         ) => true,
+        // bia-bridge builds for agents that have no certificate yet
+        ("GET", p) if p.strip_prefix("/bridge/").is_some_and(|n| crate::bridge::file(n).is_some()) => true,
         // First-time root cert only when none is active yet (see serve_bootstrap_root).
         ("POST", "/v1/pki/bootstrap/root") => true,
         ("GET", p)
@@ -323,6 +240,8 @@ fn root_only(path: &str) -> bool {
         || path == "/v1/pki/certs"
         || path == "/v1/pki/issue"
         || path == "/v1/pki/revoke"
+        || path == "/v1/peers"
+        || path == "/v1/peers/action"
         || path == "/v1/pki/requests"
         || request_route(path).is_some_and(|(_, action)| matches!(action, "approve" | "deny"))
 }
@@ -464,7 +383,7 @@ impl Web {
         let text = match p.status.as_str() {
             "active" => format!(
                 "[peer {name}] {name} at {url} approved this bia's request: trust is set up both ways. \
-                 Call it with web_peer_call(peer=\"{name}\", method, path); it can call this bia the same way. Tell root.",
+                 The live link opens by itself; a [peer {name}] notice comes when it is up, then talk with say(channel=\"peer:{name}\"). Tell root.",
                 name = p.name,
                 url = p.url
             ),
@@ -477,7 +396,7 @@ impl Web {
         self.con.log(&format!("  peer {} at {}: {}", p.name, p.url, p.status));
         self.con.push_inbound(crate::bus::Inbound {
             identity: crate::bus::ID_SYSTEM.into(),
-            channel: crate::bus::CH_WEB.into(),
+            channel: crate::peer::channel(&p.name),
             id: crate::bus::mint_msg_id(),
             text,
         });
@@ -647,6 +566,15 @@ impl Web {
             return;
         }
 
+        // bias talk only over the live link: a peer certificate opens nothing else
+        if self.pki.is_peer_cert(&id).is_some()
+            // (it is renewed over the link, which keeps the peer record in step)
+            && !matches!(req.path.as_str(), "/ws/peer" | "/v1/whoami")
+        {
+            respond(&mut stream, 403, "text/plain", b"a peer certificate is only for the live link (GET /ws/peer)", None);
+            return;
+        }
+
         // ---- streaming bodies ----
         if req.method == "POST" && req.path == "/v1/upload" {
             self.upload(&mut stream, reader, &req, &id.identity);
@@ -654,6 +582,31 @@ impl Web {
         }
         if req.method == "POST" && req.path == "/v1/fs/put" {
             self.fs_put(&mut stream, reader, &req);
+            return;
+        }
+
+        // ---- the live link with another bia (peer certificate only) ----
+        if req.method == "GET" && req.path == "/ws/peer" {
+            let Some(links) = crate::peer::links() else {
+                respond(&mut stream, 503, "text/plain", b"peer links are not running", None);
+                return;
+            };
+            if self.pki.is_peer_cert(&id).is_none() {
+                respond(&mut stream, 403, "text/plain", b"not a peer of this bia", None);
+                return;
+            }
+            if links.admit(&peer).is_err() {
+                respond(&mut stream, 429, "text/plain", b"too many connections; try later", None);
+                return;
+            }
+            let Some(key) = req.header("sec-websocket-key") else {
+                respond(&mut stream, 400, "text/plain", b"not a websocket request", None);
+                return;
+            };
+            let _ = stream.write_all(ws_accept(key).as_bytes());
+            let _ = stream.flush();
+            crate::peer::set_sndbuf_shared(&stream);
+            links.accept(stream, reader, &id, &peer);
             return;
         }
 
@@ -674,17 +627,7 @@ impl Web {
                 );
                 return;
             };
-            let accept = base64::engine::general_purpose::STANDARD.encode(
-                sha1_smol::Sha1::from(format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
-                    .digest()
-                    .bytes(),
-            );
-            let _ = stream.write_all(
-                format!(
-                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
-                )
-                .as_bytes(),
-            );
+            let _ = stream.write_all(ws_accept(key).as_bytes());
             let _ = stream.flush();
             let _ = stream.set_read_timeout(None);
             match req.path.as_str() {
@@ -762,6 +705,14 @@ impl Web {
             ("GET", "/apple-touch-icon.png") => respond(stream, 200, "image/png", APPLE_ICON, None),
             ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", MANIFEST),
             ("GET", "/sw.js") => asset(stream, "text/javascript; charset=utf-8", SW_JS),
+            ("GET", "/v1/bridge") => respond_json(stream, crate::bridge::list()),
+            ("GET", p) if p.starts_with("/bridge/") => match crate::bridge::file(&p["/bridge/".len()..]) {
+                Some(f) => {
+                    let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    send_file(stream, &f, &name, true, req.header("range"))
+                }
+                None => respond(stream, 404, "text/plain", b"no such bridge build", None),
+            },
             ("GET", "/.well-known/bia.json") => respond_json(
                 stream,
                 crate::openapi::discovery(self.port, &self.ca_sha256()),
@@ -922,6 +873,30 @@ impl Web {
                     .unwrap_or("")
                     .to_string();
                 self.renew_client(stream, id, &csr)
+            }
+            ("GET", "/v1/peers") => {
+                let peers: Vec<Value> = self
+                    .pki
+                    .peers()
+                    .into_iter()
+                    .map(|p| {
+                        let link = match (crate::peer::links(), p.status.as_str()) {
+                            (Some(l), "active") => l.describe(&p.name),
+                            _ => json!({}),
+                        };
+                        json!({"name": p.name, "url": p.url, "status": p.status, "asked_by": p.asked_by, "since": p.since, "link": link})
+                    })
+                    .collect();
+                respond_json(stream, json!({"me": self.pki.agent_name(), "peers": peers}));
+            }
+            ("POST", "/v1/peers/action") => {
+                let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+                let args = json!({"action": v["action"], "peer": v["peer"]});
+                let ctx = bia_mcp::Ctx::console();
+                match crate::peer::tool_root(&ctx, args) {
+                    Ok(t) => respond_json(stream, json!({"ok": true, "text": t})),
+                    Err(e) => respond(stream, 400, "text/plain", e.as_bytes(), None),
+                }
             }
             ("GET", "/v1/pki/certs") => {
                 let now = std::time::SystemTime::now()
@@ -2795,6 +2770,16 @@ pub(crate) fn respond(
     let _ = stream.flush();
 }
 
+/// The `101 Switching Protocols` answer to a WebSocket key.
+fn ws_accept(key: &str) -> String {
+    let accept = base64::engine::general_purpose::STANDARD.encode(
+        sha1_smol::Sha1::from(format!("{key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+            .digest()
+            .bytes(),
+    );
+    format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n")
+}
+
 pub(crate) fn ws_send(s: &mut dyn Write, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
     let mut frame = Vec::with_capacity(payload.len() + 10);
     frame.push(0x80 | opcode);
@@ -2818,7 +2803,7 @@ pub(crate) fn ws_recv(r: &mut impl Read) -> std::io::Result<(u8, Vec<u8>)> {
 }
 
 /// One message; continuation frames are joined (browsers fragment large sends).
-fn ws_recv_max(r: &mut impl Read, max: u64) -> std::io::Result<(u8, Vec<u8>)> {
+pub(crate) fn ws_recv_max(r: &mut impl Read, max: u64) -> std::io::Result<(u8, Vec<u8>)> {
     let mut first_op = None;
     let mut data = Vec::new();
     loop {

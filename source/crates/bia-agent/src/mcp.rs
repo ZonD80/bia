@@ -466,7 +466,21 @@ impl McpServer {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    /// Stop the MCP: SIGTERM, then SIGKILL if it is still there after 3 s (the web MCP
+    /// says goodbye to its peers on SIGTERM).
     pub fn kill(&mut self) {
+        if let Ok(None) = self.child.try_wait() {
+            unsafe {
+                libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM);
+            }
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < end {
+                if !matches!(self.child.try_wait(), Ok(None)) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

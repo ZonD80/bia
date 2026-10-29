@@ -64,6 +64,16 @@ web_mcp() {
   builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/web-mcp-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
 }
 
+# live peer links between web MCPs: trust, messages, files, disconnect, bans, bye, a copy refused
+peer_link() {
+  builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/peer-link-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
+}
+
+# bia-bridge (CLI, daemon, MCP mode) against the real web MCP
+bridge() {
+  builder 'cargo build -q -p bia-mcp-web -p bia-bridge && python3 -I tests/integration/bridge-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web" "$CARGO_TARGET_DIR/debug/bia-bridge"'
+}
+
 # messenger + instagram MCPs with the real bia-meta, no Meta account (builds bia-meta with the cached Go)
 meta_mcp() {
   builder 'ARCH='"$ARCH"'; . /work/builders/go-env.sh; ensure_go && OUT=/tmp/meta-e2e && mkdir -p $OUT &&
@@ -82,6 +92,8 @@ for stage in "$@"; do
       run unit-cargo unit ;;
     integration)
       run web-mcp-https web_mcp
+      run peer-link peer_link
+      run bia-bridge bridge
       run meta-mcp meta_mcp
       run ignore-mcp ignore_mcp
       run web-markdown node tests/integration/web-md-test.js

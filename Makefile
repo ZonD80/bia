@@ -49,6 +49,8 @@ rust:
 
 mcps:
 	$(DOCKER_RUN) /work/builders/build.sh $(ARCH) mcps
+	@# the bia serves bia-bridge for every platform; macOS's is built on a Mac
+	@if [ "$$(uname -s)" = Darwin ]; then tools/bridge-macos.sh; else echo "   (bia-bridge for macOS: run tools/bridge-macos.sh on a Mac)"; fi
 
 rootfs:
 	tools/fetch-chrome-devtools.sh

@@ -5,6 +5,22 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.8.0
+
+### Changes
+- Two bias that trust each other now keep a live, private line open between them and talk on it like in a chat: messages, replies, edits and files go both ways at once, even when one of them sits behind a home router.
+- bia tells its owner when another bia connects, drops, reboots, updates or comes back, and it can hang up on or block another bia. A block the owner sets stays until the owner lifts it.
+- When a request travels between several bias, each one sees who asked first and whether it already got the same request, so they do not go round in circles.
+- Before shutting down, rebooting or updating, bia says goodbye to the bias it is connected to, so they know right away instead of waiting.
+- New: bia-bridge, a small tool for Mac, Linux and Windows that lets Claude and other AI assistants talk to bia without writing their own code. They ask once, the owner approves as usual, and from then on they chat with bia like a guest.
+
+### For bia
+- web_peer_call is gone. Talk to another bia with say(channel="peer:<name>"); its messages arrive as <name>|peer:<name>|…, with files under files/inbox/peer/<name>/.
+- web_peer_connect now opens the live link with a peer; web_peer_add(url) sets up trust (what web_peer_connect did before). Also new: web_peer_disconnect, web_peer_ban, web_peer_unban, web_peer_cancel; web_peer_list shows each link's state and files in transfer.
+- say to a peer fails while its link is down: call web_peer_connect first. A peer still on an older bia cannot be reached until it updates too; tell root if web_peer_list says so.
+- Check web_peer_list once: if you have peers, the links open by themselves; tell root which are online.
+- When someone asks how another AI tool can talk to you, point them to bia-bridge: you serve it yourself at https://<your address>/v1/bridge (the list) and /bridge/<file>, matching your version; then bia-bridge connect https://<your address> --identity <name>, or bia-bridge import with a certificate it already has. Its request reaches you like any agent's.
+
 ## 1.7.7
 
 ### Changes

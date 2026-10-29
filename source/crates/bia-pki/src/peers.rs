@@ -363,18 +363,70 @@ impl Pki {
         Ok(Some(p))
     }
 
-    /// Call a peer's web API with this bia's certificate there.
-    pub fn peer_call(&self, name: &str, method: &str, path: &str, body: Option<&serde_json::Value>) -> Result<client::Response> {
+    /// What this bia presents to an active peer: (their CA, its certificate there, agent key), PEM.
+    pub fn peer_tls(&self, name: &str) -> Result<(String, String, String)> {
         let p = self.peer(name).ok_or_else(|| anyhow!("no peer {name} (see the peer list)"))?;
         if p.status != "active" {
             bail!("peer {name} is {}", p.status);
         }
-        if !path.starts_with('/') {
-            bail!("path must start with / (e.g. /v1/status)");
-        }
         let (ca, cert, key) = self.peer_files(name)?;
-        let (ca, cert, key) = (fs::read_to_string(ca)?, fs::read_to_string(cert)?, fs::read_to_string(key)?);
-        client::request(&p.url, method, path, body, ServerTrust::Ca(&ca), Some((&cert, &key)))
+        Ok((fs::read_to_string(ca)?, fs::read_to_string(cert)?, fs::read_to_string(key)?))
+    }
+
+    /// Days until this bia's certificate at `name` expires (None when unreadable).
+    pub fn peer_cert_days_left(&self, name: &str) -> Option<i64> {
+        let (_, cert, _) = self.peer_files(name).ok()?;
+        let ders = pem_to_cert_ders(&fs::read_to_string(cert).ok()?).ok()?;
+        crate::client_id_from_certs(Some(&ders[..1])).map(|c| c.days_left())
+    }
+
+    /// A CSR (PEM) for the agent key, to renew this bia's certificate at a peer.
+    pub fn agent_renew_csr(&self) -> Result<String> {
+        self.agent_csr()
+    }
+
+    /// A peer renewed its certificate here over the link: keep the new one.
+    pub fn peer_save_cert(&self, name: &str, chain: &str) -> Result<()> {
+        let mut p = self.peer(name).ok_or_else(|| anyhow!("no peer {name}"))?;
+        let ders = pem_to_cert_ders(chain)?;
+        let (_, x) = x509_parser::parse_x509_certificate(ders[0].as_ref()).map_err(|_| anyhow!("parse"))?;
+        if x.public_key().raw != self.agent_key()?.public_key_der().as_slice() {
+            bail!("that certificate is not for this bia's agent key");
+        }
+        let (_, cert_path, _) = self.peer_files(name)?;
+        fs::write(cert_path, chain)?;
+        p.updated = now_secs();
+        self.save_peer(&p, None, None)
+    }
+
+    /// Renew the certificate a peer holds from this bia (its CSR, sent over the link):
+    /// same identity, the old serial is revoked and the peer record follows the new one.
+    pub fn peer_renew(&self, name: &str, csr: &str) -> Result<String> {
+        let mut p = self.peer(name).ok_or_else(|| anyhow!("no peer {name}"))?;
+        let m = self
+            .issued_meta(&p.issued_serial)
+            .ok_or_else(|| anyhow!("no record of the certificate this bia issued {name}"))?;
+        let current = crate::ClientId {
+            identity: m.identity,
+            role: m.role,
+            trust: m.trust,
+            serial_hint: m.serial,
+            not_after: m.not_after as i64,
+        };
+        let (pem, meta) = self.renew_csr(&current, csr)?;
+        p.issued_serial = meta.serial;
+        p.updated = now_secs();
+        self.save_peer(&p, None, None)?;
+        Ok(pem)
+    }
+
+    /// A connection presenting `id` is this active peer: its agent certificate from this
+    /// bia, the serial this bia issued it.
+    pub fn is_peer_cert(&self, id: &crate::ClientId) -> Option<Peer> {
+        let p = self.peer(&id.identity)?;
+        let serial_ok = !p.issued_serial.is_empty()
+            && (id.serial_hint == p.issued_serial || id.serial_hint.starts_with(&p.issued_serial) || p.issued_serial.starts_with(&id.serial_hint));
+        (p.status == "active" && id.role == "agent" && serial_ok).then_some(p)
     }
 
     /// Forget a peer and revoke the certificate this bia issued for it.
@@ -534,8 +586,12 @@ mod tests {
         assert_eq!((p.name.as_str(), p.status.as_str()), (b_name.as_str(), "pending"));
         let p = a.peer_poll(&b_name).unwrap().unwrap();
         assert_eq!(p.status, "active");
-        let r = a.peer_call(&b_name, "GET", "/whoami", None).unwrap();
+        let (ca, cert, key) = a.peer_tls(&b_name).unwrap();
+        let r = client::request(&url, "GET", "/whoami", None, ServerTrust::Ca(&ca), Some((&cert, &key))).unwrap();
         assert_eq!((r.status, r.text()), (200, a.agent_name()));
+        // the link connects with the same files
+        let (conn, _tcp) = client::connect(&url, ServerTrust::Ca(&ca), Some((&cert, &key))).unwrap();
+        assert!(!conn.is_handshaking());
         // B keeps A as a peer with the address A saw itself at
         let back = b_check.peer(&a.agent_name()).unwrap();
         assert_eq!(back.url, "https://127.0.0.1:8443");

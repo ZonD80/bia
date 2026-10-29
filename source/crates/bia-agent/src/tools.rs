@@ -22,6 +22,7 @@ const AGENT_ONLY_WEB: &[&str] = &[
     "history",
     "read",
     "typing",
+    "peer_root",
 ];
 
 fn agent_only(server: &str, tool: &str) -> bool {
@@ -44,6 +45,31 @@ pub fn chat_bus(channel: &str) -> Option<(&str, &str)> {
 
 pub fn is_web(channel: &str) -> bool {
     channel == CH_WEB || channel.starts_with("web:")
+}
+
+/// A live link with another bia (`peer:<name>`), also served by the web MCP. The identity
+/// is the peer's name.
+pub fn is_peer(channel: &str) -> bool {
+    channel.strip_prefix("peer:").is_some_and(|n| !n.is_empty())
+}
+
+/// Channels whose sends, edits, reactions and history go to the web MCP.
+pub fn via_web(channel: &str) -> bool {
+    is_web(channel) || is_peer(channel)
+}
+
+/// The request a peer message belongs to, from its `[request <id>: a → b → you]` line:
+/// `{id, path}` to pass on with this bia's own messages to peers.
+pub fn peer_origin(text: &str) -> Option<Value> {
+    let line = text.lines().find(|l| l.starts_with("[request "))?;
+    let (id, rest) = line.strip_prefix("[request ")?.split_once(": ")?;
+    let path: Vec<&str> = rest
+        .trim_end_matches(']')
+        .split(" → ")
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "you")
+        .collect();
+    Some(json!({"id": id, "path": path}))
 }
 
 /// `identity|channel|issued|delivered|id|message` — RFC 3339 UTC timestamps of when the message
@@ -968,6 +994,9 @@ pub struct Tools {
     pub reply_to: std::cell::RefCell<Option<(String, String)>>,
     /// identity of the last human inbound on each channel
     pub last_on: std::cell::RefCell<HashMap<String, String>>,
+    /// The request the current turn works on, passed on with messages to peers: `{new, from}`
+    /// when a person asked here, `{id, path}` when a peer's request came in.
+    pub origin: std::cell::RefCell<Option<Value>>,
     /// Human messages the model has not closed with answered=[ids] yet.
     pub unanswered: crate::unanswered::Set,
     mcp_arch: String,
@@ -1098,6 +1127,7 @@ impl Tools {
             fired_job: std::cell::Cell::new(false),
             reply_to: std::cell::RefCell::new(None),
             last_on: std::cell::RefCell::new(HashMap::new()),
+            origin: std::cell::RefCell::new(None),
             unanswered: crate::unanswered::Set::load(&state),
             mcp_arch: std::env::consts::ARCH.into(),
             mcp_env: vec![],
@@ -3600,6 +3630,9 @@ impl Tools {
                 def_id
             } else if let Some(id) = self.last_on.borrow().get(&channel) {
                 id.clone()
+            } else if let Some(name) = channel.strip_prefix("peer:").filter(|_| is_peer(&channel)) {
+                // a peer chat is the peer itself
+                name.to_string()
             } else if is_web(&channel) {
                 // no one wrote on this web chat yet: the web MCP names its users
                 String::new()
@@ -3608,6 +3641,20 @@ impl Tools {
             }
         });
         (identity, channel)
+    }
+
+    /// The request behind what the model handles now (see `origin`): a peer's message
+    /// carries its own, anyone else's message starts one here.
+    pub fn note_origin(&self, identity: &str, channel: &str, id: &str, text: &str) {
+        let o = if is_peer(channel) {
+            match peer_origin(text) {
+                Some(o) => o,
+                None => return,
+            }
+        } else {
+            json!({"new": id, "from": identity})
+        };
+        *self.origin.borrow_mut() = Some(o);
     }
 
     /// A human message arrived: it is the default target of the next reply.
@@ -3695,7 +3742,7 @@ impl Tools {
         }
         if args.get("voice").and_then(|v| v.as_bool()).unwrap_or(false) {
             let lang = s("lang").unwrap_or_default();
-            let detail = if is_web(&channel) {
+            let detail = if via_web(&channel) {
                 let r = self.web_invoke(
                     "send",
                     json!({"identity": identity, "channel": channel, "text": message,
@@ -3744,12 +3791,17 @@ impl Tools {
             echo(&self.con);
             return Ok(format!("sent to {identity}@{channel}"));
         }
-        if is_web(&channel) {
+        if via_web(&channel) {
             let mut a = json!({"identity": identity, "channel": channel, "text": message,
                                "files": files, "lang": s("lang").unwrap_or_default()});
             for k in ["reply_to", "buttons", "poll", "new_chat"] {
                 if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
                     a[k] = v.clone();
+                }
+            }
+            if is_peer(&channel) {
+                if let Some(o) = self.origin.borrow().clone() {
+                    a["origin"] = o;
                 }
             }
             let r = self.web_invoke("send", a)?;
@@ -3788,7 +3840,7 @@ impl Tools {
         if let Some(k) = ["files", "voice", "poll"].into_iter().find(|k| has(k)) {
             bail!("edit replaces text only; {k} cannot be combined with edit (send a new message instead)");
         }
-        if is_web(channel) {
+        if via_web(channel) {
             self.web_invoke(
                 "edit",
                 json!({"identity": identity, "channel": channel, "message_id": id, "text": message}),
@@ -3976,7 +4028,7 @@ impl Tools {
                 .unwrap_or_default()
         };
         let (identity, channel) = self.target(args);
-        let web = is_web(&channel);
+        let web = via_web(&channel);
         let to = |extra: Value| {
             let mut a = json!({"identity": identity, "channel": channel});
             if let (Some(o), Some(e)) = (a.as_object_mut(), extra.as_object()) {
@@ -4714,6 +4766,23 @@ done
             t.target(&json!({"channel": "web:trip"})),
             ("carol".into(), "web:trip".into())
         );
+    }
+
+    #[test]
+    fn peer_chats_name_the_peer_and_carry_the_request() {
+        let t = Tools::new(&std::env::temp_dir(), Console::for_test());
+        assert_eq!(t.target(&json!({"channel": "peer:fred"})), ("fred".into(), "peer:fred".into()));
+        assert!(is_peer("peer:fred") && !is_peer("peer:") && via_web("peer:fred") && !is_web("peer:fred"));
+        // a person asked here: a new request
+        t.note_origin("root", "telegram:42", "b17", "find the invoice");
+        assert_eq!(*t.origin.borrow(), Some(json!({"new": "b17", "from": "root"})));
+        // a peer's request is passed on as it came
+        t.note_origin("fred", "peer:fred", "p1", "[request alex/b1: root → alex → fred → you]\n[asked again: …]\nhave it?");
+        assert_eq!(*t.origin.borrow(), Some(json!({"id": "alex/b1", "path": ["root", "alex", "fred"]})));
+        // a peer message without one leaves the current request alone
+        t.note_origin("fred", "peer:fred", "p2", "no header");
+        assert_eq!(t.origin.borrow().as_ref().unwrap()["id"], "alex/b1");
+        assert_eq!(peer_origin("x"), None);
     }
 
     #[test]

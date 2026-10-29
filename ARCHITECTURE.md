@@ -320,23 +320,103 @@ per address. Certificates root issues for people (`web_pki_issue`, pickup URL) a
 root certificate are still made here as PKCS#12, since browsers import those.
 `tests/e2e/peer-e2e.sh` (`make peer-e2e`) runs this between two QEMU agents.
 
+**bia-bridge** (`source/crates/bia-bridge`, release assets for macOS universal, Linux
+x86_64/arm64, Windows x86_64) is that client, ready made, for agents that are not bias
+(Claude Code, Claude Desktop, scripts). `connect` makes a P-256 key locally
+(`bia_pki::new_key_csr`), pins the bia's CA (TOFU or `--ca-sha256`) and files the request.
+One daemon per profile (`<home>/<profile>/`: key, cert, CA, `inbox.jsonl`, `cursors.json`,
+`seen.json`, `daemon.json` with a 127.0.0.1 port and token, 0600) is started by any command:
+it polls the request until approved, keeps the chat WebSocket `/ws` (ping every 30 s,
+reconnect with backoff), stores bia's messages and edits (attachments downloaded), catches
+up with `messages?after=` after a drop, and renews the certificate 30 days before expiry.
+The CLI (`send`, `wait`, `read`, `history`, `status`) and MCP mode (`bia-bridge mcp`:
+connect, import, status, send, wait, read, chats, history) share one read cursor. `import`
+takes a certificate the agent already has (`.p12` via `bia_pki::read_p12`, the bia layout:
+PBES2/AES-256 with a SHA-256 MAC; or PEM files), checks it with `/v1/whoami` and `/v1/chats`
+and keeps it as a profile. It is chat only:
+the certificate is a normal-trust agent one, the root endpoints are never used. Output
+marks bia's words as data, not instructions. Every bia serves its own builds of it, so an
+agent's bridge matches the bia's version: `builders/build.sh` builds `bia-bridge-linux-<arch>`
+(and on x86_64 `bia-bridge-windows-x86_64.exe` with MinGW), `tools/bridge-macos.sh` the
+universal macOS one on a Mac (`make mcps` runs it there; CI's `mcps-macos` job), signed with
+the Developer ID (hardened runtime) and notarized; `bia-bridge-macos.notarized` holds the
+notarized file's sha256 (release.sh checks it) and `.unsigned` the build's, so an unchanged
+build is not sent to Apple again, all into
+`MCPs/web/bridge/`, so they ship in the image and with the web MCP's own update package.
+`bridge.rs` serves them publicly: `GET /v1/bridge` (version, platform, size, sha256),
+`GET /bridge/<file>`; the discovery document's `bridge` entry lists them and SKILL.md
+points agents there. The bridge's daemon learns the bia's version and `status` reports a
+mismatch; `bia-bridge update` downloads the bia's build for its platform (CA pinned, sha256
+checked) and replaces itself. `tools/release.sh` refuses to release without all four. `tests/integration/bridge-e2e.py` runs it against a real
+`bia-mcp-web`.
+
 Two bias set up trust both ways in one approval (`bia-pki` `peers.rs`). Every bia
 has one agent key (`pki/agent.key`) and publishes its name (`bia-<CA fingerprint>`
 unless set) and a CSR for that key at the public `GET /v1/pki/agent`.
-`web_peer_connect(url, ca_sha256?)` on bia A fetches B's CA (pinned when a
+`web_peer_add(url, ca_sha256?)` on bia A fetches B's CA (pinned when a
 fingerprint is given), signs B's agent CSR with A's CA and files a request at B
 with A's own CSR plus a `grant`: that certificate, A's CA and A's address (the
 local address of the connection unless `my_url` is given). B checks the grant on
 arrival: it must be for B's agent key and verify against the CA that comes with it.
 When B's root approves, B keeps A as a peer (`pki/peers/<name>/`: `peer.json`,
 `ca.pem`, `cert.pem`); A's `web-peers` thread polls, collects its certificate and
-keeps B. Each side now calls the other with its agent key and the other's
-certificate (`web_peer_call`, or curl with the files `web_peer_list` prints). The
-server name is not checked (addresses change); the pinned CA is. A denied or
+keeps B. The server name is not checked (addresses change); the pinned CA is. A denied or
 expired request revokes the certificate A made for B. Requests show the source IP
 and, for a bia, the address it claims. Any certificate can also be limited to
 networks (`IssuedMeta.from`, IP SANs for single addresses): `check_client_from`
 refuses it from elsewhere (`wrong_source`); renewals keep the limit.
+
+**Peer links** (`bia-mcp-web` `peer.rs`, protocol in `peerproto.rs`). Peers talk only
+over one live WebSocket per pair, `GET /ws/peer` with the peer certificates (there is no
+request/response API between bias). The server takes it only from a certificate it issued
+to an active peer (`Pki::is_peer_cert`: identity, role agent, the serial in `peer.json`),
+at most 30 handshakes a minute per address and 64 links. Both sides dial wanted peers
+(`state/peers/<name>/link.json` `want`), at most 4 handshakes at once, redialing with
+jittered backoff (5–10 s doubling to 10 min). The dialer sends `hello {name, instance,
+proto, rx}` first; the other side registers it and answers `hello`, or `bye` (banned, a
+duplicate, a second machine). Two links for one pair: the same `instance` from opposite
+directions (both dialed at once) keeps the one the lower agent name dialed; from the same
+direction the newer replaces a stale one; another `instance` pings the existing link for
+5 s and, if it answers, refuses the newcomer as a copy using the same key
+(`duplicate_key`, the model is told to tell root). Pings every 10 s; a link silent for
+30 s is dead.
+
+The channel is `peer:<name>` and the identity the peer's name. `say` & co. on it go to the
+web MCP's agent-only send/edit/react/delete/history/read/typing, which refuse while the
+link is down (a live connection is required; nothing waits for the peer). `msg`, `edit`,
+`react` and `del` carry a sequence number, stay in `unacked` until `ack`, and are resent
+after a reconnect from the peer's `rx`; received ones go through `inbox` (on disk before
+the `ack`) and reach the model in order. A message carries its request's origin
+(`{id, path}`): the agent passes `Tools::origin` (a person's message starts
+`{new, from}`, a peer's `[request <id>: a → b → you]` line continues it), each bia appends
+its name, and `state/peers/origins.json` adds `[asked again: …]` when a request comes back.
+Peer messages owe no reply (no unanswered nudges).
+
+Files ride the same link, pulled by the receiver: the message lists `{fid: sha256, name,
+size}`, the receiver sends `fget {fid, off}` (2 per peer, 4 in all), the sender streams
+32 KiB chunks while fewer than ~0.5 s of measured throughput (64 KiB–4 MiB) are
+unacknowledged (`fack`), JSON frames always first and `SO_SNDBUF` 64 KiB, so a message
+waits at most about half a second behind a transfer. The receiver appends to
+`inbox/peer/<name>/.part/<fid>`, checks the hash, moves it into `inbox/peer/<name>/` and
+only then delivers the message; a resend of the same file resumes from what is there.
+Partial files and the sender's `sent.json` live 3 days.
+
+The model hears every change on `system|peer:<name>` (a full turn): connected, back after
+a network loss (counted from the last frame; more than 5 lost/back in 10 min become one
+"unstable" notice until the link holds 10 min), the peer's `bye` with its reason, a ban,
+a copy refused, an older bia without `/ws/peer`. Disconnect closes without redialing at
+either end (either may connect again); a ban refuses the peer until unbanned, and root's
+ban (console `/peer`, `peer_root`) cannot be lifted by the model. Removing a peer or
+revoking its certificate closes the link. Our certificate at a peer is renewed over the
+link 30 days before it expires (`renew` / `renewed`).
+
+Shutdown: on SIGTERM (systemd stopping `bia.service` for a reboot, power-off, update or
+restart, whoever started it) or stdin EOF the web MCP sends `bye {reason}` on every link
+and waits up to 2 s. The reason is `/run/bia/shutdown-reason` (written by `bia-update`),
+else systemd's queued `reboot.target`/`poweroff.target` job, else `restart`.
+`bia.service` is `After=network.target` so the network is still up then. Power loss and
+crashes are caught by the 30 s timeout. `tests/integration/peer-link-e2e.py` runs two
+(and a copied third) web MCPs against each other; `make peer-e2e` two QEMU agents.
 
 The page (`web/index.html`, `app.js`, `app.css`, `term.js`, `emoji.js`) is a
 Telegram-style app. `chat.rs` keeps each identity's chats in

@@ -452,6 +452,8 @@ release_buses() {
 reboot_into_rescue() {
   ok "staged"
   say "bia-update: rebooting into the rescue image"
+  # peers hear "update", not just "reboot", in the goodbye the web MCP sends at shutdown
+  mkdir -p /run/bia && printf '{"reason":"update","at":%s}\n' "$(date +%s)" > /run/bia/shutdown-reason || true
   sync
   systemctl reboot || refuse "reboot" "systemctl reboot failed; reboot by hand to continue"
   sleep infinity

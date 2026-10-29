@@ -55,11 +55,27 @@ pub fn target(args: &Value) -> Result<(String, String), String> {
     Ok((identity, channel))
 }
 
+/// A `peer:<name>` channel goes over the live link with that peer, not the web chats.
+fn peer_channel(args: &Value) -> Option<Result<(&'static std::sync::Arc<crate::peer::Links>, String), String>> {
+    let ch = arg_str_opt(args, "channel").unwrap_or_default().trim();
+    if !crate::peer::is_peer(ch) {
+        return None;
+    }
+    Some(match crate::peer::links() {
+        Some(l) => crate::peer::channel_peer(args).map(|n| (l, n)),
+        None => Err("peer links are not running".into()),
+    })
+}
+
 fn s(args: &Value, k: &str) -> String {
     arg_str_opt(args, k).unwrap_or_default().trim().to_string()
 }
 
 pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        return links.send(&name, &args);
+    }
     let (identity, channel) = target(&args)?;
     let text = arg_str_opt(&args, "text").unwrap_or_default().to_string();
     let lang = s(&args, "lang");
@@ -90,6 +106,10 @@ pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn edit(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        return links.edit(&name, &s(&args, "message_id"), arg_str_opt(&args, "text").unwrap_or_default());
+    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     let text = arg_str_opt(&args, "text").unwrap_or_default();
@@ -98,6 +118,10 @@ pub fn edit(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn react(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        return links.react(&name, &s(&args, "message_id"), &s(&args, "emoji"));
+    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     let emoji = s(&args, "emoji");
@@ -110,6 +134,10 @@ pub fn react(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn delete(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        return links.delete(&name, &arg_str_list(&args, "message_ids"));
+    }
     let (identity, channel) = target(&args)?;
     let ids = arg_str_list(&args, "message_ids");
     if ids.is_empty() {
@@ -120,6 +148,9 @@ pub fn delete(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn pin(_: &Ctx, args: Value) -> Result<String, String> {
+    if peer_channel(&args).is_some() {
+        return Err("pinning is not available on peer chats".into());
+    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     let on = arg_bool(&args, "on", true);
@@ -128,18 +159,32 @@ pub fn pin(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn close_poll(_: &Ctx, args: Value) -> Result<String, String> {
+    if peer_channel(&args).is_some() {
+        return Err("polls are not available on peer chats".into());
+    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     chat::agent_close_poll(&identity, &channel, &id).map(|t| format!("poll {id} closed: {t}"))
 }
 
 pub fn history(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        let n = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
+        return links.history(&name, n);
+    }
     let (identity, channel) = target(&args)?;
     let n = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
     chat::agent_history(&identity, &channel, n)
 }
 
 pub fn read(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        let id = s(&args, "message_id");
+        links.read(&name, &id);
+        return Ok(format!("read up to {id}"));
+    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     chat::agent_read(&identity, &channel, &id);
@@ -147,6 +192,11 @@ pub fn read(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn typing(_: &Ctx, args: Value) -> Result<String, String> {
+    if let Some(r) = peer_channel(&args) {
+        let (links, name) = r?;
+        links.typing(&name, arg_bool(&args, "on", true));
+        return Ok("ok".into());
+    }
     let (identity, channel) = target(&args)?;
     let on = arg_bool(&args, "on", true);
     chat::typing(&identity, &channel, on);

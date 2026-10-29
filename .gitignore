@@ -29,6 +29,7 @@ source/flash/boot/
 source/flash/files/state/
 source/flash/files/inbox/
 source/flash/MCPs/*/bin/
+source/flash/MCPs/web/bridge/
 source/flash/MCPs/telegram/lib/
 source/flash/MCPs/chrome/runtime/
 source/flash/MCPs/chrome/devtools/

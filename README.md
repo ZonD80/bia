@@ -78,6 +78,7 @@ where it left off.
 ├── source/
 │   ├── crates/
 │   │   ├── bia-agent/         the agent: console UI, REPL, tool registry, llama-server
+│   │   ├── bia-bridge/        client for other agents: cert request, chat link daemon, CLI + MCP
 │   │   │                      supervisor, FMM client, memory, schedules
 │   │   ├── bia-mcp/           tiny MCP-over-stdio server library used by every MCP
 │   │   ├── bia-pki/           agent-owned CA, server/client certs, CSR requests, PKCS#12 pickup
@@ -158,7 +159,7 @@ tools/make-icons.sh          # website favicon/icons + flasher .icns/.ico/window
 tools/release.sh             # GitHub release v<version>: builds only what is missing (OS per arch, flashers), notarizes, uploads
 make update-e2e              # QEMU end-to-end test of the rescue-image OS update
 make land-e2e                # QEMU end-to-end test: land ISO install, then fly/land
-make peer-e2e                # QEMU end-to-end test: agent-to-agent web API with a cert request
+make peer-e2e                # QEMU end-to-end test: two agents set up trust, then talk over the live peer link
 make bios-e2e                # QEMU end-to-end test on legacy BIOS: boot the stick, install to disk
 make bios-update-e2e         # /update and /rescue through the rescue image on legacy BIOS
 make patch-mcp MCP=chrome    # rebuild one MCP and hot-patch existing images
@@ -200,6 +201,11 @@ context meters, tokens/s, what the agent is doing). Your input is green after
 Press Enter on an empty line to interrupt the model. The same session is
 available in a browser at `https://<machine-ip>/` with a client certificate
 the agent issues (`/pki issue`).
+
+Other agents (Claude Code, Claude Desktop, Cursor, scripts) talk to a bia with
+`bia-bridge` (release assets for macOS, Linux, Windows; `source/crates/bia-bridge`):
+`bia-bridge connect https://<machine-ip> --identity <name>`, the owner approves, then
+`bia-bridge send` / `bia-bridge wait`, or `claude mcp add bia -- bia-bridge mcp`.
 
 ## Adding an MCP
 

@@ -566,9 +566,9 @@ export const features: Feature[] = [
     lead:
       'bia is not alone in the world. Other programs and AI agents can talk to it through its own chat app, with their own certificate, exactly like a human guest. bias can talk to each other through messengers or the web, and one bia can even build and run another computer inside itself.',
     points: [
-      { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own certificate from you, and then chat with bia like any member of the household — with their own chats and history.' },
+      { title: 'A front door for agents', text: 'Other AI agents find bia’s documented doorway, receive their own certificate from you, and then chat with bia like any member of the household — with their own chats and history. bia-bridge, a small free tool for Mac, Linux and Windows, plugs Claude and other assistants straight in: one command to ask, and they can talk.' },
       { title: 'bia to bia', text: 'Two bias can be contacts of each other on Telegram, WhatsApp, Messenger, Instagram or the web app: one at home, one at the shop, sharing work, passing messages and handing each other the skills they wrote.' },
-      { title: 'Trust in one handshake', text: 'Ask bia to connect to another bia: it hands the other one a certificate and asks for one back. When the other owner approves, both can call each other’s web app. Every request shows the address it came from, and a certificate can be limited to the addresses it may be used from.' },
+      { title: 'Trust in one handshake', text: 'Ask bia to connect to another bia: it hands the other one a certificate and asks for one back. When the other owner approves, the two keep a live, private line open between them, like a chat: messages and files go both ways at once, and each tells its owner when the other goes offline or comes back. Either one can hang up or block the other. Every request shows the address it came from.' },
       { title: 'A computer inside a computer', text: 'bia can set up a virtual computer, boot a second bia in it and drive it — handy for testing, teaching or giving a helper its own room.' },
       { title: 'Same rules for everyone', text: 'Agents get trust levels like people do: a guest agent can ask and chat, only a trusted one can give serious orders.' },
     ],

@@ -173,7 +173,7 @@ pub fn decide(ctx: &Ctx, args: Value, approve: bool) -> Result<String, String> {
             r.identity,
             if r.reason.is_empty() { "; nothing to send.".to_string() } else { format!(" and reads your message with it: \"{}\"", r.reason) },
             if r.grant.is_some() {
-                format!(" Trust is now set up both ways: {0} is a peer, call it with web_peer_call(peer=\"{0}\", …).", r.identity)
+                format!(" Trust is now set up both ways: {0} is a peer. The link with it opens by itself; a [peer {0}] notice comes when it is up, then talk with say(channel=\"peer:{0}\").", r.identity)
             } else {
                 String::new()
             }
@@ -197,7 +197,7 @@ fn cidrs(args: &Value, key: &str) -> Result<Vec<bia_pki::Cidr>, String> {
         .collect()
 }
 
-pub fn peer_connect(ctx: &Ctx, args: Value) -> Result<String, String> {
+pub fn peer_add(ctx: &Ctx, args: Value) -> Result<String, String> {
     let url = bia_mcp::arg_str(&args, "url")?.trim().to_string();
     let pin = bia_mcp::arg_str_opt(&args, "ca_sha256");
     let note = bia_mcp::arg_str_opt(&args, "note").unwrap_or_default();
@@ -208,66 +208,58 @@ pub fn peer_connect(ctx: &Ctx, args: Value) -> Result<String, String> {
         .map_err(|e| format!("{e:#}"))?;
     ctx.log(format!("asked {} at {} for mutual trust (request {})", p.name, p.url, &p.request[..8.min(p.request.len())]));
     Ok(format!(
-        "Asked {name} at {url} (CA {ca}). It already holds a certificate from this bia; once its root approves, this bia gets its certificate too and a [peer {name}] notice arrives. Pending until then (its request lives 3 days).",
+        "Asked {name} at {url} (CA {ca}). It already holds a certificate from this bia; once its root approves, this bia gets its certificate too, the link opens by itself and a [peer {name}] notice arrives. Pending until then (its request lives 3 days).",
         name = p.name,
         url = p.url,
         ca = &p.ca_sha256[..16]
     ))
 }
 
-pub fn peer_list(_: &Ctx, _: Value) -> Result<String, String> {
+/// Peers with trust and link state, one block each.
+pub fn peer_list_text() -> Result<String, String> {
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     let peers = pki.peers();
     if peers.is_empty() {
         return Ok(format!(
-            "(no peers) This bia is {} to other bias; web_peer_connect sets up trust with one.",
+            "(no peers) This bia is {} to other bias; web_peer_add sets up trust with one.",
             pki.agent_name()
         ));
     }
     let mut out = vec![format!("This bia is {} to other bias.", pki.agent_name())];
     for p in peers {
         out.push(p.describe());
-        if p.status == "active" {
-            if let Ok((ca, cert, key)) = pki.peer_files(&p.name) {
-                out.push(format!(
-                    "  curl --cert {} --key {} --cacert {} {}/v1/status   (server name is not in its certificate: add --resolve or -k only if curl refuses the address)",
-                    cert.display(),
-                    key.display(),
-                    ca.display(),
-                    p.url
-                ));
+        if p.status != "active" {
+            continue;
+        }
+        if let Some(l) = crate::peer::links() {
+            let d = l.describe(&p.name);
+            out.push(format!("  link: {}  (channel peer:{})", d["state"].as_str().unwrap_or(""), p.name));
+            if let Some(e) = d["last_error"].as_str().filter(|e| !e.is_empty() && d["online"] != true) {
+                out.push(format!("  last try: {e}"));
+            }
+            for t in d["transfers"].as_array().into_iter().flatten() {
+                out.push(format!("  file {}", t.as_str().unwrap_or("")));
             }
         }
     }
     Ok(out.join("\n"))
 }
 
-pub fn peer_call(_: &Ctx, args: Value) -> Result<String, String> {
-    let name = bia_mcp::arg_str(&args, "peer")?.trim().to_string();
-    let method = bia_mcp::arg_str(&args, "method")?.trim().to_ascii_uppercase();
-    let path = bia_mcp::arg_str(&args, "path")?.trim().to_string();
-    let body = args.get("body").filter(|b| !b.is_null());
-    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
-    let r = pki
-        .peer_call(&name, &method, &path, body)
-        .map_err(|e| format!("{e:#}"))?;
-    let text = r.text();
-    let cut: String = text.chars().take(8000).collect();
-    Ok(format!(
-        "HTTP {}\n{}{}",
-        r.status,
-        cut,
-        if cut.len() < text.len() { "\n… (cut)" } else { "" }
-    ))
+pub fn peer_list(_: &Ctx, _: Value) -> Result<String, String> {
+    peer_list_text()
 }
 
 pub fn peer_remove(ctx: &Ctx, args: Value) -> Result<String, String> {
     let name = bia_mcp::arg_str(&args, "peer")?.trim().to_string();
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    // trust first, so the link manager cannot take the peer up again meanwhile
     let p = pki.peer_remove(&name).map_err(|e| format!("{e:#}"))?;
+    if let Some(l) = crate::peer::links() {
+        l.forget(&name);
+    }
     ctx.log(format!("removed peer {} ({})", p.name, p.url));
     Ok(format!(
-        "Removed {}. The certificate this bia gave it is revoked; its certificate for this bia is forgotten here.",
+        "Removed {}. Its link is closed, the certificate this bia gave it is revoked and its certificate for this bia is forgotten here.",
         p.name
     ))
 }

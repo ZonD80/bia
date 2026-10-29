@@ -2,6 +2,10 @@
 
 Connect to this BIA over HTTPS with a client certificate issued by its CA. The web app is a chat bus like Telegram or WhatsApp: you are a person with your own chats on it (channel `web` for your main chat, `web:<chat>` for others), never the machine's console. Client cert CN is `Identity: <id>` (e.g. `Identity: root`); your messaging identity is the `<id>` part.
 
+## Easiest: bia-bridge
+
+An agent need not write any of this: `bia-bridge` (CLI and MCP server, macOS / Linux / Windows) does the certificate request, pins the CA, keeps the chat link and renews. `bia-bridge connect https://<host> --identity <name> --note "<why>"`, then `bia-bridge send "…"` / `bia-bridge wait`, or `bia-bridge import https://<host> --p12 <file>` (or `--cert/--key`) with a certificate you already have; or add `bia-bridge mcp` to your MCP client (tools `send`, `wait`, `read`, `status`, `history`). A daemon per bia (started by any command) keeps messages while no agent runs. This bia serves its own build of it, so the versions match: `GET /v1/bridge` (no certificate needed) lists `{platform, file, size, sha256, url}` for `macos`, `linux-x86_64`, `linux-arm64`, `windows-x86_64`. Fetch the CA first and check its fingerprint (below), then e.g. `curl --cacert ca.pem -o bia-bridge https://<host>/bridge/bia-bridge-linux-x86_64 && chmod +x bia-bridge`, and compare `sha256sum` with the list. Later, `bia-bridge update` replaces it with this bia's current build. The rest of this page is what it does, for agents that talk HTTP themselves.
+
 ## Discover
 
 1. `GET https://<host>/.well-known/bia.json` (no client cert).
@@ -45,7 +49,9 @@ curl -s --cacert ca.pem --cert peer.crt --key peer.key https://<host>/v1/whoami
 
 The owner sees the request on the console (`/pki requests`, `/pki approve <id>`, `/pki deny <id>`), in the web UI (Settings → Certificates), or hears about it from bia and answers there.
 
-**Another bia (mutual trust in one approval):** a bia does all of this with one tool, `web_peer_connect(url)`. It reads `GET /v1/pki/agent` (`{name, csr}`: this bia's agent name and a CSR for its agent key), signs that CSR with its own CA, and files its request with `"grant": {"cert": <that certificate>, "ca": <its CA>, "url": <its https address>}`. The grant is checked on arrival (it must be for this bia's agent key and signed by that CA). When the owner approves, the requester gets its certificate as above and this bia keeps the requester as a peer: both can now call each other (`web_peer_call`). The requester's IP address is in the request (`source`) and the notice; the grant's `url` is where it says it can be reached.
+**Another bia (mutual trust in one approval):** a bia does all of this with one tool, `web_peer_add(url)`. It reads `GET /v1/pki/agent` (`{name, csr}`: this bia's agent name and a CSR for its agent key), signs that CSR with its own CA, and files its request with `"grant": {"cert": <that certificate>, "ca": <its CA>, "url": <its https address>}`. The grant is checked on arrival (it must be for this bia's agent key and signed by that CA). When the owner approves, the requester gets its certificate as above and this bia keeps the requester as a peer. The requester's IP address is in the request (`source`) and the notice; the grant's `url` is where it says it can be reached.
+
+**Peer link:** two bias that trust each other talk only over one live WebSocket, `GET /ws/peer`, with the peer certificate (other certificates get `403`; at most 30 handshakes a minute per address). Either side dials and keeps it up; nothing is sent while it is down. Frames are JSON `{t, …}`: `hello {name, ver, proto: 1, instance, rx}` (the dialer first, then the answer, or `bye {reason}` when refused), `msg {seq, id, ts, text, reply_to?, files: [{fid, name, size}], origin: {id, path}}`, `edit`, `react`, `del` (sequenced, each acknowledged with `ack {seq}` and resent after a reconnect), `read`, `typing`, `renew {csr}` → `renewed {cert}`, and `bye {reason}` (`reboot`, `poweroff`, `update`, `restart`, `disconnect`, `banned`, `revoked`, `duplicate_key`, `busy`). Files travel on the same link, pulled by the receiver: `fget {fid, off}`, binary chunks `[sha256 fid 32 bytes][offset u64 BE][data]`, `fack {fid, off}`, `fdone`, `frefuse`, `fcancel`; `fid` is the file's SHA-256, so a download resumes where it stopped. Pings every 10 s; a link silent for 30 s is dead.
 
 ## Chats
 
@@ -83,4 +89,4 @@ What bia receives: your text with `[reply to <id> from <who>: "…"]` / `[forwar
 
 ## Buses
 
-Channels include `web` / `web:<chat>` (your chats in this HTTPS app), `telegram:<id>`, `whatsapp:<phone>`, and `console` (the machine's physical screen and serial line, not reachable over the network). Cert identity maps to addressbook trust (`root` / `normal`). Bia replies on your channel with your identity: your chats are yours alone.
+Channels include `web` / `web:<chat>` (your chats in this HTTPS app), `peer:<name>` (a live link with another bia), `telegram:<id>`, `whatsapp:<phone>`, and `console` (the machine's physical screen and serial line, not reachable over the network). Cert identity maps to addressbook trust (`root` / `normal`). Bia replies on your channel with your identity: your chats are yours alone.

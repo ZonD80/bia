@@ -43,6 +43,16 @@ def prep(name):
                 shutil.copy2(f"{out}/bia-mcp-{mcp}", f"{bindir}/bia-mcp-{mcp}")
             shutil.copy2(f"/work/source/flash/MCPs/{mcp}/mcp.json", f"{r}/home/bia/MCPs/{mcp}/mcp.json")
         ut.sh("cp", "-a", "/work/source/os/overlay/usr/local/share/bia/.", f"{r}/usr/local/share/bia/")
+        # the unit and update script from this tree (bia.service is ordered after the network)
+        for f in ("etc/systemd/system/bia.service", "usr/local/sbin/bia-update"):
+            shutil.copy2(f"/work/source/os/overlay/{f}", f"{r}/{f}")
+        # agent names for the peer link (bia-b is the curl agent's identity in the first part)
+        pki = f"{r}/home/bia/files/state/pki"
+        os.makedirs(pki, exist_ok=True)
+        ut.put(f"{pki}/agent.json", json.dumps({"name": {"a": "alpha", "b": "beta"}[name]}))
+        os.chown(f"{pki}/agent.json", 1000, 1000)
+        shutil.rmtree(f"{pki}/peers", ignore_errors=True)
+        shutil.rmtree(f"{r}/home/bia/files/state/peers", ignore_errors=True)
         for d in (f"{r}/home/bia/files/state/pki/requests",):
             shutil.rmtree(d, ignore_errors=True)
         print(f"{name}: bia-{name}, eth1 {LINK_IP[name]}, agent + system and web MCPs from dist")
@@ -77,12 +87,12 @@ def check():
             m = json.load(open(meta)) if os.path.exists(meta) else {}
             want(m.get("identity") == "bia-b" and m.get("role") == "agent" and m.get("trust") == "normal",
                  f"issued cert {q['serial']}: {m.get('identity')} role={m.get('role')} trust={m.get('trust')}")
-            # CSR flow: bia-a never held bia-b's private key; bia-b's own key matches the cert
+            # CSR flow: bia-a never held bia-b's private key (agent.key is bia-a's own peer-link key)
             stray = []
             for dp, _, fs in os.walk(pki):
                 for f in fs:
                     path = os.path.join(dp, f)
-                    if path in (f"{pki}/ca.key", f"{pki}/server.key"):
+                    if path in (f"{pki}/ca.key", f"{pki}/server.key", f"{pki}/agent.key"):
                         continue
                     if b"PRIVATE KEY" in open(path, "rb").read():
                         stray.append(path[len(pki) + 1:])
@@ -101,7 +111,9 @@ def check():
                         continue
                     if pub and ut.sh("openssl", "pkey", "-in", path, "-pubout", capture=True, check=False) == pub:
                         match.append(path[len(b.root):])
-            want(bool(match), f"bia-b holds the private key for the issued cert {match}")
+            # bia-b may replace that key with its renewed one; the renewal check below covers it then
+            first_revoked = json.load(open(meta)).get("revoked") if os.path.exists(meta) else False
+            want(bool(match) or first_revoked, f"bia-b holds the private key for the issued cert {match or '(replaced at renewal)'}")
         # renewal: bia-b's first cert revoked, a second one active for a new key only bia-b has
         issued = []
         for n in os.listdir(f"{pki}/issued"):
@@ -135,7 +147,7 @@ def check():
         for dp, _, fs in os.walk(pki):
             for f in fs:
                 path = os.path.join(dp, f)
-                if path not in (f"{pki}/ca.key", f"{pki}/server.key") and b"PRIVATE KEY" in open(path, "rb").read():
+                if path not in (f"{pki}/ca.key", f"{pki}/server.key", f"{pki}/agent.key") and b"PRIVATE KEY" in open(path, "rb").read():
                     stray.append(path[len(pki) + 1:])
         want(not stray, f"after renewals still no client private key on bia-a {stray or ''}")
         chat = f"{a.root}/home/bia/files/state/web/bia-b"
@@ -155,6 +167,17 @@ def check():
         froms = [m.get("from") for m in msgs if isinstance(m, dict)]
         want("bia-b" in froms and "bia" in froms, f"bia-b's main chat has bia-b's message and bia's answer (from: {sorted(set(froms))})")
         want(not os.path.isdir(f"{a.root}/home/bia/files/state/web/bia"), "nothing written under web/bia")
+        # the peer link: both sides keep the peer, the link state and the talk
+        for img, me, other in ((a, "alpha", "beta"), (b, "beta", "alpha")):
+            st = f"{img.root}/home/bia/files/state/peers/{other}"
+            link = json.load(open(f"{st}/link.json")) if os.path.exists(f"{st}/link.json") else {}
+            want(link.get("greeted") and link.get("want"), f"{me}: link with {other} was up and is wanted ({ {k: link.get(k) for k in ('greeted', 'want', 'banned_by')} })")
+            peer = f"{img.root}/home/bia/files/state/pki/peers/{other}/peer.json"
+            want(os.path.exists(peer) and json.load(open(peer)).get("status") == "active", f"{me}: {other} is an active peer")
+            lines = open(f"{st}/chat.jsonl").read().splitlines() if os.path.exists(f"{st}/chat.jsonl") else []
+            froms = {json.loads(l).get("from") for l in lines}
+            want({"me", other} <= froms, f"{me}: the peer chat has messages both ways ({sorted(froms)})")
+            want(os.stat(f"{st}/link.json").st_uid == 1000 if os.path.exists(f"{st}/link.json") else False, f"{me}: link.json belongs to bia")
     if errs:
         sys.exit(f"CHECK peer: {len(errs)} failure(s)")
     print("CHECK peer: all good")

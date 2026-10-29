@@ -16,6 +16,7 @@ members = [
     "source/crates/bia-mcp-carry",
     "source/crates/bia-speech",
     "source/crates/bia-mcp-lang",
+    "source/crates/bia-bridge",
     "installers/bia-disk",
     "installers/bia-mkimage",
     "installers/bia-deploy",
@@ -23,7 +24,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.7.7"
+version = "1.8.0"
 edition = "2021"
 license = "GPL-3.0-only"
 

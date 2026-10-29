@@ -2,7 +2,9 @@
 Description=bia agent
 ConditionPathExists=!/etc/bia-land-mode
 # bia-update runs before us; networking is best-effort (DHCP must not block the agent).
-After=local-fs.target bia-update.service
+# After network.target orders shutdown: bia stops (the web MCP says bye to its peers)
+# before the network goes down. network.target does not wait for a DHCP lease.
+After=local-fs.target bia-update.service network.target
 Wants=networking.service network-online.target
 Conflicts=shutdown.target
 

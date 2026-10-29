@@ -9,6 +9,7 @@
 #                   os = os-x86_64,os-arm64
 #                   land = land-x86_64,land-arm64
 #                   apps = app-android,app-ios
+#                   bridge = bridge-macos,bridge-linux,bridge-linux-arm64,bridge-windows
 #                 e.g. --force --only flashers      --only os-arm64,flash-macos
 #   --dry-run     only show what is missing      --build-only  build into dist/release/<tag>, upload nothing
 #   --publish     build nothing: upload what --build-only runs left in dist/release/<tag> (their
@@ -42,6 +43,11 @@
 #   mcps           mcp-<name>.tar.gz per shipped MCP (the whole folder, both architectures'
 #                  binaries, as in /home/bia/MCPs; + "mcps" in bia-os.json: version, size,
 #                  sha256): a bia updates one MCP with mcp_update, without a system update
+#   bridge-macos   bia-bridge-macos-universal.zip  bia-bridge: lets other agents (Claude Code,
+#                  scripts) talk to a bia (CLI + MCP server); the same signed + notarized
+#                  build the bias serve (tools/bridge-macos.sh)
+#   bridge-linux   bia-bridge-linux-x86_64.tar.gz      bridge-linux-arm64  …-linux-arm64.tar.gz
+#   bridge-windows bia-bridge-windows-x86_64.zip   (MinGW cross build)
 #   app-ios        bia-deploy-ios-unsigned.ipa  not signed (installers/ios/build-ipa.sh with
 #                  IOS_UNSIGNED=1); sideloading tools sign it. App Store builds: build-ipa.sh
 # Asset names carry no version, so https://github.com/zond80/bia/releases/latest/download/<name>
@@ -54,7 +60,7 @@ SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 cd "$(dirname "$SELF")/.."
 ROOT=$(pwd)
 REPO=zond80/bia
-ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover mcps app-android app-ios)
+ALL=(os-x86_64 os-arm64 land-x86_64 land-arm64 flash-macos flash-linux flash-linux-arm64 flash-windows takeover mcps app-android app-ios bridge-macos bridge-linux bridge-linux-arm64 bridge-windows)
 
 NOTES="" ONLY="" WITHIN="" DRY=0 DIRTY=0 REBUILD_OS=0 BUILD_ONLY=0 PUBLISH=0 FORCE=0
 die() { echo "error: $*" >&2; exit 1; }
@@ -87,7 +93,8 @@ expand() { # comma list → " pkg pkg … " (groups expanded)
       os) want+="os-x86_64 os-arm64 " ;;
       land) want+="land-x86_64 land-arm64 " ;;
       apps) want+="app-android app-ios " ;;
-      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land, apps)"
+      bridge) want+="bridge-macos bridge-linux bridge-linux-arm64 bridge-windows " ;;
+      *) [[ " ${ALL[*]} " == *" $i "* ]] || die "unknown package '$i' (packages: ${ALL[*]}; groups: flashers, os, land, apps, bridge)"
          want+="$i " ;;
     esac
   done
@@ -113,6 +120,12 @@ gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 [[ -n "$VERSION" ]] || die "no version in Cargo.toml"
+# Unfinished documentation: a change that needs its docs checked leaves "TODO(docs: <what>)"
+# where they must be updated; nothing is released while one is left.
+if todo=$(git grep -n -F 'TODO(docs:' -- . ':!tools/release.sh' 2>/dev/null) && [[ -n "$todo" ]]; then
+  echo "$todo" >&2
+  die "documentation placeholders are left (above); update those docs first"
+fi
 TAG="v$VERSION"
 SHA=$(git rev-parse HEAD)
 OUT="$ROOT/dist/release/$TAG"
@@ -159,6 +172,10 @@ complete() { # pkg
     land-*) has "bia-land-${1#land-}.iso.xz" ;;
     app-android) has bia-deploy-android.apk && has bia-deploy-android.aab ;;
     app-ios) has bia-deploy-ios-unsigned.ipa ;;
+    bridge-macos) has bia-bridge-macos-universal.zip ;;
+    bridge-linux) has bia-bridge-linux-x86_64.tar.gz ;;
+    bridge-linux-arm64) has bia-bridge-linux-arm64.tar.gz ;;
+    bridge-windows) has bia-bridge-windows-x86_64.zip ;;
     mcps)
       local d
       for d in source/flash/MCPs/*/; do
@@ -291,6 +308,20 @@ both_arches() {
   done
   [[ -f source/flash/MCPs/chrome/devtools/build/src/bin/chrome-devtools-mcp.js ]] || missing+=("chrome/devtools")
   [[ ${#missing[@]} -eq 0 ]] || die "chrome MCP payload missing: ${missing[*]} (tools/fetch-chrome-devtools.sh)"
+  # the bia serves bia-bridge for every platform, from the same build
+  for f in linux-x86_64 linux-arm64 windows-x86_64.exe macos; do
+    [[ -s source/flash/MCPs/web/bridge/bia-bridge-$f ]] || missing+=("web/bridge/bia-bridge-$f")
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "bia-bridge builds missing: ${missing[*]} (make rust mcps for both architectures; tools/bridge-macos.sh on a Mac)"
+  # built from this version (the bias serve them as the bridge matching their own)
+  for f in linux-x86_64 linux-arm64 windows-x86_64.exe macos; do
+    LC_ALL=C grep -a -q -F "$VERSION" "source/flash/MCPs/web/bridge/bia-bridge-$f" || missing+=("web/bridge/bia-bridge-$f (not $VERSION)")
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "bia-bridge builds from another version: ${missing[*]} (rebuild: make rust mcps for both architectures; tools/bridge-macos.sh)"
+  # the macOS build the bias serve must be the notarized one
+  local mb=source/flash/MCPs/web/bridge/bia-bridge-macos
+  [[ -f "$mb.notarized" && "$(cat "$mb.notarized")" == "$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$mb")" ]] \
+    || die "$mb is not the notarized build (run tools/bridge-macos.sh on a Mac with the Apple credentials)"
 }
 
 build_os() { # arch
@@ -403,6 +434,49 @@ build_windows() {
   UPLOAD+=("$OUT/bia-deploy-windows-x86_64.zip")
 }
 
+# bia-bridge for other agents: one binary + README per platform
+bridge_readme() { # dir
+  cp source/crates/bia-bridge/README.md "$1/README.md"
+}
+
+build_bridge_macos() {
+  echo "== bia-bridge (macOS universal, signed, notarized)"
+  installers/macos/bridge-release.sh
+  scan installers/dist/macos-universal/bia-bridge/bia-bridge
+  cp -f installers/dist/macos-universal/bia-bridge-macos-universal.zip "$OUT/bia-bridge-macos-universal.zip"
+  UPLOAD+=("$OUT/bia-bridge-macos-universal.zip")
+}
+
+build_bridge_linux() { # arch
+  local a=$1 s="$ROOT/dist/release/.bridge-$1" st tgz
+  echo "== bia-bridge (Linux $a)"
+  BUILDER_ARCH=$a docker_flash "cargo build --release -p bia-bridge && mkdir -p /work/dist/release/.bridge-$a && cp /cache/flash-target/release/bia-bridge /work/dist/release/.bridge-$a/"
+  scan "$s/bia-bridge"
+  st=$(mktemp -d)
+  mkdir -p "$st/bia-bridge"
+  cp "$s/bia-bridge" "$st/bia-bridge/"
+  bridge_readme "$st/bia-bridge"
+  tgz="$OUT/bia-bridge-linux-$a.tar.gz"
+  tar -C "$st" -czf "$tgz" bia-bridge
+  rm -rf "$st" "$s"
+  UPLOAD+=("$tgz")
+}
+
+build_bridge_windows() {
+  echo "== bia-bridge (Windows x86_64, MinGW cross build)"
+  docker_flash "command -v x86_64-w64-mingw32-gcc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 >/dev/null; }; rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu; cargo build --release -p bia-bridge --target x86_64-pc-windows-gnu && mkdir -p /work/dist/release/.bridge-windows && cp /cache/flash-target/x86_64-pc-windows-gnu/release/bia-bridge.exe /work/dist/release/.bridge-windows/"
+  local s="$ROOT/dist/release/.bridge-windows" st
+  scan "$s/bia-bridge.exe"
+  st=$(mktemp -d)
+  mkdir -p "$st/bia-bridge"
+  cp "$s/bia-bridge.exe" "$st/bia-bridge/"
+  bridge_readme "$st/bia-bridge"
+  rm -f "$OUT/bia-bridge-windows-x86_64.zip"
+  (cd "$st" && zip -qr "$OUT/bia-bridge-windows-x86_64.zip" bia-bridge)
+  rm -rf "$st" "$s"
+  UPLOAD+=("$OUT/bia-bridge-windows-x86_64.zip")
+}
+
 # Each shipped MCP as its own archive: the folder as /home/bia/MCPs holds it (both
 # architectures' binaries, chrome's Node and devtools), for mcp_update on a running bia.
 build_mcps() {
@@ -466,6 +540,10 @@ for p in ${TODO[@]+"${TODO[@]}"}; do
     flash-linux-arm64) build_linux arm64 ;;
     takeover) build_takeover ;;
     flash-windows) build_windows ;;
+    bridge-macos) build_bridge_macos ;;
+    bridge-linux) build_bridge_linux x86_64 ;;
+    bridge-linux-arm64) build_bridge_linux arm64 ;;
+    bridge-windows) build_bridge_windows ;;
     mcps) build_mcps ;;
     app-android) build_android ;;
     app-ios) build_ios ;;

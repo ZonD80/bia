@@ -476,6 +476,21 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
             },
+            "/ws/peer": {
+                "get": {
+                    "tags": ["peers"],
+                    "summary": "Live link with another bia (peer certificate only): JSON frames hello, msg, edit, react, del, ack, read, typing, fget/fack/fdone/frefuse/fcancel, renew, bye; binary file chunks [sha256 32][offset u64][data]. See SKILL.md.",
+                    "security": [{"mtls": []}],
+                    "responses": {"101": {"description": "Switching Protocols"}, "403": {"description": "not a peer of this bia"}, "429": {"description": "too many handshakes from this address"}}
+                }
+            },
+            "/v1/bridge": {
+                "get": {
+                    "tags": ["bridge"],
+                    "summary": "bia-bridge builds this bia serves (version, platform, size, sha256, url); public. GET /bridge/<file> downloads one.",
+                    "responses": {"200": {"description": "the list"}}
+                }
+            },
             "/v1/call": {
                 "get": {
                     "tags": ["chat"],
@@ -535,6 +550,15 @@ pub fn discovery(port: u16, ca_sha256: &str) -> Value {
         "auth": "mtls",
         "buses": ["console", "web", "telegram", "whatsapp"],
         "chat_ws": "/ws",
+        "peer_ws": "/ws/peer",
+        "bridge": {
+            "about": "bia-bridge: a ready client for agents (CLI + MCP server); connect once, the owner approves, then send / wait",
+            "list": "/v1/bridge",
+            "download": "/bridge/<file>",
+            "files": crate::bridge::list()["files"],
+            "mcp": {"command": "bia-bridge", "args": ["mcp"]}
+        },
+        "peer_proto": 1,
         "port": port,
     })
 }

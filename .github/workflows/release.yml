@@ -81,7 +81,7 @@ jobs:
           make ARCH=${{ matrix.arch }} mcps
           sudo chown -R "$(id -u):$(id -g)" dist source/flash
       - name: Pack (a tar keeps the executable bits an artifact would drop)
-        run: tar -czf mcps-${{ matrix.arch }}.tgz dist/${{ matrix.arch }} source/flash/MCPs/*/bin/${{ matrix.rarch }}
+        run: tar -czf mcps-${{ matrix.arch }}.tgz dist/${{ matrix.arch }} source/flash/MCPs/*/bin/${{ matrix.rarch }} source/flash/MCPs/web/bridge
       - uses: actions/upload-artifact@v7
         with:
           name: mcps-${{ matrix.arch }}
@@ -91,17 +91,66 @@ jobs:
         if: always()
         run: rm -f .env
 
+  # bia-bridge for macOS, which every image serves next to the Linux and Windows ones
+  mcps-macos:
+    if: ${{ !inputs.only || contains(inputs.only, 'os') || contains(inputs.only, 'land') || contains(inputs.only, 'mcps') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Signing identity into a keychain of its own
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/bia-signing.keychain-db"
+          kp=$(openssl rand -hex 24)
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kp" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kp" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Developer ID certificates are issued by Apple's G2 intermediate, which a fresh
+          # runner lacks: without it the identity does not verify and codesign cannot find it
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$kc" -T /usr/bin/codesign
+          security find-identity -p codesigning "$kc"
+          if ! security find-identity -v -p codesigning "$kc" | grep -q 'Developer ID Application'; then
+            echo "::error::no usable Developer ID Application identity in MACOS_CERT_P12: export it from Keychain Access under My Certificates (certificate with its private key) as .p12"
+            exit 1
+          fi
+      - name: Build, sign, notarize (universal)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          CODESIGN_IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
+        run: tools/bridge-macos.sh
+      - name: Pack
+        run: tar -czf mcps-macos.tgz source/flash/MCPs/web/bridge/bia-bridge-macos source/flash/MCPs/web/bridge/bia-bridge-macos.notarized
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mcps-macos
+          path: mcps-macos.tgz
+          retention-days: 3
+      - name: Remove the keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/bia-signing.keychain-db" 2>/dev/null || true
+
   linux:
-    needs: mcps
-    if: ${{ !cancelled() && needs.mcps.result != 'failure' }}
+    needs: [mcps, mcps-macos]
+    if: ${{ !cancelled() && needs.mcps.result != 'failure' && needs.mcps-macos.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-24.04
-            within: os-x86_64,land-x86_64,flash-linux,flash-windows,takeover,mcps
+            within: os-x86_64,land-x86_64,flash-linux,flash-windows,takeover,mcps,bridge-linux,bridge-windows
           - runner: ubuntu-24.04-arm
-            within: os-arm64,land-arm64,flash-linux-arm64
+            within: os-arm64,land-arm64,flash-linux-arm64,bridge-linux-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 300
     steps:
@@ -199,7 +248,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           CODESIGN_IDENTITY: ${{ vars.CODESIGN_IDENTITY }}
-        run: tools/release.sh --build-only --within flash-macos ${ONLY:+--only "$ONLY"} $FORCE
+        run: tools/release.sh --build-only --within flash-macos,bridge-macos ${ONLY:+--only "$ONLY"} $FORCE
       - uses: actions/upload-artifact@v7
         with:
           name: built-macos

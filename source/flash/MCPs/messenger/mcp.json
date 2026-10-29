@@ -1,6 +1,6 @@
 {
   "name": "messenger",
-  "version": "1.7.7",
+  "version": "1.8.0",
   "description": "Facebook messages: read and send your Facebook account's Messenger chats here, never through the browser. A real user, not a bot: chats (including end-to-end encrypted ones), messages, files, voice messages, reactions, edits, groups, bans and blocks. The login is taken from the Facebook session in bia's Chrome. Received files are saved in /home/bia/files/inbox/messenger/; voice messages arrive transcribed as [speech <lang>]; edits, deletions and reactions arrive as [edited <id>], [deleted] and [reaction] lines. No calls. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-messenger",

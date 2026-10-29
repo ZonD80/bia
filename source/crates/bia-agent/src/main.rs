@@ -852,7 +852,25 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         });
         boot.end_inline();
     }
-    Ok(repl.run())
+    let exit = repl.run();
+    // The MCPs stop when repl drops (SIGTERM first): the web MCP tells its peers why in
+    // its goodbye, and systemd has no reboot job queued yet, so say it here.
+    if system_mode {
+        let reason = match exit {
+            repl::Exit::Reboot => Some("reboot"),
+            repl::Exit::Poweroff => Some("poweroff"),
+            _ => None,
+        };
+        if let Some(r) = reason {
+            let _ = std::fs::create_dir_all("/run/bia");
+            let _ = std::fs::write(
+                "/run/bia/shutdown-reason",
+                format!("{{\"reason\":\"{r}\",\"at\":{}}}\n", crate::clock::unix(crate::clock::now())),
+            );
+        }
+    }
+    drop(repl);
+    Ok(exit)
 }
 
 /// Where the flasher leaves the owner's language: `{"lang": "ru"}`.

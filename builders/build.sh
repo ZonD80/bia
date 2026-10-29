@@ -90,7 +90,7 @@ rust() {
   local want_wa=0
   local want_meta=0
   if [ ${#FILTERS[@]} -eq 0 ]; then
-    main_pkgs=(bia-agent bia-mcp-system bia-mcp-web bia-mcp-secrets bia-mcp-chrome bia-mcp-screen bia-mcp-carry bia-mcp-lang)
+    main_pkgs=(bia-agent bia-mcp-system bia-mcp-web bia-mcp-secrets bia-mcp-chrome bia-mcp-screen bia-mcp-carry bia-mcp-lang bia-bridge)
     want_tg=1
     want_wa=1
     want_meta=1
@@ -100,10 +100,11 @@ rust() {
       case $f in
         agent) main_pkgs+=(bia-agent) ;;
         system|web|secrets|chrome|screen|carry|lang) main_pkgs+=(bia-mcp-"$f") ;;
+        bridge) main_pkgs+=(bia-bridge) ;;
         telegram) want_tg=1 ;;
         whatsapp) want_wa=1 ;;
         meta|messenger|instagram) want_meta=1 ;;
-        *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|telegram|whatsapp|meta)" >&2; exit 1 ;;
+        *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|bridge|telegram|whatsapp|meta)" >&2; exit 1 ;;
       esac
     done
   fi
@@ -123,6 +124,14 @@ rust() {
       strip -o "$OUT/$p" "$CARGO_TARGET_DIR/$triple/release/$p"
     done
     echo "   main bins installed under $OUT"
+    # bia-bridge for Windows too (the bia serves every platform's bridge; x86_64 builder only)
+    if [[ " ${main_pkgs[*]} " == *" bia-bridge "* ]] && [ "$ARCH" = x86_64 ]; then
+      command -v x86_64-w64-mingw32-gcc >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 >/dev/null; }
+      rustup target list --installed | grep -qx x86_64-pc-windows-gnu || rustup target add x86_64-pc-windows-gnu
+      cargo build --release -p bia-bridge --target x86_64-pc-windows-gnu
+      x86_64-w64-mingw32-strip -o "$OUT/bia-bridge.exe" "$CARGO_TARGET_DIR/x86_64-pc-windows-gnu/release/bia-bridge.exe"
+      echo "   bia-bridge.exe (windows x86_64) under $OUT"
+    fi
     if command -v ldd >/dev/null && [ -x "$OUT/bia-agent" ]; then
       echo "   ldd bia-agent:"; ldd "$OUT/bia-agent" | sed 's/^/     /' || true
     fi
@@ -191,6 +200,12 @@ mcps() {
   mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH"
   cp "$OUT/bia-mcp-system" "$M/system/bin/$RARCH/"
   cp "$OUT/bia-mcp-web" "$M/web/bin/$RARCH/"
+  # the bia serves bia-bridge to agents (web/bridge/); macOS comes from tools/bridge-macos.sh
+  mkdir -p "$M/web/bridge"
+  local barch=$RARCH
+  [ "$barch" = aarch64 ] && barch=arm64
+  [ -x "$OUT/bia-bridge" ] && cp "$OUT/bia-bridge" "$M/web/bridge/bia-bridge-linux-$barch"
+  [ -f "$OUT/bia-bridge.exe" ] && cp "$OUT/bia-bridge.exe" "$M/web/bridge/bia-bridge-windows-x86_64.exe"
   cp "$OUT/bia-mcp-telegram" "$M/telegram/bin/$RARCH/"
   cp "$OUT/bia-mcp-whatsapp" "$M/whatsapp/bin/$RARCH/"
   cp "$OUT/bia-mcp-secrets" "$M/secrets/bin/$RARCH/"

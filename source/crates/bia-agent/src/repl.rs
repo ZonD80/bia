@@ -147,6 +147,8 @@ fn needs_answer(ib: &Inbound) -> bool {
         || ib.channel.starts_with(crate::jobs::PREFIX)
         || ib.channel == crate::tools::CH_SCHEDULE
         || console_command(ib).is_some()
+        // another bia: no reply is owed (nudges and "still working" would talk back)
+        || crate::tools::is_peer(&ib.channel)
     {
         return false;
     }
@@ -1174,7 +1176,7 @@ impl Repl {
         let mut it = cmd.split_whitespace();
         match it.next().unwrap_or("") {
             "help" | "?" => self.con.writeln(&self.con.c(GRAY,
-                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/dream [now|on|off|time HH:MM|time auto]  when bia dreams (works on long-term memory at night); now starts it at once\n/memory [status|rebuild|rebuild yes|pause|resume|rollback]  long-term memory: re-reflect the whole journal (rebuild shows the estimate, rebuild yes starts it)\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/fsck      check and repair this disk offline: reboots into the rescue image (e2fsck -f -y), then back here\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
+                "/tools     list tools (built-in and from MCPs)\n/status    memory, context usage, model\n/ctx [n]   show or set the active brain's context window (unload/reload; previous restored on failure)\n/reflect   compact the live window into dated categorized memories now\n/dream [now|on|off|time HH:MM|time auto]  when bia dreams (works on long-term memory at night); now starts it at once\n/memory [status|rebuild|rebuild yes|pause|resume|rollback]  long-term memory: re-reflect the whole journal (rebuild shows the estimate, rebuild yes starts it)\n/save      save the conversation now (it is also autosaved after every turn)\n/call <function>  run any tool yourself: asks for each argument, then runs it (e.g. /call system_fmm_configure to fix the cloud model)\n/fmm [on|off|back]  Frontier Model Mode status / switch (configured via the system MCP); back restores the settings from before the last switch\n/update [force] [/dev/…|internet]  update this OS via the rescue image: from the attached bia system (flash or disk), else the newest GitHub release over the internet\n/rescue [/dev/…]  from the flash: rewrite the internal disk with this system (keeps the disk's agent)\n/fsck      check and repair this disk offline: reboots into the rescue image (e2fsck -f -y), then back here\n/web       show the web app's HTTPS address and CA path (the web MCP)\n/pki issue <id> [user|agent] [root|normal]  issue client cert + one-time pickup URL\n/pki requests | approve <id> | deny <id>  certificate requests from other agents\n/pki peers | connect https://<address> [ca-sha256]  mutual trust with other bias\n/peer [list] | connect|disconnect|ban|unban <name>  live links with other bias (root's ban outranks the agent's)\n/channels  buses and channels\n/contacts  addressbook\n/schedules calendar (tasks and reminders)\n/jobs      in-flight MCP jobs (not calendar)\n/unanswered  human messages the agent has not closed yet\n/prompt    show the frozen system prompt and builtin tool list\n/history [n]  show the last n raw messages (envelopes with timestamps)\n/forget    start from scratch: forget the conversation, context, queue and saved state\n/reboot    reboot the machine (conversation and queue are saved and resumed)\n/poweroff  power off (same)\n/exit      quit (systemd restarts the agent; use /reboot to reboot the machine)",
             )),
             "dream" => {
                 let action = it.next().unwrap_or("status");
@@ -1327,6 +1329,22 @@ impl Repl {
                 }
             }
             "web" => self.print_web_info(),
+            "peer" | "peers" => {
+                let action = it.next().unwrap_or("list");
+                let peer = it.next().unwrap_or("");
+                if !matches!(action, "list" | "connect" | "disconnect" | "ban" | "unban") || (action != "list" && peer.is_empty()) {
+                    self.con.writeln("usage: /peer [list] | /peer connect|disconnect|ban|unban <name>");
+                } else {
+                    match self.tools.web_invoke("peer_root", serde_json::json!({"action": action, "peer": peer})) {
+                        Ok(t) => {
+                            for l in t.lines() {
+                                self.con.writeln(&format!("  {l}"));
+                            }
+                        }
+                        Err(e) => self.con.writeln(&self.con.c(RED, &format!("  peer: {e:#}"))),
+                    }
+                }
+            }
             "pki" => {
                 match it.next() {
                     Some("issue") => {
@@ -2497,8 +2515,14 @@ now: {now}", done.join("\n")), failed)
         } else {
             ib.id.clone()
         };
-        if crate::tools::is_web(&ib.channel) {
+        if crate::tools::via_web(&ib.channel) && ib.identity != ID_SYSTEM {
             self.tools.web_read(&ib.identity, &ib.channel, &id);
+        }
+        if ib.identity != ID_SYSTEM
+            && !ib.channel.starts_with(crate::jobs::PREFIX)
+            && ib.channel != crate::tools::CH_SCHEDULE
+        {
+            self.tools.note_origin(&ib.identity, &ib.channel, &id, &ib.text);
         }
         let now = crate::clock::unix(crate::clock::now());
         if ib.channel.starts_with(crate::jobs::PREFIX) {
@@ -2565,7 +2589,7 @@ now: {now}", done.join("\n")), failed)
         self.tools.set_chat_typing(&chats, true);
         let mut web: Vec<(String, String)> = messages
             .iter()
-            .filter(|ib| crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM)
+            .filter(|ib| crate::tools::via_web(&ib.channel) && ib.identity != ID_SYSTEM)
             .map(|ib| (ib.identity.clone(), ib.channel.clone()))
             .collect();
         web.dedup();
@@ -3358,6 +3382,7 @@ mod channel_tests {
     fn web_messages_are_tracked_like_any_bus() {
         assert!(needs_answer(&ib("root", "web", "/status")));
         assert!(needs_answer(&ib("alex", "web:trip", "hi")));
+        assert!(!needs_answer(&ib("fred", "peer:fred", "can you check?")), "another bia is owed no reply");
         assert!(!needs_answer(&ib("root", "console", "hi")));
         assert!(!needs_answer(&ib("system", "web", "[call ended]")));
     }

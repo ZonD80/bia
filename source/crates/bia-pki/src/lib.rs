@@ -825,7 +825,7 @@ pub fn client_id_from_certs(certs: Option<&[CertificateDer<'_>]>) -> Option<Clie
     })
 }
 
-fn pem_to_cert_ders(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
+pub fn pem_to_cert_ders(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
     let mut slice = pem.as_bytes();
     let mut out = Vec::new();
     for item in rustls_pemfile::certs(&mut slice) {
@@ -954,6 +954,36 @@ fn sanitize_token(s: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// A new P-256 key and a CSR for it (`CN` = identity), both PEM: for a client that asks a
+/// bia for a certificate (bia-bridge). The key never leaves the caller.
+pub fn new_key_csr(identity: &str) -> Result<(String, String)> {
+    let key = KeyPair::generate()?;
+    let mut p = CertificateParams::new(Vec::<String>::new())?;
+    p.distinguished_name.push(DnType::CommonName, identity);
+    let csr = p.serialize_request(&key)?.pem()?;
+    Ok((key.serialize_pem(), csr))
+}
+
+/// A .p12 (bia's own layout: PBES2/AES-256, SHA-256 MAC) → (key PEM, certificates PEM in
+/// order: the client certificate first). For clients importing a certificate they have.
+pub fn read_p12(p12: &[u8], password: &str) -> Result<(String, Vec<String>)> {
+    let (key, certs) = p12::parse(p12, password)?;
+    let pem = |label: &str, der: &[u8]| {
+        use base64::Engine as _;
+        let b = base64::engine::general_purpose::STANDARD.encode(der);
+        let body: Vec<&str> = b.as_bytes().chunks(64).map(|c| std::str::from_utf8(c).unwrap_or("")).collect();
+        format!("-----BEGIN {label}-----\n{}\n-----END {label}-----\n", body.join("\n"))
+    };
+    Ok((pem("PRIVATE KEY", &key), certs.iter().map(|c| pem("CERTIFICATE", c)).collect()))
+}
+
+/// Write `data` readable by the owner only (keys).
+pub fn write_private(path: &Path, data: &[u8]) -> Result<()> {
+    fs::write(path, data).with_context(|| format!("write {}", path.display()))?;
+    chmod600(path);
+    Ok(())
 }
 
 fn chmod600(path: &Path) {

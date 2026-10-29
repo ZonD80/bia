@@ -73,17 +73,8 @@ pub fn origin(url: &str) -> Result<String> {
     Ok(if p == 443 { format!("https://{host}") } else { format!("https://{host}:{p}") })
 }
 
-/// One request (`Connection: close`). `client` is (certificate chain PEM, key PEM).
-pub fn request(
-    url: &str,
-    method: &str,
-    path: &str,
-    body: Option<&serde_json::Value>,
-    trust: ServerTrust<'_>,
-    client: Option<(&str, &str)>,
-) -> Result<Response> {
+fn client_config(trust: ServerTrust<'_>, client: Option<(&str, &str)>) -> Result<ClientConfig> {
     crate::install_crypto_provider();
-    let (host, port) = split_url(url)?;
     let verifier: Arc<dyn ServerCertVerifier> = match trust {
         ServerTrust::Any => Arc::new(AnyServer(provider_schemes())),
         ServerTrust::Ca(pem) => {
@@ -107,34 +98,87 @@ pub fn request(
         None => b.with_no_client_auth(),
     };
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-    let name = match crate::parse_ip(&host) {
+    Ok(cfg)
+}
+
+/// TCP + TLS to `url` (connect timeout 10 s, handshake done). For long-lived links.
+pub fn connect(
+    url: &str,
+    trust: ServerTrust<'_>,
+    client: Option<(&str, &str)>,
+) -> Result<(rustls::ClientConnection, TcpStream)> {
+    let (host, port) = split_url(url)?;
+    let (mut conn, mut tcp) = open(&host, port, client_config(trust, client)?)?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp).map_err(|e| anyhow!("tls with {host}:{port}: {e}"))?;
+    }
+    Ok((conn, tcp))
+}
+
+fn open(host: &str, port: u16, cfg: ClientConfig) -> Result<(rustls::ClientConnection, TcpStream)> {
+    let name = match crate::parse_ip(host) {
         Ok(ip) => ServerName::IpAddress(ip.into()),
-        Err(_) => ServerName::try_from(host.clone()).map_err(|_| anyhow!("bad host {host}"))?,
+        Err(_) => ServerName::try_from(host.to_string()).map_err(|_| anyhow!("bad host {host}"))?,
     };
-    let addr = (host.as_str(), port)
+    let addr = (host, port)
         .to_socket_addrs()
         .with_context(|| format!("resolve {host}"))?
         .next()
         .ok_or_else(|| anyhow!("{host}: no address"))?;
-    let mut tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
+    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10))
         .with_context(|| format!("connect {addr}"))?;
     tcp.set_read_timeout(Some(Duration::from_secs(30)))?;
     tcp.set_write_timeout(Some(Duration::from_secs(30)))?;
-    let local = tcp.local_addr().ok();
-    let mut conn = rustls::ClientConnection::new(Arc::new(cfg), name)
+    let conn = rustls::ClientConnection::new(Arc::new(cfg), name)
         .map_err(|e| anyhow!("tls: {e}"))?;
+    Ok((conn, tcp))
+}
+
+/// One request (`Connection: close`). `client` is (certificate chain PEM, key PEM).
+pub fn request(
+    url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+    trust: ServerTrust<'_>,
+    client: Option<(&str, &str)>,
+) -> Result<Response> {
+    let payload = body.map(|v| v.to_string());
+    request_raw(
+        url,
+        method,
+        path,
+        payload.as_deref().map(|p| (p.as_bytes(), "application/json")),
+        trust,
+        client,
+    )
+}
+
+/// [`request`] with any body: `(bytes, content type)` (uploads).
+pub fn request_raw(
+    url: &str,
+    method: &str,
+    path: &str,
+    body: Option<(&[u8], &str)>,
+    trust: ServerTrust<'_>,
+    client: Option<(&str, &str)>,
+) -> Result<Response> {
+    let (host, port) = split_url(url)?;
+    let (mut conn, mut tcp) = open(&host, port, client_config(trust, client)?)?;
+    let local = tcp.local_addr().ok();
     let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
-    let payload = body.map(|v| v.to_string()).unwrap_or_default();
     let hosthdr = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
     let mut req = format!(
         "{method} {path} HTTP/1.1\r\nHost: {hosthdr}\r\nUser-Agent: bia-peer\r\nAccept: application/json\r\nConnection: close\r\n"
     );
-    if body.is_some() {
-        req.push_str(&format!("Content-Type: application/json\r\nContent-Length: {}\r\n", payload.len()));
+    if let Some((b, ctype)) = body {
+        req.push_str(&format!("Content-Type: {ctype}\r\nContent-Length: {}\r\n", b.len()));
     }
     req.push_str("\r\n");
     tls.write_all(req.as_bytes()).context("send request")?;
-    tls.write_all(payload.as_bytes()).context("send body")?;
+    if let Some((b, _)) = body {
+        tls.write_all(b).context("send body")?;
+    }
     tls.flush()?;
     let mut raw = Vec::new();
     // a peer that closes without close_notify still sent the whole response

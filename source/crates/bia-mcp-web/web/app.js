@@ -2709,6 +2709,7 @@ async function renderSettings() {
       h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', null, 'Role'), role), h('div', { class: 'field grow' }, h('label', null, 'Trust'), trust)),
       h('button', { class: 'btn', onclick: issue }, ic('key'), 'Issue certificate'), out,
       h('h3', { style: 'margin-top:18px' }, 'Requests from other agents'), h('div', { id: 'reqList' }, 'Loading…'),
+      h('h3', { style: 'margin-top:18px' }, 'Other bias'), h('div', { id: 'peerList' }, 'Loading…'),
       h('h3', { style: 'margin-top:18px' }, 'Issued'), certs));
     const st = h('div', { class: 'kv' }, 'Loading…');
     kids.push(h('div', { class: 'card' }, h('h3', null, ic('console'), 'Machine'), st));
@@ -2725,7 +2726,7 @@ async function renderSettings() {
         h('div', null, 'Uptime'), h('div', null, `${Math.floor(up / 86400)}d ${Math.floor(up % 86400 / 3600)}h ${Math.floor(up % 3600 / 60)}m`),
         h('div', null, 'Addresses'), h('div', { class: 'mono' }, (s.origins || []).join('  ') || '—'));
     }).catch(e => set(st, e.message));
-    setTimeout(() => { loadCerts(); loadRequests(); }, 0);
+    setTimeout(() => { loadCerts(); loadRequests(); loadPeers(); }, 0);
   }
   kids.push(h('div', { class: 'card' }, h('h3', null, ic('info'), 'About'),
     h('p', { class: 'muted', style: 'margin:0' }, `bia ${me.version || ''} — a machine that boots into an agent. `,
@@ -2770,13 +2771,42 @@ async function loadRequests() {
       h('thead', null, h('tr', null, h('th', null, 'Identity'), h('th', null, 'Asked'), h('th', null, 'Status'), h('th'))),
       h('tbody', null, [...live, ...old].map(r => h('tr', null,
         h('td', null, h('b', null, r.identity), ` · ${r.role}`, h('div', { class: 'muted mono', style: 'font-size:11px' }, `${r.id.slice(0, 8)} · from IP ${r.source || '?'}`),
-          r.peer_url ? h('div', { class: 'muted', style: 'font-size:12px' }, h('span', { class: 'tag acc' }, 'mutual'), ` a bia at ${r.peer_url}; approving also lets this bia call it`) : null,
+          r.peer_url ? h('div', { class: 'muted', style: 'font-size:12px' }, h('span', { class: 'tag acc' }, 'mutual'), ` a bia at ${r.peer_url}; approving opens a live link with it`) : null,
           r.note ? h('div', { class: 'muted', style: 'font-size:12px' }, `“${r.note}”`) : null),
         h('td', null, new Date(r.created * 1000).toLocaleString()),
         h('td', null, h('span', { class: 'tag ' + (tag[r.status] || '') }, r.status)),
         h('td', null, r.status === 'pending' ? h('div', { class: 'row' },
           h('button', { class: 'btn small', onclick: decide(r, 'approve') }, 'Approve'),
           h('button', { class: 'btn flat danger small', onclick: decide(r, 'deny') }, 'Deny')) : null))))));
+  } catch (e) { set(box, e.message); }
+}
+async function loadPeers() {
+  const box = $('#peerList');
+  if (!box) return;
+  try {
+    const j = await GET('/v1/peers');
+    if (!j.peers.length) { set(box, h('p', { class: 'muted' }, `None. This bia is ${j.me} to others; ask it to connect to another bia (web_peer_add).`)); return; }
+    const act = (p, action) => async () => {
+      if (action === 'ban' && !await confirmBox({ title: `Block ${p.name}?`, body: 'Its links and messages are refused until you unblock it. bia cannot lift a block you set.' }, 'Block', true)) return;
+      try { await POST('/v1/peers/action', { action, peer: p.name }); loadPeers(); } catch (e) { toast(e.message, true); }
+    };
+    set(box, h('table', { class: 'certs' },
+      h('thead', null, h('tr', null, h('th', null, 'bia'), h('th', null, 'Link'), h('th'))),
+      h('tbody', null, j.peers.map(p => {
+        const l = p.link || {};
+        const tag = p.status !== 'active' ? h('span', { class: 'tag' }, p.status)
+          : l.online ? h('span', { class: 'tag ok' }, 'online') : l.banned_by ? h('span', { class: 'tag bad' }, 'blocked') : h('span', { class: 'tag' }, 'offline');
+        const btns = p.status !== 'active' ? null : l.banned_by
+          ? h('button', { class: 'btn small', onclick: act(p, 'unban') }, 'Unblock')
+          : h('div', { class: 'row' },
+            l.online ? h('button', { class: 'btn flat small', onclick: act(p, 'disconnect') }, 'Disconnect') : h('button', { class: 'btn small', onclick: act(p, 'connect') }, 'Connect'),
+            h('button', { class: 'btn flat danger small', onclick: act(p, 'ban') }, 'Block'));
+        return h('tr', null,
+          h('td', null, h('b', null, p.name), h('div', { class: 'muted mono', style: 'font-size:11px' }, p.url)),
+          h('td', null, tag, h('div', { class: 'muted', style: 'font-size:12px' }, l.state || ''),
+            ...(l.transfers || []).map(t => h('div', { class: 'muted', style: 'font-size:12px' }, t))),
+          h('td', null, btns));
+      }))));
   } catch (e) { set(box, e.message); }
 }
 async function renewCert() {

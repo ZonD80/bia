@@ -5,6 +5,7 @@
 //! arrive as `identity|web[:<chat>]|…` inbound envelopes, and the agent answers with these tools.
 //! Apart from root's console mirror (`/ws/term`, relayed from the agent's socket) it has
 //! nothing to do with the agent's console.
+mod bridge;
 mod bus;
 mod call;
 mod chat;
@@ -14,10 +15,14 @@ mod hitl;
 #[path = "../../listen.rs"]
 mod listen;
 mod openapi;
+mod peer;
+mod peerproto;
 mod pki;
 mod pty;
 mod push;
 mod server;
+#[path = "../../tlspipe.rs"]
+mod tlspipe;
 mod tools;
 
 use bia_mcp::Server;
@@ -64,6 +69,8 @@ fn main() {
     if let Err(e) = push::init(&files, bus.clone()) {
         bus.log(&format!("  web push off: {e}"));
     }
+    peer::init(&files, bus.clone());
+    on_terminate(files.clone());
     let b = bus.clone();
     Server::new("web", env!("CARGO_PKG_VERSION"))
         .tool(
@@ -143,21 +150,30 @@ fn main() {
         .tool("pki_deny", "Deny a certificate request (id from web_pki_requests or the request notice).",
             obj(json!({"id": {"type": "string"}, "reason": {"type": "string", "description": "optional, shown to the requester"}}), &["id"]),
             |c, a| pki::decide(c, a, false))
-        .tool("peer_connect", "Set up trust with another bia in one step: this bia gives it a certificate for its agent key and asks it for one for ours. Its root must approve there; until then the peer is pending and this bia checks by itself — a [peer …] notice comes when it is decided. Use when root (or root's setup instructions) asks you to connect to another bia. ca_sha256 pins its CA fingerprint when root gave one.",
+        .tool("peer_add", "Set up trust with another bia in one step: this bia gives it a certificate for its agent key and asks it for one for ours. Its root must approve there; until then the peer is pending and this bia checks by itself — a [peer …] notice comes when it is decided, and the link then opens by itself. Use when root (or root's setup instructions) asks you to connect to another bia. ca_sha256 pins its CA fingerprint when root gave one.",
             obj(json!({"url": {"type": "string", "description": "https://address[:port] of the other bia"},
                        "ca_sha256": {"type": "string", "description": "optional: its CA fingerprint (sha256 hex) to check"},
                        "note": {"type": "string", "description": "optional: shown to its root with the request (who you are, why)"},
                        "my_url": {"type": "string", "description": "optional: https address where it can reach this bia (default: this side's address on the connection; give the public one behind NAT)"}}), &["url"]),
-            pki::peer_connect)
-        .tool("peer_list", "Other bias this one has trust with (active), is waiting for (pending), or was refused by, with the files to call them with curl.",
+            pki::peer_add)
+        .tool("peer_list", "Other bias this one has trust with (active), is waiting for (pending) or was refused by, with each live link's state (online, offline, banned) and files in transfer.",
             obj(json!({}), &[]), pki::peer_list)
-        .tool("peer_call", "Call an active peer's web API with this bia's certificate there (see the peer's /openapi.yaml). Returns the HTTP status and body.",
-            obj(json!({"peer": {"type": "string", "description": "peer name from web_peer_list"},
-                       "method": {"type": "string", "description": "GET, POST, …"},
-                       "path": {"type": "string", "description": "e.g. /v1/status or /v1/chats"},
-                       "body": {"type": "object", "description": "optional JSON body"}}), &["peer", "method", "path"]),
-            pki::peer_call)
-        .tool("peer_remove", "Forget a peer (only when root asks) and revoke the certificate this bia gave it.",
+        .tool("peer_connect", "Open the live link with a peer (it stays up and reconnects by itself after a network loss or a restart on either side). Talking with a peer needs this link: say(channel=\"peer:<name>\") fails while it is down. Waits up to 15 s.",
+            obj(json!({"peer": {"type": "string", "description": "peer name from web_peer_list"}}), &["peer"]),
+            peer::tool_connect)
+        .tool("peer_disconnect", "Close the live link with a peer. Nothing reconnects by itself; the peer is told and may connect again (web_peer_ban keeps it out).",
+            obj(json!({"peer": {"type": "string"}}), &["peer"]), peer::tool_disconnect)
+        .tool("peer_ban", "Refuse a peer: its links and messages are refused until web_peer_unban; it is told. Use when you do not want it to talk to this bia.",
+            obj(json!({"peer": {"type": "string"}}), &["peer"]), peer::tool_ban)
+        .tool("peer_unban", "Lift a ban you set on a peer and open the link again (a ban root set stays until root lifts it).",
+            obj(json!({"peer": {"type": "string"}}), &["peer"]), peer::tool_unban)
+        .tool("peer_cancel", "Stop sending the files of a message to a peer (it then gets the message without them).",
+            obj(json!({"peer": {"type": "string"}, "message_id": {"type": "string", "description": "id of the message say returned"}}), &["peer", "message_id"]),
+            peer::tool_cancel)
+        .tool("peer_root", "Root's peer controls (console /peer, web Settings): action list|connect|disconnect|ban|unban.",
+            obj(json!({"action": {"type": "string"}, "peer": {"type": "string"}}), &["action"]),
+            peer::tool_root)
+        .tool("peer_remove", "Forget a peer (only when root asks): close its link and revoke the certificate this bia gave it.",
             obj(json!({"peer": {"type": "string"}}), &["peer"]), pki::peer_remove)
         .tool("restore", "Report whether the web server is listening (run at boot).", obj(json!({}), &[]), tools::status)
         .run_with(move |ctx| {
@@ -175,4 +191,41 @@ fn main() {
                 Err(e) => b.log(&format!("web server not started: {e}")),
             }
         });
+    // stdin closed: the agent stopped or restarts
+    peer::shutdown_all(&peer::shutdown_reason(&files_dir()));
+}
+
+static TERM_PIPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+extern "C" fn on_sigterm(_: libc::c_int) {
+    let fd = TERM_PIPE.load(std::sync::atomic::Ordering::Relaxed);
+    if fd >= 0 {
+        let b = 1u8;
+        unsafe {
+            libc::write(fd, &b as *const u8 as *const libc::c_void, 1);
+        }
+    }
+}
+
+/// SIGTERM (systemd stopping bia at shutdown, reboot, update or restart, whoever asked):
+/// tell every peer why with `bye`, then exit. A handler, not a blocked mask, so programs
+/// started from here still get their own SIGTERM.
+fn on_terminate(files: PathBuf) {
+    let mut fds = [0 as libc::c_int; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return;
+    }
+    TERM_PIPE.store(fds[1], std::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        libc::signal(libc::SIGTERM, on_sigterm as *const () as libc::sighandler_t);
+    }
+    let rfd = fds[0];
+    let _ = std::thread::Builder::new().name("web-sigterm".into()).spawn(move || {
+        let mut b = 0u8;
+        let n = unsafe { libc::read(rfd, &mut b as *mut u8 as *mut libc::c_void, 1) };
+        if n == 1 {
+            peer::shutdown_all(&peer::shutdown_reason(&files));
+            std::process::exit(0);
+        }
+    });
 }
