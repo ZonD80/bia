@@ -249,6 +249,22 @@ pub fn dir_size(p: &Path) -> u64 {
     files(p).iter().map(|c| dir_size(c)).sum()
 }
 
+/// Give a freshly installed model tree to the owner of the folder it sits in (bia's
+/// files/speech/models): the MCP runs as root, and bia reads, backs up and removes models too.
+pub fn own_like_parent(dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Some(m) = dir.parent().and_then(|p| std::fs::metadata(p).ok()) else {
+        return;
+    };
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let _ = std::os::unix::fs::lchown(&p, Some(m.uid()), Some(m.gid()));
+        if p.is_dir() && !p.is_symlink() {
+            stack.extend(std::fs::read_dir(&p).into_iter().flatten().flatten().map(|e| e.path()));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

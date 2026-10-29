@@ -62,6 +62,7 @@ pub fn ensure_voice(ctx: &dyn Report, cat: &Catalog, id: &str, pct: (u32, u32)) 
     let res = store::unpack(&archive, &dir);
     let _ = std::fs::remove_file(&archive);
     res?;
+    store::own_like_parent(&dir);
     let v = store::resolve_voice(&dir, &cv.kind, &cv.langs, &cv.locale)?;
     // Load it and let it read a sentence now: a broken voice fails here, not in a call.
     let lang = cv.langs.first().cloned().unwrap_or_default();
@@ -149,6 +150,7 @@ pub fn ensure_asr(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<bool, Str
         }
         res?;
     }
+    store::own_like_parent(&dir);
     let a = match ca.kind.as_str() {
         "nemo_transducer" => store::resolve_transducer(&dir, &ca.langs)?,
         "nemo_ctc" => store::resolve_ctc(&dir, &ca.langs)?,
@@ -169,6 +171,9 @@ pub fn ensure_extra(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<(), Str
     let file = f.url.rsplit('/').next().unwrap_or(id).replace("%2B", "+");
     let dest = crate::paths::models().join(id).join(file);
     store::download(ctx, &Want { url: &f.url, size: f.size, sha256: &f.sha256, label: id }, &dest, 0, 100)?;
+    if let Some(d) = dest.parent() {
+        store::own_like_parent(d);
+    }
     update(|r| {
         r.extras.insert(id.to_string(), dest.to_string_lossy().into_owned());
         Ok(())

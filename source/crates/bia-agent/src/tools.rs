@@ -4179,7 +4179,7 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
             s -= 4;
         }
     }
-    if modelish {
+    if modelish && !looks_like_path(v) {
         if v.contains('/')
             || ["grok", "claude", "gpt", "gemini", "deepseek", "qwen"]
                 .iter()
@@ -4202,6 +4202,13 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
         }
     }
     s
+}
+
+/// A file path rather than a provider/model id (openai/gpt-5, google/gemini-2.5-flash):
+/// absolute or relative to home, more than one /, or a file extension.
+fn looks_like_path(v: &str) -> bool {
+    let ext = v.rsplit_once('.').is_some_and(|(_, e)| (2..=4).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphabetic()));
+    v.starts_with(['/', '~', '.']) || v.matches('/').count() > 1 || ext
 }
 
 fn str_list(args: &Value, k: &str) -> Vec<String> {
@@ -4238,6 +4245,24 @@ pub fn human(bytes: u64) -> String {
 #[cfg(test)]
 mod web_tests {
     use super::*;
+
+    #[test]
+    fn a_file_path_is_not_a_model_id() {
+        let file = json!({"type": "string", "description": "the audio: path under /home/bia/files or absolute"});
+        let model = json!({"type": "string", "description": "an installed speech model's name, e.g. whisper-small"});
+        let path = "inbox/whatsapp/34603831241/20261028-200147-3A1.ogg";
+        // lang_transcribe(file=<path>, model=parakeet-v3) is left as it is
+        let kept = prop_score(&file, "file", path) + prop_score(&model, "model", "parakeet-v3");
+        let swapped = prop_score(&file, "file", "parakeet-v3") + prop_score(&model, "model", path);
+        assert!(swapped < kept + 4);
+        for p in ["/home/bia/files/a.ogg", "~/x", "voice.ogg"] {
+            assert!(looks_like_path(p), "{p}");
+        }
+        for m in ["openai/gpt-5", "google/gemini-2.5-flash", "meta-llama/llama-3.1-8b", "qwen/qwen3:free"] {
+            assert!(!looks_like_path(m), "{m}");
+            assert!(prop_score(&model, "model", m) >= 8, "{m}");
+        }
+    }
 
     /// A stand-in web MCP: answers initialize and tools/list, logs every tools/call line.
     const FAKE: &str = r#"#!/bin/sh

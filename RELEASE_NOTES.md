@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.6
+
+### Changes
+- Transcribing a recording with a chosen speech model works: bia used to mix up the recording and the model name, so asking for a particular model always failed.
+- Speech models and voices bia downloads now belong to bia right away, not only after the next restart.
+
+### For bia
+- lang_transcribe(file, model) with a model name from lang_list (parakeet-v3, shenava-fa, whisper-small) works now; try it once on a voice message to confirm.
+- You no longer need to fix permissions on files/speech/models after lang_install.
+
 ## 1.7.5
 
 ### Changes
