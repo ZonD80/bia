@@ -33,7 +33,9 @@ pub struct Voice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Asr {
-    /// whisper, or nemo_transducer (Parakeet: no language detection; `langs` only)
+    /// whisper, nemo_transducer (Parakeet) or nemo_ctc (one-language models such as
+    /// shenava-fa; `encoder` is its one model file). NeMo ones detect no language and
+    /// transcribe only `langs`.
     pub kind: String,
     /// Empty: every language Whisper knows.
     pub langs: Vec<String>,

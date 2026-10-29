@@ -5,6 +5,7 @@
 //! progress. tools/call runs on a worker thread so a second request can arrive
 //! (and be cancelled) while a long handler is running.
 
+pub mod ignore;
 pub mod lanes;
 pub mod md;
 pub mod share;
@@ -82,7 +83,11 @@ impl Ctx {
     /// [`Ctx::inbound`] with when the message was written (Unix seconds, from the
     /// platform), so the envelope's `issued` is not the time bia received it — e.g.
     /// for messages that came while bia was off. 0: issued is when the agent gets it.
-    pub fn inbound_at(&self, identity: &str, channel: &str, id: &str, message: &str, issued: i64) {
+    /// Returns what the chat's ignore rules made of it ([`ignore::check`]): the agent keeps
+    /// an ignored one from the model, and its read receipt is left unsent.
+    pub fn inbound_at(&self, identity: &str, channel: &str, id: &str, message: &str, issued: i64) -> ignore::Verdict {
+        // bia's own notices (catch-up headers, deletions) are not the chat's talk
+        let verdict = if identity == "system" { ignore::Verdict::Deliver } else { ignore::check(channel, message) };
         let mut v = json!({
             "t": "inbound",
             "identity": identity,
@@ -93,7 +98,13 @@ impl Ctx {
         if issued > 0 {
             v["issued"] = json!(issued);
         }
+        match &verdict {
+            ignore::Verdict::Deliver => {}
+            ignore::Verdict::Ignored => v["ignored"] = json!(true),
+            ignore::Verdict::Woke(why) => v["woke"] = json!(why),
+        }
         self.note(v);
+        verdict
     }
     /// Progress in percent for long operations.
     pub fn progress(&self, pct: u32, msg: impl AsRef<str>) {

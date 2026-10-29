@@ -27,6 +27,13 @@ export const LAND_ASSETS: Record<LandArch, string> = {
   arm64: 'bia-land-arm64.iso.xz',
 }
 
+export type AppPlatform = 'android'
+
+/** The phone app outside the stores (the APK is signed with the same key as the Play one). */
+export const APP_ASSETS: Record<AppPlatform, string> = {
+  android: 'bia-deploy-android.apk',
+}
+
 type GitHubReleaseAsset = {
   name: string
   browser_download_url: string
@@ -101,6 +108,7 @@ function pick<K extends string>(assets: Record<K, string>, releases: GitHubRelea
 export function useLatestRelease() {
   const downloads = useState<Record<FlashHost, FlashDownload>>('bia-deploy-downloads', () => unchecked(FLASH_ASSETS))
   const landDownloads = useState<Record<LandArch, FlashDownload>>('bia-land-downloads', () => unchecked(LAND_ASSETS))
+  const appDownloads = useState<Record<AppPlatform, FlashDownload>>('bia-app-downloads', () => unchecked(APP_ASSETS))
   // Newest release that has the OS manifest bia-deploy writes the stick from.
   const version = useState<string | null>('bia-deploy-version', () => null)
   const releaseUrl = useState<string>('bia-deploy-release-url', () => FALLBACK_RELEASE_PAGE)
@@ -125,6 +133,7 @@ export function useLatestRelease() {
       const next = pick(FLASH_ASSETS, releases)
       downloads.value = next
       landDownloads.value = pick(LAND_ASSETS, releases)
+      appDownloads.value = pick(APP_ASSETS, releases)
 
       const os = releases.find((r) => r.assets.some((a) => a.name === 'bia-os.json'))
       version.value = os ? tagVersion(os.tag_name) : null
@@ -134,6 +143,7 @@ export function useLatestRelease() {
     } catch {
       downloads.value = unchecked(FLASH_ASSETS)
       landDownloads.value = unchecked(LAND_ASSETS)
+      appDownloads.value = unchecked(APP_ASSETS)
       error.value = 'Could not load the latest release'
     } finally {
       fetched.value = true
@@ -155,6 +165,7 @@ export function useLatestRelease() {
   return {
     downloads,
     landDownloads,
+    appDownloads,
     version,
     releaseUrl,
     loading,

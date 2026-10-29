@@ -381,6 +381,32 @@ ref and the MCP asks for the file, then transcribes voice notes. `backlog`
 (classic Messenger threads, Instagram) or else from the local index (encrypted
 chats have no server history for linked devices).
 
+### Ignored chats
+
+A busy group the model does not need to follow can be ignored (`chat_ignore`,
+the model's own decision; Telegram, WhatsApp, Messenger and Instagram chats).
+The rules are `files/state/ignore.json` (`bia_mcp::ignore`), written by the
+agent and re-read by the chat MCPs when the file changes. Every message is still
+processed in full: media downloaded and voice notes transcribed. Then
+`Ctx::inbound_at` checks it. A reply to one of bia's messages, or a wake pattern
+(case-insensitive regular expressions from the `regex` crate, linear time, so
+strangers' text cannot stall it) matched on the text including the transcript,
+delivers it flagged `woke`; anything else is flagged `ignored`. The MCPs hold
+back the read receipt for ignored chats and send it only for a message that
+woke the model, so the chat stays unread like one a person ignores (Telegram's
+catch-up neither marks it read nor counts it against its budget). bia's own
+`system` notices are never ignored.
+
+The agent (`ignored.rs`) keeps an ignored message in
+`files/state/ignored/<chat>.jsonl`, never in the context, `inbox.jsonl`, the
+memory journal or unanswered tracking. A woken message arrives with the last
+five ignored ones before it. At most every 15 minutes a quiet `system|ignored`
+note counts what was missed per chat; dreams leave these notes out.
+`chat_restore(chat, count)` sends the newest messages not yet shown (50 by
+default, up to 500), oldest first, as one `system|ignored` message, which is
+journaled and so reflected. Each call goes further back. `chat_ignored` lists
+the chats, and `chat_unignore` stops ignoring but keeps what is not shown yet.
+
 ### Speech
 
 `bia-speech` (a library shared by `telegram`, `whatsapp`, `messenger`, `instagram` and `lang`) dlopens the
@@ -400,6 +426,16 @@ background. The install code (`bia-speech::learn`) is shared with the `lang`
 MCP. The model gets a `[new language: …]` notice. Received voice messages
 arrive as `[voice message] [speech <lang>] …`. Every speech step is logged to
 `files/speech/logs/speech.log`, and its tail is shown in `*_call_status`.
+Voice notes (since 1.7.3) are cut also at breaths and grouped per language into
+chunks of up to 25 s, one decode each. A chunk goes to a model made for its
+language when one is installed: Parakeet (`nemo_transducer`, 25 European
+languages, when it is the voice-note model) or a one-language NeMo CTC model
+(`nemo_ctc`, e.g. `shenava-fa` for Persian, installed with the language from
+separate pinned files); the rest goes to the best Whisper installed, with its
+own language detection. Tiny's language is checked again by that Whisper when it
+names a language that is not learned, or when Parakeet finds no words; with only
+tiny, the sender's preferred language decides. `tools/asr-bench.py` measures
+models on real Common Voice clips.
 Speaking needs `lang`: text is split into `<lang=xx>` spans, and every span's
 Piper (or Kokoro) voice is checked before anything is spoken. The registry
 `files/speech/languages.json` is written by `lang` under a file lock and

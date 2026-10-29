@@ -47,6 +47,9 @@ impl Recognizer {
             cfg.model_config.transducer.decoder = s.p(&asr.decoder);
             cfg.model_config.transducer.joiner = s.p(&asr.joiner);
             cfg.model_config.model_type = s.p("nemo_transducer");
+        } else if asr.kind == "nemo_ctc" {
+            cfg.model_config.nemo_ctc.model = s.p(&asr.encoder);
+            cfg.model_config.model_type = s.p("nemo_ctc");
         } else {
             cfg.model_config.whisper.encoder = s.p(&asr.encoder);
             cfg.model_config.whisper.decoder = s.p(&asr.decoder);
@@ -61,11 +64,13 @@ impl Recognizer {
     }
 
     fn load(asr: &Asr) -> Result<Self, String> {
-        if asr.kind != "whisper" && asr.kind != "nemo_transducer" {
+        if !matches!(asr.kind.as_str(), "whisper" | "nemo_transducer" | "nemo_ctc") {
             return Err(format!("unsupported speech model kind {}", asr.kind));
         }
         need(&asr.encoder, "speech model encoder")?;
-        need(&asr.decoder, "speech model decoder")?;
+        if asr.kind != "nemo_ctc" {
+            need(&asr.decoder, "speech model decoder")?;
+        }
         need(&asr.tokens, "speech model tokens")?;
         if asr.kind == "nemo_transducer" {
             need(&asr.joiner, "speech model joiner")?;
@@ -80,9 +85,9 @@ impl Recognizer {
         Ok(Self { h, asr: asr.clone() })
     }
 
-    /// Whisper (detects the language, can be told one); a transducer has neither.
+    /// Whisper (detects the language, can be told one); a NeMo model has neither.
     pub fn is_whisper(&self) -> bool {
-        self.asr.kind != "nemo_transducer"
+        self.asr.kind == "whisper"
     }
 
     /// Languages it transcribes; empty = all Whisper knows.
@@ -420,9 +425,11 @@ type Shared<T> = Arc<Mutex<T>>;
 
 #[derive(Default)]
 struct Cache {
-    /// Model id + encoder path → recognizer (at most two kept).
+    /// Model id + encoder path → recognizer (at most three kept).
     recognizers: Vec<(String, Shared<Recognizer>)>,
-    slid: Option<(String, Shared<Slid>)>,
+    /// Encoder path → language identification: tiny, and the bigger Whisper that
+    /// checks what tiny is unsure of (at most two kept).
+    slid: Vec<(String, Shared<Slid>)>,
     denoiser: Option<(String, Shared<Denoiser>)>,
     speaker: Option<(String, Shared<Speaker>)>,
 }
@@ -448,7 +455,8 @@ pub fn recognizer(reg: &Registry, id: &str) -> Result<Shared<Recognizer>, String
     }
     let r = Arc::new(Mutex::new(Recognizer::load(asr)?));
     c.recognizers.push((key, r.clone()));
-    if c.recognizers.len() > 2 {
+    // a voice note may need three: Parakeet, a one-language model and Whisper
+    if c.recognizers.len() > 3 {
         c.recognizers.remove(0);
     }
     Ok(r)
@@ -479,13 +487,14 @@ pub fn slid_for(reg: &Registry, id: &str) -> Result<Shared<Slid>, String> {
         .or_else(|| reg.asr.get(registry::BUNDLED_ASR))
         .ok_or("no whisper model")?;
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((k, s)) = &c.slid {
-        if *k == asr.encoder {
-            return Ok(s.clone());
-        }
+    if let Some((_, s)) = c.slid.iter().find(|(k, _)| *k == asr.encoder) {
+        return Ok(s.clone());
     }
     let s = Arc::new(Mutex::new(Slid::load(asr)?));
-    c.slid = Some((asr.encoder.clone(), s.clone()));
+    c.slid.push((asr.encoder.clone(), s.clone()));
+    if c.slid.len() > 2 {
+        c.slid.remove(0);
+    }
     Ok(s)
 }
 

@@ -9,7 +9,7 @@ fn main() {
     let hint = std::env::args().nth(2);
     let t = std::time::Instant::now();
     let heard = bia_speech::transcribe_note_from(std::path::Path::new(&path), hint.as_deref()).unwrap();
-    println!("[{} ms] {}", t.elapsed().as_millis(), heard.text());
+    println!("[{} ms] {} {}", t.elapsed().as_millis(), heard.voice_head(), heard.text());
     println!("notice: {:?}", heard.notice);
     if let Some(l) = heard.new_lang {
         for _ in 0..120 {

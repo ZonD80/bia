@@ -997,7 +997,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "calendar",
         blurb: "Tasks and reminders.",
-        guide: "schedule_create(title, body markdown, at or cron, kind=task|reminder, repeat, command, user, match). at is RFC 3339 UTC, YYYY-MM-DD HH:MM, a weekday like monday 09:00, or relative in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5, and replaces at and repeat. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command runs as user when due (default bia; root and other accounts can be named). If you write a script or program for command, run it first with real or sample data and confirm it works before you schedule it. match is a regular expression: if set, no system|schedule message is sent unless the program output matches, and the message then includes the task text and the log path. Due text items arrive as system|schedule (issued is the scheduled time), including ones missed while the machine was off. schedule_list, schedule_update (enabled=false pauses), schedule_delete.",
+        guide: "schedule_create(title, body markdown, at or cron, kind=task|reminder, repeat, command, user, match). at is RFC 3339 UTC, YYYY-MM-DD HH:MM, a weekday like monday 09:00, or relative in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5, and replaces at and repeat. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command runs as user when due (default bia; root and other accounts can be named). If you write a script or program for command, run it first with real or sample data and confirm it works before you schedule it. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches, and the message then includes the task text and the log path. Due text items arrive as system|schedule (issued is the scheduled time), including ones missed while the machine was off. schedule_list, schedule_update (enabled=false pauses), schedule_delete.",
     },
     Branch {
         id: "memory",
@@ -1289,7 +1289,20 @@ impl Tools {
             "Remove a contact from the addressbook.",
             obj(json!({"id": {"type": "string"}}), &["id"]),
         );
-        t.add_grouped("calendar", "schedule_create", "Schedule a task or reminder. body is markdown. at is RFC 3339 UTC, YYYY-MM-DD HH:MM, monday 09:00, or in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5; it replaces at and repeat. kind is task or reminder. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command is a program to run when the item is due, as user (default bia). If you write a script or program for command, run it first with real or sample data and confirm it works before you call schedule_create. match is a regular expression: if set, no system|schedule message is sent unless the program output matches. The message includes the task text and the path of that run's log. Without a command, the item arrives as a system|schedule message when due, including missed ones after boot.",
+        t.add_grouped("talk", "chat_ignore", "Stop getting a busy chat's messages (a group whose talk is not your task): they are kept, the chat stays unread, and a reply to you or a wake pattern still reaches you. Decide it yourself when a chat fills your context with talk you need not follow. wake: regular expressions (case-insensitive) matched on each finished message, voice transcripts included: put your name and @username in them, and any topic you watch for. A message that wakes you comes with the last few ignored ones before it. Every quarter of an hour you are told how many you missed. Calling it again replaces the wake patterns. Telegram, WhatsApp, Messenger and Instagram chats only.",
+            obj(json!({
+                "chat": {"type": "string", "description": "channel as channels lists it, e.g. telegram:-1001234567890"},
+                "wake": {"type": "array", "items": {"type": "string"}, "description": "regular expressions that deliver a message anyway"},
+                "why": {"type": "string", "description": "a few words: why you ignore it"}
+            }), &["chat"]));
+        t.add_grouped("talk", "chat_unignore", "Get a chat's messages again. The ignored ones stay kept: chat_restore shows them.", obj(json!({"chat": {"type": "string"}}), &["chat"]));
+        t.add_grouped("talk", "chat_ignored", "Ignored chats: since when, wake patterns, and how many of their messages you have not seen.", obj(json!({}), &[]));
+        t.add_grouped("talk", "chat_restore", "Show a chat's ignored messages, newest first, count at a time (default 50, at most 500); call again to go further back until you have the context you need. They arrive as one system message and go to your memory like any message; long ones are cut (the chat's history tool has them whole).",
+            obj(json!({
+                "chat": {"type": "string"},
+                "count": {"type": "integer", "description": "how many (default 50)"}
+            }), &["chat"]));
+        t.add_grouped("calendar", "schedule_create", "Schedule a task or reminder. body is markdown. at is RFC 3339 UTC, YYYY-MM-DD HH:MM, monday 09:00, or in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5; it replaces at and repeat. kind is task or reminder. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command is a program to run when the item is due, as user (default bia). If you write a script or program for command, run it first with real or sample data and confirm it works before you call schedule_create. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches. The message includes the task text and the path of that run's log. Without a command, the item arrives as a system|schedule message when due, including missed ones after boot.",
             obj(json!({
                 "title": {"type": "string"},
                 "body": {"type": "string", "description": "markdown task text"},
@@ -1299,7 +1312,7 @@ impl Tools {
                 "repeat": {"type": "string", "description": "none, daily, weekly, …"},
                 "command": {"type": "string", "description": "program to run when due"},
                 "user": {"type": "string", "description": "unix account (default bia)"},
-                "match": {"type": "string", "description": "regular expression; stay silent unless the output matches"}
+                "match": {"type": "string", "description": "Rust regex (no look-around or back-references; (?i) ignores case); stay silent unless the output matches"}
             }), &["title"]));
         t.add_grouped(
             "calendar",
@@ -1321,7 +1334,7 @@ impl Tools {
                     "repeat": {"type": "string"},
                     "command": {"type": "string"},
                     "user": {"type": "string"},
-                    "match": {"type": "string", "description": "regular expression; empty clears it"},
+                    "match": {"type": "string", "description": "Rust regex (no look-around or back-references; (?i) ignores case); empty clears it"},
                     "enabled": {"type": "boolean"}
                 }),
                 &["id"],
@@ -3408,6 +3421,29 @@ impl Tools {
                 } else {
                     format!("{channel} was not linked")
                 })
+            }
+            "chat_ignore" => {
+                let wake: Vec<String> = args
+                    .get("wake")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).map(String::from).collect())
+                    .unwrap_or_default();
+                crate::ignored::ignore(&s("chat").unwrap_or_default(), &wake, &s("why").unwrap_or_default())
+            }
+            "chat_unignore" => crate::ignored::unignore(&s("chat").unwrap_or_default()),
+            "chat_ignored" => Ok(crate::ignored::list()),
+            "chat_restore" => {
+                let count = args.get("count").and_then(|v| v.as_u64()).map(|n| n as usize);
+                let (text, summary) = crate::ignored::restore(&s("chat").unwrap_or_default(), count)?;
+                // its own channel: restoring is reading, not a turn in that chat (no typing there)
+                self.con.push_inbound(crate::console::Inbound {
+                    identity: ID_SYSTEM.into(),
+                    channel: crate::ignored::CH_IGNORED.into(),
+                    issued: crate::clock::now(),
+                    id: crate::console::mint_msg_id(),
+                    text,
+                });
+                Ok(summary)
             }
             "addressbook_remove" => {
                 let id = s("id").unwrap_or_default();

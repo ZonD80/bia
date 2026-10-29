@@ -47,9 +47,19 @@ pub struct Asr {
     pub langs: Vec<String>,
     pub size_name: String,
     pub note: String,
+    /// A .tar.bz2 to unpack, or (empty) `files` downloaded one by one.
     pub url: String,
     pub size: u64,
     pub sha256: String,
+    /// The model's files, each saved under the name its URL ends with.
+    pub files: Vec<File>,
+}
+
+impl Asr {
+    /// Download size of the whole model.
+    pub fn total_size(&self) -> u64 {
+        self.size + self.files.iter().map(|f| f.size).sum::<u64>()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -109,7 +119,16 @@ mod tests {
         assert!(ru.hear && !ru.voices.is_empty());
         assert!(c.voices.contains_key(&ru.default_voice));
         assert!(c.voices.values().all(|v| v.sha256.len() == 64 && v.size > 0 && v.url.starts_with("https://")));
-        assert!(c.asr.values().all(|v| v.sha256.len() == 64));
+        // one archive, or files each pinned
+        assert!(c.asr.values().all(|v| if v.files.is_empty() {
+            v.sha256.len() == 64 && v.url.starts_with("https://")
+        } else {
+            v.url.is_empty() && v.files.iter().all(|f| f.sha256.len() == 64 && f.size > 0 && f.url.starts_with("https://"))
+        }));
+        let fa = &c.asr["shenava-fa"];
+        assert_eq!((fa.kind.as_str(), fa.langs.as_slice()), ("nemo_ctc", &["fa".to_string()][..]));
+        assert!(fa.files.iter().any(|f| f.url.ends_with("/model.onnx")) && fa.files.iter().any(|f| f.url.ends_with("/tokens.txt")));
+        assert!(fa.total_size() > 100_000_000);
         assert!(c.extras.contains_key("speaker-campplus"));
         assert!(c.languages["en"].default_voice == crate::registry::BUNDLED_VOICE);
     }

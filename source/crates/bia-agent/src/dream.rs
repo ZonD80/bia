@@ -719,7 +719,9 @@ fn digest(state_dir: &Path, from: u64, to: u64) -> Vec<Row> {
             let channel = f.next().unwrap_or("");
             let body = m.content.splitn(6, '|').nth(5).unwrap_or(&m.content);
             in_dream = channel == CH_DREAM;
-            if t < from || t >= to || in_dream || crate::memory::is_stub(&m.name, &m.content) {
+            // counts of ignored messages are not what happened (what was restored is)
+            let ignored_note = channel == crate::ignored::CH_IGNORED && body.starts_with(crate::ignored::NOTE_HEAD);
+            if t < from || t >= to || in_dream || ignored_note || crate::memory::is_stub(&m.name, &m.content) {
                 continue;
             }
             let when = crate::clock::format_hms(t, crate::clock::offset_east_at(t));

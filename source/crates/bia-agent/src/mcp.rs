@@ -530,6 +530,16 @@ impl Drop for McpServer {
 fn dispatch(sh: &Shared, v: Value) {
     if v.get("id").is_none() {
         if let Some(ib) = inbound_from_notification(&v) {
+            // ignored chats: the MCP checked the finished message against the rules
+            let data = v.pointer("/params/data");
+            if data.and_then(|d| d.get("ignored")).and_then(Value::as_bool) == Some(true) && crate::ignored::can_ignore(&ib.channel) {
+                crate::ignored::keep(&ib);
+                return;
+            }
+            let ib = match data.and_then(|d| d.get("woke")).and_then(Value::as_str) {
+                Some(why) if crate::ignored::can_ignore(&ib.channel) => crate::ignored::woke(ib, why),
+                _ => ib,
+            };
             let tag = if sh.con.color {
                 format!("{GRAY}[{}@{}]{RESET}", ib.identity, ib.channel)
             } else {

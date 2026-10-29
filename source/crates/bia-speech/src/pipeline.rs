@@ -41,6 +41,8 @@ pub struct LangState {
     reported: Vec<String>,
     /// Voice notes / files: one-shot, so discovery needs less speech.
     file: bool,
+    /// Voice notes: the sender's preferred language, when it is known and learned.
+    sender: Option<String>,
 }
 
 impl LangState {
@@ -51,6 +53,7 @@ impl LangState {
             window: VecDeque::new(),
             reported: Vec::new(),
             file: false,
+            sender: None,
         }
     }
 
@@ -542,48 +545,103 @@ fn words_of(text: &str, d: f32, filter_on: bool, dropped: &mut Vec<String>) -> O
 fn transcribe_chunks(reg: &Registry, pieces: Vec<Segment>, clean: Vec<Vec<f32>>, st: &mut LangState, opts: &Opts, mut heard: Heard) -> Result<Heard, String> {
     let t0 = std::time::Instant::now();
     let s = &reg.settings;
-    // only to group segments (and to route to a transducer): Whisper decides each chunk's language
-    let lid: Vec<Option<String>> = {
+    // only to group segments and route chunks: Whisper decides the language of what it decodes
+    let mut lid: Vec<Option<String>> = {
         let slid = models::slid(reg)?;
         let slid = slid.lock().map_err(|_| "slid lock")?;
         clean.iter().map(|c| if secs(c.len()) >= LID_MIN_SECS { slid.detect(c).ok().filter(|l| !l.is_empty()) } else { None }).collect()
     };
-    let groups = chunks(&pieces, &lid);
+    let mut groups = chunks(&pieces, &lid);
+    // tiny mixes up languages (Persian heard as Arabic, Portuguese, Turkish …): a chunk it
+    // puts in a language that is not learned is checked again by the best Whisper
+    // installed; with none, the sender's language (when known) is taken instead
+    let better = models::best_whisper(reg);
+    let sender = st.sender.clone();
+    let judge = if better == registry::BUNDLED_ASR { "the sender's language" } else { better };
+    let opinion = |a: &[f32]| -> Result<Option<String>, String> {
+        if better == registry::BUNDLED_ASR {
+            return Ok(sender.clone());
+        }
+        let slid = models::slid_for(reg, better)?;
+        let got = slid.lock().map_err(|_| "slid lock")?.detect(a).ok().filter(|x| !x.is_empty());
+        Ok(got)
+    };
+    let main_id = if reg.asr.contains_key(opts.asr) { opts.asr } else { registry::BUNDLED_ASR };
+    let is_whisper = |id: &str| reg.asr.get(id).is_some_and(|a| a.kind == "whisper");
+    // models for some languages only: the voice-note model when it is one (Parakeet),
+    // then every one-language model installed (shenava-fa); the rest goes to Whisper
+    let mut own: Vec<&str> = vec![];
+    if !is_whisper(main_id) {
+        own.push(main_id);
+    }
+    own.extend(reg.asr.iter().filter(|(id, a)| a.kind == "nemo_ctc" && id.as_str() != main_id).map(|(id, _)| id.as_str()));
+    let own_for = |lang: &str| own.iter().copied().find(|id| reg.asr[*id].langs.iter().any(|x| x == lang));
+    // a language that is not learned; and, with only tiny to tell, one that would go to
+    // tiny's own transcript when the sender speaks a language with a model of its own
+    let sender_own = better == registry::BUNDLED_ASR && sender.as_deref().is_some_and(|l| own_for(l).is_some());
+    let doubtful = |l: &Option<String>| {
+        l.as_ref().is_some_and(|l| !reg.is_enabled(l) || (sender_own && Some(l) != sender.as_ref() && own_for(l).is_none()))
+    };
+    if groups.iter().any(|(_, l)| doubtful(l)) {
+        let mut changed = false;
+        for (r, l) in &groups {
+            if !doubtful(l) {
+                continue;
+            }
+            let again = opinion(&concat(r.clone().map(|k| clean[k].as_slice())))?;
+            if let Some(x) = again.filter(|x| Some(x) != l.as_ref()) {
+                crate::diag::log("speech", format!("note: tiny heard {l:?} in parts {r:?}, {judge} says {x}"));
+                for p in lid[r.clone()].iter_mut().filter(|p| p.is_some()) {
+                    *p = Some(x.clone());
+                }
+                changed = true;
+            }
+        }
+        if changed {
+            groups = chunks(&pieces, &lid);
+        }
+    }
+    let whisper_id = if is_whisper(main_id) { main_id } else { better };
     let audio: Vec<Vec<f32>> = groups
         .iter()
         .map(|(g, _)| concat(g.clone().map(|k| if s.asr_denoised { clean[k].as_slice() } else { pieces[k].samples.as_slice() })))
         .collect();
-    let main_id = if reg.asr.contains_key(opts.asr) { opts.asr } else { registry::BUNDLED_ASR };
-    let main = models::recognizer(reg, main_id)?;
-    let main = main.lock().map_err(|_| "recognizer lock")?;
-    let whisper_id = if main.is_whisper() { main_id } else { models::best_whisper(reg) };
-    // what a transducer takes: a chunk identified in one of its languages (or, with
-    // nothing identified, the language bia is in)
-    let to_main: Vec<bool> = groups
-        .iter()
-        .map(|(_, l)| main.is_whisper() || main.langs().contains(l.as_ref().unwrap_or(&st.current)))
-        .collect();
     let mut used = vec![];
     // (language, words) per chunk; None = not decoded yet
     let mut out: Vec<Option<(String, Option<String>)>> = vec![None; groups.len()];
-    if !main.is_whisper() {
-        // chunk by chunk: over longer audio (or chunks joined with gaps) Parakeet stops early
-        for i in (0..groups.len()).filter(|&i| to_main[i]) {
-            let (text, _) = main.decode_lang(&audio[i], "")?;
-            let lang = groups[i].1.clone().unwrap_or_else(|| st.current.clone());
-            out[i] = Some((lang, words_of(&text, secs(audio[i].len()), s.hallucination_filter, &mut heard.dropped)));
+    // decoding in a language-only model; chunk by chunk: over longer audio (or chunks
+    // joined with gaps) Parakeet stops early
+    let decode_own = |id: &str, a: &[f32], dropped: &mut Vec<String>| -> Result<Option<String>, String> {
+        let r = models::recognizer(reg, id)?;
+        let (text, _) = r.lock().map_err(|_| "recognizer lock")?.decode_lang(a, "")?;
+        Ok(words_of(&text, secs(a.len()), s.hallucination_filter, dropped))
+    };
+    for i in 0..groups.len() {
+        let mut lang = groups[i].1.clone().unwrap_or_else(|| st.current.clone());
+        let Some(id) = own_for(&lang) else { continue };
+        let mut words = decode_own(id, &audio[i], &mut heard.dropped)?;
+        used.push(id);
+        if words.is_none() && secs(audio[i].len()) >= LID_MIN_SECS {
+            // no words in its language: tiny may have been wrong (Persian taken for English)
+            if let Some(x) = opinion(&audio[i])?.filter(|x| *x != lang) {
+                crate::diag::log("speech", format!("note: {id} found no words in chunk {i} ({lang}); {judge} says {x}"));
+                match own_for(&x) {
+                    Some(other) => {
+                        words = decode_own(other, &audio[i], &mut heard.dropped)?;
+                        used.push(other);
+                        lang = x;
+                    }
+                    // Whisper decodes it below
+                    None => continue,
+                }
+            }
         }
-        if to_main.iter().any(|&m| m) {
-            used.push(main_id);
-        }
+        out[i] = Some((lang, words));
     }
     if out.iter().any(Option::is_none) {
-        let wrec = if main.is_whisper() { None } else { Some(models::recognizer(reg, whisper_id)?) };
-        let wguard = match &wrec {
-            Some(r) => Some(r.lock().map_err(|_| "recognizer lock")?),
-            None => None,
-        };
-        let rec: &models::Recognizer = wguard.as_deref().unwrap_or(&main);
+        let wrec = models::recognizer(reg, whisper_id)?;
+        let wguard = wrec.lock().map_err(|_| "recognizer lock")?;
+        let rec: &models::Recognizer = &wguard;
         let decode = |a: &[f32], lang: &str, dropped: &mut Vec<String>| -> Result<(String, Option<String>), String> {
             let (mut text, got) = rec.decode_lang(a, lang)?;
             if !got.is_empty() && too_short(&text, secs(a.len()), &got) {
@@ -598,7 +656,16 @@ fn transcribe_chunks(reg: &Registry, pieces: Vec<Segment>, clean: Vec<Vec<f32>>,
         let todo: Vec<usize> = (0..groups.len()).filter(|&i| out[i].is_none()).collect();
         for &i in &todo {
             if secs(audio[i].len()) >= LID_MIN_SECS || groups.len() == 1 {
-                out[i] = Some(decode(&audio[i], "", &mut heard.dropped)?);
+                let (lang, words) = decode(&audio[i], "", &mut heard.dropped)?;
+                // Whisper heard a language that has a model of its own (tiny got it wrong)
+                out[i] = Some(match own_for(&lang) {
+                    Some(id) => {
+                        used.push(id);
+                        let w = decode_own(id, &audio[i], &mut heard.dropped)?;
+                        (lang, w)
+                    }
+                    None => (lang, words),
+                });
             }
         }
         let neighbour = |out: &[Option<(String, Option<String>)>], i: usize| {
@@ -621,7 +688,13 @@ fn transcribe_chunks(reg: &Registry, pieces: Vec<Segment>, clean: Vec<Vec<f32>>,
                 continue;
             }
             match near {
-                Some(l) => out[i] = Some(decode(&audio[i], &l, &mut heard.dropped)?),
+                Some(l) => match own_for(&l) {
+                    Some(id) => {
+                        out[i] = Some((l, decode_own(id, &audio[i], &mut heard.dropped)?));
+                        used.push(id);
+                    }
+                    None => out[i] = Some(decode(&audio[i], &l, &mut heard.dropped)?),
+                },
                 None if out[i].is_none() => out[i] = Some(decode(&audio[i], "", &mut heard.dropped)?),
                 None => {}
             }
@@ -662,7 +735,8 @@ fn transcribe_chunks(reg: &Registry, pieces: Vec<Segment>, clean: Vec<Vec<f32>>,
     }
     heard.new_lang = st.discover(reg);
     heard.parts = groups.len();
-    used.dedup();
+    let mut seen = std::collections::HashSet::new();
+    used.retain(|id| seen.insert(*id));
     heard.model = used.join("+");
     heard.ms = t0.elapsed().as_millis() as u64;
     crate::diag::log(
@@ -759,7 +833,9 @@ fn transcribe_file_with(path: &std::path::Path, lang: Option<&str>, asr: Option<
     if pieces.is_empty() {
         return Ok(Heard { secs: 0.0, ..Default::default() });
     }
-    let mut st = LangState::for_file(start.filter(|l| reg.is_enabled(l)).unwrap_or(&reg.default_lang));
+    let start = start.filter(|l| reg.is_enabled(l));
+    let mut st = LangState::for_file(start.unwrap_or(&reg.default_lang));
+    st.sender = start.map(str::to_string);
     let asr = asr.unwrap_or(&reg.asr_file).to_string();
     transcribe(&reg, pieces, &mut st, &Opts { asr: &asr, forced: lang, echo: None, speaker_key: None, echo_always: false })
 }

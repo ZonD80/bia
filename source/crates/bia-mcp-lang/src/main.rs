@@ -25,7 +25,7 @@ fn main() {
         )
         .tool(
             "install",
-            "Learn a language: download and verify its voice (sha256-pinned) and enable it, so speech in it is transcribed and you can speak it (lang= on call_say / send_voice). The first non-English language also installs whisper-base (207 MB) for voice notes. Do it without asking when you hear a new language ([new language heard: …]) or the user speaks or asks for one; tell the user first that you are learning it. lang may carry a region (es-MX, pt-BR, en-GB) to pick a voice of that locale. voice picks a specific voice from lang_catalog.",
+            "Learn a language: download and verify its voice (sha256-pinned) and enable it, so speech in it is transcribed and you can speak it (lang= on call_say / send_voice). The first non-English language also installs whisper-base (207 MB) for voice notes, and Persian (fa) its own model shenava-fa (117 MB). Do it without asking when you hear a new language ([new language heard: …]) or the user speaks or asks for one; tell the user first that you are learning it. lang may carry a region (es-MX, pt-BR, en-GB) to pick a voice of that locale. voice picks a specific voice from lang_catalog.",
             json!({"type": "object", "required": ["lang"], "properties": {
                 "lang": {"type": "string", "description": "language code (es), with optional region (es-MX), or English name"},
                 "voice": {"type": "string", "description": "voice id from lang_catalog (optional)"}

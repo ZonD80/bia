@@ -603,7 +603,11 @@ impl Tg {
         }
         // Read as soon as it arrives: downloading media and transcribing a voice note
         // take a while, and the sender should not wait for them to see it was received.
-        mark_delivered_read(client, &msg, chat_id).await;
+        // An ignored chat stays unread unless the finished message wakes the model.
+        let ignoring = bia_mcp::ignore::ignoring(&format!("telegram:{chat_id}"));
+        if !ignoring {
+            mark_delivered_read(client, &msg, chat_id).await;
+        }
         let mut media = None;
         if let Some(tl::enums::MessageMedia::GeoLive(geo_live)) = msg.media() {
             // The first point of a share reaches the model; the moves come as edits.
@@ -669,7 +673,9 @@ impl Tg {
                 .and_then(|r| r);
             text = with_transcript(heard, &text, &format!("telegram/{rel}"));
         }
-        tg.inbound_at(&identity, chat_id, &msg_id, &text, date);
+        if tg.inbound_at(&identity, chat_id, &msg_id, &text, date).read() && ignoring {
+            mark_delivered_read(client, &msg, chat_id).await;
+        }
         // The text as sent (no file notes), so an edit can show what it was.
         texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
         Ok(true)
@@ -680,11 +686,15 @@ impl Tg {
     }
 
     /// [`Tg::inbound`] with when it was written (Telegram's date, Unix seconds; 0 = now).
-    pub fn inbound_at(&self, identity: &str, chat_id: i64, id: &str, text: &str, issued: i64) {
+    /// Returns what the chat's ignore rules made of it (an ignored one stays unread).
+    pub fn inbound_at(&self, identity: &str, chat_id: i64, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
         let channel = format!("telegram:{chat_id}");
         match self.ctx_clone() {
             Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
-            None => hold_inbound(identity, &channel, id, text, issued),
+            None => {
+                hold_inbound(identity, &channel, id, text, issued);
+                if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) }
+            }
         }
     }
 
@@ -1821,6 +1831,8 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
         }
         batch.reverse();
 
+        // an ignored chat neither uses up the catch-up budget nor gets marked read
+        let ignoring = bia_mcp::ignore::ignoring(&format!("telegram:{chat_id}"));
         for msg in batch {
             if delivered >= CATCHUP_MAX_TOTAL {
                 more.push(format!("telegram:{chat_id} ({})", d.title()));
@@ -1840,12 +1852,15 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
             }
             let turn = lanes().reserve(&chat_id.to_string());
             match Tg::handle_inbound_message(client, msg, turn).await {
-                Ok(true) => delivered += 1,
-                Ok(false) => {}
+                Ok(true) if !ignoring => delivered += 1,
+                Ok(_) => {}
                 Err(e) => Tg::global().log(format!("catch-up deliver chat={chat_id}: {e}")),
             }
         }
         // Ensure the dialog unread badge clears even if some messages were empty/skipped.
+        if ignoring {
+            continue;
+        }
         if let Err(e) = client.mark_read(chat_id).await {
             Tg::global().log(format!("catch-up mark_read chat={chat_id}: {e}"));
         }

@@ -378,6 +378,7 @@ func (m *messenger) onEvent(gen uint64, raw any) {
 		}
 		m.mu.Unlock()
 		m.saveCookies(gen)
+		go reads.flush(ctx)
 		go m.connectE2EE(gen, false)
 	case *messagix.TransientDisconnectEvent:
 		m.setState("reconnecting", "")
@@ -578,6 +579,7 @@ func (m *messenger) onE2EE(gen uint64, raw any) {
 		}
 		m.mu.Unlock()
 		emit("status", map[string]any{"state": m.Status()["state"], "e2ee": "ready"})
+		go reads.flush(m.rootCtx)
 	case *events.Disconnected:
 		m.mu.Lock()
 		m.e2eeSt = "reconnecting"

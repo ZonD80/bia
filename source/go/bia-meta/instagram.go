@@ -343,6 +343,7 @@ func (ig *instagram) onEvent(gen uint64, raw slidetypes.ClientEvent) error {
 		}
 		ig.mu.Unlock()
 		ig.saveCookies(gen)
+		go reads.flush(ctx)
 	case *slidetypes.Disconnected:
 		if dgw.IsUnauthorized(evt.Error) || errors.Is(evt.Error, instameow.ErrUserIDMissing) {
 			ig.loggedOut("Instagram ended the session")
@@ -1087,7 +1088,7 @@ func (ig *instagram) Typing(ctx context.Context, p TypingParams) error {
 func (ig *instagram) MarkRead(ctx context.Context, p ReadParams) error {
 	cli, err := ig.client()
 	if err != nil {
-		return nil
+		return notConnected(err)
 	}
 	t, err := ig.target(ctx, p.Chat)
 	if err != nil {

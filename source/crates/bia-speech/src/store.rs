@@ -19,10 +19,19 @@ pub struct Want<'a> {
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
+        .timeout_recv_response(Some(Duration::from_secs(60)))
         .user_agent("bia-lang")
         .build()
         .into()
+}
+
+/// Slowest download still waited for: the whole body must arrive at this rate (and
+/// never gets less than a minute). A fixed minute failed every model bigger than a
+/// minute's worth of the line (Parakeet is 487 MB).
+const MIN_RATE: u64 = 100 * 1024;
+
+fn body_timeout(size: u64) -> Duration {
+    Duration::from_secs((size / MIN_RATE).max(60))
 }
 
 /// Download to `dest` (verified), reporting progress in `pct_from..pct_to`.
@@ -31,7 +40,13 @@ pub fn download(ctx: &dyn Report, w: &Want, dest: &Path, pct_from: u32, pct_to: 
         std::fs::create_dir_all(dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
     }
     let part = dest.with_extension("partial");
-    let resp = agent().get(w.url).call().map_err(|e| format!("download {}: {e}", w.label))?;
+    let resp = agent()
+        .get(w.url)
+        .config()
+        .timeout_recv_body(Some(body_timeout(w.size)))
+        .build()
+        .call()
+        .map_err(|e| format!("download {}: {e}", w.label))?;
     let mut body = resp.into_body().into_reader();
     let mut f = std::fs::File::create(&part).map_err(|e| format!("create {}: {e}", part.display()))?;
     let mut h = Sha256::new();
@@ -212,6 +227,17 @@ pub fn resolve_transducer(dir: &Path, langs: &[String]) -> Result<Asr, String> {
     })
 }
 
+/// The model and tokens of a NeMo CTC model (one file; an int8 one when there is one).
+pub fn resolve_ctc(dir: &Path, langs: &[String]) -> Result<Asr, String> {
+    let all = files(dir);
+    let find = |f: &dyn Fn(&str) -> bool| all.iter().find(|p| f(&name(p))).map(|p| s(p));
+    let model = find(&|n| n.ends_with(".int8.onnx"))
+        .or_else(|| find(&|n| n.ends_with(".onnx")))
+        .ok_or_else(|| format!("no .onnx model in {}", dir.display()))?;
+    let tokens = find(&|n| n.ends_with("tokens.txt")).ok_or_else(|| format!("no tokens.txt in {}", dir.display()))?;
+    Ok(Asr { kind: "nemo_ctc".into(), langs: langs.to_vec(), dir: s(dir), encoder: model, tokens, ..Default::default() })
+}
+
 pub fn dir_size(p: &Path) -> u64 {
     let Ok(md) = std::fs::symlink_metadata(p) else { return 0 };
     if md.is_file() {
@@ -221,4 +247,35 @@ pub fn dir_size(p: &Path) -> u64 {
         return 0;
     }
     files(p).iter().map(|c| dir_size(c)).sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctc_model_files() {
+        let dir = std::env::temp_dir().join(format!("bia-ctc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(resolve_ctc(&dir, &["fa".into()]).is_err());
+        for f in ["model.onnx", "tokens.txt"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        let a = resolve_ctc(&dir, &["fa".into()]).unwrap();
+        assert_eq!((a.kind.as_str(), a.langs.as_slice()), ("nemo_ctc", &["fa".to_string()][..]));
+        assert!(a.encoder.ends_with("/model.onnx") && a.tokens.ends_with("/tokens.txt"));
+        // an int8 copy is preferred
+        std::fs::write(dir.join("model.int8.onnx"), b"x").unwrap();
+        assert!(resolve_ctc(&dir, &[]).unwrap().encoder.ends_with("/model.int8.onnx"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn download_waits_for_big_files() {
+        assert_eq!(body_timeout(0), Duration::from_secs(60));
+        assert_eq!(body_timeout(1 << 20), Duration::from_secs(60));
+        // Parakeet (487 MB) gets over an hour at the slowest rate still accepted
+        assert!(body_timeout(487_170_055) > Duration::from_secs(3600));
+    }
 }

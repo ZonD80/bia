@@ -323,7 +323,7 @@ func dispatch(ctx context.Context, b Backend, req *request) (any, error) {
 	case "typing":
 		return call(ctx, req.Params, func(ctx context.Context, p TypingParams) (any, error) { return ok(b.Typing(ctx, p)) })
 	case "read":
-		return call(ctx, req.Params, func(ctx context.Context, p ReadParams) (any, error) { return ok(b.MarkRead(ctx, p)) })
+		return call(ctx, req.Params, func(ctx context.Context, p ReadParams) (any, error) { return ok(reads.mark(ctx, b.MarkRead, p)) })
 	case "download":
 		return call(ctx, req.Params, func(ctx context.Context, p DownloadParams) (any, error) { return media.Download(ctx, p) })
 	case "create_group":

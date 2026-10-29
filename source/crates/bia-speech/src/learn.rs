@@ -122,13 +122,38 @@ pub fn ensure_asr(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<bool, Str
     }
     let ca = cat.asr.get(id).ok_or_else(|| format!("unknown speech model {id}; known: {}", cat.asr.keys().cloned().collect::<Vec<_>>().join(", ")))?;
     let models = crate::paths::models();
-    let archive = models.join(format!(".{id}-{}.tar.bz2", crate::paths::stamp()));
-    store::download(ctx, &Want { url: &ca.url, size: ca.size, sha256: &ca.sha256, label: id }, &archive, 0, 90)?;
     let dir = models.join(id);
-    let res = store::unpack(&archive, &dir);
-    let _ = std::fs::remove_file(&archive);
-    res?;
-    let a = if ca.kind == "nemo_transducer" { store::resolve_transducer(&dir, &ca.langs)? } else { store::resolve_whisper(&dir)? };
+    if ca.files.is_empty() {
+        let archive = models.join(format!(".{id}-{}.tar.bz2", crate::paths::stamp()));
+        store::download(ctx, &Want { url: &ca.url, size: ca.size, sha256: &ca.sha256, label: id }, &archive, 0, 90)?;
+        let res = store::unpack(&archive, &dir);
+        let _ = std::fs::remove_file(&archive);
+        res?;
+    } else {
+        // separate files: all into a temporary folder, which then becomes the model's
+        let tmp = models.join(format!(".{id}-{}", crate::paths::stamp()));
+        let total = ca.total_size().max(1);
+        let mut done = 0u64;
+        let res = ca.files.iter().try_for_each(|f| {
+            let file = f.url.rsplit('/').next().unwrap_or(id);
+            let (from, to) = ((done * 90 / total) as u32, ((done + f.size) * 90 / total) as u32);
+            done += f.size;
+            store::download(ctx, &Want { url: &f.url, size: f.size, sha256: &f.sha256, label: id }, &tmp.join(file), from, to)
+        });
+        let res = res.and_then(|_| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::rename(&tmp, &dir).map_err(|e| format!("{}: {e}", dir.display()))
+        });
+        if res.is_err() {
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        res?;
+    }
+    let a = match ca.kind.as_str() {
+        "nemo_transducer" => store::resolve_transducer(&dir, &ca.langs)?,
+        "nemo_ctc" => store::resolve_ctc(&dir, &ca.langs)?,
+        _ => store::resolve_whisper(&dir)?,
+    };
     update(|r| {
         r.asr.insert(id.to_string(), a);
         Ok(())
@@ -234,6 +259,15 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
     let mut out = format!("learned {}: {hear}; {speak}.", label(&l.code));
     if !skipped.is_empty() {
         out.push_str(&format!(" Skipped: {}.", skipped.join("; ")));
+    }
+    // a model made for this one language (Persian: shenava-fa) takes its voice-note parts
+    let own = cat.asr.iter().find(|(id, a)| a.kind == "nemo_ctc" && a.langs.contains(&l.code) && !registry::current().asr.contains_key(*id));
+    if let (true, Some((id, _))) = (can_hear, own) {
+        ctx.progress(0, &format!("voice notes in {}: {id}", label(&l.code)));
+        match ensure_asr(ctx, &cat, id) {
+            Ok(_) => out.push_str(&format!(" Voice notes in {} now use {id}, made for it (far more accurate and faster than Whisper).", label(&l.code))),
+            Err(e) => out.push_str(&format!(" (Could not install {id} for voice notes in {}: {e}; Whisper transcribes them.)", label(&l.code))),
+        }
     }
     // More than one language: voice notes get Parakeet for the languages it knows (the
     // first time; a model chosen later is kept), whisper-base for the others (tiny

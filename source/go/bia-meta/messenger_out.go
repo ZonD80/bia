@@ -637,9 +637,12 @@ func (m *messenger) MarkRead(ctx context.Context, p ReadParams) error {
 	}
 	ref := m.msgRef(ctx, t, p.ID)
 	if ref.E2EE || t.e2ee && !isClassicID(p.ID) {
+		if _, err := m.client(); err != nil {
+			return notConnected(err)
+		}
 		e2ee, err := m.encryptedNow()
 		if err != nil {
-			return nil
+			return notConnected(err)
 		}
 		var sender waTypes.JID
 		if t.group && ref.Sender != "" {
@@ -649,7 +652,7 @@ func (m *messenger) MarkRead(ctx context.Context, p ReadParams) error {
 	}
 	cli, err := m.client()
 	if err != nil {
-		return nil
+		return notConnected(err)
 	}
 	ts := ref.TS
 	if ts == 0 {

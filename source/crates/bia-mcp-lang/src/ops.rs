@@ -388,7 +388,10 @@ pub fn list() -> String {
         if r.asr_file == *id {
             uses.push("voice notes");
         }
-        out.push_str(&format!("  {id} ({size}){}\n", if uses.is_empty() { String::new() } else { format!(" — used for {}", uses.join(" and ")) }));
+        if a.kind != "whisper" && !a.langs.is_empty() && r.asr_file != *id {
+            uses.push("voice notes in its languages");
+        }
+        out.push_str(&format!("  {id} ({size}{}){}\n", if a.kind == "whisper" { String::new() } else { format!(", {}", a.langs.join(" ")) }, if uses.is_empty() { String::new() } else { format!(" — used for {}", uses.join(" and ")) }));
     }
     out.push_str(&format!("settings: {}\n", serde_json::to_string(&r.settings).unwrap_or_default()));
     if !r.speakers.is_empty() {
@@ -460,7 +463,7 @@ pub fn catalog_text(query: Option<&str>) -> Result<String, String> {
     out.push_str(
         &cat.asr
             .iter()
-            .map(|(id, a)| format!("{id} ({}, {})", catalog::mb(a.size), a.note))
+            .map(|(id, a)| format!("{id} ({}, {})", catalog::mb(a.total_size()), a.note))
             .collect::<Vec<_>>()
             .join("; "),
     );

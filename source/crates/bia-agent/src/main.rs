@@ -10,6 +10,7 @@ mod console;
 mod dream;
 mod gguf;
 mod hw;
+mod ignored;
 mod jobs;
 mod llama_srv;
 mod llm;
@@ -192,6 +193,9 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         boot.warn(&w);
     }
     sys::ensure_inbox(&paths.files);
+    // ignored chats: the rules (found through BIA_FILES, as the MCPs find them) and the kept messages
+    std::env::set_var("BIA_FILES", &paths.files);
+    ignored::init(&paths.files.join("state"));
     clock::restore(&paths.files.join("state").join("clock.json"));
     // messages a previous run received but never handed to the model (reboot, update, crash)
     let replay = con.open_journal(paths.files.join("state").join("inbox.jsonl"));

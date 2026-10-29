@@ -78,6 +78,19 @@ TRANSDUCER_ASR = {
                     "and as accurate; voice notes in other languages use the best Whisper installed"),
 }
 
+# NeMo CTC models for one language, published as separate files on Hugging Face (pinned
+# revision; sizes and hashes from the repo's LFS records, so nothing is downloaded here)
+# id -> (repo, revision, languages, size name, note, [(file, size, sha256)])
+CTC_ASR = {
+    "shenava-fa": ("Reza2kn/Shenava-Rizeh-v1.0-sherpa-onnx", "57173ab4b3f6a646e1664e02f8bbec5a9386cabc", ["fa"], "shenava",
+                   "Shenava Rizeh v1.0 (Apache-2.0): Persian only, about 3x fewer errors than whisper-small and 40x "
+                   "faster; numbers come out as words",
+                   [("model.onnx", 116700660, "ec66d191f1eee10a1cc4b58ce5d2d328e160193975e118139e4600102550255b"),
+                    ("tokens.txt", 12236, "8e192963f6e666dfa5721e5cbd4710bc1ef592460a45f08cefc94b2db16a6954")]),
+}
+
+KIND_OF_FILE = {"model.onnx": "model", "tokens.txt": "tokens"}
+
 
 def get_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": "bia-catalog", "Accept": "application/vnd.github+json"})
@@ -197,6 +210,12 @@ def main():
         asr_models[mid] = {"kind": "whisper", "langs": [], "size_name": size, "note": note, **file_entry(h, a)}
     for mid, (file, size, langs, note) in TRANSDUCER_ASR.items():
         asr_models[mid] = {"kind": "nemo_transducer", "langs": langs, "size_name": size, "note": note, **file_entry(h, asr[file])}
+    for mid, (repo, rev, langs, size, note, files) in CTC_ASR.items():
+        asr_models[mid] = {
+            "kind": "nemo_ctc", "langs": langs, "size_name": size, "note": note, "url": "", "size": 0, "sha256": "",
+            "files": [{"kind": KIND_OF_FILE[name], "url": f"https://huggingface.co/{repo}/resolve/{rev}/{name}",
+                       "size": n, "sha256": sha, "note": ""} for name, n, sha in files],
+        }
 
     extras = {
         "silero-vad": {"kind": "vad", **file_entry(h, asr["silero_vad.onnx"])},

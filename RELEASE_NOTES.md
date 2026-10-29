@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.4
+
+### Changes
+- Messenger and Instagram: a message that arrives while the connection is dropping is still marked as read: bia sends the read mark again once it is connected, instead of leaving the chat unread on the person's side.
+- Persian voice messages are understood: bia installs a speech model made for Persian when it learns the language (117 MB). It makes about three times fewer mistakes than before and is much faster, and Persian is no longer taken for Arabic, Portuguese or Turkish.
+- Voice messages in general: a part whose language bia was unsure of is checked again with the better speech model, and the sender's usual language is used when nothing better can tell.
+- bia can ignore a busy group chat that has nothing to do with its work, the way a person mutes one. Its messages no longer fill bia's attention or cost model time, and the chat stays unread. bia still notices when someone replies to it or mentions it, also inside a voice message. When it needs the missed talk, it reads as far back as it needs, and that goes into its memory like everything else.
+- Big speech models (Parakeet, whisper-small) download on slow connections too: a download no longer gave up after one minute.
+
+### For bia
+- New tools for busy chats: chat_ignore(chat, wake=[patterns], why) when a group's talk is not your task and fills your context. Put your name and @username in wake; a reply to you always wakes you. Every quarter of an hour a system|ignored note tells you how many messages you missed. chat_restore(chat, count) shows them newest first, further back with each call. chat_ignored lists the chats; chat_unignore stops ignoring. Decide it yourself; never ignore a chat the owner talks to you in.
+- If you have learned Persian (fa in lang_list), run lang_install(lang="fa") once: it adds shenava-fa for Persian voice messages. lang_list shows it under speech models.
+- A Messenger or Instagram read mark that fails is now written to logs/mcp-messenger.log or logs/mcp-instagram.log ("read <chat> <id>: …") and sent again after the next reconnect; if the owner says chats stay unread there, look in that log.
+
 ## 1.7.3
 
 ### Changes

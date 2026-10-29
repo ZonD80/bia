@@ -6,6 +6,7 @@
 |---|---|---|
 | unit | `cargo test --workspace` | agent (web/console separation, reply targets, release notes, outbox, …), web MCP, PKI, MCPs |
 | integration | `integration/web-mcp-e2e.py` | the web MCP binary over stdio + HTTPS + mTLS: first-visit root certificate, a chat both ways, identity rules (never `bia`), no console stream |
+| integration | `integration/ignore-e2e.py` | ignored chats through the messenger MCP with a fake bia-meta: ignored messages flagged and left unread; a wake pattern, a reply to bia and (with a voice note and speech models) a wake word spoken in a voice message deliver and mark read |
 | integration | `integration/update-net-test.sh` | `bia-update`'s internet path in a container: manifest, download, sha256, unpack, version rules, refusals |
 | e2e | `e2e/update-e2e.sh all internet disk flash rescue` | offline OS update through the rescue image, from a downloaded release, a flash stick or the disk; the agent survives |
 | e2e | `e2e/peer-e2e.sh all` | two QEMU machines: bia-b asks bia-a's web API for a certificate, root approves, bia-b chats with bia-a over mTLS and renews (also the browser renewal path with `web/pki.js`) |

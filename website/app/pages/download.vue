@@ -39,7 +39,20 @@
             <h3>Android</h3>
             <p class="host__note">Phones and tablets</p>
             <a class="btn btn--primary host__btn" :href="PLAY_URL" target="_blank" rel="noopener">Get it on Google Play</a>
-            <p class="host__ver"><a :href="APK_URL">or download the APK</a> from the latest release</p>
+            <a
+              class="btn btn--ghost host__btn host__btn--alt"
+              :class="{ 'is-busy': loading }"
+              :href="appDownloads.android.url"
+              :aria-busy="loading"
+            >
+              Download the APK
+            </a>
+            <p class="host__ver">
+              <template v-if="appDownloads.android.available">
+                Version {{ appDownloads.android.version }}<template v-if="appDownloads.android.size"> · {{ sizeMB(appDownloads.android.size) }}</template> ·
+              </template>
+              from GitHub, no Play Store needed
+            </p>
           </div>
           <div class="card host host--soon">
             <h3>iPhone</h3>
@@ -162,8 +175,6 @@ type Host = { id: FlashHost; label: string; note: string }
 
 // the phone apps (server only); the iPhone one is not in the App Store yet
 const PLAY_URL = 'https://play.google.com/store/apps/details?id=biadeploy.android'
-// the same app, signed with the same key, straight from GitHub (no Play Store needed)
-const APK_URL = 'https://github.com/ZonD80/bia/releases/latest/download/bia-deploy-android.apk'
 
 const hosts: Host[] = [
   { id: 'macos', label: 'Mac', note: 'Apple Silicon and Intel' },
@@ -171,7 +182,9 @@ const hosts: Host[] = [
   { id: 'linux', label: 'Linux', note: '64-bit (Intel and AMD)' },
 ]
 
-const { downloads, version, releaseUrl, loading, error, fetched, fallbackUrl } = useLatestRelease()
+const { downloads, appDownloads, version, releaseUrl, loading, error, fetched, fallbackUrl } = useLatestRelease()
+
+const sizeMB = (bytes: number) => `${Math.round(bytes / 1e6)} MB`
 
 function buttonText(host: Host): string {
   if (loading.value) return 'Checking latest…'
@@ -189,6 +202,7 @@ function buttonText(host: Host): string {
 .host h3 { font-size: 1.4rem; margin-bottom: 0.2rem; }
 .host__note { color: var(--mute); }
 .host__btn { width: 100%; }
+.host__btn--alt { margin-top: 0.6rem; }
 .host__btn.is-busy { opacity: 0.7; pointer-events: none; }
 .phones__title { font-size: 1.2rem; margin: 2rem 0 0.25rem; }
 .phones__lead { color: var(--mute); margin: 0 0 1rem; }

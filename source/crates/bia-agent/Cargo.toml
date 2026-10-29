@@ -25,3 +25,4 @@ sha2 = "0.10"
 unicode-width = "0.1"
 bia-pki = { path = "../bia-pki" }
 bia-speech = { path = "../bia-speech" }
+bia-mcp = { path = "../bia-mcp" }

@@ -71,6 +71,11 @@ meta_mcp() {
            cargo build -q -p bia-mcp-meta && python3 -I tests/integration/meta-mcp-e2e.py "$CARGO_TARGET_DIR/debug" $OUT/bia-meta'
 }
 
+# ignored chats: rules, unread and wake-ups through the messenger MCP with a fake bia-meta
+ignore_mcp() {
+  builder 'cargo build -q -p bia-mcp-meta && python3 -I tests/integration/ignore-e2e.py "$CARGO_TARGET_DIR/debug"'
+}
+
 for stage in "$@"; do
   case $stage in
     unit)
@@ -78,6 +83,7 @@ for stage in "$@"; do
     integration)
       run web-mcp-https web_mcp
       run meta-mcp meta_mcp
+      run ignore-mcp ignore_mcp
       run web-markdown node tests/integration/web-md-test.js
       run update-internet-stage env ARCH="$ARCH" tests/integration/update-net-test.sh ;;
     e2e)

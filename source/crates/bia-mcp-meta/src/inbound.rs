@@ -59,16 +59,19 @@ pub fn log(msg: &str) {
 }
 
 /// A message for the model on `<platform>:<chat>`.
-pub fn inbound(identity: &str, chat: &str, id: &str, text: &str, issued: i64) {
+/// Returns what the chat's ignore rules made of it (an ignored one stays unread).
+pub fn inbound(identity: &str, chat: &str, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
     let channel = platform().channel(chat);
     match ctx() {
         Some(c) => c.inbound_at(identity, &channel, id, text, issued),
         None => {
             let issued = if issued > 0 { issued } else { state::now_secs() };
+            let verdict = if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) };
             let mut h = held().lock().unwrap();
             if h.len() < 500 {
                 h.push((identity.into(), channel, id.into(), text.into(), issued));
             }
+            verdict
         }
     }
 }
@@ -153,15 +156,23 @@ fn ban_reply(chat: &str, id: &str) {
     };
     let (chat, id) = (chat.to_string(), id.to_string());
     std::thread::spawn(move || {
-        let h = helper::get();
-        let _ = h.call("read", json!({"chat": chat, "id": id}), QUICK);
+        mark_read(&chat, &id);
         if due {
+            let h = helper::get();
             let _ = h.call("send", json!({"chat": chat, "text": "I've banned you"}), helper::NORMAL);
         }
     });
 }
 
 // --- delivery ---
+
+/// Read receipt for one message. A failed one goes to the log; bia-meta sends it once more
+/// after the next reconnect.
+fn mark_read(chat: &str, id: &str) {
+    if let Err(e) = helper::get().call("read", json!({"chat": chat, "id": id}), QUICK) {
+        log(&format!("{} read {chat} {id}: {e}", platform().name()));
+    }
+}
 
 /// Inbound messages to the model, in order per chat.
 fn lanes() -> &'static bia_mcp::lanes::Lanes {
@@ -268,9 +279,12 @@ fn deliver(ev: &Value, live: bool) {
     let ev = ev.clone();
     let _ = std::thread::Builder::new().name("meta-in".into()).spawn(move || {
         let mut turn = turn;
-        let h = helper::get();
-        // read as soon as it arrives: downloads and transcripts take a while
-        let _ = h.call("read", json!({"chat": chat, "id": id}), QUICK);
+        // read as soon as it arrives: downloads and transcripts take a while; an ignored
+        // chat stays unread unless the finished message wakes the model
+        let ignoring = bia_mcp::ignore::ignoring(&platform().channel(&chat));
+        if !ignoring {
+            mark_read(&chat, &id);
+        }
         let mut parts: Vec<String> = Vec::new();
         if let Some(r) = ev.get("reply").filter(|r| r.is_object()) {
             let from = if b(r, "me") { "you".to_string() } else { label(s(r, "sender"), s(r, "sender_name")) };
@@ -306,7 +320,9 @@ fn deliver(ev: &Value, live: bool) {
             let heard = bia_speech::transcribe_note_from(&abs, lang.as_deref());
             body = with_transcript(heard, &body);
         }
-        inbound(&who, &chat, &id, &body, ts);
+        if inbound(&who, &chat, &id, &body, ts).read() && ignoring {
+            mark_read(&chat, &id);
+        }
         bump_last_seen(ts);
     });
 }

@@ -943,11 +943,15 @@ impl Wa {
     }
 
     /// [`Wa::inbound`] with when it was written (WhatsApp's timestamp, Unix seconds; 0 = now).
-    pub fn inbound_at(&self, identity: &str, key: &str, id: &str, text: &str, issued: i64) {
+    /// Returns what the chat's ignore rules made of it (an ignored one stays unread).
+    pub fn inbound_at(&self, identity: &str, key: &str, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
         let channel = format!("whatsapp:{key}");
         match self.ctx_clone() {
             Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
-            None => hold_inbound(identity, &channel, id, text, issued),
+            None => {
+                hold_inbound(identity, &channel, id, text, issued);
+                if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) }
+            }
         }
     }
 
@@ -2314,6 +2318,9 @@ impl Wa {
         } else {
             None
         };
+        if bia_mcp::ignore::ignoring(&format!("whatsapp:{key}")) {
+            return Ok(());
+        }
         if let Err(e) = client
             .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
             .await
@@ -2375,7 +2382,9 @@ impl Wa {
                 },
             );
         }
-        self.inbound_at(&label, &key, &info.id, &text, edited);
+        if !self.inbound_at(&label, &key, &info.id, &text, edited).read() {
+            return Ok(());
+        }
         let read_sender = if chat.is_group() { Some(&info.source.sender) } else { None };
         let _ = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await;
         Ok(())
@@ -2439,7 +2448,9 @@ impl Wa {
             format!("[reaction] {emoji}")
         };
         // Envelope id is the reacted-to message (what react/delete tools need).
-        self.inbound_at(&label, &key, &target_id, &body, ts);
+        if !self.inbound_at(&label, &key, &target_id, &body, ts).read() {
+            return Ok(());
+        }
 
         let read_sender = if chat.is_group() {
             Some(&info.source.sender)
@@ -2573,11 +2584,15 @@ impl Wa {
 
         // Read as soon as it arrives: downloading media and transcribing a voice note
         // take a while, and the sender should not wait for them to see it was received.
-        if let Err(e) = client
-            .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
-            .await
-        {
-            self.log(format!("mark_read chat={key}: {e}"));
+        // An ignored chat stays unread unless the finished message wakes the model.
+        let ignoring = bia_mcp::ignore::ignoring(&format!("whatsapp:{key}"));
+        if !ignoring {
+            if let Err(e) = client
+                .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
+                .await
+            {
+                self.log(format!("mark_read chat={key}: {e}"));
+            }
         }
         let mut deliver = text.clone();
         if let Some(r) = self.reply_note(&client, &key, base).await {
@@ -2622,7 +2637,11 @@ impl Wa {
                 .and_then(|r| r);
             deliver = with_transcript(heard, &deliver, &format!("whatsapp/{rel}"));
         }
-        self.inbound_at(&label, &key, &info.id, &deliver, ts);
+        if self.inbound_at(&label, &key, &info.id, &deliver, ts).read() && ignoring {
+            if let Err(e) = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await {
+                self.log(format!("mark_read chat={key}: {e}"));
+            }
+        }
         Ok(())
     }
 

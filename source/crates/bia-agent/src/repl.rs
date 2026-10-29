@@ -2373,6 +2373,7 @@ now: {now}", done.join("\n")), failed)
         self.collect_inbound();
         // Not counted: a finished background send alone is no reason for another round.
         self.record_outbox_notes();
+        self.record_ignored_note();
         let jobs = std::mem::take(&mut self.job_ready);
         let n_jobs = jobs.len();
         for ib in &jobs {
@@ -2530,6 +2531,15 @@ now: {now}", done.join("\n")), failed)
         self.push_history(Msg::user(env));
     }
 
+    /// How many messages ignored chats had since the model was last told (at most every
+    /// quarter of an hour), as one quiet `system|ignored` line riding with the turn.
+    fn record_ignored_note(&mut self) {
+        let Some(text) = crate::ignored::note() else { return };
+        let env = envelope(ID_SYSTEM, crate::ignored::CH_IGNORED, crate::clock::now(), &crate::console::mint_msg_id(), &text);
+        self.log("system", &text);
+        self.push_history(Msg::user(env));
+    }
+
     /// Queue a `system|console|…` message for the model (answered at the next turn).
     pub fn system_message(&mut self, text: &str) {
         let env = envelope(
@@ -2568,6 +2578,7 @@ now: {now}", done.join("\n")), failed)
     fn turn_inner(&mut self, messages: Vec<Inbound>) {
         self.tools.dream.set_ctx(self.ctx_budget(), self.live_tokens());
         self.record_outbox_notes();
+        self.record_ignored_note();
         for ib in &messages {
             self.record_inbound(ib);
         }

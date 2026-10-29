@@ -35,6 +35,33 @@
    "size_name": "parakeet",
    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
   },
+  "shenava-fa": {
+   "files": [
+    {
+     "kind": "model",
+     "note": "",
+     "sha256": "ec66d191f1eee10a1cc4b58ce5d2d328e160193975e118139e4600102550255b",
+     "size": 116700660,
+     "url": "https://huggingface.co/Reza2kn/Shenava-Rizeh-v1.0-sherpa-onnx/resolve/57173ab4b3f6a646e1664e02f8bbec5a9386cabc/model.onnx"
+    },
+    {
+     "kind": "tokens",
+     "note": "",
+     "sha256": "8e192963f6e666dfa5721e5cbd4710bc1ef592460a45f08cefc94b2db16a6954",
+     "size": 12236,
+     "url": "https://huggingface.co/Reza2kn/Shenava-Rizeh-v1.0-sherpa-onnx/resolve/57173ab4b3f6a646e1664e02f8bbec5a9386cabc/tokens.txt"
+    }
+   ],
+   "kind": "nemo_ctc",
+   "langs": [
+    "fa"
+   ],
+   "note": "Shenava Rizeh v1.0 (Apache-2.0): Persian only, about 3x fewer errors than whisper-small and 40x faster; numbers come out as words",
+   "sha256": "",
+   "size": 0,
+   "size_name": "shenava",
+   "url": ""
+  },
   "whisper-base": {
    "kind": "whisper",
    "langs": [],
