@@ -200,9 +200,18 @@ fn rel(p: &Path) -> String {
 }
 
 pub fn transcribe(file: &str, lang: Option<&str>, model: Option<&str>) -> Result<String, String> {
+    let reg = registry::current();
+    let installed = || reg.asr.keys().cloned().collect::<Vec<_>>().join(", ");
     let path = files_path(file);
     if !path.exists() {
+        if reg.asr.contains_key(file) {
+            return Err(format!("{file} is a speech model: file is the audio to transcribe, model={file} picks the model"));
+        }
         return Err(format!("{} not found", path.display()));
+    }
+    let model = model.filter(|m| !m.is_empty());
+    if let Some(m) = model.filter(|m| !reg.asr.contains_key(*m)) {
+        return Err(format!("no speech model {m:?}; installed: {}", installed()));
     }
     let forced = match lang.filter(|l| !l.is_empty()) {
         Some(l) => {
@@ -214,7 +223,7 @@ pub fn transcribe(file: &str, lang: Option<&str>, model: Option<&str>) -> Result
         }
         None => None,
     };
-    let heard = bia_speech::transcribe_file(&path, forced.as_deref(), model.filter(|m| !m.is_empty()))?;
+    let heard = bia_speech::transcribe_file(&path, forced.as_deref(), model)?;
     let mut out = heard.text();
     if out.is_empty() {
         out = if heard.parts > 0 {

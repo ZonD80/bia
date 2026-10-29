@@ -1,6 +1,6 @@
 {
   "name": "instagram",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "Instagram direct messages: read and send your Instagram account's chats here, never through the browser. A real user, not a bot: chats, messages, photos and videos, voice messages, reactions, edits, unsends, groups, pins, bans and blocks. The login is taken from the Instagram session in bia's Chrome. Received files are saved in /home/bia/files/inbox/instagram/; voice messages arrive transcribed as [speech <lang>]; shared posts and reels arrive as [shared] lines with their link; edits, unsends and reactions as [edited <id>], [deleted] and [reaction]. No calls. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-instagram",

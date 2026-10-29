@@ -115,11 +115,11 @@ fn main() {
         )
         .tool(
             "transcribe",
-            "Transcribe an audio file (voice note, recording; any format ffmpeg reads) with language detection per phrase: [speech ru] … [en] …; a ? after a code marks a language not learned yet (rough). lang forces one language. model overrides the voice-note model (whisper-tiny/base/small, if installed).",
+            "Transcribe an audio file (voice note, recording; any format ffmpeg reads) with language detection per phrase: [speech ru] … [en] …; a ? after a code marks a language not learned yet (rough). lang forces one language. model overrides the voice-note model by its name in lang_list (whisper-small, parakeet-v3, shenava-fa…).",
             json!({"type": "object", "required": ["file"], "properties": {
-                "file": {"type": "string", "description": "path under /home/bia/files or absolute"},
+                "file": {"type": "string", "description": "the audio: path under /home/bia/files or absolute"},
                 "lang": {"type": "string"},
-                "model": {"type": "string"}
+                "model": {"type": "string", "description": "an installed speech model's name, e.g. whisper-small"}
             }}),
             |_, a| ops::transcribe(arg_str(&a, "file")?, arg_str_opt(&a, "lang"), arg_str_opt(&a, "model")),
         )

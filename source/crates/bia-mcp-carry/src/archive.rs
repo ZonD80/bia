@@ -587,45 +587,37 @@ fn copy_any(ctx: &Ctx, label: &str, src: &Path, dst: &Path, exclude: Option<&Pat
     Ok(())
 }
 
-/// Live MCP programs already on this machine (`bin`, `mcp.json`, `native-host`).
-/// Unfold/update restore `/home/bia` from an archive over them, then put these back so
-/// a backup cannot replace newer system binaries that already exist.
-fn keep_image_mcp_programs() -> Result<Scratch, String> {
-    let dir = std::env::temp_dir().join(format!("bia-mcp-keep-{}", std::process::id()));
+/// The shipped MCP folders already on this machine (the image's): unfold/update restore
+/// `/home/bia` from an archive over them, then put every file the image ships back, so a
+/// backup cannot replace newer programs or data (a speech catalog, a README) with its
+/// older copies. Files only the backup has stay.
+fn keep_image_mcps() -> Result<Scratch, String> {
+    keep_image_mcps_from(&PathBuf::from(format!("{HOME}/MCPs")))
+}
+
+fn keep_image_mcps_from(mcps: &Path) -> Result<Scratch, String> {
+    // on disk, not /tmp (RAM): node runtimes and libntgcalls are hundreds of MB
+    let tmp = if cfg!(test) { std::env::temp_dir() } else { PathBuf::from("/var/tmp") };
+    let dir = tmp.join(format!(".bia-mcp-keep-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let mcps = PathBuf::from(format!("{HOME}/MCPs"));
-    if let Ok(rd) = fs::read_dir(&mcps) {
+    if let Ok(rd) = fs::read_dir(mcps) {
         for ent in rd.flatten() {
-            if !ent.path().is_dir() {
-                continue;
-            }
             let name = ent.file_name();
-            let name_s = name.to_string_lossy();
-            if !rel_ok(Path::new(&*name_s)) {
+            if !ent.path().is_dir() || !rel_ok(Path::new(&name)) {
                 continue;
             }
-            let dst = dir.join(&name);
-            for keep in ["bin", "mcp.json", "native-host"] {
-                let from = ent.path().join(keep);
-                if !from.exists() {
-                    continue;
-                }
-                let to = dst.join(keep);
-                if from.is_dir() {
-                    copy_tree(None, &from, &to, &|_| false)?;
-                } else if from.is_file() {
-                    fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
-                    copy_file(None, &from, &to)?;
-                }
-            }
+            copy_tree(None, &ent.path(), &dir.join(&name), &|_| false)?;
         }
     }
     Ok(Scratch(dir))
 }
 
-fn put_back_mcp_programs(ctx: &Ctx, stash: &Path) -> Result<(), String> {
-    let dest_root = PathBuf::from(format!("{HOME}/MCPs"));
+fn put_back_image_mcps(ctx: &Ctx, stash: &Path) -> Result<(), String> {
+    put_back_image_mcps_into(ctx, stash, &PathBuf::from(format!("{HOME}/MCPs")))
+}
+
+fn put_back_image_mcps_into(ctx: &Ctx, stash: &Path, dest_root: &Path) -> Result<(), String> {
     let Ok(rd) = fs::read_dir(stash) else {
         return Ok(());
     };
@@ -633,22 +625,13 @@ fn put_back_mcp_programs(ctx: &Ctx, stash: &Path) -> Result<(), String> {
         if !ent.path().is_dir() {
             continue;
         }
-        let name = ent.file_name();
-        let dst = dest_root.join(&name);
-        fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
-        for keep in ["bin", "mcp.json", "native-host"] {
-            let from = ent.path().join(keep);
-            if !from.exists() {
-                continue;
-            }
-            let to = dst.join(keep);
-            if from.is_dir() {
-                let _ = fs::remove_dir_all(&to);
-                copy_tree(Some(ctx), &from, &to, &|_| false)?;
-            } else if from.is_file() {
-                copy_file(Some(ctx), &from, &to)?;
-            }
+        let dst = dest_root.join(ent.file_name());
+        // binaries as a whole: none of an older release's may stay
+        let bin = ent.path().join("bin");
+        if bin.is_dir() {
+            let _ = fs::remove_dir_all(dst.join("bin"));
         }
+        copy_tree(Some(ctx), &ent.path(), &dst, &|_| false)?;
     }
     Ok(())
 }
@@ -692,14 +675,13 @@ fn etc_members(base: &Path, m: &mut Members) -> Result<(), String> {
     Ok(())
 }
 fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode) -> Result<(), String> {
+    // Keep the image's MCP files: the archive's may be from another release,
+    // and Update has already put the image's in place.
+    let keep = keep_image_mcps()?;
     let packed = stage.join("home/bia");
     if packed.is_dir() {
-        // Keep the image's MCP programs: archive binaries may be from another release,
-        // and Update has already put the image's binaries in place.
-        let keep = keep_image_mcp_programs()?;
         ctx.log(format!("unfold: restoring {}", HOME));
         copy_any(ctx, "unfold", &packed, Path::new(HOME), None, 0)?;
-        put_back_mcp_programs(ctx, &keep.0)?;
     } else {
         let toml = stage.join("bia.toml");
         if toml.is_file() {
@@ -715,6 +697,12 @@ fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode) -> Result<(), String> {
             copy_tree(Some(ctx), &mcps, &PathBuf::from(format!("{HOME}/MCPs")), &|n| {
                 n == "bin" || n == "native-host" || (skip_json && n == "mcp.json")
             })?;
+            if !skip_json {
+                // a land keeps the archive's mcp.json (its MCP settings)
+                for ent in fs::read_dir(&keep.0).into_iter().flatten().flatten() {
+                    let _ = fs::remove_file(ent.path().join("mcp.json"));
+                }
+            }
         }
         let chrome = stage.join("chrome-profile");
         if chrome.is_dir() {
@@ -728,6 +716,7 @@ fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode) -> Result<(), String> {
             copy_tree(Some(ctx), &chrome, &dst, &|n| CHROME_SKIP.contains(&n))?;
         }
     }
+    put_back_image_mcps(ctx, &keep.0)?;
     let etc = stage.join("etc");
     if etc.is_dir() {
         apply_etc(&etc, mode)?;
@@ -1997,6 +1986,34 @@ curl:
         assert_eq!(super::apt_status("pmstatus:libc6:arm64:50:Unpacking libc6:arm64"), Some((65, "Unpacking libc6:arm64".into())));
         assert_eq!(super::apt_status("pmerror:x.deb:20:failed"), None);
         assert_eq!(super::apt_status("Setting up jq (1.6) ..."), None);
+    }
+
+    #[test]
+    fn unfold_keeps_every_image_mcp_file() {
+        let dir = std::env::temp_dir().join(format!("bia-carry-image-mcps-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let live = dir.join("MCPs");
+        // the image's lang MCP: a new catalog and binary
+        fs::create_dir_all(live.join("lang/bin/x86_64")).unwrap();
+        fs::write(live.join("lang/bin/x86_64/bia-mcp-lang"), b"new-bin").unwrap();
+        fs::write(live.join("lang/catalog.json"), b"new-catalog").unwrap();
+        fs::write(live.join("lang/mcp.json"), b"new-json").unwrap();
+        let keep = super::keep_image_mcps_from(&live).unwrap();
+        // the backup restored over it: older files, a stale binary, a file of its own
+        fs::write(live.join("lang/catalog.json"), b"old-catalog").unwrap();
+        fs::write(live.join("lang/mcp.json"), b"old-json").unwrap();
+        fs::create_dir_all(live.join("lang/bin/aarch64")).unwrap();
+        fs::write(live.join("lang/bin/aarch64/bia-mcp-lang"), b"old-bin").unwrap();
+        fs::write(live.join("lang/notes.txt"), b"mine").unwrap();
+        let ctx = bia_mcp::Ctx::console();
+        super::put_back_image_mcps_into(&ctx, &keep.0, &live).unwrap();
+        assert_eq!(fs::read(live.join("lang/catalog.json")).unwrap(), b"new-catalog");
+        assert_eq!(fs::read(live.join("lang/mcp.json")).unwrap(), b"new-json");
+        assert_eq!(fs::read(live.join("lang/bin/x86_64/bia-mcp-lang")).unwrap(), b"new-bin");
+        assert!(!live.join("lang/bin/aarch64").exists());
+        assert_eq!(fs::read(live.join("lang/notes.txt")).unwrap(), b"mine");
+        drop(keep);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

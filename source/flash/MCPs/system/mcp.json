@@ -1,6 +1,6 @@
 {
   "name": "system",
-  "version": "1.7.4",
+  "version": "1.7.5",
   "description": "The cloud model (system_fmm_*: an API key, or a ChatGPT plan with system_fmm_chatgpt), download links for files (system_share_file), and asking the person for a step you cannot do (system_ask_human). The web address and certificates are mcp/web; disks, network and packages are bash.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-system",

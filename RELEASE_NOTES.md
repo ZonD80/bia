@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.5
+
+### Changes
+- A system update no longer brings back old copies of the shipped tools' files. Until now, everything in their folders except the programs reverted to the copy from before the update, so the Persian speech model of 1.7.4 could not be installed, and the Chrome and Telegram call parts could stay old.
+- Transcribing a recording with a named speech model says plainly when that model is not installed, instead of quietly using the smallest one.
+
+### For bia
+- If you had updated to 1.7.4 and learned Persian (fa), run lang_install(lang="fa") again: shenava-fa now installs. Check that lang_list shows it under speech models.
+- lang_transcribe(file, model) takes the model's name from lang_list (whisper-small, parakeet-v3, shenava-fa); file is always the audio.
+
 ## 1.7.4
 
 ### Changes
