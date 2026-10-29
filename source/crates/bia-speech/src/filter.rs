@@ -45,6 +45,81 @@ fn strip_brackets(t: &str) -> String {
     out
 }
 
+/// Whisper's sound-event captions are not words: "[MUSIC PLAYING]", "[NON-ENGLISH
+/// SPEECH]", "(speaking in foreign language)", "[INAUDIBLE]", "♪". Returns the text
+/// without them and whether any were there. A bracket that holds ordinary words
+/// ("call me (after eight)") stays.
+pub fn strip_captions(text: &str) -> (String, bool) {
+    const EVENTS: &[&str] = &[
+        "music", "inaudible", "speech", "speaking", "foreign", "language", "applause", "laugh", "laughs",
+        "laughing", "laughter", "noise", "silence", "blank_audio", "blank", "audio", "unintelligible",
+        "crosstalk", "indistinct", "cough", "coughing", "sigh", "sighs", "breathing", "background",
+        "playing", "upbeat", "sound", "sounds", "static", "beep", "клацание", "музыка", "неразборчиво",
+        "смех", "musik", "música", "musique",
+    ];
+    let is_caption = |inner: &str| {
+        let w = words(inner);
+        let shouting = inner.chars().any(|c| c.is_alphabetic()) && !inner.chars().any(|c| c.is_lowercase());
+        w.is_empty() || shouting || w.iter().any(|x| EVENTS.contains(&x.as_str()))
+    };
+    let mut out = String::new();
+    let mut found = false;
+    let mut rest = text;
+    while let Some(i) = rest.find(['[', '(']) {
+        let close = if rest[i..].starts_with('[') { ']' } else { ')' };
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        // an unclosed bracket runs to the end
+        let (inner, next) = match after.find(close) {
+            Some(j) => (&after[..j], &after[j + 1..]),
+            None => (after, ""),
+        };
+        if is_caption(inner) {
+            found = true;
+        } else {
+            out.push_str(&rest[i..rest.len() - next.len()]);
+        }
+        rest = next;
+    }
+    out.push_str(rest);
+    let notes: String = out.chars().filter(|c| !matches!(c, '♪' | '♫')).collect();
+    found |= notes.len() != out.len();
+    let clean = notes.split_whitespace().collect::<Vec<_>>().join(" ");
+    (clean.trim_matches(|c: char| c == '-' || c.is_whitespace()).to_string(), found)
+}
+
+/// Whisper decoder loops ("azért azért azért …", "and then and then and then …"): a
+/// word or phrase of up to 3 words repeated 4+ times in a row is kept once. Returns
+/// the text and whether a loop was cut.
+pub fn collapse_loops(text: &str) -> (String, bool) {
+    let toks: Vec<&str> = text.split_whitespace().collect();
+    let norm: Vec<String> = toks
+        .iter()
+        .map(|t| t.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect())
+        .collect();
+    let mut keep = Vec::new();
+    let mut cut = false;
+    let mut i = 0;
+    'scan: while i < toks.len() {
+        for n in 1..=3 {
+            let same = |k: usize| i + (k + 1) * n <= toks.len() && (0..n).all(|j| !norm[i + j].is_empty() && norm[i + j] == norm[i + k * n + j]);
+            let mut reps = 1;
+            while same(reps) {
+                reps += 1;
+            }
+            if reps >= 4 {
+                keep.extend_from_slice(&toks[i..i + n]);
+                i += reps * n;
+                cut = true;
+                continue 'scan;
+            }
+        }
+        keep.push(toks[i]);
+        i += 1;
+    }
+    (keep.join(" "), cut)
+}
+
 /// True when `text` (from `secs` seconds of speech) looks like a hallucination.
 pub fn is_hallucination(text: &str, secs: f32) -> bool {
     let t = text.trim();
@@ -117,6 +192,29 @@ mod tests {
         assert!(!is_hallucination("Thank you.", 1.0));
         assert!(!is_hallucination("Can you call me back at eight?", 2.5));
         assert!(!is_hallucination("Привет, я буду в восемь", 2.0));
+    }
+
+    #[test]
+    fn loops() {
+        let (t, cut) = collapse_loops("és azért azért azért azért azért azért az");
+        assert_eq!((t.as_str(), cut), ("és azért az", true));
+        assert_eq!(collapse_loops("and then and then and then and then we left").0, "and then we left");
+        assert_eq!(collapse_loops("no, no, no, I said").0, "no, no, no, I said");
+        assert_eq!(collapse_loops("Привет, как дела?"), ("Привет, как дела?".into(), false));
+    }
+
+    #[test]
+    fn captions() {
+        assert_eq!(
+            strip_captions("[NON-ENGLISH SPEECH] or This time it's much slower, right?"),
+            ("or This time it's much slower, right?".into(), true)
+        );
+        assert_eq!(strip_captions("[INAUDIBLE] [MUSIC PLAYING]"), (String::new(), true));
+        assert_eq!(strip_captions("(speaking in foreign language) ok"), ("ok".into(), true));
+        assert_eq!(strip_captions("♪ la la ♪"), ("la la".into(), true));
+        assert_eq!(strip_captions("Call me (after eight)"), ("Call me (after eight)".into(), false));
+        assert_eq!(strip_captions("Привет, как дела?"), ("Привет, как дела?".into(), false));
+        assert_eq!(strip_captions("hi [Music"), ("hi".into(), true));
     }
 
     #[test]

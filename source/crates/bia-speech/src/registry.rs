@@ -33,13 +33,15 @@ pub struct Voice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Asr {
-    /// whisper
+    /// whisper, or nemo_transducer (Parakeet: no language detection; `langs` only)
     pub kind: String,
     /// Empty: every language Whisper knows.
     pub langs: Vec<String>,
     pub dir: String,
     pub encoder: String,
     pub decoder: String,
+    /// nemo_transducer only
+    pub joiner: String,
     pub tokens: String,
     pub bundled: bool,
 }
@@ -69,7 +71,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             denoise: true,
-            asr_denoised: false,
+            asr_denoised: true,
             split_pauses: true,
             hallucination_filter: true,
             discovery: true,
@@ -137,6 +139,7 @@ impl Default for Registry {
                 decoder: s(&tiny.join("decoder.onnx")),
                 tokens: s(&tiny.join("tokens.txt")),
                 bundled: true,
+                ..Default::default()
             },
         );
         let mut extras = BTreeMap::new();

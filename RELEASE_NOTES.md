@@ -5,6 +5,22 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.7.3
+
+### Changes
+- Voice messages that switch languages are understood: bia now transcribes them phrase by phrase, each phrase in its own language (cut even at a short breath), instead of forcing one language on the whole message, which turned the other languages into nonsense.
+- Voice messages use a new, much faster speech model, Parakeet (25 European languages, including English, German, Spanish, French, Italian, Russian and Ukrainian): about ten times faster than the best Whisper and as accurate. bia installs it with the first of those languages it learns (on computers with at least 3 GB of memory); phrases in other languages still go to Whisper.
+- What is not speech is no longer passed on as words: "[MUSIC PLAYING]", "[NON-ENGLISH SPEECH]", "(speaking in foreign language)" and repeated-word loops are removed, and a part that gave no words is marked [unclear].
+- With each voice message bia sees how long it was, how many phrases it had, which languages, which model and how long transcribing took, so it can tell when to ask for a repeat.
+- Speech is recognized from the cleaned (denoised) audio by default, which helps in noisy recordings.
+- bia can think with Google's Gemini: give it a key from Google AI Studio (it starts with AIza), in a message or in bia deploy, and it is recognized like the other providers.
+
+### For bia
+- Voice messages now arrive as `[voice message, 17.6s, 5 parts, de+en+es, whisper-small 4.2s] [speech en] … [de] …`; `N.Ns unclear` in that list means part of it gave no words. If much is unclear and it matters, ask the person to repeat or to write.
+- If you have learned a language other than English that Parakeet knows (bg cs da de el es et fi fr hr hu it lt lv mt nl pl pt ro ru sk sl sv uk), the computer has at least 3 GB of memory, and lang_settings shows a file_model other than parakeet-v3: run lang_settings(file_model="parakeet-v3") (a 487 MB download) and tell the owner voice messages are now faster and more accurate. Keep the Whisper model you have (whisper-small or whisper-base): it transcribes the other languages.
+- A workaround script of your own that cut voice messages into pieces for Whisper is no longer needed: lang_transcribe does that now.
+- A Gemini key (AIza…) goes to system_fmm_configure(api_key=…); provider gemini and model gemini-4-argon are filled in, and another Gemini model id (for example gemini-3.8-flash) goes in model.
+
 ## 1.7.2
 
 ### Changes

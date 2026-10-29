@@ -1255,7 +1255,7 @@ impl FlashApp {
                         ui.label("Provider");
                         let r = ui
                             .add(egui::TextEdit::singleline(&mut self.provider).desired_width(160.0))
-                            .on_hover_text("Filled in from the key: openrouter, openai, anthropic, xai, deepseek or qwen");
+                            .on_hover_text("Filled in from the key: openrouter, openai, anthropic, gemini, xai, deepseek or qwen");
                         if r.changed() && PROVIDERS.contains(&self.provider.trim()) {
                             self.fetch_models();
                         }

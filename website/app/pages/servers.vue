@@ -332,7 +332,7 @@ const takeoverSteps = [
   {
     title: 'Answer a few questions',
     text: 'The API key for bia’s cloud brain, your language, and optional setup instructions for bia. The command finds the disk, the network (with each card’s hardware address) and how the server starts, and wakes bia’s brain once to check the key.',
-    screen: '== this machine: x86_64, UEFI, 4096 MiB RAM\nAPI key for bia\'s model (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek, Qwen): sk-…\nOwner\'s language (code or name) [en]:\nSetup instructions for bia (optional): bia\'s model reads them once at its first boot\n> Connect to the bia at https://203.0.113.5 and set up trust with it.\n>\nPublic address or DNS name of this machine, if it is behind NAT or has a name (optional):',
+    screen: '== this machine: x86_64, UEFI, 4096 MiB RAM\nAPI key for bia\'s model (OpenRouter, OpenAI, Anthropic, Gemini, xAI, DeepSeek, Qwen): sk-…\nOwner\'s language (code or name) [en]:\nSetup instructions for bia (optional): bia\'s model reads them once at its first boot\n> Connect to the bia at https://203.0.113.5 and set up trust with it.\n>\nPublic address or DNS name of this machine, if it is behind NAT or has a name (optional):',
   },
   {
     title: 'Check the plan and confirm',

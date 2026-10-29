@@ -1,5 +1,40 @@
 {
  "asr": {
+  "parakeet-v3": {
+   "kind": "nemo_transducer",
+   "langs": [
+    "bg",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "en",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "hr",
+    "hu",
+    "it",
+    "lt",
+    "lv",
+    "mt",
+    "nl",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "uk"
+   ],
+   "note": "NVIDIA Parakeet TDT 0.6B v3: 25 European languages, about 10x faster than whisper-small and as accurate; voice notes in other languages use the best Whisper installed",
+   "sha256": "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
+   "size": 487170055,
+   "size_name": "parakeet",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
+  },
   "whisper-base": {
    "kind": "whisper",
    "langs": [],

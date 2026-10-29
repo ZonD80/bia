@@ -43,6 +43,8 @@ pub struct Voice {
 #[serde(default)]
 pub struct Asr {
     pub kind: String,
+    /// Languages it transcribes; empty = every language Whisper knows.
+    pub langs: Vec<String>,
     pub size_name: String,
     pub note: String,
     pub url: String,

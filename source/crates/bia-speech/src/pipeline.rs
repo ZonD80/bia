@@ -1,9 +1,13 @@
 //! Speech segments → tagged text.
 //!
-//! For each VAD segment (split at short pauses): language identification on the
+//! Calls, for each VAD segment (split at short pauses): language identification on the
 //! (cleaned) audio, routing to an installed language with hysteresis, discovery of a
 //! language that is heard but not installed, merging neighbours of the same language
 //! into runs, Whisper per run with the language forced, then the filters.
+//!
+//! Voice notes and files: Whisper once per chunk (segments joined into phrases) with
+//! its own language detection, so a note that switches languages comes out right
+//! (Whisper keeps one language per pass: a whole mixed note became nonsense).
 
 use crate::filter;
 use crate::langs;
@@ -19,6 +23,14 @@ const SWITCH_SECS: f32 = 1.5;
 /// A not-installed language is transcribed in that language only from this long a
 /// segment (or once discovery has enough evidence); otherwise the current one is used.
 const FOREIGN_SECS: f32 = 3.0;
+/// Voice notes: a language switch often comes after a breath of only 0.2 s, which
+/// Silero keeps inside one segment. Segments longer than `BREATH_MIN_SEG` are also cut
+/// at quiet stretches of `BREATH_SECS`, `BREATH_DB` below the segment's speech level.
+const BREATH_SECS: f32 = 0.15;
+const BREATH_DB: f32 = 20.0;
+const BREATH_MIN_SEG: f32 = 3.0;
+/// The longest chunk given to Whisper in one pass (its window is 30 s).
+const CHUNK_SECS: f32 = 25.0;
 
 /// Per-stream language memory (one call participant, or one file).
 #[derive(Debug)]
@@ -148,6 +160,12 @@ pub struct Heard {
     /// For the model: a new language was learned automatically from this audio.
     pub notice: Option<String>,
     pub secs: f32,
+    /// Voice notes: chunks transcribed, speech that gave no words, the model and how
+    /// long it took.
+    pub parts: usize,
+    pub unclear_secs: f32,
+    pub model: String,
+    pub ms: u64,
 }
 
 impl Heard {
@@ -171,6 +189,37 @@ impl Heard {
             last = Some((r.lang.as_str(), r.installed));
         }
         out
+    }
+
+    /// `17.6s, 5 parts, en+de+es, whisper-small 4.2s`, plus the speech that gave no
+    /// words; so the model can judge the transcript (and ask again when much is unclear).
+    pub fn summary(&self) -> String {
+        let mut v = vec![format!("{:.1}s", self.secs)];
+        if self.parts > 1 {
+            v.push(format!("{} parts", self.parts));
+        }
+        let mut langs = self.langs();
+        langs.sort();
+        langs.dedup();
+        if !langs.is_empty() {
+            v.push(langs.join("+"));
+        }
+        if !self.model.is_empty() {
+            v.push(format!("{} {:.1}s", self.model, self.ms as f32 / 1000.0));
+        }
+        if self.unclear_secs >= 0.5 {
+            v.push(format!("{:.1}s unclear", self.unclear_secs));
+        }
+        v.join(", ")
+    }
+
+    /// The line a chat MCP puts before a received voice message's own text.
+    pub fn voice_head(&self) -> String {
+        let spoken = self.text();
+        if spoken.is_empty() {
+            return format!("[voice message, {}: no words recognized]", self.summary());
+        }
+        format!("[voice message, {}] {spoken}", self.summary())
     }
 
     pub fn langs(&self) -> Vec<String> {
@@ -252,6 +301,10 @@ pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts
                 }
             }
         }
+    }
+
+    if st.file && opts.forced.is_none() {
+        return transcribe_chunks(reg, pieces, clean, st, opts, heard);
     }
 
     // Language per segment.
@@ -383,15 +436,252 @@ pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts
     Ok(heard)
 }
 
-/// Whisper (tiny especially) sometimes ends after the first sentence of a longer
-/// segment. When the text is far too short for the audio, split at the quietest point
-/// near the middle and transcribe both halves; keep whichever result is longer.
+/// Cut long segments at short quiet stretches of `level` (the same audio, possibly
+/// cleaned): 20 ms frames whose energy is `BREATH_DB` below the segment's loud frames.
+fn split_breaths(pieces: Vec<Segment>, level: &[f32]) -> Vec<Segment> {
+    const FRAME: usize = 320;
+    let mut out = Vec::new();
+    for p in pieces {
+        let end = (p.start + p.samples.len()).min(level.len());
+        if secs(p.samples.len()) < BREATH_MIN_SEG || p.start >= end {
+            out.push(p);
+            continue;
+        }
+        let db: Vec<f32> = level[p.start..end]
+            .chunks(FRAME)
+            .map(|f| 10.0 * (f.iter().map(|x| x * x).sum::<f32>() / f.len() as f32 + 1e-10).log10())
+            .collect();
+        let mut sorted = db.clone();
+        sorted.sort_by(f32::total_cmp);
+        let quiet = sorted[sorted.len() * 9 / 10] - BREATH_DB;
+        let need = (BREATH_SECS * RATE / FRAME as f32).ceil() as usize;
+        // cut points: the middle of each quiet run, leaving pieces of at least 0.5 s
+        let mut cuts = vec![0usize];
+        let mut run = 0usize;
+        for (i, &d) in db.iter().enumerate().chain(std::iter::once((db.len(), &f32::MAX))) {
+            if d < quiet {
+                run += 1;
+                continue;
+            }
+            if run >= need {
+                let mid = (i - run / 2) * FRAME;
+                if secs(mid - cuts.last().unwrap()) >= 0.5 && secs(p.samples.len().saturating_sub(mid)) >= 0.5 {
+                    cuts.push(mid);
+                }
+            }
+            run = 0;
+        }
+        cuts.push(p.samples.len());
+        for w in cuts.windows(2) {
+            out.push(Segment { start: p.start + w[0], samples: p.samples[w[0]..w[1]].to_vec() });
+        }
+    }
+    out
+}
+
+/// Voice notes: neighbouring segments that tiny's language identification puts in
+/// the same language form one chunk (one Whisper pass each, at most `CHUNK_SECS`); a
+/// segment too short to identify goes with its nearest identified neighbour.
+fn chunks(pieces: &[Segment], lid: &[Option<String>]) -> Vec<(std::ops::Range<usize>, Option<String>)> {
+    // silence between two segments, in samples (0 for the segment itself)
+    let gap = |a: &Segment, b: &Segment| {
+        let (x, y) = if a.start <= b.start { (a, b) } else { (b, a) };
+        y.start.saturating_sub(x.start + x.samples.len())
+    };
+    let filled: Vec<Option<&str>> = (0..pieces.len())
+        .map(|i| {
+            if lid[i].is_some() {
+                return lid[i].as_deref();
+            }
+            (0..pieces.len())
+                .filter(|&k| lid[k].is_some())
+                .min_by_key(|&k| (gap(&pieces[i], &pieces[k]), k > i))
+                .and_then(|k| lid[k].as_deref())
+        })
+        .collect();
+    let mut out: Vec<(std::ops::Range<usize>, Option<String>)> = Vec::new();
+    for (i, p) in pieces.iter().enumerate() {
+        if let Some((last, _)) = out.last_mut() {
+            let span = secs(p.start + p.samples.len() - pieces[last.start].start);
+            if filled[i] == filled[last.start] && span <= CHUNK_SECS {
+                last.end = i + 1;
+                continue;
+            }
+        }
+        out.push((i..i + 1, filled[i].map(str::to_string)));
+    }
+    out
+}
+
+/// One chunk's words: Whisper sound-event captions removed, hallucinations dropped
+/// (the reason goes to `dropped`); `None` = no words in it.
+fn words_of(text: &str, d: f32, filter_on: bool, dropped: &mut Vec<String>) -> Option<String> {
+    let (clean, captions) = filter::strip_captions(text);
+    if captions {
+        dropped.push(format!("captions: {}", text.trim()));
+    }
+    let (clean, looped) = filter::collapse_loops(&clean);
+    if looped {
+        dropped.push(format!("decoder loop: {}", text.trim()));
+    }
+    if clean.is_empty() {
+        return None;
+    }
+    if filter_on && filter::is_hallucination(&clean, d) {
+        dropped.push(format!("hallucination: {clean}"));
+        return None;
+    }
+    Some(clean)
+}
+
+/// Voice notes: one pass per chunk. A transducer voice-note model (Parakeet) takes the
+/// chunks in its languages; Whisper (the voice-note model, or the best one installed)
+/// the rest, with its own language detection. A short chunk takes the language of its
+/// nearest decoded neighbour, and so does one Whisper heard as a language that is not
+/// learned while that neighbour's is.
+fn transcribe_chunks(reg: &Registry, pieces: Vec<Segment>, clean: Vec<Vec<f32>>, st: &mut LangState, opts: &Opts, mut heard: Heard) -> Result<Heard, String> {
+    let t0 = std::time::Instant::now();
+    let s = &reg.settings;
+    // only to group segments (and to route to a transducer): Whisper decides each chunk's language
+    let lid: Vec<Option<String>> = {
+        let slid = models::slid(reg)?;
+        let slid = slid.lock().map_err(|_| "slid lock")?;
+        clean.iter().map(|c| if secs(c.len()) >= LID_MIN_SECS { slid.detect(c).ok().filter(|l| !l.is_empty()) } else { None }).collect()
+    };
+    let groups = chunks(&pieces, &lid);
+    let audio: Vec<Vec<f32>> = groups
+        .iter()
+        .map(|(g, _)| concat(g.clone().map(|k| if s.asr_denoised { clean[k].as_slice() } else { pieces[k].samples.as_slice() })))
+        .collect();
+    let main_id = if reg.asr.contains_key(opts.asr) { opts.asr } else { registry::BUNDLED_ASR };
+    let main = models::recognizer(reg, main_id)?;
+    let main = main.lock().map_err(|_| "recognizer lock")?;
+    let whisper_id = if main.is_whisper() { main_id } else { models::best_whisper(reg) };
+    // what a transducer takes: a chunk identified in one of its languages (or, with
+    // nothing identified, the language bia is in)
+    let to_main: Vec<bool> = groups
+        .iter()
+        .map(|(_, l)| main.is_whisper() || main.langs().contains(l.as_ref().unwrap_or(&st.current)))
+        .collect();
+    let mut used = vec![];
+    // (language, words) per chunk; None = not decoded yet
+    let mut out: Vec<Option<(String, Option<String>)>> = vec![None; groups.len()];
+    if !main.is_whisper() {
+        // chunk by chunk: over longer audio (or chunks joined with gaps) Parakeet stops early
+        for i in (0..groups.len()).filter(|&i| to_main[i]) {
+            let (text, _) = main.decode_lang(&audio[i], "")?;
+            let lang = groups[i].1.clone().unwrap_or_else(|| st.current.clone());
+            out[i] = Some((lang, words_of(&text, secs(audio[i].len()), s.hallucination_filter, &mut heard.dropped)));
+        }
+        if to_main.iter().any(|&m| m) {
+            used.push(main_id);
+        }
+    }
+    if out.iter().any(Option::is_none) {
+        let wrec = if main.is_whisper() { None } else { Some(models::recognizer(reg, whisper_id)?) };
+        let wguard = match &wrec {
+            Some(r) => Some(r.lock().map_err(|_| "recognizer lock")?),
+            None => None,
+        };
+        let rec: &models::Recognizer = wguard.as_deref().unwrap_or(&main);
+        let decode = |a: &[f32], lang: &str, dropped: &mut Vec<String>| -> Result<(String, Option<String>), String> {
+            let (mut text, got) = rec.decode_lang(a, lang)?;
+            if !got.is_empty() && too_short(&text, secs(a.len()), &got) {
+                // Whisper may stop after the first sentence: split and keep the longer
+                let again = decode_robust(rec, a, &got, 0)?;
+                if again.chars().count() > text.chars().count() {
+                    text = again;
+                }
+            }
+            Ok((got, words_of(&text, secs(a.len()), s.hallucination_filter, dropped)))
+        };
+        let todo: Vec<usize> = (0..groups.len()).filter(|&i| out[i].is_none()).collect();
+        for &i in &todo {
+            if secs(audio[i].len()) >= LID_MIN_SECS || groups.len() == 1 {
+                out[i] = Some(decode(&audio[i], "", &mut heard.dropped)?);
+            }
+        }
+        let neighbour = |out: &[Option<(String, Option<String>)>], i: usize| {
+            (0..out.len())
+                .filter(|&k| k != i && matches!(&out[k], Some((l, Some(_))) if reg.is_enabled(l)))
+                .min_by_key(|&k| k.abs_diff(i))
+                .and_then(|k| out[k].as_ref().map(|(l, _)| l.clone()))
+        };
+        for &i in &todo {
+            let near = neighbour(&out, i);
+            let d = secs(audio[i].len());
+            let redo = match &out[i] {
+                None => true,
+                // a short chunk heard as a language that is not learned, between learned ones
+                Some((l, _)) if !reg.is_enabled(l) => d < FOREIGN_SECS,
+                // a very short one where Whisper disagrees with tiny and the neighbour
+                Some((l, _)) => d < SWITCH_SECS + 0.5 && groups[i].1.as_ref().is_some_and(|t| t != l && near.as_ref() == Some(t)),
+            };
+            if !redo {
+                continue;
+            }
+            match near {
+                Some(l) => out[i] = Some(decode(&audio[i], &l, &mut heard.dropped)?),
+                None if out[i].is_none() => out[i] = Some(decode(&audio[i], "", &mut heard.dropped)?),
+                None => {}
+            }
+        }
+        used.push(whisper_id);
+    }
+    let mut unclear_before = false;
+    for (i, o) in out.into_iter().enumerate() {
+        let d = secs(audio[i].len());
+        let Some((lang, words)) = o else { continue };
+        let Some(words) = words else {
+            heard.unclear_secs += d;
+            unclear_before = true;
+            continue;
+        };
+        let lang = if lang.is_empty() { st.current.clone() } else { lang };
+        if d >= LID_MIN_SECS && langs::can_hear(&lang) {
+            st.note(&lang, d);
+        }
+        let installed = reg.is_enabled(&lang);
+        let text = if unclear_before { format!("[unclear] {words}") } else { words };
+        unclear_before = false;
+        match heard.runs.last_mut() {
+            Some(last) if last.lang == lang && last.installed == installed => {
+                last.text.push(' ');
+                last.text.push_str(&text);
+            }
+            _ => heard.runs.push(Run { lang: lang.clone(), installed, text }),
+        }
+        if installed {
+            st.current = lang;
+        }
+    }
+    if unclear_before {
+        if let Some(last) = heard.runs.last_mut() {
+            last.text.push_str(" [unclear]");
+        }
+    }
+    heard.new_lang = st.discover(reg);
+    heard.parts = groups.len();
+    used.dedup();
+    heard.model = used.join("+");
+    heard.ms = t0.elapsed().as_millis() as u64;
+    crate::diag::log(
+        "speech",
+        format!("note {:.1}s: {} segment(s), lid={lid:?}, chunks {:?}, {} ms → {:?} dropped={:?} new_lang={:?}", heard.secs, pieces.len(), groups.iter().map(|(r, l)| (r.clone(), l.clone().unwrap_or_default())).collect::<Vec<_>>(), heard.ms, heard.text(), heard.dropped, heard.new_lang),
+    );
+    Ok(heard)
+}
+
+/// Far less text than `d` seconds of speech hold. Normal speech is 10–15 characters
+/// per second (fewer for CJK scripts).
+fn too_short(text: &str, d: f32, lang: &str) -> bool {
+    let min_chars = if matches!(lang, "zh" | "ja" | "ko" | "yue") { 3.0 } else { 8.0 };
+    d >= 3.0 && (text.chars().count() as f32) < d * min_chars
+}
+
 fn decode_robust(rec: &models::Recognizer, samples: &[f32], lang: &str, depth: u32) -> Result<String, String> {
     let text = rec.decode(samples, lang)?;
-    let d = secs(samples.len());
-    // Normal speech is 10–15 characters per second (fewer for CJK scripts).
-    let min_chars = if matches!(lang, "zh" | "ja" | "ko" | "yue") { 3.0 } else { 8.0 };
-    if depth >= 2 || d < 3.0 || text.chars().count() as f32 >= d * min_chars {
+    if depth >= 2 || !too_short(&text, secs(samples.len()), lang) {
         return Ok(text);
     }
     let cut = quietest(samples, samples.len() * 3 / 10, samples.len() * 7 / 10);
@@ -459,7 +749,13 @@ fn transcribe_file_with(path: &std::path::Path, lang: Option<&str>, asr: Option<
     let mut samples = vec![0.0f32; 8_000];
     samples.extend(decoded);
     let min_silence = if reg.settings.split_pauses { 0.25 } else { 0.5 };
-    let pieces = models::segments(&reg, &samples, min_silence)?;
+    let mut pieces = models::segments(&reg, &samples, min_silence)?;
+    if reg.settings.split_pauses && lang.is_none() {
+        // breaths are found on the cleaned audio (noise fills them); pieces keep the original
+        let den = if reg.settings.denoise { models::denoiser(&reg) } else { None };
+        let cleaned = den.and_then(|d| d.lock().ok().and_then(|d| d.run(&samples).ok())).filter(|c| c.len() == samples.len());
+        pieces = split_breaths(pieces, cleaned.as_deref().unwrap_or(&samples));
+    }
     if pieces.is_empty() {
         return Ok(Heard { secs: 0.0, ..Default::default() });
     }
@@ -542,6 +838,48 @@ mod tests {
     }
 
     #[test]
+    fn breaths_split_long_segments() {
+        let tone = |n: usize| (0..n).map(|i| (i as f32 * 0.05).sin() * 0.5).collect::<Vec<f32>>();
+        // 4 s speech, 0.25 s breath, 3 s speech: one VAD segment, two pieces
+        let mut x = tone(64_000);
+        x.extend(vec![0.001f32; 4_000]);
+        x.extend(tone(48_000));
+        let p = vec![Segment { start: 0, samples: x.clone() }];
+        let out = split_breaths(p, &x);
+        assert_eq!(out.len(), 2);
+        assert!((secs(out[0].samples.len()) - 4.12).abs() < 0.1, "{}", secs(out[0].samples.len()));
+        assert_eq!(out.iter().map(|s| s.samples.len()).sum::<usize>(), x.len());
+        // a 0.1 s gap is not a breath
+        let mut y = tone(64_000);
+        y.extend(vec![0.001f32; 1_600]);
+        y.extend(tone(48_000));
+        assert_eq!(split_breaths(vec![Segment { start: 0, samples: y.clone() }], &y).len(), 1);
+    }
+
+    fn ranges(c: Vec<(std::ops::Range<usize>, Option<String>)>) -> Vec<std::ops::Range<usize>> {
+        c.into_iter().map(|(r, _)| r).collect()
+    }
+
+    #[test]
+    fn note_chunks_follow_language() {
+        let seg = |start: f32, dur: f32| Segment { start: (start * RATE) as usize, samples: vec![0.0; (dur * RATE) as usize] };
+        let l = |x: &str| Some(x.to_string());
+        // en, a short unidentified piece, de, de, short, es
+        let p = vec![seg(0.3, 6.9), seg(7.3, 0.5), seg(7.9, 2.8), seg(11.0, 1.1), seg(12.4, 0.6), seg(13.2, 2.0)];
+        let lid = vec![l("en"), None, l("de"), l("de"), None, l("es")];
+        assert_eq!(ranges(chunks(&p, &lid)), vec![0..2, 2..4, 4..6]);
+        // one language: one chunk until the Whisper window is full
+        let p: Vec<Segment> = (0..12).map(|i| seg(i as f32 * 3.0, 2.5)).collect();
+        let lid = vec![l("ru"); 12];
+        assert_eq!(ranges(chunks(&p, &lid)), vec![0..8, 8..12]);
+        assert_eq!(ranges(chunks(&p[..2], &[None, None])), vec![0..2]);
+        // pieces cut at a breath touch: each keeps its own language
+        let p = vec![seg(0.0, 4.0), seg(4.0, 3.0), seg(7.0, 2.0)];
+        assert_eq!(ranges(chunks(&p, &[l("en"), l("de"), l("en")])), vec![0..1, 1..2, 2..3]);
+        assert_eq!(chunks(&p, &[l("en"), l("de"), l("en")])[1].1.as_deref(), Some("de"));
+    }
+
+    #[test]
     fn heard_text_tags() {
         let h = Heard {
             runs: vec![
@@ -553,6 +891,13 @@ mod tests {
         };
         assert_eq!(h.text(), "[speech ru] Привет, я буду в восемь [en] see you at the meeting [es?] hasta luego");
         assert_eq!(Heard::default().text(), "");
+        let note = Heard { secs: 17.6, parts: 5, model: "parakeet-v3+whisper-small".into(), ms: 3084, unclear_secs: 1.2, ..h.clone() };
+        assert_eq!(
+            note.voice_head(),
+            "[voice message, 17.6s, 5 parts, en+es+ru, parakeet-v3+whisper-small 3.1s, 1.2s unclear] [speech ru] Привет, я буду в восемь [en] see you at the meeting [es?] hasta luego"
+        );
+        let silent = Heard { secs: 2.0, parts: 1, model: "whisper-base".into(), ms: 400, unclear_secs: 2.0, ..Default::default() };
+        assert_eq!(silent.voice_head(), "[voice message, 2.0s, whisper-base 0.4s, 2.0s unclear: no words recognized]");
         assert!(discovery_notice("es", Some("inbox/x.ogg")).contains("lang_install(lang=\"es\")"));
     }
 }

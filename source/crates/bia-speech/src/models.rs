@@ -42,10 +42,17 @@ impl Recognizer {
         let mut cfg: sherpa::OfflineRecognizerCfg = unsafe { std::mem::zeroed() };
         cfg.feat_config.sample_rate = 16_000;
         cfg.feat_config.feature_dim = 80;
-        cfg.model_config.whisper.encoder = s.p(&asr.encoder);
-        cfg.model_config.whisper.decoder = s.p(&asr.decoder);
-        cfg.model_config.whisper.language = s.p(language);
-        cfg.model_config.whisper.task = s.p("transcribe");
+        if asr.kind == "nemo_transducer" {
+            cfg.model_config.transducer.encoder = s.p(&asr.encoder);
+            cfg.model_config.transducer.decoder = s.p(&asr.decoder);
+            cfg.model_config.transducer.joiner = s.p(&asr.joiner);
+            cfg.model_config.model_type = s.p("nemo_transducer");
+        } else {
+            cfg.model_config.whisper.encoder = s.p(&asr.encoder);
+            cfg.model_config.whisper.decoder = s.p(&asr.decoder);
+            cfg.model_config.whisper.language = s.p(language);
+            cfg.model_config.whisper.task = s.p("transcribe");
+        }
         cfg.model_config.tokens = s.p(&asr.tokens);
         cfg.model_config.num_threads = threads();
         cfg.model_config.provider = s.p("cpu");
@@ -54,29 +61,50 @@ impl Recognizer {
     }
 
     fn load(asr: &Asr) -> Result<Self, String> {
-        if asr.kind != "whisper" {
+        if asr.kind != "whisper" && asr.kind != "nemo_transducer" {
             return Err(format!("unsupported speech model kind {}", asr.kind));
         }
-        need(&asr.encoder, "whisper encoder")?;
-        need(&asr.decoder, "whisper decoder")?;
-        need(&asr.tokens, "whisper tokens")?;
+        need(&asr.encoder, "speech model encoder")?;
+        need(&asr.decoder, "speech model decoder")?;
+        need(&asr.tokens, "speech model tokens")?;
+        if asr.kind == "nemo_transducer" {
+            need(&asr.joiner, "speech model joiner")?;
+        }
         let api = sherpa::api()?;
         let mut s = Strs::default();
         let cfg = Self::config(asr, "", &mut s);
         let h = unsafe { (api.create_recognizer)(&cfg) };
         if h.is_null() {
-            return Err(format!("could not load whisper model {}", asr.dir));
+            return Err(format!("could not load speech model {}", asr.dir));
         }
         Ok(Self { h, asr: asr.clone() })
     }
 
+    /// Whisper (detects the language, can be told one); a transducer has neither.
+    pub fn is_whisper(&self) -> bool {
+        self.asr.kind != "nemo_transducer"
+    }
+
+    /// Languages it transcribes; empty = all Whisper knows.
+    pub fn langs(&self) -> &[String] {
+        &self.asr.langs
+    }
+
     /// Transcribe 16 kHz mono with the language forced ("" = Whisper detects it).
     pub fn decode(&self, samples: &[f32], language: &str) -> Result<String, String> {
+        self.decode_lang(samples, language).map(|(text, _)| text)
+    }
+
+    /// [`Recognizer::decode`] and the language Whisper decoded in (its own detection
+    /// when `language` is ""): one encoder pass gives both.
+    pub fn decode_lang(&self, samples: &[f32], language: &str) -> Result<(String, String), String> {
         let api = sherpa::api()?;
         let mut s = Strs::default();
         let cfg = Self::config(&self.asr, language, &mut s);
         unsafe {
-            (api.recognizer_set_config)(self.h, &cfg);
+            if self.is_whisper() {
+                (api.recognizer_set_config)(self.h, &cfg);
+            }
             let stream = (api.create_offline_stream)(self.h);
             if stream.is_null() {
                 return Err("could not create recognizer stream".into());
@@ -85,11 +113,15 @@ impl Recognizer {
             (api.decode_offline_stream)(self.h, stream);
             let r = (api.get_offline_result)(stream);
             let text = if r.is_null() { String::new() } else { cstr_to_string((*r).text) };
+            let lang = if r.is_null() { String::new() } else { cstr_to_string((*r).lang) };
             if !r.is_null() {
                 (api.destroy_offline_result)(r);
             }
             (api.destroy_offline_stream)(stream);
-            Ok(text.trim().to_string())
+            // "<|de|>" from some sherpa builds, "de" from others
+            let lang = lang.trim().trim_start_matches("<|").trim_end_matches("|>").to_string();
+            let lang = if lang.is_empty() && self.is_whisper() { language.to_string() } else { lang };
+            Ok((text.trim().to_string(), lang))
         }
     }
 }
@@ -422,6 +454,15 @@ pub fn recognizer(reg: &Registry, id: &str) -> Result<Shared<Recognizer>, String
     Ok(r)
 }
 
+/// The most accurate Whisper installed (for what a transducer such as Parakeet does
+/// not know): small, then base, then the bundled tiny.
+pub fn best_whisper(reg: &Registry) -> &str {
+    ["whisper-small", "whisper-base"]
+        .into_iter()
+        .find(|id| reg.asr.get(*id).is_some_and(|a| a.kind == "whisper"))
+        .unwrap_or(registry::BUNDLED_ASR)
+}
+
 /// Language identification for calls uses the bundled whisper-tiny: fast, and it
 /// knows every language, so detection works for languages that are not installed.
 pub fn slid(reg: &Registry) -> Result<Shared<Slid>, String> {
@@ -434,6 +475,7 @@ pub fn slid_for(reg: &Registry, id: &str) -> Result<Shared<Slid>, String> {
     let asr = reg
         .asr
         .get(id)
+        .filter(|a| a.kind == "whisper")
         .or_else(|| reg.asr.get(registry::BUNDLED_ASR))
         .ok_or("no whisper model")?;
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());

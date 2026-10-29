@@ -138,6 +138,8 @@ pub struct ToolCall {
     pub id: String,
     pub name: String,
     pub args: Value,
+    /// Gemini's thought signature for this call; sent back with it on the next request.
+    pub sig: String,
 }
 
 impl ToolFormat {
@@ -622,6 +624,7 @@ fn parse_qwen_functions(body: &str) -> Vec<ToolCall> {
             id: String::new(),
             name: name.to_string(),
             args: Value::Object(args),
+            ..Default::default()
         });
         rest = match after.find("</function>") {
             Some(j) => &after[j + "</function>".len()..],
@@ -660,6 +663,7 @@ fn parse_call_body(body: &str) -> Vec<ToolCall> {
                     id: String::new(),
                     name: name.to_string(),
                     args,
+                    ..Default::default()
                 });
             }
         }
@@ -757,6 +761,7 @@ impl<'a> Pythonic<'a> {
             id: String::new(),
             name,
             args: Value::Object(args),
+            ..Default::default()
         })
     }
     fn value(&mut self) -> Result<Value> {
@@ -4132,7 +4137,7 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
     let modelish = n == "model" || desc.contains("model id");
     let providerish = n == "provider" || desc.contains("openrouter");
     if keyish {
-        if v.starts_with("sk-") || v.starts_with("sk_") {
+        if v.starts_with("sk-") || v.starts_with("sk_") || v.starts_with("AIza") {
             s += 10;
         } else if v.contains('/') {
             s -= 4;
@@ -4140,20 +4145,20 @@ fn prop_score(schema: &serde_json::Value, name: &str, val: &str) -> i32 {
     }
     if modelish {
         if v.contains('/')
-            || ["grok", "claude", "gpt", "deepseek", "qwen"]
+            || ["grok", "claude", "gpt", "gemini", "deepseek", "qwen"]
                 .iter()
                 .any(|m| v.contains(m))
         {
             s += 8;
         }
-        if v.starts_with("sk-") {
+        if v.starts_with("sk-") || v.starts_with("AIza") {
             s -= 8;
         }
     }
     if providerish {
         if matches!(
             v,
-            "openrouter" | "openai" | "anthropic" | "xai" | "deepseek" | "qwen" | "chatgpt"
+            "openrouter" | "openai" | "anthropic" | "gemini" | "google" | "xai" | "deepseek" | "qwen" | "chatgpt"
         ) {
             s += 10;
         } else {
@@ -4247,19 +4252,19 @@ done
     }
 
     fn call(id: &str, name: &str) -> ToolCall {
-        ToolCall { id: id.into(), name: name.into(), args: json!({}) }
+        ToolCall { id: id.into(), name: name.into(), args: json!({}), ..Default::default() }
     }
 
     #[test]
     fn say_rounds_are_free_however_they_are_called() {
-        let say = ToolCall { id: "a".into(), name: "say".into(), args: json!({"message": "hi"}) };
-        let via_discover = ToolCall { id: "b".into(), name: "discover".into(), args: json!({"call": "say", "arguments": {"message": "status"}}) };
-        let via_invoke = ToolCall { id: "c".into(), name: "invoke".into(), args: json!({"name": "say", "arguments": {"message": "x"}}) };
-        let work = ToolCall { id: "d".into(), name: "discover".into(), args: json!({"call": "memory_list", "arguments": {}}) };
+        let say = ToolCall { id: "a".into(), name: "say".into(), args: json!({"message": "hi"}), ..Default::default() };
+        let via_discover = ToolCall { id: "b".into(), name: "discover".into(), args: json!({"call": "say", "arguments": {"message": "status"}}), ..Default::default() };
+        let via_invoke = ToolCall { id: "c".into(), name: "invoke".into(), args: json!({"name": "say", "arguments": {"message": "x"}}), ..Default::default() };
+        let work = ToolCall { id: "d".into(), name: "discover".into(), args: json!({"call": "memory_list", "arguments": {}}), ..Default::default() };
         assert!(only_say(&[say.clone(), via_discover.clone(), via_invoke]));
         assert!(!only_say(&[via_discover, work.clone()]));
         assert!(!only_say(&[work]));
-        assert!(!only_say(&[ToolCall { id: "e".into(), name: "discover".into(), args: json!({"q": "say"}) }]), "a search is a round");
+        assert!(!only_say(&[ToolCall { id: "e".into(), name: "discover".into(), args: json!({"q": "say"}), ..Default::default() }]), "a search is a round");
     }
 
     #[test]

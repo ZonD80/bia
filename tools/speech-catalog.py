@@ -68,6 +68,15 @@ WHISPER_ASR = {
     "whisper-base": ("sherpa-onnx-whisper-base.tar.bz2", "base", "better accuracy, about 2x slower than tiny"),
     "whisper-small": ("sherpa-onnx-whisper-small.tar.bz2", "small", "best accuracy here, slow on CPU; voice notes only"),
 }
+# NeMo transducers: no language detection, a fixed language list
+# id -> (release asset, size name, languages, note)
+TRANSDUCER_ASR = {
+    "parakeet-v3": ("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2", "parakeet",
+                    ["bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv",
+                     "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"],
+                    "NVIDIA Parakeet TDT 0.6B v3: 25 European languages, about 10x faster than whisper-small "
+                    "and as accurate; voice notes in other languages use the best Whisper installed"),
+}
 
 
 def get_json(url):
@@ -186,6 +195,8 @@ def main():
     for mid, (file, size, note) in WHISPER_ASR.items():
         a = asr[file]
         asr_models[mid] = {"kind": "whisper", "langs": [], "size_name": size, "note": note, **file_entry(h, a)}
+    for mid, (file, size, langs, note) in TRANSDUCER_ASR.items():
+        asr_models[mid] = {"kind": "nemo_transducer", "langs": langs, "size_name": size, "note": note, **file_entry(h, asr[file])}
 
     extras = {
         "silero-vad": {"kind": "vad", **file_entry(h, asr["silero_vad.onnx"])},

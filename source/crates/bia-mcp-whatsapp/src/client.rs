@@ -147,17 +147,12 @@ fn jid_of_key(key: &str) -> Option<Jid> {
     }
 }
 
-/// A received voice/audio message for the model: `[voice message] [speech ru] …`, then
+/// A received voice/audio message for the model: `[voice message, 4.2s, whisper-base 1.3s] [speech ru] …`, then
 /// the message's own lines (file: …), then a notice if a language was just learned.
 fn with_transcript(heard: Result<bia_speech::Heard, String>, text: &str, _file: &str) -> String {
     match heard {
         Ok(h) => {
-            let spoken = h.text();
-            let mut out = if spoken.is_empty() {
-                format!("[voice message, no words found]\n{text}")
-            } else {
-                format!("[voice message] {spoken}\n{text}")
-            };
+            let mut out = format!("{}\n{text}", h.voice_head());
             if let Some(n) = h.notice {
                 out.push('\n');
                 out.push_str(&n);

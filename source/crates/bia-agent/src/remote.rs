@@ -556,7 +556,7 @@ data: {"type":"response.completed","response":{"usage":{}}}
     #[test]
     fn openai_drops_empty_assistant_messages() {
         // DeepSeek: "Invalid assistant message: content or tool_calls must be set"
-        let call = ToolCall { id: "c1".into(), name: "bash".into(), args: json!({}) };
+        let call = ToolCall { id: "c1".into(), name: "bash".into(), args: json!({}), ..Default::default() };
         let mut t = Msg::user("out".into());
         t.role = Role::Tool;
         t.call_id = "c1".into();
@@ -570,13 +570,45 @@ data: {"type":"response.completed","response":{"usage":{}}}
             Msg::user("c".into()),
             Msg::assistant("done".into(), vec![]),
         ];
-        let m = Remote::openai_messages("sys", &h);
+        let m = Remote::openai_messages("sys", &h, false);
         let roles: Vec<&str> = m.iter().map(|v| v["role"].as_str().unwrap()).collect();
         assert_eq!(roles, ["system", "user", "assistant", "tool", "user", "assistant"]);
         assert_eq!(m[1]["content"], "a\n\nb");
         assert!(m[2]["tool_calls"].is_array());
         assert_eq!(m[4]["content"], "c");
         assert!(m.iter().all(|v| v["role"] != "assistant" || v["content"].is_string() || v["tool_calls"].is_array()));
+    }
+
+    #[test]
+    fn gemini_thought_tags() {
+        let mut t = ThoughtTags::default();
+        let mut got: Vec<(bool, String)> = vec![];
+        for c in ["<tho", "ught>plan", " it</th", "ought>\nHi <b", "> there"] {
+            got.extend(t.feed(c).into_iter().filter(|p| !p.1.is_empty()));
+        }
+        assert_eq!(
+            got,
+            [(true, "plan".into()), (true, " it".into()), (false, "Hi <b".into()), (false, "> there".into())]
+        );
+        assert_eq!(ThoughtTags::default().feed("a < b"), [(false, "a < b".to_string())]);
+    }
+
+    #[test]
+    fn gemini_calls_carry_signatures() {
+        let mut a = Msg::assistant(String::new(), vec![
+            ToolCall { id: "c1".into(), name: "bash".into(), args: json!({}), sig: "SIG".into() },
+            ToolCall { id: "c2".into(), name: "bash".into(), args: json!({}), ..Default::default() },
+        ]);
+        let m = Remote::openai_messages("sys", &[Msg::user("a".into()), a.clone()], true);
+        let tc = &m[2]["tool_calls"];
+        assert_eq!(tc[0]["extra_content"]["google"]["thought_signature"], "SIG");
+        assert!(tc[1].get("extra_content").is_none());
+        // a call from another model gets the documented stand-in
+        a.tool_calls[0].sig.clear();
+        let m = Remote::openai_messages("sys", &[Msg::user("a".into()), a.clone()], true);
+        assert_eq!(m[2]["tool_calls"][0]["extra_content"]["google"]["thought_signature"], GEMINI_NO_SIG);
+        let m = Remote::openai_messages("sys", &[Msg::user("a".into()), a], false);
+        assert!(m[2]["tool_calls"][0].get("extra_content").is_none());
     }
 
     #[test]
@@ -588,6 +620,7 @@ data: {"type":"response.completed","response":{"usage":{}}}
             id: "c1".into(),
             name: "bash".into(),
             args: json!({"cmd": "ls"}),
+            ..Default::default()
         }];
         let mut t = Msg::user("out".into());
         t.role = Role::Tool;
@@ -689,6 +722,7 @@ pub fn default_model(provider: &str) -> &'static str {
         "xai" => "grok-4.6",
         "deepseek" => "deepseek-chat",
         "qwen" => "qwen-max",
+        "gemini" | "google" => "gemini-4-argon",
         _ => "gpt-5",
     }
 }
@@ -724,9 +758,19 @@ static RESPONSES_FLAT_TOOLS: AtomicBool = AtomicBool::new(false);
 static RESPONSES_NO_REASONING: AtomicBool = AtomicBool::new(false);
 const RESPONSES_NS: &str = "bia";
 
+/// Gemini's OpenAI-compatible chat completions.
+const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+/// Gemini 3+ refuses a function call sent back without the thought signature it came with.
+/// Calls that have none (made by another model, or saved before signatures were kept) carry
+/// the value Google documents for skipping that check.
+const GEMINI_NO_SIG: &str = "skip_thought_signature_validator";
+
 impl Remote {
     pub fn from_config(c: &FmmConfig) -> Result<Remote> {
-        let provider = c.provider.to_lowercase();
+        let provider = match c.provider.to_lowercase().as_str() {
+            "google" => "gemini".to_string(),
+            p => p.to_string(),
+        };
         let (api, base) = match provider.as_str() {
             "openai" => (Api::OpenAi, "https://api.openai.com/v1"),
             "openrouter" => (Api::OpenAi, "https://openrouter.ai/api/v1"),
@@ -734,9 +778,10 @@ impl Remote {
             "deepseek" => (Api::OpenAi, "https://api.deepseek.com/v1"),
             // International (Singapore) endpoint; mainland China keys carry their base_url.
             "qwen" => (Api::OpenAi, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
+            "gemini" => (Api::OpenAi, GEMINI_BASE),
             "chatgpt" => (Api::Responses, CHATGPT_RESOURCE),
             "anthropic" | "claude" => (Api::Anthropic, "https://api.anthropic.com"),
-            other => bail!("unknown provider {other}; use openrouter, openai, anthropic, xai, deepseek or qwen"),
+            other => bail!("unknown provider {other}; use openrouter, openai, anthropic, gemini, xai, deepseek or qwen"),
         };
         if c.api_key.trim().is_empty() {
             bail!("api_key is empty");
@@ -838,7 +883,9 @@ impl Remote {
 
     // ---------------- OpenAI-compatible chat completions ----------------
 
-    fn openai_messages(system: &str, history: &[Msg]) -> Vec<Value> {
+    /// `gemini`: tool calls carry thought signatures, and a screenshot follows its tool
+    /// result as a user image (Gemini takes images in user messages only).
+    fn openai_messages(system: &str, history: &[Msg], gemini: bool) -> Vec<Value> {
         let shot = latest_shot(history);
         let mut msgs = vec![json!({"role": "system", "content": system})];
         // set after a skipped empty assistant: the next user message joins the previous one
@@ -865,11 +912,35 @@ impl Remote {
                         o["tool_calls"] = Value::Array(
                             m.tool_calls
                                 .iter()
-                                .map(|c| json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.args.to_string()}}))
+                                .enumerate()
+                                .map(|(k, c)| {
+                                    let mut o = json!({"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.args.to_string()}});
+                                    // the first call of a turn holds the turn's signature
+                                    let sig = match c.sig.as_str() {
+                                        "" if k == 0 => GEMINI_NO_SIG,
+                                        s => s,
+                                    };
+                                    if gemini && !sig.is_empty() {
+                                        o["extra_content"] = json!({"google": {"thought_signature": sig}});
+                                    }
+                                    o
+                                })
                                 .collect(),
                         );
                     }
                     msgs.push(o);
+                }
+                Role::Tool if gemini => {
+                    join = false;
+                    msgs.push(openai_tool(m, false));
+                    if shot == Some(i) {
+                        if let Some((mime, b64)) = image_path(&m.content).and_then(load_image) {
+                            msgs.push(json!({"role": "user", "content": [
+                                {"type": "text", "text": "[the screenshot from that result]"},
+                                {"type": "image_url", "image_url": {"url": format!("data:{mime};base64,{b64}")}}
+                            ]}));
+                        }
+                    }
                 }
                 Role::Tool => {
                     join = false;
@@ -888,14 +959,19 @@ impl Remote {
         on_piece: &mut dyn FnMut(bool, &str) -> bool,
         timeout: Duration,
     ) -> Result<RemoteResult> {
+        let gemini = self.provider == "gemini";
         let mut body = json!({
             "model": self.model,
-            "messages": Self::openai_messages(system, history),
+            "messages": Self::openai_messages(system, history, gemini),
             "stream": true,
             "stream_options": {"include_usage": true},
         });
         if self.provider == "openrouter" {
             body["reasoning"] = json!({"enabled": true});
+        }
+        if gemini {
+            // thought summaries, streamed inside <thought>…</thought> in the content
+            body["extra_body"] = json!({"google": {"thinking_config": {"include_thoughts": true}}});
         }
         if !tools.is_empty() {
             body["tools"] = Value::Array(
@@ -926,7 +1002,8 @@ impl Remote {
         }
         let reader = BufReader::new(resp.into_body().into_reader());
         let mut text = String::new();
-        let mut calls: Vec<(String, String, String)> = vec![]; // (id, name, arguments json)
+        let mut calls: Vec<(String, String, String, String)> = vec![]; // (id, name, arguments json, signature)
+        let mut tags = ThoughtTags::default();
         let (mut input_tokens, mut output_tokens) = (0u64, 0u64);
         let mut stop = String::from("end");
         for line in reader.lines() {
@@ -987,22 +1064,33 @@ impl Remote {
                 }
             }
             if let Some(c) = delta.get("content").and_then(|c| c.as_str()) {
-                if !c.is_empty() {
-                    text.push_str(c);
-                    if !on_piece(false, c) {
-                        stop = "interrupted".into();
+                let pieces = if gemini { tags.feed(c) } else { vec![(false, c.to_string())] };
+                let mut go = true;
+                for (thought, p) in pieces.iter().filter(|p| !p.1.is_empty()) {
+                    if !thought {
+                        text.push_str(p);
+                    }
+                    if !on_piece(*thought, p) {
+                        go = false;
                         break;
                     }
+                }
+                if !go {
+                    stop = "interrupted".into();
+                    break;
                 }
             }
             if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                 for tc in tcs {
                     let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
                     while calls.len() <= idx {
-                        calls.push((String::new(), String::new(), String::new()));
+                        calls.push(Default::default());
                     }
                     if let Some(id) = tc.get("id").and_then(|i| i.as_str()) {
                         calls[idx].0 = id.to_string();
+                    }
+                    if let Some(sig) = tc.pointer("/extra_content/google/thought_signature").and_then(|s| s.as_str()) {
+                        calls[idx].3 = sig.to_string();
                     }
                     if let Some(f) = tc.get("function") {
                         if let Some(n) = f.get("name").and_then(|n| n.as_str()) {
@@ -1015,11 +1103,14 @@ impl Remote {
                 }
             }
         }
+        if !tags.inside && !tags.held.is_empty() {
+            text.push_str(&tags.held);
+        }
         let calls = calls
             .into_iter()
             .enumerate()
             .filter(|(_, c)| !c.1.is_empty())
-            .map(|(i, (id, name, args))| ToolCall {
+            .map(|(i, (id, name, args, sig))| ToolCall {
                 id: if id.is_empty() {
                     format!("call_{i}")
                 } else {
@@ -1027,6 +1118,7 @@ impl Remote {
                 },
                 name,
                 args: parse_args(&args, &stop),
+                sig,
             })
             .collect();
         Ok(RemoteResult {
@@ -1207,6 +1299,7 @@ impl Remote {
                             id: item["call_id"].as_str().unwrap_or("").to_string(),
                             name: item["name"].as_str().unwrap_or("").to_string(),
                             args: parse_args(args, &stop),
+                            ..Default::default()
                         });
                     }
                 }
@@ -1475,6 +1568,7 @@ impl Remote {
                 id,
                 name,
                 args: parse_args(&args, &stop),
+                ..Default::default()
             })
             .collect();
         Ok(RemoteResult {
@@ -1542,6 +1636,40 @@ fn load_image(path: &str) -> Option<(&'static str, String)> {
         mime,
         base64::engine::general_purpose::STANDARD.encode(bytes),
     ))
+}
+
+/// Splits Gemini's streamed content into thoughts (`<thought>…</thought>`) and reply text;
+/// a tag may arrive cut between two chunks.
+#[derive(Default)]
+struct ThoughtTags {
+    inside: bool,
+    held: String,
+}
+
+impl ThoughtTags {
+    fn feed(&mut self, chunk: &str) -> Vec<(bool, String)> {
+        let mut s = std::mem::take(&mut self.held) + chunk;
+        let mut out = vec![];
+        loop {
+            let tag = if self.inside { "</thought>" } else { "<thought>" };
+            if let Some(i) = s.find(tag) {
+                out.push((self.inside, s[..i].to_string()));
+                s = s[i + tag.len()..].to_string();
+                self.inside = !self.inside;
+                // the reply usually starts on a new line after the thoughts
+                if !self.inside {
+                    s = s.trim_start_matches('\n').to_string();
+                }
+                continue;
+            }
+            // keep a tail that may be the start of the tag
+            let keep = (1..tag.len()).rev().find(|&n| s.ends_with(&tag[..n])).unwrap_or(0);
+            self.held = s[s.len() - keep..].to_string();
+            s.truncate(s.len() - keep);
+            out.push((self.inside, s));
+            return out;
+        }
+    }
 }
 
 fn openai_tool(m: &Msg, with_image: bool) -> Value {

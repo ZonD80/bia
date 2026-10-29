@@ -1,6 +1,6 @@
 {
   "name": "system",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "The cloud model (system_fmm_*: an API key, or a ChatGPT plan with system_fmm_chatgpt), download links for files (system_share_file), and asking the person for a step you cannot do (system_ask_human). The web address and certificates are mcp/web; disks, network and packages are bash.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-system",
@@ -20,6 +20,8 @@
     "sign",
     "anthropic",
     "claude",
+    "gemini",
+    "google",
     "gpt",
     "grok",
     "xai",
@@ -43,6 +45,7 @@
   "examples": [
     "root|console|<issued>|<delivered>|use grok via openrouter with key sk-or-... -> system_fmm_configure(provider='openrouter', api_key='sk-or-...', model='x-ai/grok-4.6')",
     "root|console|<issued>|<delivered>|here is my deepseek key sk-... -> system_fmm_configure(api_key='sk-...')",
+    "root|console|<issued>|<delivered>|use gemini, key AIza... -> system_fmm_configure(api_key='AIza...')",
     "root|console|<issued>|<delivered>|use my chatgpt plus subscription -> system_fmm_chatgpt()",
     "root|console|<issued>|<delivered>|log in to chatgpt, I want gpt-5 -> system_fmm_chatgpt(model='gpt-5'); on system|fmm: chrome_new_page(url='http://127.0.0.1:1455/'); say: switch to Chrome and press Login with ChatGPT",
     "root|console|<issued>|<delivered>|the new model does not work, go back to the previous one -> system_fmm_back()",

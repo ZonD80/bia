@@ -217,7 +217,13 @@ pub fn transcribe(file: &str, lang: Option<&str>, model: Option<&str>) -> Result
     let heard = bia_speech::transcribe_file(&path, forced.as_deref(), model.filter(|m| !m.is_empty()))?;
     let mut out = heard.text();
     if out.is_empty() {
-        out = format!("[no speech found in {:.1}s of audio]", heard.secs);
+        out = if heard.parts > 0 {
+            format!("[no words recognized: {}]", heard.summary())
+        } else {
+            format!("[no speech found in {:.1}s of audio]", heard.secs)
+        };
+    } else if heard.parts > 0 {
+        out = format!("[{}] {out}", heard.summary());
     }
     if let Some(l) = heard.new_lang {
         out.push('\n');

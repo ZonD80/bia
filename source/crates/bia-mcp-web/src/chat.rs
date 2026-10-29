@@ -1282,15 +1282,12 @@ fn deliver(mut d: Delivery) {
                 bia_speech::contacts::lang_for_identity(&d.identity).as_deref(),
             ) {
                 Ok(heard) => {
-                    let t = heard.text();
-                    if t.is_empty() {
-                        heads.push("[voice message, no words found]".to_string());
-                    } else {
+                    if !heard.runs.is_empty() {
                         // under the bubble: just the words, not the model's language tags
                         let shown: Vec<&str> = heard.runs.iter().map(|r| r.text.as_str()).collect();
                         h.set_transcript(&d.identity, &d.chat, &d.id, rel, &shown.join(" "));
-                        heads.push(format!("[voice message] {t}"));
                     }
+                    heads.push(heard.voice_head());
                     if let Some(n) = heard.notice {
                         tails.push(n);
                     }
@@ -1893,7 +1890,7 @@ mod voice_tests {
         eprintln!("model sees on {}:\n{}", ib.channel, ib.text);
         assert_eq!(ib.channel, "web:test");
         assert!(
-            ib.text.starts_with("[voice message] [speech en]"),
+            ib.text.starts_with("[voice message, ") && ib.text.contains("] [speech en]"),
             "{}",
             ib.text
         );

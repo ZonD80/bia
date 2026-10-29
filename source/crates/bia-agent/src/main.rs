@@ -890,7 +890,7 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
     let brain = if cloud {
         String::new()
     } else {
-        "\n- you think with a small local model now; for a stronger one they can give you an API key (OpenRouter, OpenAI, Anthropic, …) or sign in with their ChatGPT plan.".into()
+        "\n- you think with a small local model now; for a stronger one they can give you an API key (OpenRouter, OpenAI, Anthropic, Gemini, …) or sign in with their ChatGPT plan.".into()
     };
     format!(
         "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: bia, an assistant that lives on this computer. Then tell them, briefly, one line each:\n\

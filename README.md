@@ -10,7 +10,7 @@ Telegram or WhatsApp (including voice calls), Messenger or Instagram, schedule w
 and update or move itself to another machine.
 
 - **Cloud brain.** Frontier Model Mode (FMM) runs the agent on a cloud model
-  (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek or Qwen) with your own key,
+  (OpenRouter, OpenAI, Anthropic, Gemini, xAI, DeepSeek or Qwen) with your own key,
   or your ChatGPT Plus/Pro plan through "Continue with ChatGPT" in the flasher.
   At the moment the cheapest option is DeepSeek V4.1.
 - **Local model, optionally.** A GGUF model can run through llama.cpp on the

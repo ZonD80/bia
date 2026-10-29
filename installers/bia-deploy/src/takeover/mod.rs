@@ -425,7 +425,7 @@ fn takeover(a: Args) -> Result<()> {
             if !ask.interactive() {
                 bail!("an FMM API key is required (fmm.api_key in a config, --key or --fmm); see `bia-deploy keys`");
             }
-            key = ask.line("API key for bia's model (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek, Qwen)", "")?;
+            key = ask.line("API key for bia's model (OpenRouter, OpenAI, Anthropic, Gemini, xAI, DeepSeek, Qwen)", "")?;
             if key.is_empty() {
                 bail!("an API key is required; see `bia-deploy keys`");
             }

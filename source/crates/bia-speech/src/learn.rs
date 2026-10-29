@@ -7,8 +7,21 @@ use crate::langs;
 use crate::registry::{self, update};
 use crate::store::{self, Want};
 
-/// Voice-note model installed with the first non-English language.
+/// Voice-note model installed with the first non-English language (and the Whisper
+/// for languages the transducer below does not know).
 pub const UPGRADE_ASR: &str = "whisper-base";
+/// Voice-note model installed with the first language it knows: faster and more
+/// accurate than Whisper there. Needs about 1 GB of RAM while transcribing.
+pub const UPGRADE_TRANSDUCER: &str = "parakeet-v3";
+const TRANSDUCER_MIN_RAM: u64 = 3 << 30;
+
+fn ram_bytes() -> u64 {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|t| t.lines().find(|l| l.starts_with("MemTotal:")).and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok()))
+        .map(|kb| kb * 1024)
+        .unwrap_or(0)
+}
 
 /// Progress and cancellation for long installs.
 pub trait Report: Sync {
@@ -115,7 +128,7 @@ pub fn ensure_asr(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<bool, Str
     let res = store::unpack(&archive, &dir);
     let _ = std::fs::remove_file(&archive);
     res?;
-    let a = store::resolve_whisper(&dir)?;
+    let a = if ca.kind == "nemo_transducer" { store::resolve_transducer(&dir, &ca.langs)? } else { store::resolve_whisper(&dir)? };
     update(|r| {
         r.asr.insert(id.to_string(), a);
         Ok(())
@@ -222,19 +235,36 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
     if !skipped.is_empty() {
         out.push_str(&format!(" Skipped: {}.", skipped.join("; ")));
     }
-    // More than one language: voice notes get whisper-base (tiny misses words outside
-    // English); calls stay on the fast bundled tiny.
-    let reg = registry::current();
-    if can_hear && l.code != "en" && reg.asr_file == registry::BUNDLED_ASR && !reg.asr.contains_key(UPGRADE_ASR) {
-        ctx.progress(0, &format!("voice notes: {UPGRADE_ASR} for better multilingual transcripts"));
-        match ensure_asr(ctx, &cat, UPGRADE_ASR).and_then(|_| {
+    // More than one language: voice notes get Parakeet for the languages it knows (the
+    // first time; a model chosen later is kept), whisper-base for the others (tiny
+    // misses words outside English); calls stay on the fast bundled tiny.
+    if can_hear && l.code != "en" {
+        let reg = registry::current();
+        let transducer = cat
+            .asr
+            .get(UPGRADE_TRANSDUCER)
+            .filter(|a| a.langs.contains(&l.code) && !reg.asr.contains_key(UPGRADE_TRANSDUCER) && ram_bytes() >= TRANSDUCER_MIN_RAM);
+        let (model, why) = if transducer.is_some() {
+            (UPGRADE_TRANSDUCER, format!("faster and more accurate for {}; other languages use Whisper", label(&l.code)))
+        } else if crate::models::best_whisper(&reg) == registry::BUNDLED_ASR {
+            (UPGRADE_ASR, "more accurate outside English".to_string())
+        } else {
+            return Ok(out);
+        };
+        // a transducer becomes the voice-note model; a Whisper only replaces tiny
+        let switch = model == UPGRADE_TRANSDUCER || reg.asr_file == registry::BUNDLED_ASR;
+        ctx.progress(0, &format!("voice notes: {model} for better multilingual transcripts"));
+        match ensure_asr(ctx, &cat, model).and_then(|_| {
             update(|r| {
-                r.asr_file = UPGRADE_ASR.to_string();
+                if switch {
+                    r.asr_file = model.to_string();
+                }
                 Ok(())
             })
         }) {
-            Ok(()) => out.push_str(&format!(" Voice notes now use {UPGRADE_ASR} (more accurate outside English; calls keep whisper-tiny).")),
-            Err(e) => out.push_str(&format!(" (Could not install {UPGRADE_ASR} for voice notes: {e}; voice notes keep whisper-tiny.)")),
+            Ok(()) if switch => out.push_str(&format!(" Voice notes now use {model} ({why}; calls keep whisper-tiny).")),
+            Ok(()) => out.push_str(&format!(" Installed {model} for voice notes in languages {} does not know.", reg.asr_file)),
+            Err(e) => out.push_str(&format!(" (Could not install {model} for voice notes: {e}; voice notes keep {}.)", reg.asr_file)),
         }
     }
     Ok(out)

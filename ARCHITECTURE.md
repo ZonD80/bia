@@ -134,7 +134,7 @@ One Rust binary, dynamically linked against glibc. Main modules:
 | `repl.rs` | the loop: slash commands, chat turns, tool rounds, streaming, interruption, autosave |
 | `tools.rs` | tool registry (built-ins + MCP), prompt rendering, tool-call parsing (Qwen/Hermes JSON and LFM2 pythonic) |
 | `llama_srv.rs`, `llm.rs`, `tune.rs`, `gguf.rs` | supervise prebuilt `llama-server`; pick backend (CUDA → ROCm → SYCL → Vulkan → CPU), threads, ctx and KV from sysfs + GGUF header |
-| `remote.rs` | FMM: streaming tool-calling client for chat completions (OpenRouter, OpenAI, xAI, DeepSeek, Qwen/DashScope), Anthropic Messages, and the Responses API for a ChatGPT plan (token refresh/rotation) |
+| `remote.rs` | FMM: streaming tool-calling client for chat completions (OpenRouter, OpenAI, Gemini, xAI, DeepSeek, Qwen/DashScope), Anthropic Messages, and the Responses API for a ChatGPT plan (token refresh/rotation). Gemini goes through Google's OpenAI-compatible endpoint: each tool call keeps its thought signature (`ToolCall.sig`, saved with the conversation), `<thought>` text streams as reasoning, and screenshots go in a user message |
 | `mcp.rs` | MCP client over stdio, discovery of `/home/bia/MCPs/*/mcp.json`, `boot_tool` |
 | `jobs.rs`, `bash.rs` | every MCP call and shell command is a job; results return as `system|job:<id>|…` envelopes; PTY shells as root or `bia` |
 | `outbox.rs` | telegram/whatsapp sends, edits, reactions and deletes: per-chat FIFO worker threads, local `o<n>` ids mapped to platform ids |
@@ -740,7 +740,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   BIOS boot; can seed `EFI/bia/fmm.json` and `EFI/bia/lang.json` (`--lang`,
   `bia-deploy langs`) and put a Hugging Face GGUF on the
   stick (`bia-deploy search` / `files` / `write --model repo[:file]`). The FMM
-  provider is detected from the pasted key (prefixes `sk-or-`, `sk-ant-`, `xai-`,
+  provider is detected from the pasted key (prefixes `sk-or-`, `sk-ant-`, `AIza` (Gemini), `xai-`,
   OpenAI `sk-proj-`/`T3BlbkFJ`; `sk-`+32 hex is DeepSeek or Qwen, settled by
   asking each API), then the provider's `/models` list is offered with search
   (GUI, or `bia-deploy models <words>`). For people without a key, the GUI's

@@ -46,6 +46,7 @@ const PROVIDERS: &[&str] = &[
     "openrouter",
     "openai",
     "anthropic",
+    "gemini",
     "xai",
     "deepseek",
     "qwen",
@@ -60,6 +61,8 @@ fn provider_for_key(key: &str) -> Option<&'static str> {
         Some("anthropic")
     } else if k.starts_with("xai-") {
         Some("xai")
+    } else if k.starts_with("AIza") {
+        Some("gemini")
     } else if ["sk-proj-", "sk-svcacct-", "sk-admin-"]
         .iter()
         .any(|p| k.starts_with(p))
@@ -120,6 +123,7 @@ fn default_model(provider: &str) -> &'static str {
         "xai" => "grok-4.6",
         "deepseek" => "deepseek-chat",
         "qwen" => "qwen-max",
+        "gemini" => "gemini-4-argon",
         _ => "gpt-5",
     }
 }
@@ -187,8 +191,10 @@ pub fn configure(
     ctx: Option<u32>,
 ) -> Result<String> {
     let mut provider = provider.trim().to_lowercase();
-    if provider == "claude" {
-        provider = "anthropic".into();
+    match provider.as_str() {
+        "claude" => provider = "anthropic".into(),
+        "google" => provider = "gemini".into(),
+        _ => {}
     }
     let prev = load();
     if provider == "chatgpt" && api_key.trim().is_empty() {

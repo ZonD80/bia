@@ -25,6 +25,8 @@ struct SavedCall {
     id: String,
     name: String,
     args: serde_json::Value,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    sig: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -122,6 +124,7 @@ pub fn save(
                         id: c.id.clone(),
                         name: c.name.clone(),
                         args: c.args.clone(),
+                        sig: c.sig.clone(),
                     })
                     .collect(),
                 call_id: m.call_id.clone(),
@@ -191,6 +194,7 @@ fn load_file(path: &Path) -> Result<(Saved, Vec<Msg>)> {
                     id: c.id.clone(),
                     name: c.name.clone(),
                     args: c.args.clone(),
+                    sig: c.sig.clone(),
                 })
                 .collect(),
             call_id: m.call_id.clone(),

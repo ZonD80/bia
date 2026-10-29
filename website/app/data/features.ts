@@ -296,7 +296,7 @@ export const features: Feature[] = [
     lead:
       'bia borrows its thinking from a cloud brain, with your own account. Right now the cheapest good option is DeepSeek V4.1: you pay only for what bia uses, and it works on any old computer. If you need it, a brain can also live right on the stick and work without any internet — on a powerful computer. Either way, its files, memory and accounts stay at home with you.',
     points: [
-      { title: 'A cloud brain, cheap and smart', text: 'Give bia a key from a cloud AI service. DeepSeek V4.1 is the cheapest good choice today; OpenAI, Anthropic, Grok, Qwen and OpenRouter work too. You pay the provider only for what bia uses.' },
+      { title: 'A cloud brain, cheap and smart', text: 'Give bia a key from a cloud AI service. DeepSeek V4.1 is the cheapest good choice today; OpenAI, Anthropic, Gemini, Grok, Qwen and OpenRouter work too. You pay the provider only for what bia uses.' },
       { title: 'Switch whenever you like', text: 'Paste a new key into the chat and bia changes brains on the spot. Nothing else changes — same memory, same people, same personality.' },
       { title: 'Or a brain on the stick', text: 'As an option, a complete language model can travel with bia and run on the computer itself, with no internet and no account — handy for remote places. It needs serious hardware: a high-end graphics card, or unified memory, with at least 64 GB of video memory (VRAM). bia tunes itself to the graphics card and memory it finds.' },
       { title: 'Your life stays local', text: 'Even with a cloud brain, bia’s files, passwords, chats and memory live on its own disk — only the thinking is borrowed.' },

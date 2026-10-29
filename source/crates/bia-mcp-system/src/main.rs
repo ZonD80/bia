@@ -11,9 +11,9 @@ use serde_json::json;
 
 fn main() {
     Server::new("system", env!("CARGO_PKG_VERSION"))
-        .tool("fmm_configure", "Turn on a cloud model instead of the local one. api_key is required, except provider=chatgpt without a key, which switches back to the ChatGPT sign-in kept from fmm_chatgpt (no new sign-in). provider is openrouter, openai, anthropic, xai, deepseek, qwen or chatgpt; leave it out and it is detected from the key. model is that provider's id, for example x-ai/grok-4.6, gpt-5, claude-opus-4-6, grok-4.6, deepseek-chat, or qwen-max; leave it out for the provider's default. The new model is tested with this conversation before the switch; if that fails, or its first real reply fails, the old settings come back. Settings are saved and used again at next boot.",
+        .tool("fmm_configure", "Turn on a cloud model instead of the local one. api_key is required, except provider=chatgpt without a key, which switches back to the ChatGPT sign-in kept from fmm_chatgpt (no new sign-in). provider is openrouter, openai, anthropic, gemini, xai, deepseek, qwen or chatgpt; leave it out and it is detected from the key. model is that provider's id, for example x-ai/grok-4.6, gpt-5, claude-opus-4-6, gemini-4-argon, grok-4.6, deepseek-chat, or qwen-max; leave it out for the provider's default. The new model is tested with this conversation before the switch; if that fails, or its first real reply fails, the old settings come back. Settings are saved and used again at next boot.",
             json!({"type": "object", "properties": {
-                "provider": {"type": "string", "description": "optional: openrouter, openai, anthropic, xai, deepseek, qwen, or chatgpt (saved sign-in, no key). Detected from the key when left out."},
+                "provider": {"type": "string", "description": "optional: openrouter, openai, anthropic, gemini, xai, deepseek, qwen, or chatgpt (saved sign-in, no key). Detected from the key when left out."},
                 "api_key": {"type": "string", "description": "the provider's secret key (not for provider=chatgpt)"},
                 "model": {"type": "string", "description": "optional: the provider's model id, for example x-ai/grok-4.6"},
                 "base_url": {"type": "string", "description": "optional. Only if the API address is not the default."},

@@ -50,6 +50,13 @@ pub const KEY_GUIDES: &[KeyGuide] = &[
         pay_url: Some("https://platform.claude.com/settings/billing"),
     },
     KeyGuide {
+        provider: "gemini",
+        name: "Google (Gemini)",
+        about: "Google's Gemini models. Create the key in Google AI Studio. The free tier is slow and limited; turn on billing there for real use.",
+        key_url: "https://aistudio.google.com/apikey",
+        pay_url: None,
+    },
+    KeyGuide {
         provider: "xai",
         name: "xAI (Grok)",
         about: "The makers of Grok. Add credit in the console, then create a key.",
@@ -72,10 +79,10 @@ pub const KEY_GUIDES: &[KeyGuide] = &[
     },
 ];
 
-pub const PROVIDERS: &[&str] = &["openrouter", "openai", "anthropic", "xai", "deepseek", "qwen"];
+pub const PROVIDERS: &[&str] = &["openrouter", "openai", "anthropic", "gemini", "xai", "deepseek", "qwen"];
 
 /// Provider implied by an API key's format, when the format alone settles it:
-/// OpenRouter `sk-or-`, Anthropic `sk-ant-`, xAI `xai-`, OpenAI `sk-proj-` /
+/// OpenRouter `sk-or-`, Anthropic `sk-ant-`, Gemini `AIza`, xAI `xai-`, OpenAI `sk-proj-` /
 /// `sk-svcacct-` / `sk-admin-` or the `T3BlbkFJ` marker every OpenAI key carries.
 /// DeepSeek and Qwen (DashScope) keys are both `sk-` + 32 hex: see [`probe_key`].
 pub fn provider_for_key(key: &str) -> Option<&'static str> {
@@ -86,6 +93,8 @@ pub fn provider_for_key(key: &str) -> Option<&'static str> {
         Some("anthropic")
     } else if k.starts_with("xai-") {
         Some("xai")
+    } else if k.starts_with("AIza") {
+        Some("gemini")
     } else if ["sk-proj-", "sk-svcacct-", "sk-admin-"].iter().any(|p| k.starts_with(p))
         || (k.starts_with("sk-") && k.contains("T3BlbkFJ"))
     {
@@ -125,6 +134,7 @@ pub fn api_base(provider: &str) -> &'static str {
         "deepseek" => "https://api.deepseek.com/v1",
         "chatgpt" => crate::chatgpt::RESOURCE,
         "qwen" => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "gemini" | "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
         _ => "https://api.openai.com/v1",
     }
 }
@@ -182,10 +192,14 @@ pub fn list_models(provider: &str, key: &str, base_url: &str) -> Result<Vec<Clou
     let mut out: Vec<CloudModel> = list
         .data
         .into_iter()
-        .map(|i| CloudModel {
-            name: i.display_name.or(i.name).unwrap_or_else(|| i.id.clone()),
-            ctx: i.context_length.map_or(0, |n| n.min(u32::MAX as u64) as u32),
-            id: i.id,
+        .map(|i| {
+            // Gemini lists "models/gemini-…"; chat requests take the bare id
+            let id = i.id.strip_prefix("models/").map(str::to_string).unwrap_or(i.id);
+            CloudModel {
+                name: i.display_name.or(i.name).unwrap_or_else(|| id.clone()),
+                ctx: i.context_length.map_or(0, |n| n.min(u32::MAX as u64) as u32),
+                id,
+            }
         })
         .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -212,6 +226,7 @@ pub fn default_model(provider: &str) -> &'static str {
         "xai" => "grok-4.6",
         "deepseek" => "deepseek-chat",
         "qwen" => "qwen-max",
+        "gemini" | "google" => "gemini-4-argon",
         _ => "gpt-5",
     }
 }
@@ -318,8 +333,10 @@ impl FmmInput {
             bail!("api_key is required");
         }
         let mut p = self.provider.trim().to_lowercase();
-        if p == "claude" {
-            p = "anthropic".into();
+        match p.as_str() {
+            "claude" => p = "anthropic".into(),
+            "google" => p = "gemini".into(),
+            _ => {}
         }
         let detected = provider_for_key(&self.api_key);
         if p.is_empty() {
@@ -340,8 +357,10 @@ impl FmmInput {
 
     pub fn normalize(mut self) -> Self {
         self.provider = self.provider.trim().to_lowercase();
-        if self.provider == "claude" {
-            self.provider = "anthropic".into();
+        match self.provider.as_str() {
+            "claude" => self.provider = "anthropic".into(),
+            "google" => self.provider = "gemini".into(),
+            _ => {}
         }
         self.api_key = self.api_key.trim().to_string();
         if self.provider.is_empty() {
@@ -413,6 +432,8 @@ mod tests {
         assert_eq!(provider_for_key("sk-or-v1-abc"), Some("openrouter"));
         assert_eq!(provider_for_key(" sk-ant-api03-abc"), Some("anthropic"));
         assert_eq!(provider_for_key("xai-abc"), Some("xai"));
+        assert_eq!(provider_for_key("AIzaSyA-abc"), Some("gemini"));
+        assert_eq!(input("google", "AIzaSyA-abc").normalize().provider, "gemini");
         assert_eq!(provider_for_key("sk-proj-abc"), Some("openai"));
         // Built at runtime: a literal sk-…T3BlbkFJ… trips GitHub secret scanning.
         let legacy_openai = format!("sk-abc{}{}xyz", "T3Blbk", "FJ");

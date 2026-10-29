@@ -187,6 +187,28 @@ pub fn resolve_whisper(dir: &Path) -> Result<Asr, String> {
         decoder: dec,
         tokens: tok,
         bundled: false,
+        ..Default::default()
+    })
+}
+
+/// Find the int8 encoder, decoder and joiner of an unpacked NeMo transducer (Parakeet).
+pub fn resolve_transducer(dir: &Path, langs: &[String]) -> Result<Asr, String> {
+    let all = files(dir);
+    let pick = |want: &str| {
+        all.iter()
+            .find(|p| name(p) == want || name(p).ends_with(&format!("-{want}")))
+            .map(|p| s(p))
+            .ok_or_else(|| format!("no {want} in {}", dir.display()))
+    };
+    Ok(Asr {
+        kind: "nemo_transducer".into(),
+        langs: langs.to_vec(),
+        dir: s(dir),
+        encoder: pick("encoder.int8.onnx")?,
+        decoder: pick("decoder.int8.onnx")?,
+        joiner: pick("joiner.int8.onnx")?,
+        tokens: pick("tokens.txt")?,
+        bundled: false,
     })
 }
 

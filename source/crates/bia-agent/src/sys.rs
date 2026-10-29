@@ -375,6 +375,7 @@ pub fn fmm_dns_host(provider: &str, base_url: &str) -> String {
         "deepseek" => "api.deepseek.com".into(),
         "chatgpt" => "api.openai.com".into(),
         "qwen" => "dashscope-intl.aliyuncs.com".into(),
+        "gemini" | "google" => "generativelanguage.googleapis.com".into(),
         "anthropic" | "claude" => "api.anthropic.com".into(),
         _ => "openrouter.ai".into(),
     }

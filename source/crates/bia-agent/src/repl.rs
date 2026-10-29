@@ -1318,7 +1318,7 @@ impl Repl {
                     _ => match (&self.remote, FmmConfig::load(&self.fmm_path)) {
                         (Some(r), _) => format!("FMM: on, {} (/fmm off to use the local model)", r.label()),
                         (None, Some(c)) => format!("FMM: off; configured {} model {} key {} (/fmm on to enable)", c.provider, if c.model.is_empty() { "(default)".into() } else { c.model.clone() }, c.masked_key()),
-                        (None, None) => "FMM: not configured. Paste an API key to the agent (OpenRouter, OpenAI, Anthropic, xAI, DeepSeek or Qwen); the provider is detected from it.".to_string(),
+                        (None, None) => "FMM: not configured. Paste an API key to the agent (OpenRouter, OpenAI, Anthropic, Gemini, xAI, DeepSeek or Qwen); the provider is detected from it.".to_string(),
                     },
                 };
                 self.con.writeln(&line);
