@@ -21,6 +21,7 @@ const TERM_JS: &str = include_str!("../web/term.js");
 const EMOJI_JS: &str = include_str!("../web/emoji.js");
 const PKI_JS: &str = include_str!("../web/pki.js");
 const MD_JS: &str = include_str!("../web/md.js");
+const LINK_JS: &str = include_str!("../web/link.js");
 const ICON: &str = include_str!("../web/icon.svg");
 const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
 const APPLE_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
@@ -144,28 +145,6 @@ fn abs_path(p: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-fn safe_name(name: &str) -> String {
-    let b = Path::new(name)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
-    let s: String = b
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | ' ' | '(' | ')') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let s = s.trim().trim_start_matches('.').to_string();
-    if s.is_empty() {
-        "file".into()
-    } else {
-        s.chars().take(120).collect()
-    }
-}
 
 fn write_bind_error(files: &Path, msg: &str) {
     let dir = files.join("state");
@@ -193,6 +172,7 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/emoji.js"
             | "/pki.js"
             | "/md.js"
+            | "/link.js"
             | "/icon.svg"
             | "/icon-192.png"
             | "/apple-touch-icon.png"
@@ -382,13 +362,13 @@ impl Web {
     fn peer_changed(&self, p: &bia_pki::Peer) {
         let text = match p.status.as_str() {
             "active" => format!(
-                "[peer {name}] {name} at {url} approved this bia's request: trust is set up both ways. \
-                 The live link opens by itself; a [peer {name}] notice comes when it is up, then talk with say(channel=\"peer:{name}\"). Tell root.",
+                "[web link {name}] {name} at {url} approved this bia's request: trust is set up both ways. \
+                 The link opens by itself; talk with say(identity=\"{name}\", channel=\"web\") like with anyone on web (it waits there until {name} is connected). Tell root.",
                 name = p.name,
                 url = p.url
             ),
             other => format!(
-                "[peer {name}] {name} at {url} did not approve this bia's request ({other}). The certificate this bia made for it is revoked. Tell root.",
+                "[web link {name}] {name} at {url} did not approve this bia's request ({other}). The certificate this bia made for it is revoked. Tell root.",
                 name = p.name,
                 url = p.url
             ),
@@ -396,7 +376,7 @@ impl Web {
         self.con.log(&format!("  peer {} at {}: {}", p.name, p.url, p.status));
         self.con.push_inbound(crate::bus::Inbound {
             identity: crate::bus::ID_SYSTEM.into(),
-            channel: crate::peer::channel(&p.name),
+            channel: crate::bus::CH_WEB.into(),
             id: crate::bus::mint_msg_id(),
             text,
         });
@@ -566,35 +546,24 @@ impl Web {
             return;
         }
 
-        // bias talk only over the live link: a peer certificate opens nothing else
-        if self.pki.is_peer_cert(&id).is_some()
-            // (it is renewed over the link, which keeps the peer record in step)
-            && !matches!(req.path.as_str(), "/ws/peer" | "/v1/whoami")
-        {
-            respond(&mut stream, 403, "text/plain", b"a peer certificate is only for the live link (GET /ws/peer)", None);
-            return;
-        }
-
         // ---- streaming bodies ----
-        if req.method == "POST" && req.path == "/v1/upload" {
-            self.upload(&mut stream, reader, &req, &id.identity);
-            return;
-        }
         if req.method == "POST" && req.path == "/v1/fs/put" {
             self.fs_put(&mut stream, reader, &req);
             return;
         }
 
-        // ---- the live link with another bia (peer certificate only) ----
+        // the peer link of bias before 1.9: they talk on /ws now
         if req.method == "GET" && req.path == "/ws/peer" {
-            let Some(links) = crate::peer::links() else {
-                respond(&mut stream, 503, "text/plain", b"peer links are not running", None);
+            respond(&mut stream, 410, "text/plain", b"this bia speaks the web bus protocol 2 on /ws; update to bia 1.9 or newer", None);
+            return;
+        }
+
+        // ---- the web bus: anyone's live session (a person, bia-bridge, another bia) ----
+        if req.method == "GET" && req.path == "/ws" {
+            let Some(links) = crate::link::links() else {
+                respond(&mut stream, 503, "text/plain", b"the web bus is not running", None);
                 return;
             };
-            if self.pki.is_peer_cert(&id).is_none() {
-                respond(&mut stream, 403, "text/plain", b"not a peer of this bia", None);
-                return;
-            }
             if links.admit(&peer).is_err() {
                 respond(&mut stream, 429, "text/plain", b"too many connections; try later", None);
                 return;
@@ -605,8 +574,8 @@ impl Web {
             };
             let _ = stream.write_all(ws_accept(key).as_bytes());
             let _ = stream.flush();
-            crate::peer::set_sndbuf_shared(&stream);
-            links.accept(stream, reader, &id, &peer);
+            crate::link::set_sndbuf_shared(&stream);
+            links.accept(stream, reader, &id, &peer, root);
             return;
         }
 
@@ -614,7 +583,7 @@ impl Web {
         if req.method == "GET"
             && matches!(
                 req.path.as_str(),
-                "/ws" | "/ws/term" | "/ws/shell" | "/v1/call" | "/gui/ws" | "/websockify"
+                "/ws/term" | "/ws/shell" | "/v1/call" | "/gui/ws" | "/websockify"
             )
         {
             let Some(key) = req.header("sec-websocket-key") else {
@@ -631,16 +600,11 @@ impl Web {
             let _ = stream.flush();
             let _ = stream.set_read_timeout(None);
             match req.path.as_str() {
-                "/ws" => self.ws_chat(stream, reader, &id.identity, root),
                 "/ws/term" => ws_term(stream, reader, &req),
                 "/ws/shell" => ws_shell(stream, reader, &req),
                 "/v1/call" => {
-                    let chat = match req.q("chat") {
-                        "" => crate::chat::MAIN.to_string(),
-                        c => c.to_string(),
-                    };
-                    let channel = crate::chat::channel_of(&chat);
-                    if let Err(e) = crate::chat::ensure_chat(&id.identity, &channel) {
+                    let chat = crate::chat::MAIN.to_string();
+                    if let Err(e) = crate::chat::ensure_chat(&id.identity, crate::bus::CH_WEB) {
                         let mut s = stream.clone();
                         let _ = ws_send(
                             &mut s,
@@ -699,6 +663,7 @@ impl Web {
             ("GET", "/emoji.js") => asset(stream, "text/javascript; charset=utf-8", EMOJI_JS),
             ("GET", "/pki.js") => asset(stream, "text/javascript; charset=utf-8", PKI_JS),
             ("GET", "/md.js") => asset(stream, "text/javascript; charset=utf-8", MD_JS),
+            ("GET", "/link.js") => asset(stream, "text/javascript; charset=utf-8", LINK_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
             ("GET", "/icon.svg" | "/favicon.ico") => asset(stream, "image/svg+xml", ICON),
             ("GET", "/icon-192.png") => respond(stream, 200, "image/png", ICON_PNG, None),
@@ -816,25 +781,6 @@ impl Web {
                 }
                 return;
             }
-            if let Some(chat) = path
-                .strip_prefix("/v1/chats/")
-                .and_then(|r| r.strip_suffix("/messages"))
-            {
-                let opt = |k: &str| Some(req.q(k)).filter(|s| !s.is_empty());
-                let limit = req.q("limit").parse().unwrap_or(50);
-                match crate::chat::messages(
-                    &id.identity,
-                    chat,
-                    opt("before"),
-                    opt("after"),
-                    opt("around"),
-                    limit,
-                ) {
-                    Ok(v) => respond_json(stream, v),
-                    Err(e) => respond(stream, 404, "text/plain; charset=utf-8", e.as_bytes(), None),
-                }
-                return;
-            }
         }
         if method == "GET" && (path == "/v1/qr" || path.starts_with("/v1/qr/")) {
             qr_http(&self.files, path, stream);
@@ -880,7 +826,7 @@ impl Web {
                     .peers()
                     .into_iter()
                     .map(|p| {
-                        let link = match (crate::peer::links(), p.status.as_str()) {
+                        let link = match (crate::link::links(), p.status.as_str()) {
                             (Some(l), "active") => l.describe(&p.name),
                             _ => json!({}),
                         };
@@ -893,7 +839,7 @@ impl Web {
                 let v: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
                 let args = json!({"action": v["action"], "peer": v["peer"]});
                 let ctx = bia_mcp::Ctx::console();
-                match crate::peer::tool_root(&ctx, args) {
+                match crate::link::tool_root(&ctx, args) {
                     Ok(t) => respond_json(stream, json!({"ok": true, "text": t})),
                     Err(e) => respond(stream, 400, "text/plain", e.as_bytes(), None),
                 }
@@ -1043,7 +989,6 @@ impl Web {
                     ),
                 }
             }
-            ("GET", "/v1/chats") => respond_json(stream, crate::chat::hello(&id.identity, root)),
             ("GET", "/v1/push/key") => match crate::push::public_key() {
                 Ok(k) => respond_json(stream, json!({"key": k})),
                 Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
@@ -1081,31 +1026,6 @@ impl Web {
                 Ok(n) => respond_json(stream, json!({"ok": true, "sent": n})),
                 Err(e) => respond(stream, 502, "text/plain; charset=utf-8", e.as_bytes(), None),
             },
-            ("POST", "/v1/chats/action") => {
-                match crate::chat::action(&id.identity, root, &json_body()) {
-                    Ok(v) => respond_json(stream, v),
-                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
-                }
-            }
-            ("GET", "/v1/search") => {
-                let chat = Some(req.q("chat")).filter(|s| !s.is_empty());
-                match crate::chat::search(&id.identity, chat, req.q("q")) {
-                    Ok(v) => respond_json(stream, v),
-                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
-                }
-            }
-            ("GET", "/v1/att") => {
-                let i = req.q("i").parse().unwrap_or(0);
-                match crate::chat::attachment(&id.identity, req.q("chat"), req.q("id"), i) {
-                    Some((p, name, _)) => {
-                        send_file(stream, &p, &name, req.q("dl") == "1", req.header("range"))
-                    }
-                    None => respond(stream, 404, "text/plain", b"not found", None),
-                }
-            }
-            ("GET", "/v1/history") => {
-                respond_json(stream, crate::chat::legacy_history(&id.identity))
-            }
             // legacy file API, relative to the files dir (root)
             ("GET", "/v1/files") => match safe_join(&self.files, req.q("path")) {
                 Some(dir) => {
@@ -1161,6 +1081,18 @@ impl Web {
 
     /// Renewal takes a CSR for a key the holder made; the answer is PEM (new cert + CA).
     fn renew_client(&self, stream: &mut dyn Write, id: &ClientId, csr: &str) {
+        // another bia's certificate: renewed so that its peer record keeps the new serial
+        // (removing the peer revokes the one it holds)
+        if self.pki.is_peer_cert(id).is_some() {
+            match self.pki.peer_renew(&id.identity, csr) {
+                Ok(pem) => {
+                    self.con.log(&format!("  web: renewed the certificate of {}", id.identity));
+                    respond(stream, 200, "application/x-pem-file", pem.as_bytes(), None);
+                }
+                Err(e) => respond(stream, 400, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+            }
+            return;
+        }
         match self.pki.renew_csr(id, csr) {
             Ok((pem, meta)) => {
                 self.con.log(&format!(
@@ -1584,39 +1516,7 @@ impl Web {
         false
     }
 
-    /// Chat attachment upload into `inbox/web/<identity>/`. Returns `{path, size, name}`.
-    fn upload(
-        &self,
-        stream: &mut dyn Write,
-        mut reader: BufReader<SharedTls>,
-        req: &Req,
-        identity: &str,
-    ) {
-        let raw_name = Some(req.q("name").to_string())
-            .filter(|s| !s.is_empty())
-            .or_else(|| req.header("x-filename").map(|s| s.to_string()))
-            .unwrap_or_else(|| "file.bin".into());
-        let name = safe_name(&raw_name);
-        let rel = format!(
-            "{}/{}-{}",
-            crate::chat::inbox_rel(identity),
-            stamp_prefix(),
-            name
-        );
-        let dest = self.files.join(&rel);
-        match receive_to(&mut reader, &dest, req.content_length()) {
-            Ok(n) => respond_json(stream, json!({"path": rel, "size": n, "name": name})),
-            Err((code, e)) => respond(
-                stream,
-                code,
-                "text/plain; charset=utf-8",
-                e.as_bytes(),
-                None,
-            ),
-        }
-    }
-
-    /// Root file manager write: `?path=/abs/file&overwrite=1`, raw body.
+    /// Root file manager write:    /// Root file manager write: `?path=/abs/file&overwrite=1`, raw body.
     fn fs_put(&self, stream: &mut dyn Write, mut reader: BufReader<SharedTls>, req: &Req) {
         let Some(dest) = abs_path(req.q("path")) else {
             respond(stream, 400, "text/plain", b"bad path", None);
@@ -1648,80 +1548,7 @@ impl Web {
         }
     }
 
-    /// Chat WebSocket: JSON events out (`webchat`), JSON actions in, `{t:"ack", cid}` replies.
-    fn ws_chat(
-        &self,
-        stream: SharedTls,
-        mut reader: BufReader<SharedTls>,
-        identity: &str,
-        root: bool,
-    ) {
-        // browsers ping every 30s; a silent peer is dropped
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
-        let (sid, rx) = self.con.add_web_sink(identity);
-        let peer = stream
-            .peer_addr()
-            .map(|a| a.ip().to_string())
-            .unwrap_or_default();
-        self.con
-            .log(&format!("  web: {peer} ({identity}) connected"));
-        self.con.web_opened(identity, &peer);
-        let hello = crate::chat::hello(identity, root).to_string();
-        let mut pkt = vec![0x1d];
-        pkt.extend_from_slice(hello.as_bytes());
-        self.con.send_to_sink(sid, &pkt);
-        let mut out = stream.clone();
-        let writer = std::thread::spawn(move || {
-            while let Ok(bytes) = rx.recv() {
-                let body = bytes.strip_prefix(&[0x1d]).unwrap_or(&bytes);
-                if ws_send(&mut out, 1, body).is_err() {
-                    break;
-                }
-            }
-            let _ = ws_send(&mut out, 8, &[]);
-            out.shutdown();
-        });
-        loop {
-            match ws_recv(&mut reader) {
-                Ok((1, payload)) => {
-                    let Ok(v) = serde_json::from_slice::<Value>(&payload) else {
-                        continue;
-                    };
-                    let cid = v.get("cid").cloned().unwrap_or(Value::Null);
-                    let t = v.get("t").and_then(|t| t.as_str());
-                    if t == Some("active") {
-                        self.con.set_active(sid, v["on"].as_bool().unwrap_or(false));
-                        continue;
-                    }
-                    let reply = if t == Some("ping") {
-                        json!({"t": "pong"})
-                    } else {
-                        match crate::chat::action(identity, root, &v) {
-                            Ok(r) => json!({"t": "ack", "cid": cid, "ok": true, "r": r}),
-                            Err(e) => json!({"t": "ack", "cid": cid, "ok": false, "error": e}),
-                        }
-                    };
-                    let mut pkt = vec![0x1d];
-                    pkt.extend_from_slice(reply.to_string().as_bytes());
-                    self.con.send_to_sink(sid, &pkt);
-                }
-                Ok((9, payload)) => {
-                    let mut s = reader.get_ref().clone();
-                    let _ = ws_send(&mut s, 10, &payload);
-                }
-                Ok((8, _)) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-        self.con.remove_sink(sid);
-        Bus::web_closed(&self.con, identity);
-        stream.shutdown();
-        let _ = writer.join();
-        self.con
-            .log(&format!("  web: {peer} ({identity}) disconnected"));
-    }
-
-    /// Root's live console: raw console bytes out (binary frames), lines/resize/stop in.
+    /// Root's live console:    /// Root's live console: raw console bytes out (binary frames), lines/resize/stop in.
     fn gui_novnc(&self, stream: &mut dyn Write, rest: &str) {
         let Some(root) = novnc_root() else {
             respond(stream, 404, "text/plain", b"novnc not installed", None);
@@ -2384,18 +2211,6 @@ fn vnc_bridge(mut browser: SharedTls, mut browser_r: BufReader<SharedTls>) {
     let _ = pump.join();
 }
 
-fn stamp_prefix() -> String {
-    let r = crate::bus::rfc3339(std::time::SystemTime::now());
-    format!(
-        "{}{}{}-{}{}{}",
-        &r[0..4],
-        &r[5..7],
-        &r[8..10],
-        &r[11..13],
-        &r[14..16],
-        &r[17..19]
-    )
-}
 
 /// HTTP/1.1 chunked transfer body.
 struct Chunked<'a> {

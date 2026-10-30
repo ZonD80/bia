@@ -212,38 +212,6 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     }
                 }
             },
-            "/v1/chats": {
-                "get": {
-                    "tags": ["chat"],
-                    "summary": "Your chats (same payload as the WebSocket hello)",
-                    "security": [{"mtls": []}],
-                    "responses": {"200": {"description": "{t, me, chats, drafts, typing}"}}
-                }
-            },
-            "/v1/chats/{chat}/messages": {
-                "get": {
-                    "tags": ["chat"],
-                    "summary": "Page of messages: newest, or before/after/around a message id",
-                    "security": [{"mtls": []}],
-                    "parameters": [
-                        {"name": "chat", "in": "path", "required": true, "schema": {"type": "string"}},
-                        {"name": "limit", "in": "query", "schema": {"type": "integer"}},
-                        {"name": "before", "in": "query", "schema": {"type": "string"}},
-                        {"name": "after", "in": "query", "schema": {"type": "string"}},
-                        {"name": "around", "in": "query", "schema": {"type": "string"}}
-                    ],
-                    "responses": {"200": {"description": "{chat, messages, more_before, more_after}"}}
-                }
-            },
-            "/v1/chats/action": {
-                "post": {
-                    "tags": ["chat"],
-                    "summary": "One chat action: send, edit, delete, react, pin, read, forward, button, vote, chat_new, chat_rename, chat_mute, chat_clear, chat_delete",
-                    "security": [{"mtls": []}],
-                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["t"], "properties": {"t": {"type": "string"}, "chat": {"type": "string"}}, "additionalProperties": true}}}},
-                    "responses": {"200": {"description": "Result"}, "400": {"description": "Error text"}}
-                }
-            },
             "/v1/push/key": {
                 "get": {
                     "tags": ["push"],
@@ -293,49 +261,6 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "summary": "Push a test notification to every subscribed browser of the caller",
                     "security": [{"mtls": []}],
                     "responses": {"200": {"description": "{ok, sent}"}, "502": {"description": "Push service error text"}}
-                }
-            },
-            "/v1/search": {
-                "get": {
-                    "tags": ["chat"],
-                    "summary": "Search message text and file names",
-                    "security": [{"mtls": []}],
-                    "parameters": [
-                        {"name": "q", "in": "query", "required": true, "schema": {"type": "string"}},
-                        {"name": "chat", "in": "query", "schema": {"type": "string"}}
-                    ],
-                    "responses": {"200": {"description": "{results: [{chat, title, m}]}"}}
-                }
-            },
-            "/v1/att": {
-                "get": {
-                    "tags": ["chat"],
-                    "summary": "Attachment of one of your messages (Range supported)",
-                    "security": [{"mtls": []}],
-                    "parameters": [
-                        {"name": "chat", "in": "query", "required": true, "schema": {"type": "string"}},
-                        {"name": "id", "in": "query", "required": true, "schema": {"type": "string"}},
-                        {"name": "i", "in": "query", "schema": {"type": "integer"}},
-                        {"name": "dl", "in": "query", "schema": {"type": "string", "enum": ["1"]}}
-                    ],
-                    "responses": {"200": {"description": "File bytes"}, "206": {"description": "Partial content"}}
-                }
-            },
-            "/v1/upload": {
-                "post": {
-                    "tags": ["chat"],
-                    "summary": "Upload an attachment into inbox/web/<identity>/ (raw body)",
-                    "security": [{"mtls": []}],
-                    "parameters": [{"name": "name", "in": "query", "schema": {"type": "string"}}],
-                    "responses": {"200": {"description": "{path, size, name}"}}
-                }
-            },
-            "/v1/history": {
-                "get": {
-                    "tags": ["chat"],
-                    "summary": "Legacy: recent messages of the main chat",
-                    "security": [{"mtls": []}],
-                    "responses": {"200": {"description": "Messages"}}
                 }
             },
             "/v1/status": {
@@ -471,17 +396,9 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/ws": {
                 "get": {
                     "tags": ["chat"],
-                    "summary": "Chat WebSocket: hello + events out, actions in ({t, cid, …} → {t:ack}). Channel web / web:<chat>.",
+                    "summary": "The web bus (protocol 2): your one chat with bia, for people, other bias and agents alike. Client hello {proto: 2, instance, rx} first; then m {seq, m} / gone {seq, ids} from rx on, live changes, actions with cid → ack (send, edit, delete, react, pin, read, button, vote, close_poll, mute, hist, search), files pulled by the receiver (fget / binary chunks [sha256 32][offset u64][data] / fack / fdone), ping every 5 s (silent 15 s: closed), bye. One live session per identity (a second gets bye duplicate_key). See SKILL.md.",
                     "security": [{"mtls": []}],
-                    "responses": {"101": {"description": "Switching Protocols"}}
-                }
-            },
-            "/ws/peer": {
-                "get": {
-                    "tags": ["peers"],
-                    "summary": "Live link with another bia (peer certificate only): JSON frames hello, msg, edit, react, del, ack, read, typing, fget/fack/fdone/frefuse/fcancel, renew, bye; binary file chunks [sha256 32][offset u64][data]. See SKILL.md.",
-                    "security": [{"mtls": []}],
-                    "responses": {"101": {"description": "Switching Protocols"}, "403": {"description": "not a peer of this bia"}, "429": {"description": "too many handshakes from this address"}}
+                    "responses": {"101": {"description": "Switching Protocols"}, "429": {"description": "too many handshakes from this address"}}
                 }
             },
             "/v1/bridge": {
@@ -494,7 +411,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/v1/call": {
                 "get": {
                     "tags": ["chat"],
-                    "summary": "Live voice call with bia on a web chat (?chat=<id>, ?ring=<id> to answer bia's call). Binary 16 kHz mono s16le frames in; JSON {t:played|mute|hangup} in; bia's speech as binary [gen u32][rate u32][s16le] plus JSON ready/say/say_end/stop/caption/end out.",
+                    "summary": "Live voice call with bia on your web chat (?ring=<id> to answer bia's call). Binary 16 kHz mono s16le frames in; JSON {t:played|mute|hangup} in; bia's speech as binary [gen u32][rate u32][s16le] plus JSON ready/say/say_end/stop/caption/end out.",
                     "security": [{"mtls": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
@@ -550,7 +467,7 @@ pub fn discovery(port: u16, ca_sha256: &str) -> Value {
         "auth": "mtls",
         "buses": ["console", "web", "telegram", "whatsapp"],
         "chat_ws": "/ws",
-        "peer_ws": "/ws/peer",
+        "chat_protocol": 2,
         "bridge": {
             "about": "bia-bridge: a ready client for agents (CLI + MCP server); connect once, the owner approves, then send / wait",
             "list": "/v1/bridge",

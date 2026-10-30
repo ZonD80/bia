@@ -64,9 +64,9 @@ web_mcp() {
   builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/web-mcp-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
 }
 
-# live peer links between web MCPs: trust, messages, files, disconnect, bans, bye, a copy refused
+# two bias on the web bus: trust, messages and files both ways, store and forward, roles, bans, a copy refused
 peer_link() {
-  builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/peer-link-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
+  builder 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/bia-link-e2e.py "$CARGO_TARGET_DIR/debug/bia-mcp-web"'
 }
 
 # bia-bridge (CLI, daemon, MCP mode) against the real web MCP
@@ -97,6 +97,9 @@ for stage in "$@"; do
       run meta-mcp meta_mcp
       run ignore-mcp ignore_mcp
       run web-markdown node tests/integration/web-md-test.js
+      run web-link node tests/integration/web-link-test.js
+      # the web app in headless Chrome, on this host (skips when there is no Chrome here)
+      run web-app bash -c 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/web-app-e2e.py target/debug/bia-mcp-web'
       run update-internet-stage env ARCH="$ARCH" tests/integration/update-net-test.sh ;;
     e2e)
       run update-e2e env ARCH="$ARCH" bash -c 'tests/e2e/update-e2e.sh images && tests/e2e/update-e2e.sh patch && tests/e2e/update-e2e.sh all internet disk flash rescue fsck twin'

@@ -544,7 +544,7 @@ mod tests {
         std::env::set_var("BIA_SPEECH_STORE", dir.join("speech"));
         let con = Arc::new(Bus::new(dir.clone()));
         crate::chat::init(&dir, con.clone());
-        crate::chat::ensure_chat("root", "web:test").unwrap();
+        crate::chat::ensure_chat("root", "web").unwrap();
 
         let sink = Sink::default();
         let (tx, rx) = mpsc::channel::<(u8, Vec<u8>)>();
@@ -583,7 +583,7 @@ mod tests {
             eprintln!("model got {}@{}: {}", ib.identity, ib.channel, ib.text);
             assert_eq!(
                 (ib.identity.as_str(), ib.channel.as_str()),
-                ("root", "web:test")
+                ("root", "web")
             );
             assert!(ib.text.starts_with("[speech en]"), "{}", ib.text);
             heard.push_str(&ib.text);
@@ -595,10 +595,10 @@ mod tests {
 
         // bia answers: audio streams to the browser, then say_end
         assert!(
-            speak("root", "web:test", "It is nine in the evening.", "").is_err(),
+            speak("root", "web", "It is nine in the evening.", "").is_err(),
             "lang required"
         );
-        speak("root", "web:test", "It is nine in the evening.", "en").unwrap();
+        speak("root", "web", "It is nine in the evening.", "en").unwrap();
         let t = Instant::now();
         let gen = loop {
             let fr = frames(&sink.0.lock().unwrap());
@@ -639,19 +639,19 @@ mod tests {
         );
 
         // bia hangs up: the model hears it ended, the chat gets the transcript
-        hangup("root", "web:test").unwrap();
+        hangup("root", "web").unwrap();
         drop(tx);
         server.join().unwrap();
         let ib = next_web(&con);
         assert!(ib.text.starts_with("[call ended]"), "{}", ib.text);
-        let h = crate::chat::chat_text("root", "test");
+        let h = crate::chat::chat_text("root");
         eprintln!("chat:\n{h}");
         assert!(
             h.contains("📞 Call")
                 && h.to_lowercase().contains("madrid")
                 && h.contains("nine in the evening")
         );
-        assert!(!active("root", "web:test"));
+        assert!(!active("root", "web"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

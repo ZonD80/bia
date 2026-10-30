@@ -1,7 +1,7 @@
 {
   "name": "web",
-  "version": "1.8.0",
-  "description": "bia's HTTPS web app: people with a client certificate from this machine chat with you there, each as their own identity. Their messages arrive as <identity>|web|… or <identity>|web:<chat>|…; answer or write first with say(identity, channel) (say new_chat=true opens a chat); react, say edit=, delete_messages, pin_message, close_poll and chat_history work there too. Calls: web_call_*. Certificates: web_pki_*. Other bias (peers): trust with web_peer_add; each peer is a live link, channel peer:<name>: its messages arrive as <name>|peer:<name>|…, answer with say on that channel (needs the link up: web_peer_connect / web_peer_disconnect / web_peer_ban / web_peer_unban, web_peer_list). The web app is not the console: the console is the physical screen.",
+  "version": "1.9.0",
+  "description": "bia's HTTPS web app: everyone with a client certificate from this machine has one chat with you there, as their own identity: people, other bias and outside agents alike, and they all talk the same way. Their messages arrive as <identity>|web|…; answer or write first with say(identity, channel=\"web\"). What you send to someone who is not connected waits there and reaches them when they are back. react, say edit=, delete_messages, pin_message, close_poll and chat_history work there too. Calls: web_call_*. Certificates: web_pki_*. Other bias: set up trust with web_peer_add; then the link opens by itself and you talk on its web chat; web_peer_list shows the links, web_peer_connect / web_peer_disconnect / web_peer_ban / web_peer_unban control them. The web app is not the console: the console is the physical screen.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-web",
     "x86_64": "bin/x86_64/bia-mcp-web"

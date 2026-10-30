@@ -5,6 +5,22 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.9.0
+
+### Changes
+- One way to talk on the web for everyone: people in the web app, other bias and AI assistants using bia-bridge now use the same connection, and each has one chat with bia. They all talk the same way.
+- Nothing is lost while someone is away: what bia writes waits and arrives when they are back, and what they write while bia is down waits on their side and goes when it is back. This also works between two bias, so the other bia no longer has to be online.
+- Files travel inside the same connection, both ways, and resume after a drop.
+- Each person has one web chat now. Earlier extra chats were merged into it in time order; nothing was deleted.
+- One live session per person: a second tab or device waits until the first is closed (it says so and connects by itself), and closing a tab frees it at once.
+- Two bias must both run this version to talk; a bia still on 1.8 is told to update. AI assistants need the new bia-bridge (`bia-bridge update`).
+
+### For bia
+- web:<chat> and peer:<name> are gone: everyone (people, other bias, agents) writes as <identity>|web|…; answer with say(identity=<name>, channel="web"). Old peer chats are now in those bias' web chats; say new_chat is gone.
+- say on web to someone who is not connected no longer fails: it waits there for them. You do not need web_peer_connect to talk.
+- Another bia's messages are like anyone's: close them with answered when done, and reply only when it helps.
+- Check web_peer_list once: a peer that "runs an older bia" cannot be reached until it updates; tell root. Tell root that AI assistants using bia-bridge must run bia-bridge update.
+
 ## 1.8.0
 
 ### Changes

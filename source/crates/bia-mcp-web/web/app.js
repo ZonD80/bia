@@ -310,16 +310,18 @@ function xhrUpload(url, blob, onProgress) {
 // ======================================================================
 const S = {
   me: null, root: false,
-  chats: new Map(),        // id → summary
-  order: [],               // chat ids, most recent first
+  // one chat with bia ('main'); its summary is worked out here from the loaded messages
+  chats: new Map(),        // 'main' → {id, title, muted, unread, last, pinned}
+  order: [],
   cache: new Map(),        // id → {list, byId, moreBefore, moreAfter, loading}
   drafts: new Map(),       // chat → {id, text}
   typing: new Set(),
-  pending: new Map(),      // chat → [{cid, text, files, progress, reply_to, kind}]
+  pending: new Map(),      // chat → [{id, text, files, progress, reply_to, kind}] (not in the chat yet)
+  upProg: new Map(),       // fid → fraction of one of our files bia has pulled
   cur: null,
   route: '',
-  ws: null, wsOk: false, wsTry: 0, hellos: 0,
-  acks: new Map(), cidSeq: 1,
+  link: null, wsOk: false, linkState: 'connecting', hellos: 0,
+  ready: null, readyResolve: null, loadedAt: Date.now(),
   tasks: [], taskSeen: new Set(),
   status: null,
   reply: null, edit: null,
@@ -461,173 +463,206 @@ async function start(who) {
   // focus moving into an iframe (display, task pages) blurs the window but keeps the tab in front
   window.addEventListener('blur', () => setTimeout(sendActive, 0));
   notifInit();
-  setInterval(() => { if (S.ws && S.ws.readyState === 1) S.ws.send('{"t":"ping"}'); }, 30000);
 }
 
 // ======================================================================
-// websocket
+// the web bus (web/link.js): one WebSocket for the chat, its files and acks
 // ======================================================================
+// The latest messages of the chat, loaded once after connecting (the list's summary and
+// unread count come from them, also before the chat is opened).
+function loadMain() {
+  const have = S.cache.get('main');
+  if (have) return have.ready;
+  const c = { list: [], byId: new Map(), moreBefore: false, moreAfter: false, loading: true };
+  S.cache.set('main', c);
+  c.ready = (async () => {
+    try {
+      const j = await hist({ limit: 60 });
+      // what arrived meanwhile (live frames) is newer than the page
+      const live = c.list;
+      c.list = j.messages; c.byId = new Map(j.messages.map(m => [m.id, m]));
+      for (const m of live) if (!c.byId.has(m.id)) { c.list.push(m); c.byId.set(m.id, m); }
+      c.list.sort((a, b) => a.ts - b.ts);
+      c.moreBefore = j.more_before; c.moreAfter = false;
+    } catch (e) {
+      toast('Could not load messages: ' + e.message, true);
+      if (S.cache.get('main') === c) S.cache.delete('main');
+      c.loading = false;
+      return null;
+    }
+    c.loading = false;
+    summarize();
+    return c;
+  })();
+  return c.ready;
+}
+
 function connect() {
-  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-  S.ws = ws;
-  let helloSeen = false;
-  ws.onopen = () => { S.wsTry = 0; };
-  ws.onmessage = e => {
-    let v; try { v = JSON.parse(e.data); } catch { return; }
-    if (v.t === 'hello') { helloSeen = true; onHello(v); return; }
-    if (!helloSeen) return;
-    onEvent(v);
-  };
-  ws.onclose = () => {
-    S.wsOk = false; setConn();
-    for (const [, a] of S.acks) a.reject(new Error('disconnected'));
-    S.acks.clear();
-    const delay = Math.min(10000, 800 * Math.pow(1.6, S.wsTry++));
-    setTimeout(connect, delay);
-  };
+  S.ready = new Promise(r => { S.readyResolve = r; });
+  S.chats.set('main', { id: 'main', title: 'bia', muted: false, unread: 0, last: null, pinned: [] });
+  S.order = ['main'];
+  S.link = BiaLink.create({
+    identity: S.me.identity,
+    onHello, onFrame: onEvent, onReset, onUpload, onOutbox,
+    onState: st => { S.linkState = st; S.wsOk = st === 'online'; setConn(); },
+  });
+  S.link.start();
 }
 
+// Actions go over the link; changes to the chat wait in its outbox while it is down.
 function act(t, payload = {}) {
-  const cid = 'c' + (S.cidSeq++);
-  const msg = Object.assign({ t, cid }, payload);
-  if (!S.ws || S.ws.readyState !== 1) {
-    return POST('/v1/chats/action', msg);
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { S.acks.delete(cid); reject(new Error('timeout')); }, 30000);
-    S.acks.set(cid, {
-      resolve: (r) => { clearTimeout(timer); resolve(r); },
-      reject: (e) => { clearTimeout(timer); reject(e); },
-    });
-    S.ws.send(JSON.stringify(msg));
-  });
+  const p = Object.assign({}, payload);
+  delete p.chat;
+  return S.link.act(t, p);
+}
+// History and search need the link (they wait for the first hello).
+async function hist(params) {
+  await S.ready;
+  const r = await act('hist', params);
+  if (r.rev > (S.link.rx || 0)) S.link.rx = r.rev;
+  return r;
 }
 
 function onHello(v) {
   S.wsOk = true;
-  S.chats.clear();
-  for (const c of v.chats || []) S.chats.set(c.id, c);
-  S.drafts.clear();
-  for (const d of v.drafts || []) S.drafts.set(d.chat, { id: d.id, text: d.text });
-  S.typing = new Set(v.typing || []);
-  sortChats();
+  const main = S.chats.get('main');
+  main.muted = !!v.muted;
+  if (v.typing) S.typing.add('main'); else S.typing.delete('main');
   setConn();
+  S.readyResolve();
+  // the first hello loads the chat; a reconnect without a known revision reloads it
+  if (!S.hellos++) loadMain();
+  else if (S.link.rx === null) { S.cache.delete('main'); loadMain(); if (S.cur) openChat('main', { keepScroll: false }); }
+  if (S.cur && S.route.startsWith('chat')) { renderChatHead(); renderPinbar(); }
   renderChatList();
-  // resync after a reconnect (events may have been missed)
-  if (S.hellos++) {
-    for (const id of [...S.cache.keys()]) if (id !== S.cur) S.cache.delete(id);
-    if (S.cur && S.route.startsWith('chat/')) { S.cache.delete(S.cur); openChat(S.cur, { keepScroll: false }); }
-  } else if (S.cur && S.route.startsWith('chat/')) { renderChatHead(); renderPinbar(); }
   updateTitle();
   sendActive();
 }
 
+function onReset() {
+  S.cache.delete('main');
+  loadMain();
+  if (S.cur) openChat('main', { keepScroll: false });
+}
+
 function onEvent(v) {
   switch (v.t) {
-    case 'ack': {
-      const a = S.acks.get(v.cid);
-      if (!a) return;
-      S.acks.delete(v.cid);
-      if (v.ok) a.resolve(v.r); else a.reject(new Error(v.error || 'failed'));
-      return;
-    }
-    case 'chat': {
-      const prev = S.chats.get(v.c.id);
-      S.chats.set(v.c.id, v.c);
-      sortChats();
-      renderChatList();
-      if (S.cur === v.c.id && S.route.startsWith('chat/')) { renderChatHead(); renderPinbar(); }
-      if (!prev || prev.unread !== v.c.unread) updateTitle();
-      return;
-    }
-    case 'chat_del':
-      S.chats.delete(v.id); S.cache.delete(v.id); sortChats(); renderChatList(); updateTitle();
-      if (S.cur === v.id) go('chat/main');
-      return;
-    case 'msg': onMsg(v.chat, v.m); return;
-    case 'ring': showRing(v); return;
-    case 'ring_end': if (RING.chat === v.chat) stopRing(); return;
+    case 'm': upsertMsg(v.m); return;
+    case 'gone': removeMsgs(v.ids); return;
+    case 'ring': showRing(Object.assign({}, v, { chat: 'main' })); return;
+    case 'ring_end': if (RING.chat) stopRing(); return;
     case 'call': return;
-    case 'upd': {
-      const c = S.cache.get(v.chat);
-      if (c && c.byId.has(v.m.id)) {
-        const i = c.list.findIndex(x => x.id === v.m.id);
-        c.list[i] = v.m; c.byId.set(v.m.id, v.m);
-        if (S.cur === v.chat) rerenderRow(v.m.id);
-      }
-      return;
-    }
-    case 'del': {
-      const c = S.cache.get(v.chat);
-      if (c) {
-        c.list = c.list.filter(m => !v.ids.includes(m.id));
-        v.ids.forEach(id => c.byId.delete(id));
-        if (S.cur === v.chat) { v.ids.forEach(id => S.sel.delete(id)); renderMessages({ keep: true }); }
-      }
-      return;
-    }
-    case 'read': {
-      const c = S.cache.get(v.chat);
-      if (!c) return;
-      for (const id of v.ids) { const m = c.byId.get(id); if (m) { m.read = true; if (S.cur === v.chat) rerenderRow(id); } }
-      return;
-    }
-    case 'clear': {
-      const c = S.cache.get(v.chat);
-      if (c) { c.list = []; c.byId.clear(); c.moreBefore = false; c.moreAfter = false; }
-      if (S.cur === v.chat) renderMessages();
-      return;
-    }
     case 'typing':
-      if (v.on) S.typing.add(v.chat); else S.typing.delete(v.chat);
+      if (v.on) S.typing.add('main'); else S.typing.delete('main');
       renderChatList();
-      if (S.cur === v.chat) { renderChatHead(); renderTail(); updateSendBtn(); }
+      if (S.cur) { renderChatHead(); renderTail(); updateSendBtn(); }
       return;
     case 'draft': {
-      const d = S.drafts.get(v.chat);
+      const d = S.drafts.get('main');
       if (d && d.id === v.id) d.text += v.d;
-      else S.drafts.set(v.chat, { id: v.id, text: v.d });
-      if (S.cur === v.chat) scheduleDraft();
+      else S.drafts.set('main', { id: v.id, text: v.d });
+      if (S.cur) scheduleDraft();
       return;
     }
     case 'draft_end':
-      S.drafts.delete(v.chat);
-      if (S.cur === v.chat) renderTail();
+      S.drafts.delete('main');
+      if (S.cur) renderTail();
       return;
   }
 }
 
-function onMsg(chat, m) {
-  const d = S.drafts.get(chat);
-  if (d && d.id === m.id) S.drafts.delete(chat);
-  // an optimistic bubble of ours becomes the real message
-  const pend = S.pending.get(chat) || [];
-  if (isMine(m)) {
-    const i = pend.findIndex(p => p.sent && !p.matched && (p.text || '') === (m.text || '') && (p.files || []).length === (m.files || []).length);
-    if (i >= 0) pend.splice(i, 1);
+// A message's new state: a new one, an edit, a reaction, a read mark, a file arriving.
+function upsertMsg(m) {
+  const d = S.drafts.get('main');
+  if (d && d.id === m.id) S.drafts.delete('main');
+  const pend = S.pending.get('main') || [];
+  const pi = pend.findIndex(p => p.id === m.id);
+  if (pi >= 0) pend.splice(pi, 1);
+  const c = S.cache.get('main');
+  if (c && c.loading) {
+    // merged into the history when it arrives
+    if (!c.byId.has(m.id)) c.list.push(m);
+    c.byId.set(m.id, m);
+  } else if (c) {
+    const old = c.byId.get(m.id);
+    if (old) {
+      if ((m.rev || 0) >= (old.rev || 0)) {
+        c.list[c.list.indexOf(old)] = m; c.byId.set(m.id, m);
+        if (S.cur) rerenderRow(m.id);
+      }
+    } else if (!c.moreAfter) {
+      const first = c.list[0];
+      if (c.moreBefore && first && m.ts < first.ts) { /* older than what is loaded */ }
+      else {
+        c.byId.set(m.id, m);
+        const last = c.list[c.list.length - 1];
+        if (!last || last.ts <= m.ts) { c.list.push(m); if (S.cur) appendRow(m); }
+        else { c.list.push(m); c.list.sort((a, b) => a.ts - b.ts); if (S.cur) renderMessages({ keep: true }); }
+        if (!isMine(m) && !m.service && !m.read && m.ts > S.loadedAt - 60e3) notifyMsg('main', m);
+      }
+    } else if (S.cur && !isMine(m)) { S.jumpUnread = (S.jumpUnread || 0) + 1; renderJump(); }
   }
-  const c = S.cache.get(chat);
-  if (c && !c.moreAfter && !c.byId.has(m.id)) {
-    c.list.push(m); c.byId.set(m.id, m);
-    if (S.cur === chat) appendRow(m);
-  } else if (c && c.moreAfter && S.cur === chat) {
-    S.jumpUnread = (S.jumpUnread || 0) + (isMine(m) ? 0 : 1); renderJump();
-  }
-  if (S.cur === chat) renderTail();
-  if (!isMine(m)) notifyMsg(chat, m);
+  summarize();
+  if (S.cur) { renderTail(); renderPinbar(); }
 }
 
-function sortChats() {
-  S.order = [...S.chats.values()]
-    .sort((a, b) => ((b.last && b.last.ts) || b.created) - ((a.last && a.last.ts) || a.created))
-    .map(c => c.id);
-  // main chat stays on top
-  S.order = ['main', ...S.order.filter(x => x !== 'main')].filter(x => S.chats.has(x));
+function removeMsgs(ids) {
+  const c = S.cache.get('main');
+  if (c) {
+    c.list = c.list.filter(m => !ids.includes(m.id));
+    ids.forEach(id => c.byId.delete(id));
+    if (S.cur) { ids.forEach(id => S.sel.delete(id)); renderMessages({ keep: true }); }
+  }
+  summarize();
+}
+
+// The chat's summary for the list and the title, from the loaded messages.
+function summarize() {
+  const c = S.cache.get('main'), sum = S.chats.get('main');
+  if (!c || !sum) return;
+  sum.unread = c.list.filter(m => m.from === 'bia' && !m.read && !m.service).length;
+  sum.last = c.list[c.list.length - 1] || null;
+  sum.pinned = c.list.filter(m => m.pinned).map(m => m.id);
+  renderChatList();
+  updateTitle();
+}
+
+// bia pulled (part of) a file of ours: show how far it got.
+function onUpload(fid, done, total) {
+  if (done === -1) S.upProg.delete(fid);
+  else if (done === -2) { S.upProg.delete(fid); toast('A file was not sent: ' + total, true); }
+  else S.upProg.set(fid, total ? done / total : 0);
+  if (onUpload.raf) return;
+  onUpload.raf = requestAnimationFrame(() => {
+    onUpload.raf = 0;
+    const c = S.cache.get('main');
+    if (!c || !S.cur) return;
+    for (const m of c.list) if ((m.files || []).some(f => f.pending)) rerenderRow(m.id);
+  });
+}
+
+// Messages written while offline (also before a reload) wait in the outbox: show them.
+function onOutbox(list) {
+  const pend = S.pending.get('main') || [];
+  S.pending.set('main', pend);
+  const c = S.cache.get('main');
+  for (const a of list) {
+    if (a.t !== 'send' || !a.id || pend.some(p => p.id === a.id) || (c && c.byId.has(a.id))) continue;
+    pend.push({ id: a.id, chat: 'main', text: a.text || '', files: (a.files || []).map(f => ({ name: f.name, size: f.size })), progress: {}, reply_to: a.reply_to, ts: Date.now() });
+  }
+  if (S.cur) renderTail();
 }
 
 function setConn() {
   const el = $('#connState');
-  if (el) { el.hidden = S.wsOk; }
+  if (el) {
+    el.hidden = S.wsOk;
+    const st = S.linkState;
+    if (st === 'blocked') set(el, 'Another session of yours is still open. Waiting about 30 s, then this page connects by itself.');
+    else if (st === 'replaced') set(el, 'This chat is now open in another tab or window. ', h('a', { href: '#', onclick: e => { e.preventDefault(); S.link.retry(); } }, 'Use it here'));
+    else if (st === 'banned') set(el, 'This identity is banned on this bia.');
+    else set(el, 'Connecting…');
+  }
   renderChatHead();
 }
 
@@ -667,7 +702,7 @@ const canNotify = () => 'Notification' in window;
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 function isActive() { return document.visibilityState === 'visible' && document.hasFocus(); }
-function sendActive() { if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify({ t: 'active', on: isActive() })); }
+function sendActive() { if (S.link) S.link.sendJson({ t: 'active', on: isActive() }); }
 async function notifInit() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.t === 'open') go(e.data.url || ''); });
@@ -811,7 +846,7 @@ function route() {
   }
   if (!S.root && ['console', 'shell', 'files', 'tasks', 'task', 'display'].includes(viewKey)) { go('chat/main'); return; }
   switch (viewKey) {
-    case 'chat': openChat(r.slice(5) || 'main'); break;
+    case 'chat': openChat('main'); break;
     case 'console': showView('console', buildConsole); break;
     case 'shell': showView('shell', buildShell); break;
     case 'files': showView('files', buildFiles); filesNavigate(r.startsWith('files=') ? r.slice(6) : null); break;
@@ -849,15 +884,13 @@ function buildSide() {
     h('div', { class: 'side-scroll', id: 'sideScroll' },
       h('div', { id: 'searchRes', class: 'search-res', hidden: true }),
       h('div', { id: 'chatList' }),
-      S.root ? h('div', { id: 'toolList' }) : null),
-    h('button', { class: 'fab', title: 'New chat', onclick: newChat }, ic('edit')));
+      S.root ? h('div', { id: 'toolList' }) : null));
 }
 
 function sideMenu(e) {
   const r = e.currentTarget.getBoundingClientRect();
   const light = document.documentElement.classList.contains('light');
   menu(r.left, r.bottom + 4, [
-    { icon: 'edit', text: 'New chat', onClick: newChat },
     S.root && { icon: 'console', text: 'Console', onClick: () => go('console') },
     S.root && { icon: 'terminal', text: 'Root shell', onClick: () => go('shell') },
     S.root && { icon: 'folder', text: 'Files', onClick: () => go('files') },
@@ -867,13 +900,6 @@ function sideMenu(e) {
     { icon: light ? 'moon' : 'sun', text: light ? 'Night mode' : 'Day mode', onClick: () => { S.prefs.theme = light ? 'dark' : 'light'; savePrefs(); } },
     { icon: 'settings', text: 'Settings', onClick: () => go('settings') },
   ]);
-}
-
-async function newChat() {
-  const t = await promptBox('New chat', '', { placeholder: 'Chat name', text: 'A separate conversation with bia (its own channel).', ok: 'Create' });
-  if (t === null || t === undefined) return;
-  try { const r = await act('chat_new', { title: t }); go('chat/' + r.id); }
-  catch (e) { toast(e.message, true); }
 }
 
 function renderChatList() {
@@ -922,24 +948,19 @@ function renderChatList() {
 function chatMenu(x, y, id) {
   const c = S.chats.get(id);
   menu(x, y, [
-    { icon: c.muted ? 'bell' : 'bellOff', text: c.muted ? 'Unmute' : 'Mute', onClick: () => act('chat_mute', { chat: id, on: !c.muted }) },
-    c.unread ? { icon: 'checks', text: 'Mark as read', onClick: () => act('read', { chat: id, upto: '' }) } : null,
-    { icon: 'edit', text: 'Rename', onClick: () => renameChat(id) },
-    { icon: 'eraser', text: 'Clear history', danger: true, onClick: () => clearChat(id) },
-    id !== 'main' ? { icon: 'trash', text: 'Delete chat', danger: true, onClick: () => deleteChat(id) } : null,
+    { icon: c.muted ? 'bell' : 'bellOff', text: c.muted ? 'Unmute' : 'Mute', onClick: () => setMute(!c.muted) },
+    c.unread ? { icon: 'checks', text: 'Mark as read', onClick: () => markAllRead() } : null,
   ]);
 }
-async function renameChat(id) {
-  const t = await promptBox('Rename chat', chatTitle(id));
-  if (t) act('chat_rename', { chat: id, title: t }).catch(e => toast(e.message, true));
+function setMute(on) {
+  const c = S.chats.get('main');
+  c.muted = on; renderChatList(); renderChatHead();
+  act('mute', { on }).catch(e => toast(e.message, true));
 }
-async function clearChat(id) {
-  if (await confirmBox(`Clear all messages in “${chatTitle(id)}”? bia keeps its own memory of the conversation.`, 'Clear', true))
-    act('chat_clear', { chat: id }).catch(e => toast(e.message, true));
-}
-async function deleteChat(id) {
-  if (await confirmBox(`Delete “${chatTitle(id)}” and all its messages?`, 'Delete', true))
-    act('chat_delete', { chat: id }).catch(e => toast(e.message, true));
+function markAllRead() {
+  const c = S.cache.get('main');
+  const last = c && [...c.list].reverse().find(m => m.from === 'bia');
+  if (last) act('read', { upto: last.id }).catch(() => {});
 }
 
 async function globalSearch(q) {
@@ -947,24 +968,19 @@ async function globalSearch(q) {
   q = q.trim();
   if (!q) { res.hidden = true; list.hidden = false; if (tools) tools.hidden = false; return; }
   res.hidden = false; list.hidden = true; if (tools) tools.hidden = true;
-  const ql = q.toLowerCase();
-  const chats = S.order.filter(id => chatTitle(id).toLowerCase().includes(ql));
   set(res, h('div', { class: 'side-label' }, 'Searching…'));
   let j = { results: [] };
-  try { j = await GET('/v1/search?q=' + encodeURIComponent(q)); } catch {}
-  set(res, 
-    chats.length ? h('div', { class: 'side-label' }, 'Chats') : null,
-    chats.map(id => h('div', { class: 'citem', onclick: () => go('chat/' + id) },
-      h('div', { class: 'avatar sm ' + colorOf(id) }, initials(chatTitle(id))), h('div', { class: 'cbody ctitle' }, chatTitle(id)))),
+  try { await S.ready; j = await act('search', { q }); } catch {}
+  set(res,
     h('div', { class: 'side-label' }, j.results.length ? `Messages (${j.results.length})` : 'No messages found'),
-    j.results.map(r => searchRow(r, q, () => jumpTo(r.chat, r.m.id))));
+    j.results.map(r => searchRow(r, q, () => jumpTo('main', r.m.id))));
 }
 function searchRow(r, q, onclick) {
   const text = snippet(r.m);
   const i = text.toLowerCase().indexOf(q.toLowerCase());
   const body = i < 0 ? text : [text.slice(Math.max(0, i - 30), i), h('mark', null, text.slice(i, i + q.length)), text.slice(i + q.length)];
   return h('div', { class: 'sr', onclick },
-    h('div', { class: 'st' }, h('span', null, (r.title || chatTitle(r.chat)) + ' · ' + (isMine(r.m) ? 'You' : 'bia')), h('span', null, fmtListTime(r.m.ts))),
+    h('div', { class: 'st' }, h('span', null, isMine(r.m) ? 'You' : 'bia'), h('span', null, fmtListTime(r.m.ts))),
     h('div', { class: 'sx' }, body));
 }
 
@@ -996,7 +1012,7 @@ function buildChat() {
 const hasFiles = e => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
 
 async function openChat(id, opts = {}) {
-  if (!S.chats.has(id) && S.chats.size) { go('chat/main'); return; }
+  id = 'main';
   const changed = S.cur !== id;
   if (changed) {
     saveComposerDraft();
@@ -1007,18 +1023,10 @@ async function openChat(id, opts = {}) {
   renderChatHead(); renderPinbar(); renderTaskbar(); renderChatSearch();
   if (changed) loadComposerDraft();
   renderComposerCtx();
-  let c = S.cache.get(id);
-  if (!c) {
-    c = { list: [], byId: new Map(), moreBefore: false, moreAfter: false, loading: true };
-    S.cache.set(id, c);
+  if (!S.cache.get(id) || S.cache.get(id).loading) {
     renderMessages();
-    try {
-      const j = await GET(`/v1/chats/${encodeURIComponent(id)}/messages?limit=60`);
-      c.list = j.messages; c.byId = new Map(j.messages.map(m => [m.id, m]));
-      c.moreBefore = j.more_before; c.moreAfter = false;
-    } catch (e) { toast('Could not load messages: ' + e.message, true); }
-    c.loading = false;
-    if (S.cur !== id) return;
+    const c = await loadMain();
+    if (S.cur !== id || !c) return;
     const sum = S.chats.get(id);
     S.unreadFrom = null;
     if (sum && sum.unread) {
@@ -1041,14 +1049,13 @@ function renderChatHead() {
     set(head, 
       iconBtn('close', 'Cancel', () => setSelecting(false)),
       h('div', { class: 'tbox title' }, `${S.sel.size} selected`),
-      iconBtn('forward', 'Forward', () => forwardMsgs([...S.sel])),
       iconBtn('copy', 'Copy', copySelected),
       iconBtn('trash', 'Delete', () => deleteMsgs([...S.sel])));
     return;
   }
   const c = S.chats.get(S.cur) || { title: chatTitle(S.cur) };
   let sub, on = false;
-  if (!S.wsOk) sub = 'connecting…';
+  if (!S.wsOk) sub = S.linkState === 'blocked' ? 'waiting for your other session…' : S.linkState === 'replaced' ? 'open in another tab' : 'connecting…';
   else if (S.typing.has(S.cur)) { sub = 'typing…'; on = true; }
   else if (S.root && S.status && /^(thinking|tool|talking|reflecting)/.test(S.status.state || '')) { sub = S.status.state.split(' ')[0] + '…'; on = true; }
   else sub = S.root && S.status && S.status.model ? `online · ${S.status.model}` : 'online';
@@ -1062,12 +1069,8 @@ function renderChatHead() {
       const r = e.currentTarget.getBoundingClientRect();
       menu(r.right - 220, r.bottom + 4, [
         { icon: 'select', text: 'Select messages', onClick: () => setSelecting(true) },
-        { icon: c.muted ? 'bell' : 'bellOff', text: c.muted ? 'Unmute' : 'Mute', onClick: () => act('chat_mute', { chat: S.cur, on: !c.muted }) },
-        { icon: 'edit', text: 'Rename', onClick: () => renameChat(S.cur) },
+        { icon: c.muted ? 'bell' : 'bellOff', text: c.muted ? 'Unmute' : 'Mute', onClick: () => setMute(!c.muted) },
         { icon: 'download', text: 'Export as text', onClick: () => exportChat(S.cur) },
-        '-',
-        { icon: 'eraser', text: 'Clear history', danger: true, onClick: () => clearChat(S.cur) },
-        S.cur !== 'main' ? { icon: 'trash', text: 'Delete chat', danger: true, onClick: () => deleteChat(S.cur) } : null,
       ]);
     }));
 }
@@ -1076,7 +1079,7 @@ async function exportChat(id) {
   const all = [];
   let before = '';
   for (let i = 0; i < 100; i++) {
-    const j = await GET(`/v1/chats/${encodeURIComponent(id)}/messages?limit=200${before ? '&before=' + before : ''}`);
+    const j = await hist(before ? { limit: 200, before } : { limit: 200 });
     all.unshift(...j.messages);
     if (!j.more_before || !j.messages.length) break;
     before = j.messages[0].id;
@@ -1107,9 +1110,9 @@ function renderPinbar() {
   h('div', { class: 'grow' },
     h('div', { class: 'ptitle' }, ids.length > 1 ? `Pinned message #${S.pinIdx + 1}` : 'Pinned message'),
     h('div', { class: 'ptext' }, m ? snippet(m) : '…')),
-  iconBtn('unpin', 'Unpin', e => { e.stopPropagation(); act('pin', { chat: S.cur, id, on: false }); })));
+  iconBtn('unpin', 'Unpin', e => { e.stopPropagation(); act('pin', { id, on: false }); })));
   if (!m) {
-    GET(`/v1/chats/${encodeURIComponent(S.cur)}/messages?around=${id}&limit=1`).then(j => {
+    hist({ around: id, limit: 1 }).then(j => {
       const x = j.messages.find(q => q.id === id);
       if (x && $('.ptext', el)) $('.ptext', el).textContent = snippet(x);
     }).catch(() => {});
@@ -1137,7 +1140,7 @@ function renderChatSearch() {
     const q = inp.value.trim();
     S.chatSearch.q = q;
     if (!q) { res.hidden = true; return; }
-    const j = await GET(`/v1/search?chat=${encodeURIComponent(S.cur)}&q=${encodeURIComponent(q)}`).catch(() => ({ results: [] }));
+    const j = await act('search', { q }).catch(() => ({ results: [] }));
     res.hidden = false;
     set(res, j.results.length ? j.results.map(r => searchRow(r, q, () => { res.hidden = true; jumpTo(S.cur, r.m.id); })) : h('div', { class: 'muted', style: 'padding:10px' }, 'Nothing found'));
   }, 250);
@@ -1253,11 +1256,12 @@ function scrollToId(id, flash, block = 'center') {
 }
 
 async function jumpTo(chat, id) {
-  if (S.cur !== chat || !S.route.startsWith('chat/')) { go('chat/' + chat); await new Promise(r => setTimeout(r, 50)); while (S.cache.get(chat) && S.cache.get(chat).loading) await new Promise(r => setTimeout(r, 50)); }
+  chat = 'main';
+  if (S.cur !== chat || !S.route.startsWith('chat')) { go('chat/' + chat); await new Promise(r => setTimeout(r, 50)); while (S.cache.get(chat) && S.cache.get(chat).loading) await new Promise(r => setTimeout(r, 50)); }
   if (scrollToId(id, true)) return;
   const c = S.cache.get(chat);
   try {
-    const j = await GET(`/v1/chats/${encodeURIComponent(chat)}/messages?around=${encodeURIComponent(id)}&limit=80`);
+    const j = await hist({ around: id, limit: 80 });
     c.list = j.messages; c.byId = new Map(j.messages.map(m => [m.id, m]));
     c.moreBefore = j.more_before; c.moreAfter = j.more_after;
     renderMessages();
@@ -1269,7 +1273,7 @@ async function jumpBottom() {
   const c = S.cache.get(S.cur);
   S.jumpUnread = 0;
   if (c && c.moreAfter) {
-    const j = await GET(`/v1/chats/${encodeURIComponent(S.cur)}/messages?limit=60`);
+    const j = await hist({ limit: 60 });
     c.list = j.messages; c.byId = new Map(j.messages.map(m => [m.id, m]));
     c.moreBefore = j.more_before; c.moreAfter = false;
     renderMessages();
@@ -1296,7 +1300,7 @@ async function onMsgsScroll() {
   if (s.scrollTop < 300 && c.moreBefore && c.list.length) {
     c.paging = true;
     try {
-      const j = await GET(`/v1/chats/${encodeURIComponent(S.cur)}/messages?before=${encodeURIComponent(c.list[0].id)}&limit=60`);
+      const j = await hist({ before: c.list[0].id, limit: 60 });
       const fresh = j.messages.filter(m => !c.byId.has(m.id));
       c.list = fresh.concat(c.list); fresh.forEach(m => c.byId.set(m.id, m));
       c.moreBefore = j.more_before;
@@ -1306,7 +1310,7 @@ async function onMsgsScroll() {
   } else if (c.moreAfter && s.scrollTop + s.clientHeight > s.scrollHeight - 300) {
     c.paging = true;
     try {
-      const j = await GET(`/v1/chats/${encodeURIComponent(S.cur)}/messages?after=${encodeURIComponent(c.list[c.list.length - 1].id)}&limit=60`);
+      const j = await hist({ after: c.list[c.list.length - 1].id, limit: 60 });
       const fresh = j.messages.filter(m => !c.byId.has(m.id));
       c.list = c.list.concat(fresh); fresh.forEach(m => c.byId.set(m.id, m));
       c.moreAfter = j.more_after;
@@ -1317,14 +1321,14 @@ async function onMsgsScroll() {
 }
 
 const maybeRead = debounce(() => {
-  if (!S.cur || document.hidden || !S.route.startsWith('chat/') || !nearBottom()) return;
+  if (!S.cur || document.hidden || !S.route.startsWith('chat') || !nearBottom()) return;
   const sum = S.chats.get(S.cur);
   const c = S.cache.get(S.cur);
   if (!sum || !sum.unread || !c || c.moreAfter) return;
   const last = [...c.list].reverse().find(m => m.from === 'bia');
   sum.unread = 0;
   renderChatList(); updateTitle();
-  act('read', { chat: S.cur, upto: last ? last.id : '' }).catch(() => {});
+  if (last) act('read', { upto: last.id }).catch(() => {});
 }, 300);
 
 // ---- one message row ----
@@ -1403,21 +1407,42 @@ function buildQuote(id) {
   return q;
 }
 
-function attUrl(m, i, dl) { return `/v1/att?chat=${encodeURIComponent(S.cur)}&id=${encodeURIComponent(m.id)}&i=${i}${dl ? '&dl=1' : ''}`; }
+// A file of the chat as a blob URL: pulled over the link once (ours are here already).
+function attSrc(f, onProg) { return S.link.url(f, onProg); }
+function downloadAtt(f) { attSrc(f).then(u => download(u, f.name)).catch(e => toast(e.message, true)); }
+const viewKind = f => f.mime.startsWith('text/') || f.mime.includes('json') ? 'text' : f.mime === 'application/pdf' ? 'pdf' : f.kind;
+
+// A file still on its way (ours being pulled by bia, or bia's not arrived) or lost.
+function fileState(f, mine) {
+  const pct = mine ? (S.upProg.get(f.fid) || 0) : 0;
+  const R = 21, C = 2 * Math.PI * R;
+  const icon = h('div', { class: 'dicon', html: f.err ? '' : `<svg class="ring" viewBox="0 0 48 48"><circle cx="24" cy="24" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - pct)}"/></svg>` });
+  icon.prepend(ic(f.err ? 'close' : mine ? 'upload' : 'download'));
+  return h('div', { class: 'doc' }, icon,
+    h('div', { class: 'grow' }, h('div', { class: 'dname' }, f.name),
+      h('div', { class: 'dsize' }, f.err ? 'not received: ' + f.err : mine ? `${Math.round(pct * 100)}% of ${fmtBytes(f.size)}` : 'on its way')));
+}
 
 function buildMedia(m, f, i, all) {
-  const url = attUrl(m, i);
-  const box = h('div', { class: 'media', onclick: (e) => { e.stopPropagation(); if (!S.selecting) openViewer(all.map(x => ({ url: attUrl(m, x.i), dl: attUrl(m, x.i, true), name: x.f.name, kind: x.f.kind })), all.findIndex(x => x.i === i)); } });
+  const box = h('div', { class: 'media', onclick: (e) => { e.stopPropagation(); if (!S.selecting && !f.pending) openViewer(all.map(x => ({ get: () => attSrc(x.f), name: x.f.name, kind: x.f.kind })), all.findIndex(x => x.i === i)); } });
+  const mine = isMine(m);
+  if (f.err || (f.pending && !mine) || !f.fid) { box.appendChild(fileState(f, mine)); return box; }
   if (f.kind === 'photo') {
-    const img = h('img', { src: url, loading: 'lazy', alt: f.name, decoding: 'async' });
+    const img = h('img', { alt: f.name, decoding: 'async' });
     img.addEventListener('load', () => { if (nearBottomish()) scrollBottom(); }, { once: true });
+    attSrc(f).then(u => { img.src = u; }).catch(() => {});
     box.appendChild(img);
-  } else {
-    const v = h('video', { src: url + '#t=0.1', preload: 'metadata', muted: true, playsinline: true });
+  } else if (f.size < (24 << 20)) {
+    const v = h('video', { preload: 'metadata', muted: true, playsinline: true });
     const dur = h('span', { class: 'dur' }, 'video');
     v.addEventListener('loadedmetadata', () => { dur.textContent = fmtDur(v.duration); });
+    attSrc(f).then(u => { v.src = u + '#t=0.1'; }).catch(() => {});
     box.append(v, h('div', { class: 'play' }, ic('play')), dur);
+  } else {
+    // a big video is pulled only when opened
+    box.append(h('div', { class: 'vtile' }), h('div', { class: 'play' }, ic('play')), h('span', { class: 'dur' }, fmtBytes(f.size)));
   }
+  if (f.pending && mine) box.appendChild(h('span', { class: 'dur', style: 'top:auto;bottom:6px' }, `${Math.round((S.upProg.get(f.fid) || 0) * 100)}%`));
   return box;
 }
 function nearBottomish() { const s = $('#msgs'); return s && s.scrollTop + s.clientHeight >= s.scrollHeight - 400; }
@@ -1431,6 +1456,7 @@ function fileIcon(name, kind) {
 }
 
 function buildDoc(m, f, i) {
+  if (f.pending || f.err || !f.fid) return fileState(f, isMine(m));
   if (f.kind === 'audio') return buildAudio(m, f, i);
   return h('div', { class: 'doc', onclick: (e) => { e.stopPropagation(); if (!S.selecting) openFileAtt(m, f, i); } },
     h('div', { class: 'dicon' }, ic(fileIcon(f.name, f.kind))),
@@ -1438,8 +1464,8 @@ function buildDoc(m, f, i) {
 }
 function openFileAtt(m, f, i) {
   const viewable = /^(application\/pdf|text\/|image\/|video\/|audio\/|application\/json)/.test(f.mime);
-  if (viewable) openViewer([{ url: attUrl(m, i), dl: attUrl(m, i, true), name: f.name, kind: f.mime.startsWith('text/') || f.mime.includes('json') ? 'text' : f.mime === 'application/pdf' ? 'pdf' : f.kind }], 0);
-  else download(attUrl(m, i, true), f.name);
+  if (viewable) openViewer([{ get: () => attSrc(f), name: f.name, kind: viewKind(f) }], 0);
+  else downloadAtt(f);
 }
 
 function buildAudio(m, f, i) {
@@ -1449,7 +1475,7 @@ function buildAudio(m, f, i) {
   const sub = h('div', { class: 'dsize' }, fmtBytes(f.size));
   btn.onclick = (e) => {
     e.stopPropagation();
-    if (!audio.src) audio.src = attUrl(m, i);
+    if (!audio.src) { attSrc(f).then(u => { audio.src = u; stopOtherAudio(audio); audio.play(); }).catch(er => toast(er.message, true)); return; }
     if (audio.paused) { stopOtherAudio(audio); audio.play(); } else audio.pause();
   };
   audio.onplay = () => set(btn, ic('pause'));
@@ -1457,15 +1483,16 @@ function buildAudio(m, f, i) {
   audio.ontimeupdate = () => { sub.textContent = `${fmtDur(audio.currentTime)} / ${fmtDur(audio.duration)}`; };
   return h('div', { class: 'doc' }, btn,
     h('div', { class: 'grow' }, h('div', { class: 'dname' }, f.name), sub),
-    iconBtn('download', 'Download', (e) => { e.stopPropagation(); download(attUrl(m, i, true), f.name); }));
+    iconBtn('download', 'Download', (e) => { e.stopPropagation(); downloadAtt(f); }));
 }
 let playingAudio = null;
 function stopOtherAudio(a) { if (playingAudio && playingAudio !== a) playingAudio.pause(); playingAudio = a; }
 
 function buildVoice(m, f, i) {
+  if (f.err || !f.fid || (f.pending && !isMine(m))) return fileState(f, isMine(m));
   const audio = new Audio();
   audio.preload = 'metadata';
-  audio.src = attUrl(m, i);
+  attSrc(f).then(u => { audio.src = u; }).catch(() => {});
   let seed = 0; for (const c of m.id) seed = (seed * 33 + c.charCodeAt(0)) >>> 0;
   const bars = [];
   for (let k = 0; k < 36; k++) { seed = (seed * 1103515245 + 12345) >>> 0; bars.push(h('i', { style: `height:${25 + (seed % 75)}%` })); }
@@ -1503,7 +1530,7 @@ function buildPoll(m) {
   const box = h('div', { class: 'poll' + (p.multi ? ' multi' : '') + (showRes ? ' voted' : '') });
   box.appendChild(h('div', { class: 'pq' }, p.question));
   box.appendChild(h('div', { class: 'pkind' }, p.closed ? 'Final results' : p.multi ? 'Poll · multiple answers' : 'Poll'));
-  const voteBtn = h('button', { class: 'btn small pvote', hidden: true, onclick: (e) => { e.stopPropagation(); act('vote', { chat: S.cur, id: m.id, options: [...picks] }).catch(er => toast(er.message, true)); } }, 'Vote');
+  const voteBtn = h('button', { class: 'btn small pvote', hidden: true, onclick: (e) => { e.stopPropagation(); act('vote', { id: m.id, options: [...picks] }).catch(er => toast(er.message, true)); } }, 'Vote');
   p.options.forEach((o, i) => {
     const pct = total ? Math.round((o.voters.length / total) * 100) : 0;
     const mineOpt = o.voters.includes(me);
@@ -1513,7 +1540,7 @@ function buildPoll(m) {
       showRes ? h('div', { class: 'bar', style: `width:${Math.max(2, pct)}%` }) : null);
     if (!showRes) opt.onclick = (e) => {
       e.stopPropagation();
-      if (!p.multi) { act('vote', { chat: S.cur, id: m.id, options: [i] }).catch(er => toast(er.message, true)); return; }
+      if (!p.multi) { act('vote', { id: m.id, options: [i] }).catch(er => toast(er.message, true)); return; }
       if (picks.has(i)) picks.delete(i); else picks.add(i);
       opt.classList.toggle('picked', picks.has(i));
       voteBtn.hidden = !picks.size;
@@ -1530,7 +1557,7 @@ function buildReacts(m) {
   return h('div', { class: 'reacts' }, Object.entries(m.reactions).map(([e, who]) =>
     h('button', {
       class: 'react' + (who.includes(me) ? ' mine' : ''), title: who.join(', '),
-      onclick: (ev) => { ev.stopPropagation(); act('react', { chat: S.cur, id: m.id, emoji: e }).catch(er => toast(er.message, true)); },
+      onclick: (ev) => { ev.stopPropagation(); act('react', { id: m.id, emoji: e, on: !who.includes(me) }).catch(er => toast(er.message, true)); },
     }, e, who.length > 1 ? h('span', { class: 'n' }, who.length) : h('span', { class: 'who' }, initials(who[0])))));
 }
 
@@ -1545,7 +1572,7 @@ function buildButtons(m) {
           return;
         }
         e.currentTarget.classList.add('pressed');
-        try { await act('button', { chat: S.cur, id: m.id, row: r, col: c }); toast(`Sent: ${b.text}`); }
+        try { await act('button', { id: m.id, row: r, col: c }); toast(S.wsOk ? `Sent: ${b.text}` : `${b.text}: goes when connected`); }
         catch (er) { toast(er.message, true); }
       },
     }, b.url ? [b.text, ' ↗'] : b.text)))));
@@ -1555,12 +1582,13 @@ function buildPendingRow(p) {
   const bubble = h('div', { class: 'bubble' });
   if (p.reply_to) bubble.appendChild(buildQuote(p.reply_to));
   for (const f of p.files || []) {
+    // hashing here first, then bia pulls it (the real message shows that part)
     const pct = p.progress && p.progress[f.name] !== undefined ? p.progress[f.name] : 0;
     const R = 21, C = 2 * Math.PI * R;
     const icon = h('div', { class: 'dicon', html: `<svg class="ring" viewBox="0 0 48 48"><circle cx="24" cy="24" r="${R}" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - pct)}"/></svg>` });
     icon.prepend(ic(p.error ? 'close' : 'upload'));
     bubble.appendChild(h('div', { class: 'doc' }, icon,
-      h('div', { class: 'grow' }, h('div', { class: 'dname' }, f.name), h('div', { class: 'dsize' }, p.error ? 'failed' : `${Math.round(pct * 100)}% of ${fmtBytes(f.size)}`))));
+      h('div', { class: 'grow' }, h('div', { class: 'dname' }, f.name), h('div', { class: 'dsize' }, p.error ? 'failed' : pct < 1 && p.progress[f.name] !== undefined ? `preparing ${Math.round(pct * 100)}%` : `${fmtBytes(f.size)} · waiting to go`))));
   }
   const meta = h('span', { class: 'meta' }, fmtTime(p.ts), p.error ? h('span', { style: 'color:var(--err)' }, '!') : ic('clock'));
   if (p.text) { const t = h('div', { class: 'text md', html: md(p.text) }); t.appendChild(meta); bubble.appendChild(t); }
@@ -1609,20 +1637,20 @@ const md = src => BiaMd.md(src, { paths: S.root });
 function msgMenu(e, m) {
   e.preventDefault();
   const mine = isMine(m);
+  const mineOn = em => ((m.reactions || {})[em] || []).includes(S.me.identity);
   const reacts = h('div', { class: 'react-row' }, BIA_REACTIONS.slice(0, 7).map(em =>
-    h('button', { onclick: () => { closeMenu(); act('react', { chat: S.cur, id: m.id, emoji: em }).catch(er => toast(er.message, true)); } }, em)),
-  h('button', { title: 'More', onclick: (ev) => { const r = ev.currentTarget.getBoundingClientRect(); closeMenu(); emojiPopup(r.left, r.top, em => act('react', { chat: S.cur, id: m.id, emoji: em })); } }, '＋'));
+    h('button', { onclick: () => { closeMenu(); act('react', { id: m.id, emoji: em, on: !mineOn(em) }).catch(er => toast(er.message, true)); } }, em)),
+  h('button', { title: 'More', onclick: (ev) => { const r = ev.currentTarget.getBoundingClientRect(); closeMenu(); emojiPopup(r.left, r.top, em => act('react', { id: m.id, emoji: em, on: !mineOn(em) })); } }, '＋'));
   const files = m.files || [];
   const sel = String(window.getSelection() || '');
   menu(e.clientX, e.clientY, [
     { icon: 'reply', text: 'Reply', onClick: () => setReply(m) },
     mine && (m.text || files.length) && !m.poll ? { icon: 'edit', text: 'Edit', onClick: () => setEdit(m) } : null,
     m.text ? { icon: 'copy', text: sel ? 'Copy selected text' : 'Copy text', onClick: () => copyText(sel || m.text) } : null,
-    { icon: m.pinned ? 'unpin' : 'pin', text: m.pinned ? 'Unpin' : 'Pin', onClick: () => act('pin', { chat: S.cur, id: m.id, on: !m.pinned }) },
-    { icon: 'forward', text: 'Forward', onClick: () => forwardMsgs([m.id]) },
-    files.length ? { icon: 'download', text: files.length > 1 ? `Download all (${files.length})` : 'Download', onClick: () => files.forEach((f, i) => setTimeout(() => download(attUrl(m, i, true), f.name), i * 400)) } : null,
+    { icon: m.pinned ? 'unpin' : 'pin', text: m.pinned ? 'Unpin' : 'Pin', onClick: () => act('pin', { id: m.id, on: !m.pinned }) },
+    files.some(f => f.fid && !f.pending) ? { icon: 'download', text: files.length > 1 ? `Download all (${files.length})` : 'Download', onClick: () => files.filter(f => f.fid && !f.pending).forEach((f, i) => setTimeout(() => downloadAtt(f), i * 400)) } : null,
     S.root && files.length ? { icon: 'folder', text: 'Show in Files', onClick: () => openPathInFiles(files[0].path.startsWith('/') ? files[0].path : (S.me.files + '/' + files[0].path)) } : null,
-    m.poll && m.poll.options.some(o => o.voters.includes(S.me.identity)) && !m.poll.closed ? { icon: 'poll', text: 'Retract vote', onClick: () => act('vote', { chat: S.cur, id: m.id, options: [] }) } : null,
+    m.poll && m.poll.options.some(o => o.voters.includes(S.me.identity)) && !m.poll.closed ? { icon: 'poll', text: 'Retract vote', onClick: () => act('vote', { id: m.id, options: [] }) } : null,
     { icon: 'select', text: 'Select', onClick: () => { setSelecting(true); toggleSel(m.id); } },
     S.root ? { icon: 'info', text: 'Copy message ID', onClick: () => copyText(m.id, 'ID') } : null,
     '-',
@@ -1653,32 +1681,9 @@ async function deleteMsgs(ids) {
   if (!ids.length) return;
   const ok = await confirmBox({ title: ids.length > 1 ? `Delete ${ids.length} messages?` : 'Delete message?', body: 'They are removed for everyone, and bia is told which ones were deleted.' }, 'Delete', true);
   if (!ok) return;
-  try { await act('delete', { chat: S.cur, ids }); setSelecting(false); }
+  try { setSelecting(false); await act('delete', { ids }); }
   catch (e) { toast(e.message, true); }
 }
-async function forwardMsgs(ids) {
-  if (!ids.length) return;
-  const from = S.cur;
-  const to = await pickChat('Forward to…');
-  if (!to) return;
-  try {
-    await act('forward', { chat: from, ids, to });
-    setSelecting(false);
-    if (to !== from) go('chat/' + to);
-    toast(ids.length > 1 ? `${ids.length} messages forwarded` : 'Message forwarded');
-  } catch (e) { toast(e.message, true); }
-}
-function pickChat(title) {
-  let pick = null;
-  return modal({
-    title,
-    body: h('div', { class: 'chat-pick' }, S.order.map(id => h('div', {
-      class: 'citem', onclick: (e) => { pick = id; e.currentTarget.closest('.modal').close(id); },
-    }, h('div', { class: 'avatar sm ' + (id === 'main' ? '' : colorOf(id)) }, initials(chatTitle(id))), h('div', { class: 'cbody ctitle' }, chatTitle(id))))),
-    buttons: [{ text: 'Cancel', value: null }],
-  }).then(v => v || pick);
-}
-
 // ---- emoji popup (reactions) ----
 function emojiPopup(x, y, onPick) {
   const grid = h('div', { class: 'egrid', style: 'height:260px;overflow:auto' });
@@ -1815,7 +1820,7 @@ async function sendText() {
   if (S.edit) {
     const m = S.edit;
     if (text === m.text) { cancelCtx(); return; }
-    try { await act('edit', { chat: S.cur, id: m.id, text }); cancelCtx(); }
+    try { cancelCtx(); await act('edit', { id: m.id, text }); }
     catch (e) { toast(e.message, true); }
     return;
   }
@@ -1825,30 +1830,24 @@ async function sendText() {
   await sendMessage({ text, files: [], reply_to: reply });
 }
 
-// optimistic send; files are uploaded first with progress
+// optimistic send: the message has our own id, so its bubble becomes the real one when bia
+// stores it; files are hashed here, then bia pulls them over the link. While the link is
+// down it waits in the outbox (also across a reload).
 async function sendMessage({ text, files, reply_to, kind }) {
-  const chat = S.cur;
-  const p = { chat, text: text || '', files: files.map(f => ({ name: f.name, size: f.size })), progress: {}, reply_to, ts: Date.now() };
+  const chat = 'main';
+  const id = 'w' + [...crypto.getRandomValues(new Uint8Array(8))].map(x => x.toString(16).padStart(2, '0')).join('');
+  const p = { id, chat, text: text || '', files: files.map(f => ({ name: f.name, size: f.size })), progress: {}, reply_to, ts: Date.now() };
   if (!S.pending.has(chat)) S.pending.set(chat, []);
   S.pending.get(chat).push(p);
   renderTail(); scrollBottom(true);
   try {
-    const paths = [];
-    for (const f of files) {
-      const j = await xhrUpload('/v1/upload?name=' + encodeURIComponent(f.name), f, (done, total) => {
-        p.progress[f.name] = total ? done / total : 0;
-        if (S.cur === chat) scheduleDraft();
-      });
-      paths.push(j.path);
-    }
-    p.sent = true;
-    const r = await act('send', { chat, text: text || '', files: paths, reply_to: reply_to || '', kind: kind || '' });
+    await S.link.send({
+      id, text: text || '', reply_to: reply_to || '', kind: kind || '', files,
+      onHash: (f, done, total) => { p.progress[f.name] = total ? done / total : 1; if (S.cur === chat) scheduleDraft(); },
+    });
     const list = S.pending.get(chat) || [];
     const i = list.indexOf(p);
     if (i >= 0) list.splice(i, 1);
-    // the msg event normally arrived first; make sure the message shows
-    const c = S.cache.get(chat);
-    if (r && r.m && c && !c.byId.has(r.m.id) && !c.moreAfter) { c.list.push(r.m); c.byId.set(r.m.id, r.m); if (S.cur === chat) appendRow(r.m); }
     if (S.cur === chat) renderTail();
   } catch (e) {
     p.error = e.message || String(e);
@@ -1975,10 +1974,10 @@ function openViewer(items, idx) {
   let i = Math.max(0, idx);
   const stage = h('div', { class: 'vstage' });
   const name = h('div', { class: 'grow ellipsis' });
-  const dlBtn = iconBtn('download', 'Download', () => download(items[i].dl, items[i].name));
+  const dlBtn = iconBtn('download', 'Download', () => items[i].get().then(u => download(u, items[i].name)).catch(e => toast(e.message, true)));
   const v = h('div', { class: 'viewer' },
     h('div', { class: 'vtop' }, name, h('span', { class: 'muted', id: 'vcount' }), dlBtn,
-      iconBtn('external', 'Open in new tab', () => window.open(items[i].url, '_blank', 'noopener')),
+      iconBtn('external', 'Open in new tab', () => items[i].get().then(u => window.open(u, '_blank', 'noopener'))),
       iconBtn('close', 'Close', () => close())),
     stage);
   const show = () => {
@@ -1986,15 +1985,21 @@ function openViewer(items, idx) {
     name.textContent = it.name;
     $('#vcount', v).textContent = items.length > 1 ? `${i + 1} of ${items.length}` : '';
     let el;
-    if (it.kind === 'photo') el = h('img', { src: it.url, alt: it.name });
-    else if (it.kind === 'video') el = h('video', { src: it.url, controls: true, autoplay: true, playsinline: true });
-    else if (it.kind === 'audio' || it.kind === 'voice') el = h('audio', { src: it.url, controls: true, autoplay: true });
-    else if (it.kind === 'pdf') el = h('iframe', { src: it.url });
-    else if (it.kind === 'text') {
-      el = h('pre', { class: 'editor', style: 'max-width:1000px;height:100%;margin:0;overflow:auto;white-space:pre-wrap' }, 'Loading…');
-      fetch(it.url, { credentials: 'include' }).then(r => r.text()).then(t => { el.textContent = t.length > 2e6 ? t.slice(0, 2e6) + '\n…' : t; });
-    } else el = h('div', { class: 'muted' }, 'No preview');
-    set(stage, el);
+    const shown = i;
+    const loading = h('div', { class: 'muted' }, 'Loading…');
+    set(stage, loading);
+    it.get().then(url => {
+      if (shown !== i) return;
+      if (it.kind === 'photo') el = h('img', { src: url, alt: it.name });
+      else if (it.kind === 'video') el = h('video', { src: url, controls: true, autoplay: true, playsinline: true });
+      else if (it.kind === 'audio' || it.kind === 'voice') el = h('audio', { src: url, controls: true, autoplay: true });
+      else if (it.kind === 'pdf') el = h('iframe', { src: url });
+      else if (it.kind === 'text') {
+        el = h('pre', { class: 'editor', style: 'max-width:1000px;height:100%;margin:0;overflow:auto;white-space:pre-wrap' }, 'Loading…');
+        fetch(url).then(r => r.text()).then(t => { el.textContent = t.length > 2e6 ? t.slice(0, 2e6) + '\n…' : t; });
+      } else el = h('div', { class: 'muted' }, 'No preview');
+      loading.replaceWith(el);
+    }).catch(e => { loading.textContent = 'Not available: ' + e.message; });
     if (items.length > 1) stage.append(
       iconBtn('back', 'Previous', () => { i = (i - 1 + items.length) % items.length; show(); }, 'vnav l'),
       h('button', { class: 'btn-icon vnav r', title: 'Next', onclick: () => { i = (i + 1) % items.length; show(); } }, ic('back', '')));
@@ -2404,9 +2409,7 @@ async function fsProps(full, e) {
   if (ok && mode !== e.mode) fsOp({ op: 'chmod', path: full, mode }, 'Mode changed');
 }
 async function fsSendToChat(paths) {
-  const chat = await pickChat('Send to chat…');
-  if (!chat) return;
-  try { await act('send', { chat, text: '', files: paths }); toast('Sent'); go('chat/' + chat); }
+  try { await act('send', { text: '', paths }); toast('Sent'); go('chat/main'); }
   catch (e) { toast(e.message, true); }
 }
 

@@ -1,19 +1,19 @@
-//! The MCP side of the web bus: messages for the agent (MCP `inbound` notifications), log lines,
-//! and the browser chat sessions (WebSocket sinks) of each client-certificate identity.
-//! Nothing here touches the agent's console: web is a channel like telegram or whatsapp.
+//! The MCP side of the web bus: messages for the agent (MCP `inbound` notifications), log
+//! lines, and who is connected (the open/close notices). The sessions themselves are in
+//! `link.rs`. Nothing here touches the agent's console: web is a channel like telegram or
+//! whatsapp.
 use bia_mcp::Ctx;
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 pub const ID_ROOT: &str = "root";
 pub const ID_SYSTEM: &str = "system";
-/// The main web chat of an identity; other chats are `web:<chat>`.
+/// The web channel: every identity has one chat with this bia.
 pub const CH_WEB: &str = "web";
 
 /// A message for the agent: `identity|channel|…|id|text`.
@@ -24,15 +24,7 @@ pub struct Inbound {
     pub text: String,
 }
 
-struct Sink {
-    id: usize,
-    identity: String,
-    tx: Sender<Vec<u8>>,
-    /// the tab is visible and focused (it says so with `{"t":"active"}`)
-    active: bool,
-}
-
-/// One person's browser sessions, for the open/close notices (Bus::web_opened/web_closed).
+/// One identity's sessions, for the open/close notices (Bus::web_opened/web_closed).
 #[derive(Default)]
 struct Seen {
     sessions: usize,
@@ -54,8 +46,6 @@ pub struct Bus {
     /// Messages that arrived before the MCP session was up (or in tests), with when
     /// they came (Unix seconds) so the envelope's issued is not the later delivery.
     held: Mutex<VecDeque<(Inbound, i64)>>,
-    sinks: Mutex<Vec<Sink>>,
-    next: AtomicUsize,
     started: Instant,
     pub files: PathBuf,
 }
@@ -67,8 +57,6 @@ impl Bus {
             presence: Mutex::new(HashMap::new()),
             close_grace: CLOSE_GRACE,
             held: Mutex::new(VecDeque::new()),
-            sinks: Mutex::new(vec![]),
-            next: AtomicUsize::new(1),
             started: Instant::now(),
             files,
         }
@@ -107,6 +95,24 @@ impl Bus {
         }
     }
 
+    /// Wait up to `timeout` for the next held message of `identity`, leaving others
+    /// (tests running side by side share one bus).
+    pub fn next_held_for(&self, identity: &str, timeout: std::time::Duration) -> Option<Inbound> {
+        let end = Instant::now() + timeout;
+        loop {
+            {
+                let mut held = self.held.lock().unwrap();
+                if let Some(i) = held.iter().position(|(ib, _)| ib.identity == identity) {
+                    return held.remove(i).map(|(ib, _)| ib);
+                }
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     /// Messages not delivered to an agent yet (tests read them here).
     pub fn take_held(&self) -> Vec<Inbound> {
         self.held.lock().unwrap().drain(..).map(|(ib, _)| ib).collect()
@@ -126,76 +132,15 @@ impl Bus {
         }
     }
 
-    // ---- browser chat sessions ----
-
-    /// A browser chat session: it receives `web_event` JSON (0x1d-prefixed).
-    pub fn add_web_sink(&self, identity: &str) -> (usize, Receiver<Vec<u8>>) {
-        let (tx, rx) = channel();
-        let id = self.next.fetch_add(1, Ordering::Relaxed);
-        self.sinks.lock().unwrap().push(Sink {
-            id,
-            identity: identity.to_string(),
-            tx,
-            active: false,
-        });
-        (id, rx)
-    }
-
-    pub fn remove_sink(&self, id: usize) {
-        self.sinks.lock().unwrap().retain(|s| s.id != id);
-    }
-
-    pub fn send_to_sink(&self, id: usize, bytes: &[u8]) -> bool {
-        let sinks = self.sinks.lock().unwrap();
-        match sinks.iter().find(|s| s.id == id) {
-            Some(s) => s.tx.send(bytes.to_vec()).is_ok(),
-            None => false,
-        }
-    }
-
-    /// A browser chat session of this identity is connected.
-    pub fn has_web(&self, identity: &str) -> bool {
-        self.sinks
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|s| s.identity == identity)
-    }
-
-    /// The tab behind a session came to the front (or left it).
-    pub fn set_active(&self, id: usize, on: bool) {
-        if let Some(s) = self.sinks.lock().unwrap().iter_mut().find(|s| s.id == id) {
-            s.active = on;
-        }
-    }
-
-    /// The person is looking at the web app right now (no push needed).
-    pub fn web_active(&self, identity: &str) -> bool {
-        self.sinks
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|s| s.identity == identity && s.active)
-    }
-
-    /// JSON event for every browser session of one identity.
-    pub fn web_event(&self, identity: &str, payload: &str) {
-        let mut pkt = Vec::with_capacity(1 + payload.len());
-        pkt.push(0x1d);
-        pkt.extend_from_slice(payload.as_bytes());
-        let mut sinks = self.sinks.lock().unwrap();
-        sinks.retain(|s| s.identity != identity || s.tx.send(pkt.clone()).is_ok());
-    }
-
     /// Tests: a short grace before a close notice.
     pub fn with_close_grace(mut self, d: std::time::Duration) -> Bus {
         self.close_grace = d;
         self
     }
 
-    /// A browser chat session of `identity` connected (from `ip`). The person's first
-    /// session tells the model their web app is open; more tabs, and a reconnect within
-    /// the grace after a drop, say nothing.
+    /// A session of `identity` started (from `ip`): a person's web app, a bridge or
+    /// another bia. The first tells the model; a reconnect within the grace after a drop
+    /// says nothing.
     pub fn web_opened(&self, identity: &str, ip: &str) {
         let away = {
             let mut p = self.presence.lock().unwrap();
@@ -217,15 +162,15 @@ impl Bus {
             channel: CH_WEB.into(),
             id: mint_msg_id(),
             text: format!(
-                "[web open] {identity} opened the web app (from {ip}; {since}). Their chats there are web and web:<chat>. \
+                "[web open] {identity} connected to their web chat (from {ip}; {since}). \
                  Greet them with say(identity=\"{identity}\", channel=\"web\") only if it fits: you have news or an answer for them, or they were away long. \
                  Otherwise do nothing; no reply is needed."
             ),
         });
     }
 
-    /// A browser chat session of `identity` ended. When it was their last one and none
-    /// comes back within the grace, the model hears that the web app is closed.
+    /// A session of `identity` ended. When none comes back within the grace, the model
+    /// hears they went away.
     pub fn web_closed(bus: &Arc<Bus>, identity: &str) {
         let generation = {
             let mut p = bus.presence.lock().unwrap();
@@ -253,8 +198,8 @@ impl Bus {
                 channel: CH_WEB.into(),
                 id: mint_msg_id(),
                 text: format!(
-                    "[web closed] {identity} closed the web app (no browser of theirs is open now). \
-                     What you send to their web chat waits there for them. No reply is needed."
+                    "[web closed] {identity} left their web chat (nothing of theirs is connected now). \
+                     What you send there waits for them and reaches them when they are back. No reply is needed."
                 ),
             });
         });
@@ -325,9 +270,16 @@ fn civil(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
-/// Local message id for web messages (`b…`, like the agent's other local buses).
+/// Local message id for web messages (`b…`, like the agent's other local buses). The
+/// counter starts at random, so two bias writing to each other in the same millisecond
+/// do not make the same id.
 pub fn mint_msg_id() -> String {
-    static SEQ: AtomicUsize = AtomicUsize::new(1);
+    static SEQ: std::sync::LazyLock<AtomicUsize> = std::sync::LazyLock::new(|| {
+        use ring::rand::SecureRandom;
+        let mut b = [0u8; 2];
+        let _ = ring::rand::SystemRandom::new().fill(&mut b);
+        AtomicUsize::new(u16::from_be_bytes(b) as usize)
+    });
     let ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -357,7 +309,7 @@ mod tests {
         let t = texts(&bus);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].0, ID_SYSTEM);
-        assert!(t[0].1.starts_with("[web open] alex") && t[0].1.contains("192.0.2.7") && t[0].1.contains("first time"), "{}", t[0].1);
+        assert!(t[0].1.starts_with("[web open] alex connected") && t[0].1.contains("192.0.2.7") && t[0].1.contains("first time"), "{}", t[0].1);
         // a second tab, then one of two closes: nothing
         bus.web_opened("alex", "192.0.2.7");
         Bus::web_closed(&bus, "alex");
@@ -374,7 +326,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(400));
         let t = texts(&bus);
         assert_eq!(t.len(), 1);
-        assert!(t[0].1.starts_with("[web closed] alex"), "{}", t[0].1);
+        assert!(t[0].1.starts_with("[web closed] alex left"), "{}", t[0].1);
         bus.web_opened("alex", "192.0.2.8");
         let t = texts(&bus);
         assert!(t.len() == 1 && t[0].1.contains("back after"), "{t:?}");
@@ -390,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn inbound_is_held_until_attached_and_sinks_are_per_identity() {
+    fn inbound_is_held_until_attached() {
         let bus = Bus::new(std::env::temp_dir());
         bus.push_inbound(Inbound {
             identity: "alex".into(),
@@ -404,21 +356,6 @@ mod tests {
             (held[0].identity.as_str(), held[0].channel.as_str()),
             ("alex", "web")
         );
-
-        let (a, rx_a) = bus.add_web_sink("alex");
-        let (_b, rx_b) = bus.add_web_sink("root");
-        assert!(bus.has_web("alex") && !bus.has_web("bob"));
-        bus.web_event("alex", "{\"t\":\"x\"}");
-        assert_eq!(rx_a.try_recv().unwrap(), b"\x1d{\"t\":\"x\"}".to_vec());
-        assert!(rx_b.try_recv().is_err());
-        assert!(!bus.web_active("alex"));
-        bus.set_active(a, true);
-        assert!(bus.web_active("alex") && !bus.web_active("root"));
-        bus.set_active(a, false);
-        assert!(!bus.web_active("alex"));
-        bus.set_active(a, true);
-        bus.remove_sink(a);
-        assert!(!bus.web_active("alex"));
-        assert!(!bus.has_web("alex"));
+        assert_ne!(mint_msg_id(), mint_msg_id());
     }
 }

@@ -173,7 +173,7 @@ pub fn decide(ctx: &Ctx, args: Value, approve: bool) -> Result<String, String> {
             r.identity,
             if r.reason.is_empty() { "; nothing to send.".to_string() } else { format!(" and reads your message with it: \"{}\"", r.reason) },
             if r.grant.is_some() {
-                format!(" Trust is now set up both ways: {0} is a peer. The link with it opens by itself; a [peer {0}] notice comes when it is up, then talk with say(channel=\"peer:{0}\").", r.identity)
+                format!(" Trust is now set up both ways: {0} is a peer. The link with it opens by itself; talk with say(identity=\"{0}\", channel=\"web\") like with anyone on web.", r.identity)
             } else {
                 String::new()
             }
@@ -231,9 +231,15 @@ pub fn peer_list_text() -> Result<String, String> {
         if p.status != "active" {
             continue;
         }
-        if let Some(l) = crate::peer::links() {
+        if let Some(l) = crate::link::links() {
             let d = l.describe(&p.name);
-            out.push(format!("  link: {}  (channel peer:{})", d["state"].as_str().unwrap_or(""), p.name));
+            let waiting = d["waiting"].as_u64().unwrap_or(0);
+            out.push(format!(
+                "  link: {}  (say(identity=\"{}\", channel=\"web\")){}",
+                d["state"].as_str().unwrap_or(""),
+                p.name,
+                if waiting > 0 { format!("; {waiting} change(s) of yours waiting to go") } else { String::new() }
+            ));
             if let Some(e) = d["last_error"].as_str().filter(|e| !e.is_empty() && d["online"] != true) {
                 out.push(format!("  last try: {e}"));
             }
@@ -254,7 +260,7 @@ pub fn peer_remove(ctx: &Ctx, args: Value) -> Result<String, String> {
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     // trust first, so the link manager cannot take the peer up again meanwhile
     let p = pki.peer_remove(&name).map_err(|e| format!("{e:#}"))?;
-    if let Some(l) = crate::peer::links() {
+    if let Some(l) = crate::link::links() {
         l.forget(&name);
     }
     ctx.log(format!("removed peer {} ({})", p.name, p.url));

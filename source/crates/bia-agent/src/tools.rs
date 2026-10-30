@@ -29,8 +29,6 @@ fn agent_only(server: &str, tool: &str) -> bool {
     server == "web" && AGENT_ONLY_WEB.contains(&tool)
 }
 
-/// A web chat channel (`web` = the person's main chat, `web:<chat>` = another one). Web is a
-/// bus served by the web MCP, like telegram or whatsapp; the person is the envelope identity.
 /// Chat-app buses served by an MCP: their channels are `<bus>:<chat>`, and sends, edits,
 /// reactions and deletes there go through the outbox to the MCP's tools.
 pub const CHAT_BUSES: &[&str] = &["telegram", "whatsapp", "messenger", "instagram"];
@@ -43,34 +41,13 @@ pub fn chat_bus(channel: &str) -> Option<(&str, &str)> {
     channel.split_once(':').filter(|(b, _)| CHAT_BUSES.contains(b))
 }
 
+/// The web channel: everyone's one chat with this bia (a person, another bia, an agent),
+/// served by the web MCP like telegram or whatsapp; who it is is the envelope identity.
+/// `web:<chat>` from before 1.9 is the same chat.
 pub fn is_web(channel: &str) -> bool {
     channel == CH_WEB || channel.starts_with("web:")
 }
 
-/// A live link with another bia (`peer:<name>`), also served by the web MCP. The identity
-/// is the peer's name.
-pub fn is_peer(channel: &str) -> bool {
-    channel.strip_prefix("peer:").is_some_and(|n| !n.is_empty())
-}
-
-/// Channels whose sends, edits, reactions and history go to the web MCP.
-pub fn via_web(channel: &str) -> bool {
-    is_web(channel) || is_peer(channel)
-}
-
-/// The request a peer message belongs to, from its `[request <id>: a → b → you]` line:
-/// `{id, path}` to pass on with this bia's own messages to peers.
-pub fn peer_origin(text: &str) -> Option<Value> {
-    let line = text.lines().find(|l| l.starts_with("[request "))?;
-    let (id, rest) = line.strip_prefix("[request ")?.split_once(": ")?;
-    let path: Vec<&str> = rest
-        .trim_end_matches(']')
-        .split(" → ")
-        .map(str::trim)
-        .filter(|p| !p.is_empty() && *p != "you")
-        .collect();
-    Some(json!({"id": id, "path": path}))
-}
 
 /// `identity|channel|issued|delivered|id|message` — RFC 3339 UTC timestamps of when the message
 /// was created and when it was handed to the model. `id` is the platform message id (empty if none).
@@ -994,9 +971,6 @@ pub struct Tools {
     pub reply_to: std::cell::RefCell<Option<(String, String)>>,
     /// identity of the last human inbound on each channel
     pub last_on: std::cell::RefCell<HashMap<String, String>>,
-    /// The request the current turn works on, passed on with messages to peers: `{new, from}`
-    /// when a person asked here, `{id, path}` when a peer's request came in.
-    pub origin: std::cell::RefCell<Option<Value>>,
     /// Human messages the model has not closed with answered=[ids] yet.
     pub unanswered: crate::unanswered::Set,
     mcp_arch: String,
@@ -1021,7 +995,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "talk",
         blurb: "Speak to people and keep contacts.",
-        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp, messenger, instagram; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web → web for the person's main chat, web:<chat> for every other chat (never shorten web:<chat> to web), with identity = that person; telegram:<chat_id>; whatsapp:<phone>; messenger:<chat_id>; instagram:<chat_id>. On web, telegram, whatsapp, messenger and instagram a message that answers another starts with [reply to <id> from <who>: \"…\"] (from you = one of your own messages; , quoting: \"…\" = the part they picked): that is what they mean, read it before answering. Web chats work like Telegram: inbound text may also start with [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp/messenger/instagram. On telegram/whatsapp/messenger/instagram an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). The console is the physical screen; web, telegram, whatsapp, messenger and instagram are buses of their MCPs (web calls: web_call_start / web_call_hangup in mcp/web) and reconnect when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban / messenger_ban / instagram_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. The *_unban tools let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. Messenger and Instagram take the login from the session in bia's Chrome (messenger_login / instagram_login; sign in there first); they have no calls. addressbook_* is your contacts (trust normal or root). channels lists buses.",
+        guide: "say(identity, channel, message, reply_to, files, buttons, poll, answered, edit). say with edit=<message id> replaces the text of a message you sent instead of sending a new one (web, telegram, whatsapp, messenger, instagram; ids are in say results). Human messages stay open until you close them with answered=[envelope ids] on say or react; do that only when the task is done, and post a plain status say while it is still running. say with answered and no message only closes. An unanswered: notice lists open messages. Always reply on the channel of the inbound envelope, copied exactly: physical screen → console; web with identity = whoever wrote (a person, another bia or an agent: everyone has one web chat with you, and they talk alike); telegram:<chat_id>; whatsapp:<phone>; messenger:<chat_id>; instagram:<chat_id>. On web, telegram, whatsapp, messenger and instagram a message that answers another starts with [reply to <id> from <who>: \"…\"] (from you = one of your own messages; , quoting: \"…\" = the part they picked): that is what they mean, read it before answering. Web chats work like Telegram: inbound text may also start with [forwarded from …], ends with files: (uploads under /home/bia/files/inbox/web/<identity>/, voice messages marked), and user actions arrive as [edited <id>], [deleted] <ids>, [reaction] <emoji> on <id>, [button] \"text\" on <id>, [vote] … in poll <id>. You can react, edit (say with edit), delete_messages, pin_message, close_poll and read chat_history there; react, edit and delete_messages also work on telegram/whatsapp/messenger/instagram. On telegram/whatsapp/messenger/instagram an edit arrives as [edited <id>] sent <time>, edited <time> with was: (old text) and now: (new text); the original message stays earlier in your history; answer only if the change matters. Shared places arrive as [location] / [live location] / [contact] lines; a live location then updates silently (telegram_live_location / whatsapp_live_location tell where they are now) and [live location ended] says when sharing stopped (no reply needed). Omitting identity/channel uses the last human inbound this turn. Sends and returns immediately — their next message arrives later as a normal inbound envelope (do not block waiting). The console is the physical screen; web, telegram, whatsapp, messenger and instagram are buses of their MCPs (web calls: web_call_start / web_call_hangup in mcp/web) and reconnect when you boot; a channel is one conversation on a bus. telegram_ban / whatsapp_ban / messenger_ban / instagram_ban ban a chat: its messages are not delivered, it is answered with I've banned you, and its calls are auto-rejected. The *_unban tools let them through again. Voice: [incoming call] → *_call_accept/reject; [speech] is spoken input (may arrive while you are still speaking — do not call_say/say again until [you finished speaking] unless you intentionally interrupt); say on an active call speaks via TTS and a new speak cancels the current one. WhatsApp login is QR-only (whatsapp_login); the QR PNG is at /home/bia/files/whatsapp/qr.png until auth completes. Messenger and Instagram take the login from the session in bia's Chrome (messenger_login / instagram_login; sign in there first); they have no calls. addressbook_* is your contacts (trust normal or root). channels lists buses.",
     },
     Branch {
         id: "calendar",
@@ -1127,7 +1101,6 @@ impl Tools {
             fired_job: std::cell::Cell::new(false),
             reply_to: std::cell::RefCell::new(None),
             last_on: std::cell::RefCell::new(HashMap::new()),
-            origin: std::cell::RefCell::new(None),
             unanswered: crate::unanswered::Set::load(&state),
             mcp_arch: std::env::consts::ARCH.into(),
             mcp_env: vec![],
@@ -1158,15 +1131,14 @@ impl Tools {
                 "cwd": {"type": "string", "description": "working directory (default /home/bia)"},
                 "timeout_secs": {"type": "integer", "description": "kill after this many seconds (default 600, 0 = no limit)"}
             }), &["command"]));
-        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp/messenger/instagram every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (web:<chat> is not web; physical screen → console, telegram:<id>, whatsapp:<phone>). Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
+        t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp/messenger/instagram every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (physical screen → console, web with the sender's identity, telegram:<id>, whatsapp:<phone>). On web, what you send to someone who is not connected waits there and reaches them when they are back. Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
             obj(json!({
                 "identity": {"type": "string", "description": "recipient identity, e.g. root; defaults to last human inbound"},
-                "channel": {"type": "string", "description": "channel, e.g. web, web:<chat> or console; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "channel, e.g. web or console; defaults to last human inbound"},
                 "message": {"type": "string", "description": "markdown text; optional when files or poll are given"},
                 "lang": {"type": "string", "description": "language of message (en, ru, es-MX…) for voice=true and for speaking it in an active call; defaults to the person's preferred language (addressbook)"},
                 "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram, whatsapp, messenger or instagram; only when the user asks for a voice reply"},
                 "reply_to": {"type": "string", "description": "web: id of the message to quote"},
-                "new_chat": {"type": "boolean", "description": "web: true opens a new chat named by channel web:<chat>; a chat that does not exist is refused otherwise"},
                 "edit": {"type": "string", "description": "id of a message you sent (from its say result): replace its text with message instead of sending a new one (web, telegram, whatsapp, messenger, instagram)"},
                 "cancel": {"type": "string", "description": "telegram/whatsapp/messenger/instagram: local id o<n> of a send that is still queued or uploading; stops it and sends nothing else"},
                 "answered": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of inbound messages whose task is now done (closes them); omit while still working"},
@@ -1180,7 +1152,7 @@ impl Tools {
             }), &[]));
         t.add_grouped("talk", "react", "React to a message with an emoji on web, telegram, whatsapp, messenger or instagram channels (message_id is the envelope id). Empty emoji removes your reaction. answered lists inbound envelope ids whose task is done (a reaction can be the whole answer).",
             obj(json!({
-                "channel": {"type": "string", "description": "e.g. web, web:<chat>, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "e.g. web, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "web only: chat owner identity; defaults to last human inbound"},
                 "message_id": {"type": "string"},
                 "emoji": {"type": "string", "description": "e.g. 👍; empty removes"},
@@ -1188,27 +1160,27 @@ impl Tools {
             }), &["message_id"]));
         t.add_grouped("talk", "delete_messages", "Delete messages on a web, telegram, whatsapp, messenger or instagram chat. They are deleted for everyone (revoke=true, the default); revoke=false deletes them only on bia's side (telegram/whatsapp/messenger/instagram).",
             obj(json!({
-                "channel": {"type": "string", "description": "web, web:<chat>, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "web, telegram:<id>, whatsapp:<phone>, messenger:<id>, instagram:<id>; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "web only: chat owner identity; defaults to last human inbound"},
                 "message_ids": {"type": "array", "items": {"type": "string"}},
                 "revoke": {"type": "boolean", "description": "telegram/whatsapp/messenger/instagram: true (default) deletes for the other person too; false only on this account"}
             }), &["message_ids"]));
         t.add_grouped("talk", "pin_message", "Pin (or unpin with on=false) a message at the top of a web chat.",
             obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "web; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "chat owner identity; defaults to last human inbound"},
                 "message_id": {"type": "string"},
                 "on": {"type": "boolean", "description": "default true"}
             }), &["message_id"]));
         t.add_grouped("talk", "close_poll", "Stop a web poll you sent from taking votes; returns the tally.",
             obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "web; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "chat owner identity; defaults to last human inbound"},
                 "message_id": {"type": "string"}
             }), &["message_id"]));
         t.add_grouped("talk", "chat_history", "Recent messages of a web chat, newest first: id, time, sender, reply/edit/pin/reaction/file/poll marks and text.",
             obj(json!({
-                "channel": {"type": "string", "description": "web or web:<chat>; defaults to last human inbound"},
+                "channel": {"type": "string", "description": "web; defaults to last human inbound"},
                 "identity": {"type": "string", "description": "chat owner identity; defaults to last human inbound"},
                 "limit": {"type": "integer", "description": "default 30, max 100"}
             }), &[]));
@@ -3630,31 +3602,14 @@ impl Tools {
                 def_id
             } else if let Some(id) = self.last_on.borrow().get(&channel) {
                 id.clone()
-            } else if let Some(name) = channel.strip_prefix("peer:").filter(|_| is_peer(&channel)) {
-                // a peer chat is the peer itself
-                name.to_string()
             } else if is_web(&channel) {
-                // no one wrote on this web chat yet: the web MCP names its users
+                // no one wrote on web yet: the web MCP names its users
                 String::new()
             } else {
                 def_id
             }
         });
         (identity, channel)
-    }
-
-    /// The request behind what the model handles now (see `origin`): a peer's message
-    /// carries its own, anyone else's message starts one here.
-    pub fn note_origin(&self, identity: &str, channel: &str, id: &str, text: &str) {
-        let o = if is_peer(channel) {
-            match peer_origin(text) {
-                Some(o) => o,
-                None => return,
-            }
-        } else {
-            json!({"new": id, "from": identity})
-        };
-        *self.origin.borrow_mut() = Some(o);
     }
 
     /// A human message arrived: it is the default target of the next reply.
@@ -3742,7 +3697,7 @@ impl Tools {
         }
         if args.get("voice").and_then(|v| v.as_bool()).unwrap_or(false) {
             let lang = s("lang").unwrap_or_default();
-            let detail = if via_web(&channel) {
+            let detail = if is_web(&channel) {
                 let r = self.web_invoke(
                     "send",
                     json!({"identity": identity, "channel": channel, "text": message,
@@ -3791,17 +3746,12 @@ impl Tools {
             echo(&self.con);
             return Ok(format!("sent to {identity}@{channel}"));
         }
-        if via_web(&channel) {
+        if is_web(&channel) {
             let mut a = json!({"identity": identity, "channel": channel, "text": message,
                                "files": files, "lang": s("lang").unwrap_or_default()});
-            for k in ["reply_to", "buttons", "poll", "new_chat"] {
+            for k in ["reply_to", "buttons", "poll"] {
                 if let Some(v) = args.get(k).filter(|v| !v.is_null()) {
                     a[k] = v.clone();
-                }
-            }
-            if is_peer(&channel) {
-                if let Some(o) = self.origin.borrow().clone() {
-                    a["origin"] = o;
                 }
             }
             let r = self.web_invoke("send", a)?;
@@ -3840,7 +3790,7 @@ impl Tools {
         if let Some(k) = ["files", "voice", "poll"].into_iter().find(|k| has(k)) {
             bail!("edit replaces text only; {k} cannot be combined with edit (send a new message instead)");
         }
-        if via_web(channel) {
+        if is_web(channel) {
             self.web_invoke(
                 "edit",
                 json!({"identity": identity, "channel": channel, "message_id": id, "text": message}),
@@ -4028,7 +3978,7 @@ impl Tools {
                 .unwrap_or_default()
         };
         let (identity, channel) = self.target(args);
-        let web = via_web(&channel);
+        let web = is_web(&channel);
         let to = |extra: Value| {
             let mut a = json!({"identity": identity, "channel": channel});
             if let (Some(o), Some(e)) = (a.as_object_mut(), extra.as_object()) {
@@ -4041,7 +3991,7 @@ impl Tools {
             if web {
                 Ok(())
             } else {
-                bail!("{name} works on web chats only (channel web or web:<chat>), not {channel}")
+                bail!("{name} works on web chats only (channel web), not {channel}")
             }
         };
         match name {
@@ -4756,33 +4706,6 @@ done
             t.target(&json!({"channel": "web", "identity": "root"})),
             ("root".into(), "web".into())
         );
-        // web:<chat> is its own channel
-        assert_eq!(
-            t.target(&json!({"channel": "web:trip"})),
-            ("".into(), "web:trip".into())
-        );
-        t.note_inbound("carol", "web:trip");
-        assert_eq!(
-            t.target(&json!({"channel": "web:trip"})),
-            ("carol".into(), "web:trip".into())
-        );
-    }
-
-    #[test]
-    fn peer_chats_name_the_peer_and_carry_the_request() {
-        let t = Tools::new(&std::env::temp_dir(), Console::for_test());
-        assert_eq!(t.target(&json!({"channel": "peer:fred"})), ("fred".into(), "peer:fred".into()));
-        assert!(is_peer("peer:fred") && !is_peer("peer:") && via_web("peer:fred") && !is_web("peer:fred"));
-        // a person asked here: a new request
-        t.note_origin("root", "telegram:42", "b17", "find the invoice");
-        assert_eq!(*t.origin.borrow(), Some(json!({"new": "b17", "from": "root"})));
-        // a peer's request is passed on as it came
-        t.note_origin("fred", "peer:fred", "p1", "[request alex/b1: root → alex → fred → you]\n[asked again: …]\nhave it?");
-        assert_eq!(*t.origin.borrow(), Some(json!({"id": "alex/b1", "path": ["root", "alex", "fred"]})));
-        // a peer message without one leaves the current request alone
-        t.note_origin("fred", "peer:fred", "p2", "no header");
-        assert_eq!(t.origin.borrow().as_ref().unwrap()["id"], "alex/b1");
-        assert_eq!(peer_origin("x"), None);
     }
 
     #[test]

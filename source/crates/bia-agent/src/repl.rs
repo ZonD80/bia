@@ -147,8 +147,6 @@ fn needs_answer(ib: &Inbound) -> bool {
         || ib.channel.starts_with(crate::jobs::PREFIX)
         || ib.channel == crate::tools::CH_SCHEDULE
         || console_command(ib).is_some()
-        // another bia: no reply is owed (nudges and "still working" would talk back)
-        || crate::tools::is_peer(&ib.channel)
     {
         return false;
     }
@@ -2515,14 +2513,8 @@ now: {now}", done.join("\n")), failed)
         } else {
             ib.id.clone()
         };
-        if crate::tools::via_web(&ib.channel) && ib.identity != ID_SYSTEM {
+        if crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM {
             self.tools.web_read(&ib.identity, &ib.channel, &id);
-        }
-        if ib.identity != ID_SYSTEM
-            && !ib.channel.starts_with(crate::jobs::PREFIX)
-            && ib.channel != crate::tools::CH_SCHEDULE
-        {
-            self.tools.note_origin(&ib.identity, &ib.channel, &id, &ib.text);
         }
         let now = crate::clock::unix(crate::clock::now());
         if ib.channel.starts_with(crate::jobs::PREFIX) {
@@ -2589,7 +2581,7 @@ now: {now}", done.join("\n")), failed)
         self.tools.set_chat_typing(&chats, true);
         let mut web: Vec<(String, String)> = messages
             .iter()
-            .filter(|ib| crate::tools::via_web(&ib.channel) && ib.identity != ID_SYSTEM)
+            .filter(|ib| crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM)
             .map(|ib| (ib.identity.clone(), ib.channel.clone()))
             .collect();
         web.dedup();
@@ -3382,7 +3374,7 @@ mod channel_tests {
     fn web_messages_are_tracked_like_any_bus() {
         assert!(needs_answer(&ib("root", "web", "/status")));
         assert!(needs_answer(&ib("alex", "web:trip", "hi")));
-        assert!(!needs_answer(&ib("fred", "peer:fred", "can you check?")), "another bia is owed no reply");
+        assert!(needs_answer(&ib("fred", "web", "can you check?")), "another bia talks like anyone");
         assert!(!needs_answer(&ib("root", "console", "hi")));
         assert!(!needs_answer(&ib("system", "web", "[call ended]")));
     }

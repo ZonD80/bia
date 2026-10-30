@@ -441,7 +441,7 @@ impl Note {
 /// is in front right now.
 pub fn notify(identity: &str, note: Note) {
     let Ok(p) = push() else { return };
-    if p.con.web_active(identity) {
+    if crate::link::active(identity) {
         return;
     }
     let targets = p.targets(identity);

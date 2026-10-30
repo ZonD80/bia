@@ -3,30 +3,33 @@ use crate::{call, chat};
 use bia_mcp::{arg_bool, arg_str_list, arg_str_opt, Ctx};
 use serde_json::Value;
 
-/// `(identity, channel)` of a web chat. identity is required: a web channel only names a chat,
-/// the person is the identity (every person has their own `web`). Never bia itself.
+/// The identity of a web chat. identity is required: the channel does not name the person
+/// (everyone has their own `web`). Never bia itself. A channel from before 1.9 still works:
+/// `web:<chat>` is the one chat, `peer:<name>` is `<name>`'s.
 pub fn target(args: &Value) -> Result<(String, String), String> {
-    let identity = arg_str_opt(args, "identity")
-        .unwrap_or_default()
-        .trim()
-        .to_string();
     let channel = arg_str_opt(args, "channel")
         .map(|c| c.trim().to_string())
         .filter(|c| !c.is_empty())
         .unwrap_or_else(|| crate::bus::CH_WEB.to_string());
-    if !chat::is_web(&channel) {
-        return Err(format!(
-            "{channel} is not a web channel (web or web:<chat>)"
-        ));
+    let mut identity = arg_str_opt(args, "identity")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if let Some(name) = channel.strip_prefix("peer:").filter(|n| !n.is_empty()) {
+        if identity.is_empty() {
+            identity = name.to_string();
+        }
+    } else if !chat::is_web(&channel) {
+        return Err(format!("{channel} is not a web channel (use web)"));
     }
     if identity.is_empty() {
         return Err(
-            "identity is required: the person whose web chat this is (from their envelope)".into(),
+            "identity is required: whose web chat this is (from their envelope)".into(),
         );
     }
     if identity == chat::BIA {
         return Err(
-            "identity bia is this machine itself; use the person's identity from their envelope"
+            "identity bia is this machine itself; use the identity from their envelope"
                 .into(),
         );
     }
@@ -41,30 +44,7 @@ pub fn target(args: &Value) -> Result<(String, String), String> {
             }
         ));
     }
-    // naming a chat that does not exist is a typo unless the model asks for a new chat
-    if !chat::has_chat(&identity, &channel) && !arg_bool(args, "new_chat", false) {
-        return Err(format!(
-            "{identity} has no web chat {channel}; their chats: {}. Reply on the channel from their envelope, or pass new_chat=true to open a new chat",
-            chat::chat_lines(&identity)
-                .iter()
-                .map(|l| l.split_whitespace().next().unwrap_or_default().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    Ok((identity, channel))
-}
-
-/// A `peer:<name>` channel goes over the live link with that peer, not the web chats.
-fn peer_channel(args: &Value) -> Option<Result<(&'static std::sync::Arc<crate::peer::Links>, String), String>> {
-    let ch = arg_str_opt(args, "channel").unwrap_or_default().trim();
-    if !crate::peer::is_peer(ch) {
-        return None;
-    }
-    Some(match crate::peer::links() {
-        Some(l) => crate::peer::channel_peer(args).map(|n| (l, n)),
-        None => Err("peer links are not running".into()),
-    })
+    Ok((identity, crate::bus::CH_WEB.to_string()))
 }
 
 fn s(args: &Value, k: &str) -> String {
@@ -72,24 +52,20 @@ fn s(args: &Value, k: &str) -> String {
 }
 
 pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        return links.send(&name, &args);
-    }
     let (identity, channel) = target(&args)?;
     let text = arg_str_opt(&args, "text").unwrap_or_default().to_string();
     let lang = s(&args, "lang");
     let reply_to = arg_str_opt(&args, "reply_to");
+    let waits = if crate::link::online(&identity) { "" } else { "; they are not connected now, it waits there for them" };
     if arg_bool(&args, "voice", false) {
-        let id = chat::say_voice(&identity, &channel, &text, &lang, reply_to)?;
+        let id = chat::say_voice(&identity, &text, &lang, reply_to)?;
         return Ok(format!(
-            "sent to {identity}@{channel} (voice message id {id})"
+            "sent to {identity}@{channel} (voice message id {id}){waits}"
         ));
     }
     let files = arg_str_list(&args, "files");
     let id = chat::say(
         &identity,
-        &channel,
         &text,
         reply_to,
         &files,
@@ -102,30 +78,22 @@ pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
             Err(e) => format!("sent to {identity}@{channel} (message id {id}); NOT spoken in the active web call: {e}"),
         });
     }
-    Ok(format!("sent to {identity}@{channel} (message id {id})"))
+    Ok(format!("sent to {identity}@{channel} (message id {id}){waits}"))
 }
 
 pub fn edit(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        return links.edit(&name, &s(&args, "message_id"), arg_str_opt(&args, "text").unwrap_or_default());
-    }
     let (identity, channel) = target(&args)?;
     let id = s(&args, "message_id");
     let text = arg_str_opt(&args, "text").unwrap_or_default();
-    chat::agent_edit(&identity, &channel, &id, text)?;
+    chat::agent_edit(&identity, &id, text)?;
     Ok(format!("edited {id} on {identity}@{channel}"))
 }
 
 pub fn react(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        return links.react(&name, &s(&args, "message_id"), &s(&args, "emoji"));
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let id = s(&args, "message_id");
     let emoji = s(&args, "emoji");
-    chat::agent_react(&identity, &channel, &id, &emoji)?;
+    chat::agent_react(&identity, &id, &emoji)?;
     Ok(if emoji.is_empty() {
         format!("removed the reaction on {id}")
     } else {
@@ -134,72 +102,46 @@ pub fn react(_: &Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn delete(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        return links.delete(&name, &arg_str_list(&args, "message_ids"));
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let ids = arg_str_list(&args, "message_ids");
     if ids.is_empty() {
         return Err("message_ids required".into());
     }
-    let n = chat::agent_delete(&identity, &channel, &ids)?;
+    let n = chat::agent_delete(&identity, &ids)?;
     Ok(format!("deleted {n} message(s) for everyone"))
 }
 
 pub fn pin(_: &Ctx, args: Value) -> Result<String, String> {
-    if peer_channel(&args).is_some() {
-        return Err("pinning is not available on peer chats".into());
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let id = s(&args, "message_id");
     let on = arg_bool(&args, "on", true);
-    chat::agent_pin(&identity, &channel, &id, on)?;
+    chat::agent_pin(&identity, &id, on)?;
     Ok(format!("{} {id}", if on { "pinned" } else { "unpinned" }))
 }
 
 pub fn close_poll(_: &Ctx, args: Value) -> Result<String, String> {
-    if peer_channel(&args).is_some() {
-        return Err("polls are not available on peer chats".into());
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let id = s(&args, "message_id");
-    chat::agent_close_poll(&identity, &channel, &id).map(|t| format!("poll {id} closed: {t}"))
+    chat::agent_close_poll(&identity, &id).map(|t| format!("poll {id} closed: {t}"))
 }
 
 pub fn history(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        let n = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
-        return links.history(&name, n);
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let n = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
-    chat::agent_history(&identity, &channel, n)
+    chat::agent_history(&identity, n)
 }
 
 pub fn read(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        let id = s(&args, "message_id");
-        links.read(&name, &id);
-        return Ok(format!("read up to {id}"));
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let id = s(&args, "message_id");
-    chat::agent_read(&identity, &channel, &id);
+    chat::agent_read(&identity, &id);
     Ok(format!("read up to {id}"))
 }
 
 pub fn typing(_: &Ctx, args: Value) -> Result<String, String> {
-    if let Some(r) = peer_channel(&args) {
-        let (links, name) = r?;
-        links.typing(&name, arg_bool(&args, "on", true));
-        return Ok("ok".into());
-    }
-    let (identity, channel) = target(&args)?;
+    let (identity, _) = target(&args)?;
     let on = arg_bool(&args, "on", true);
-    chat::typing(&identity, &channel, on);
+    chat::typing(&identity, on);
     Ok(if on { "typing" } else { "stopped typing" }.into())
 }
 
@@ -208,19 +150,21 @@ pub fn chats(_: &Ctx, _: Value) -> Result<String, String> {
     if users.is_empty() {
         return Ok("(no web chats yet)".into());
     }
-    let mut out = Vec::new();
-    for u in users {
-        let open = if chat::has_client(&u) {
-            "  (browser open)"
-        } else {
-            ""
-        };
-        out.push(format!("{u}{open}"));
-        for l in chat::chat_lines(&u) {
-            out.push(format!("  {l}"));
-        }
-    }
-    Ok(out.join("\n"))
+    Ok(users
+        .iter()
+        .map(|u| {
+            let mut l = format!("{u}  web");
+            let n = chat::unread(u);
+            if n > 0 {
+                l.push_str(&format!("  ({n} unread)"));
+            }
+            if crate::link::online(u) {
+                l.push_str("  (connected)");
+            }
+            l
+        })
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 pub fn call_start(_: &Ctx, args: Value) -> Result<String, String> {
@@ -263,25 +207,6 @@ pub fn status(_: &Ctx, _: Value) -> Result<String, String> {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::{Arc, Once};
-
-    /// One chat store per test process (it is a global, like in the server).
-    fn setup() -> Arc<crate::bus::Bus> {
-        static INIT: Once = Once::new();
-        static mut BUS: Option<Arc<crate::bus::Bus>> = None;
-        INIT.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("bia-mcp-web-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let bus = Arc::new(crate::bus::Bus::new(dir.clone()));
-            chat::init(&dir, bus.clone());
-            unsafe { BUS = Some(bus) };
-        });
-        #[allow(static_mut_refs)]
-        unsafe {
-            BUS.clone().unwrap()
-        }
-    }
 
     fn ctx() -> Ctx {
         Ctx::console()
@@ -289,7 +214,7 @@ mod tests {
 
     #[test]
     fn identity_is_required_and_never_bia() {
-        setup();
+        crate::chat::tests::setup();
         let e = send(&ctx(), json!({"channel": "web", "text": "hi"})).unwrap_err();
         assert!(e.contains("identity is required"), "{e}");
         let e = send(
@@ -300,48 +225,39 @@ mod tests {
         assert!(e.contains("this machine itself"), "{e}");
         let e = send(&ctx(), json!({"identity": "nobody", "text": "hi"})).unwrap_err();
         assert!(e.contains("no web user nobody"), "{e}");
-        let e = send(
-            &ctx(),
-            json!({"identity": "root", "channel": "console", "text": "hi"}),
-        )
-        .unwrap_err();
-        assert!(e.contains("not a web channel"), "{e}");
-        let e = send(
-            &ctx(),
-            json!({"identity": "root", "channel": "telegram:1", "text": "hi"}),
-        )
-        .unwrap_err();
-        assert!(e.contains("not a web channel"), "{e}");
+        for ch in ["console", "telegram:1"] {
+            let e = send(&ctx(), json!({"identity": "root", "channel": ch, "text": "hi"})).unwrap_err();
+            assert!(e.contains("not a web channel"), "{e}");
+        }
     }
 
     #[test]
-    fn reply_lands_in_the_senders_own_chat() {
-        // Alex writes on web; the answer must go to web/alex/main.json, next to Alex's message.
-        let bus = setup();
-        let files = bus.files.clone();
+    fn reply_lands_in_the_one_chat() {
+        let (_, files) = crate::chat::tests::setup();
         std::fs::create_dir_all(files.join("state/web/alex")).unwrap();
         let r = send(
             &ctx(),
             json!({"identity": "alex", "channel": "web", "text": "hello Alex"}),
         )
         .unwrap();
-        assert!(r.starts_with("sent to alex@web (message id b"), "{r}");
+        assert!(r.starts_with("sent to alex@web (message id b") && r.contains("not connected now"), "{r}");
         let main = std::fs::read_to_string(files.join("state/web/alex/main.json")).unwrap();
         assert!(main.contains("hello Alex"));
         assert!(
             !files.join("state/web/bia").exists(),
             "nothing is written under web/bia"
         );
-        // history, react, pin, edit and delete address the same chat
+        // a chat named the old way is the same one chat
+        send(&ctx(), json!({"identity": "alex", "channel": "web:trip", "text": "tickets"})).unwrap();
+        assert!(history(&ctx(), json!({"identity": "alex"})).unwrap().contains("tickets"));
         let id = r
             .split("message id ")
             .nth(1)
             .unwrap()
-            .trim_end_matches(')')
-            .to_string();
-        assert!(history(&ctx(), json!({"identity": "alex"}))
+            .split(')')
+            .next()
             .unwrap()
-            .contains("hello Alex"));
+            .to_string();
         react(
             &ctx(),
             json!({"identity": "alex", "message_id": id, "emoji": "👍"}),
@@ -360,57 +276,29 @@ mod tests {
             delete(&ctx(), json!({"identity": "alex", "message_ids": [id]})).unwrap(),
             "deleted 1 message(s) for everyone"
         );
-    }
-
-    #[test]
-    fn other_chats_and_listing() {
-        let bus = setup();
-        std::fs::create_dir_all(bus.files.join("state/web/carol")).unwrap();
-        // a chat that does not exist is refused (a typo like web:bia must not open one)
-        let e = send(
-            &ctx(),
-            json!({"identity": "carol", "channel": "web:trip", "text": "tickets"}),
-        )
-        .unwrap_err();
-        assert!(
-            e.contains("carol has no web chat web:trip") && e.contains("new_chat=true"),
-            "{e}"
-        );
-        assert!(!bus.files.join("state/web/carol/trip.json").exists());
-        send(
-            &ctx(),
-            json!({"identity": "carol", "channel": "web:trip", "text": "tickets", "new_chat": true}),
-        )
-        .unwrap();
-        // once it exists, no flag is needed
-        send(
-            &ctx(),
-            json!({"identity": "carol", "channel": "web:trip", "text": "and hotel"}),
-        )
-        .unwrap();
         let l = chats(&ctx(), json!({})).unwrap();
-        assert!(l.contains("carol") && l.contains("web:trip"), "{l}");
+        assert!(l.lines().any(|x| x.starts_with("alex  web")), "{l}");
         assert!(!l.lines().any(|x| x.trim() == "bia"), "{l}");
     }
 
     #[test]
-    fn people_messages_reach_the_agent_as_web_envelopes() {
-        let bus = setup();
-        std::fs::create_dir_all(bus.files.join("state/web/dave")).unwrap();
+    fn old_peer_channel_names_the_identity() {
+        let (_, files) = crate::chat::tests::setup();
+        std::fs::create_dir_all(files.join("state/web/fred")).unwrap();
+        assert_eq!(target(&json!({"channel": "peer:fred"})).unwrap(), ("fred".to_string(), "web".to_string()));
+    }
+
+    #[test]
+    fn messages_reach_the_agent_as_web_envelopes() {
+        let (bus, files) = crate::chat::tests::setup();
+        std::fs::create_dir_all(files.join("state/web/dave")).unwrap();
         chat::action(
             "dave",
             false,
-            &json!({"t": "send", "chat": "main", "text": "ping"}),
+            &json!({"t": "send", "text": "ping"}),
         )
         .unwrap();
-        let ib = loop {
-            let ib = bus
-                .next_held(std::time::Duration::from_secs(10))
-                .expect("delivered");
-            if ib.identity == "dave" {
-                break ib;
-            }
-        };
+        let ib = crate::chat::tests::next_for(&bus, "dave");
         assert_eq!(ib.channel, "web");
         assert!(ib.text.contains("ping"), "{}", ib.text);
         assert!(ib.id.starts_with('b'));

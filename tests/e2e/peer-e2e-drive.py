@@ -12,7 +12,7 @@ before approving). Serial output goes to $LE/a.log and $LE/b.log. Phases:
   b:     reports bia-a's answer and the approval message, which must contain the code word
 then the bia-to-bia peer link (agents alpha = bia-a, beta = bia-b):
   a:     root asks it to connect to https://10.77.0.3 (web_peer_add); root on b approves
-  both:  [peer …] Connected notices: the live link opened by itself
+  both:  [web open] notices: the link opened by itself, each is an identity on the other's web chat
   a<->b: root gives beta a code word; alpha asks beta for it over the link and reports it
   b:     /reboot (systemd stops bia): alpha hears "beta is rebooting" at once (bye), then back
   b:     hard reset (no goodbye): alpha reports the link lost after ~30 s, then back
@@ -24,7 +24,7 @@ import e2e_vm
 from e2e_vm import LE, VM, die, link, stamp
 
 DELAY = int(os.environ.get("DELAY", "90"))
-e2e_vm.SHOW = re.compile(r"certificate request|downloaded its certificate|bia-b@web|pki_|requests|MANGO-|KIWI-|\[peer |@peer:|Kernel panic")
+e2e_vm.SHOW = re.compile(r"certificate request|downloaded its certificate|bia-b@web|pki_|requests|MANGO-|KIWI-|\[web (open|closed|link)|alpha@web|beta@web|Kernel panic")
 READY = r"Ready for commands|<-(?:\x1b\[[0-9;]*m)* "  # the agent answered its boot notice (a restored one may not say "ready")
 
 for f in (f"{LE}/a.img", f"{LE}/b.img"):
@@ -52,8 +52,8 @@ code = f"MANGO-{secrets.randbelow(10**6):06d}"
 b.send("Another bia agent runs at https://10.77.0.2 (reachable from this machine on eth1). Get access to its web API "
        "as identity bia-b with role agent: read https://10.77.0.2/.well-known/bia.json and the skill it points to, and "
        "follow the skill to request a client certificate. A person there must approve it, which can take a while, so keep "
-       "checking the request by its id until it is approved, then collect the certificate. Then send a message in its main "
-       "web chat saying hello from bia-b, wait for bia-a's answer there, and tell me exactly what bia-a answered and the message that came with the approval, word for word. "
+       "checking the request by its id until it is approved, then collect the certificate. Then talk to it as the skill describes "
+       "(bia-bridge, which bia-a serves itself, with that certificate): send a message saying hello from bia-b, wait for bia-a's answer, and tell me exactly what bia-a answered and the message that came with the approval, word for word. "
        "Do all of it without asking me.")
 
 m = a.expect("request reaches bia-a", r"certificate request ([0-9a-f]{8}) from ([0-9.]+): bia-b \(agent\)", 900)
@@ -123,37 +123,37 @@ for attempt in range(3):
         break
 else:
     die("beta never approved alpha's request", b)
-a.expect("alpha: the link with beta is up", r"\[peer beta\] Connected", 300)
-b.expect("beta: the link with alpha is up", r"\[peer alpha\] Connected", 300)
+a.expect("alpha: beta connected", r"\[web open\] beta connected", 300)
+b.expect("beta: alpha connected", r"\[web open\] alpha connected", 300)
 
 word = f"KIWI-{secrets.randbelow(10**6):06d}"
-b.send(f"Root here. Remember the code word {word}. When the bia alpha asks you for the code word over your peer link, tell it. No need to answer me.")
+b.send(f"Root here. Remember the code word {word}. When the bia alpha asks you for the code word on web, tell it. No need to answer me.")
 time.sleep(60)
-a.send("Root here. Ask the bia beta over your peer link (say on channel peer:beta) for the code word root gave it, "
+a.send("Root here. Ask the bia beta on web (say with identity beta, channel web) for the code word root gave it, "
        "wait for its answer, then tell me the code word.")
-b.expect("alpha's question reaches beta on peer:alpha", r"alpha@peer:alpha", 900)
-a.expect("beta's answer reaches alpha on peer:beta", r"beta@peer:beta", 900)
+b.expect("alpha's question reaches beta as alpha@web", r"alpha@web", 900)
+a.expect("beta's answer reaches alpha as beta@web", r"beta@web", 900)
 a.expect("alpha reports the code word", re.escape(word), 900)
 
-print(f"{stamp()} [b] reboot: the web MCP says bye when systemd stops bia", flush=True)
+print(f"{stamp()} [b] reboot: alpha writes meanwhile; it waits and arrives when beta is back", flush=True)
 b.send("/reboot")
-t_bye = time.time()
-a.expect("alpha hears beta is rebooting (bye)", r"\[peer beta\] beta is rebooting", 90)
-print(f"{stamp()} [a] bye arrived {time.time() - t_bye:.0f} s after /reboot", flush=True)
+time.sleep(5)
+a.send("Root here. Tell beta on web (say with identity beta, channel web) that alpha says good morning. Do not wait for an answer.")
 b.expect("beta up again", READY, 900, fail=r"Kernel panic")
-a.expect("alpha: beta back online", r"\[peer beta\] Back online", 600)
+b.expect("beta sees alpha connected after its reboot", r"\[web open\] alpha connected", 600)
+b.expect("what alpha said during the reboot reaches beta", r"alpha@web .*good morning", 600)
 
 print(f"{stamp()} [b] hard reset: no goodbye, alpha must notice by itself", flush=True)
 time.sleep(30)
 b.mon("system_reset")
 t_rst = time.time()
-a.expect("alpha reports beta lost", r"\[peer beta\] Lost", 180)
+a.expect("alpha hears beta left", r"\[web closed\] beta left", 240)
 lost_after = time.time() - t_rst
-print(f"{stamp()} [a] lost reported {lost_after:.0f} s after the reset", flush=True)
-if lost_after < 20:
-    die(f"lost reported too early ({lost_after:.0f} s)", a)
+print(f"{stamp()} [a] beta's absence reported {lost_after:.0f} s after the reset", flush=True)
+if lost_after < 60:
+    die(f"absence reported too early ({lost_after:.0f} s; a dead link takes 30 s, then 60 s of grace)", a)
 b.expect("beta up again after the reset", READY, 900, fail=r"Kernel panic")
-a.expect("alpha: beta back online after the reset", r"\[peer beta\] Back online", 600)
+a.expect("alpha: beta back after the reset", r"\[web open\] beta connected .*back after", 600)
 
 for v in (a, b):
     v.send("/poweroff")

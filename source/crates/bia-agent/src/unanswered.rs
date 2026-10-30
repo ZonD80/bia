@@ -199,7 +199,7 @@ impl Set {
     }
 
     /// Other chats on the same bus with open messages, when `channel` itself has none
-    /// (a reply that probably went to the wrong chat, e.g. web instead of web:<chat>).
+    /// (a reply that probably went to the wrong chat, e.g. telegram instead of whatsapp).
     pub fn has_open(&self, channel: &str) -> bool {
         self.open.iter().any(|e| e.channel == channel)
     }

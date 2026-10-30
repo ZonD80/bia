@@ -1,7 +1,8 @@
-//! Talking to the bia: the certificate request (CSR; the key stays here), HTTPS calls with
-//! the client certificate, and the chat WebSocket. The bia's CA is pinned; its server name
-//! is not checked (bias are reached by addresses that change).
-use crate::profile::{now_secs, random_hex, sha256_hex, Profile};
+//! Talking to the bia: the certificate request (CSR; the key stays here) and renewal over
+//! HTTPS, and the web bus WebSocket (`/ws`, protocol 2) for everything in the chat. The
+//! bia's CA is pinned; its server name is not checked (bias are reached by addresses that
+//! change).
+use crate::profile::{now_secs, sha256_hex, Profile};
 use anyhow::{anyhow, bail, Context, Result};
 use bia_pki::client::{self, ServerTrust};
 use serde_json::{json, Value};
@@ -85,54 +86,6 @@ pub fn poll_request(p: &mut Profile) -> Result<u64> {
     }
 }
 
-/// An HTTPS call with the client certificate. JSON in and out.
-pub fn call(p: &Profile, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
-    let (ca, cert, key) = p.creds()?;
-    let r = client::request(&p.url, method, path, body, ServerTrust::Ca(&ca), Some((&cert, &key)))?;
-    if r.status != 200 {
-        bail!("{method} {path}: HTTP {} {}", r.status, r.text().trim());
-    }
-    r.json()
-}
-
-/// Upload a local file; returns the path the bia gave it (for `files` in a send).
-pub fn upload(p: &Profile, file: &std::path::Path) -> Result<String> {
-    let (ca, cert, key) = p.creds()?;
-    let data = std::fs::read(file).with_context(|| format!("read {}", file.display()))?;
-    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
-    let path = format!("/v1/upload?name={}", urlenc(&name));
-    let r = client::request_raw(&p.url, "POST", &path, Some((&data, "application/octet-stream")), ServerTrust::Ca(&ca), Some((&cert, &key)))?;
-    if r.status != 200 {
-        bail!("upload {}: HTTP {} {}", file.display(), r.status, r.text().trim());
-    }
-    Ok(r.json()?["path"].as_str().unwrap_or("").to_string())
-}
-
-/// An attachment of a message, as bytes.
-pub fn download(p: &Profile, chat: &str, id: &str, i: usize) -> Result<Vec<u8>> {
-    let (ca, cert, key) = p.creds()?;
-    let path = format!("/v1/att?chat={}&id={}&i={i}&dl=1", urlenc(chat), urlenc(id));
-    let r = client::request(&p.url, "GET", &path, None, ServerTrust::Ca(&ca), Some((&cert, &key)))?;
-    if r.status != 200 {
-        bail!("attachment {i} of {id}: HTTP {}", r.status);
-    }
-    Ok(r.body)
-}
-
-/// Send a message in a chat (files are local paths, uploaded first). Returns its id.
-pub fn send(p: &Profile, chat: &str, text: &str, files: &[String], reply_to: Option<&str>) -> Result<String> {
-    let mut paths = vec![];
-    for f in files {
-        paths.push(upload(p, std::path::Path::new(f))?);
-    }
-    let mut a = json!({"t": "send", "chat": chat, "text": text, "files": paths});
-    if let Some(r) = reply_to.filter(|r| !r.is_empty()) {
-        a["reply_to"] = json!(r);
-    }
-    let v = call(p, "POST", "/v1/chats/action", Some(&a))?;
-    Ok(v["id"].as_str().unwrap_or("").to_string())
-}
-
 /// Renew this client's certificate (new key + CSR) when it is still valid.
 pub fn renew(p: &Profile) -> Result<()> {
     let (key, csr) = bia_pki::new_key_csr(&p.identity)?;
@@ -197,7 +150,7 @@ pub fn urlenc(s: &str) -> String {
         .collect()
 }
 
-// ---- the chat WebSocket ----
+// ---- the web bus WebSocket ----
 
 pub struct Ws {
     pub tls: SharedTls,
@@ -209,7 +162,7 @@ pub fn ws_connect(p: &Profile) -> Result<Ws> {
     let (conn, tcp) = client::connect(&p.url, ServerTrust::Ca(&ca), Some((&cert, &key)))?;
     let (host, port) = client::split_url(&p.url)?;
     let tls = SharedTls::new(conn, tcp)?;
-    let k = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, random_hex(16).as_bytes());
+    let k = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, rnd::<16>());
     let hosthdr = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
     let mut w = tls.clone();
     write!(
@@ -227,40 +180,68 @@ pub fn ws_connect(p: &Profile) -> Result<Ws> {
         }
     }
     if !status.contains(" 101 ") {
-        bail!("chat link: {}", status.trim());
+        bail!("the bia refused the link: {}", status.trim());
     }
     Ok(Ws { tls, reader })
 }
 
-impl Ws {
-    /// A text frame, masked (this side is the client).
-    pub fn send_text(tls: &SharedTls, text: &str) -> Result<()> {
-        let mask: [u8; 4] = {
-            use ring::rand::SecureRandom;
-            let mut b = [0u8; 4];
-            let _ = ring::rand::SystemRandom::new().fill(&mut b);
-            b
-        };
-        let payload = text.as_bytes();
-        let mut f = vec![0x81u8];
-        let n = payload.len();
-        if n < 126 {
-            f.push(0x80 | n as u8);
-        } else if n < 65536 {
-            f.push(0x80 | 126);
-            f.extend_from_slice(&(n as u16).to_be_bytes());
-        } else {
-            f.push(0x80 | 127);
-            f.extend_from_slice(&(n as u64).to_be_bytes());
-        }
-        f.extend_from_slice(&mask);
-        f.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
-        let mut t = tls.clone();
-        t.write_all(&f)?;
-        t.flush()?;
-        Ok(())
-    }
+fn rnd<const N: usize>() -> [u8; N] {
+    use ring::rand::SecureRandom;
+    let mut b = [0u8; N];
+    let _ = ring::rand::SystemRandom::new().fill(&mut b);
+    b
+}
 
+/// One client frame (masked, as RFC 6455 asks of a client).
+pub fn frame(op: u8, payload: &[u8]) -> Vec<u8> {
+    let mask = rnd::<4>();
+    let n = payload.len();
+    let mut f = Vec::with_capacity(n + 14);
+    f.push(0x80 | op);
+    if n < 126 {
+        f.push(0x80 | n as u8);
+    } else if n < 65536 {
+        f.push(0x80 | 126);
+        f.extend_from_slice(&(n as u16).to_be_bytes());
+    } else {
+        f.push(0x80 | 127);
+        f.extend_from_slice(&(n as u64).to_be_bytes());
+    }
+    f.extend_from_slice(&mask);
+    f.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    f
+}
+
+/// A file chunk: `[fid 32 bytes][offset u64 BE][data]`.
+pub fn chunk(fid: &[u8; 32], off: u64, data: &[u8]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(40 + data.len());
+    b.extend_from_slice(fid);
+    b.extend_from_slice(&off.to_be_bytes());
+    b.extend_from_slice(data);
+    b
+}
+
+pub fn parse_chunk(b: &[u8]) -> Option<(String, u64, &[u8])> {
+    if b.len() < 40 {
+        return None;
+    }
+    let fid: String = b[..32].iter().map(|x| format!("{x:02x}")).collect();
+    let off = u64::from_be_bytes(b[32..40].try_into().ok()?);
+    Some((fid, off, &b[40..]))
+}
+
+pub fn unhex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+impl Ws {
     /// The next message: (opcode, payload). Fragments are joined.
     pub fn recv(&mut self) -> Result<(u8, Vec<u8>)> {
         let r = &mut self.reader;
@@ -320,5 +301,17 @@ mod tests {
     #[test]
     fn url_encoding() {
         assert_eq!(urlenc("a b/ü.txt"), "a%20b%2F%C3%BC.txt");
+    }
+
+    #[test]
+    fn frames_and_chunks() {
+        let f = frame(1, b"hi");
+        assert_eq!((f[0], f[1] & 0x7f), (0x81, 2));
+        let k = [f[2], f[3], f[4], f[5]];
+        assert_eq!([f[6] ^ k[0], f[7] ^ k[1]], *b"hi");
+        let fid = [7u8; 32];
+        let c = chunk(&fid, 70_000, b"data");
+        let (h, off, d) = parse_chunk(&c).unwrap();
+        assert_eq!((unhex32(&h), off, d), (Some(fid), 70_000, &b"data"[..]));
     }
 }

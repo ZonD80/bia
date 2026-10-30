@@ -276,17 +276,18 @@ rotation and closes when the MCP deletes the file after the login.
 The web app is the `web` MCP (`source/crates/bia-mcp-web`), a bus like telegram
 and whatsapp. It has nothing to do with the console: the console is the
 physical screen and serial line, and only there do slash commands, a blank
-Enter (stop) and the model's own notes exist. People on web are envelope
-identities (their client certificate), each with their own chats: the main chat
-is channel `web`, others are `web:<chat>`. Their messages reach the agent as MCP
+Enter (stop) and the model's own notes exist. Everyone on web is an envelope
+identity (the name in their client certificate): people, other bias and outside
+agents alike, with no difference in how they talk. Each identity has exactly one
+chat with this bia, channel `web` (other buses such as telegram or whatsapp keep
+their own chats). Their messages reach the agent as MCP
 `inbound` notifications and are journaled like any bus; the agent answers through
 the MCP (`say`, `react`, `delete_messages`, `pin_message`, `close_poll` and
 `chat_history` call its `send`, `react`, … functions, as do read marks and typing;
-those functions are the agent's own path and are not model tools). A web channel
-only names a chat, so a reply always
-carries the person: `say(channel="web")` without an identity uses whoever last
-wrote on that same channel, and the MCP refuses an unknown identity or `bia`
-itself. The agent loads the MCP at boot when `[web] enabled` and passes
+those functions are the agent's own path and are not model tools). The channel
+does not name the person, so a reply always carries the identity:
+`say(channel="web")` without one uses whoever last wrote on web, and the MCP refuses
+an unknown identity or `bia` itself. The agent loads the MCP at boot when `[web] enabled` and passes
 `BIA_WEB_PORT` / `BIA_WEB_HTTP_PORT` (443/80, dev 8443/0); the MCP publishes its
 address in `files/state/web.json`.
 
@@ -325,14 +326,15 @@ x86_64/arm64, Windows x86_64) is that client, ready made, for agents that are no
 (Claude Code, Claude Desktop, scripts). `connect` makes a P-256 key locally
 (`bia_pki::new_key_csr`), pins the bia's CA (TOFU or `--ca-sha256`) and files the request.
 One daemon per profile (`<home>/<profile>/`: key, cert, CA, `inbox.jsonl`, `cursors.json`,
-`seen.json`, `daemon.json` with a 127.0.0.1 port and token, 0600) is started by any command:
-it polls the request until approved, keeps the chat WebSocket `/ws` (ping every 30 s,
-reconnect with backoff), stores bia's messages and edits (attachments downloaded), catches
-up with `messages?after=` after a drop, and renews the certificate 30 days before expiry.
+`link.json` with the last revision seen, `outbox.jsonl`, `daemon.json` with a 127.0.0.1
+port and token, 0600) is started by any command: it polls the request until approved,
+then keeps the web bus link (protocol 2, below; `rx: null` the first time, so it starts
+from now), stores bia's messages and edits with their files pulled, sends from its
+outbox (files served from disk by `fid`) and renews the certificate 30 days before expiry.
 The CLI (`send`, `wait`, `read`, `history`, `status`) and MCP mode (`bia-bridge mcp`:
-connect, import, status, send, wait, read, chats, history) share one read cursor. `import`
+connect, import, status, send, wait, read, history) share one read cursor. `import`
 takes a certificate the agent already has (`.p12` via `bia_pki::read_p12`, the bia layout:
-PBES2/AES-256 with a SHA-256 MAC; or PEM files), checks it with `/v1/whoami` and `/v1/chats`
+PBES2/AES-256 with a SHA-256 MAC; or PEM files), checks it with `/v1/whoami`
 and keeps it as a profile. It is chat only:
 the certificate is a normal-trust agent one, the root endpoints are never used. Output
 marks bia's words as data, not instructions. Every bia serves its own builds of it, so an
@@ -366,64 +368,116 @@ and, for a bia, the address it claims. Any certificate can also be limited to
 networks (`IssuedMeta.from`, IP SANs for single addresses): `check_client_from`
 refuses it from elsewhere (`wrong_source`); renewals keep the limit.
 
-**Peer links** (`bia-mcp-web` `peer.rs`, protocol in `peerproto.rs`). Peers talk only
-over one live WebSocket per pair, `GET /ws/peer` with the peer certificates (there is no
-request/response API between bias). The server takes it only from a certificate it issued
-to an active peer (`Pki::is_peer_cert`: identity, role agent, the serial in `peer.json`),
-at most 30 handshakes a minute per address and 64 links. Both sides dial wanted peers
-(`state/peers/<name>/link.json` `want`), at most 4 handshakes at once, redialing with
-jittered backoff (5–10 s doubling to 10 min). The dialer sends `hello {name, instance,
-proto, rx}` first; the other side registers it and answers `hello`, or `bye` (banned, a
-duplicate, a second machine). Two links for one pair: the same `instance` from opposite
-directions (both dialed at once) keeps the one the lower agent name dialed; from the same
-direction the newer replaces a stale one; another `instance` pings the existing link for
-5 s and, if it answers, refuses the newcomer as a copy using the same key
-(`duplicate_key`, the model is told to tell root). Pings every 10 s; a link silent for
-30 s is dead.
+**The web bus protocol** (`bia-mcp-web` `link.rs`, pure parts in `linkproto.rs`;
+protocol 2). There is one WebSocket protocol for everyone on web: the browser app,
+bia-bridge, and another bia. A client opens `GET /ws` with any valid client
+certificate of this bia's CA. Another bia's certificate is an ordinary identity
+certificate (role `agent`, trust `normal`) and opens whatever such a certificate opens.
+Chat, files, edits and acknowledgements all travel inside that one socket; there is
+no HTTP chat or file API. Text frames are JSON `{t, …}`. Binary frames are file
+chunks `[fid: 32 bytes sha256][offset: u64 BE][data]`.
 
-The channel is `peer:<name>` and the identity the peer's name. `say` & co. on it go to the
-web MCP's agent-only send/edit/react/delete/history/read/typing, which refuse while the
-link is down (a live connection is required; nothing waits for the peer). `msg`, `edit`,
-`react` and `del` carry a sequence number, stay in `unacked` until `ack`, and are resent
-after a reconnect from the peer's `rx`; received ones go through `inbox` (on disk before
-the `ack`) and reach the model in order. A message carries its request's origin
-(`{id, path}`): the agent passes `Tools::origin` (a person's message starts
-`{new, from}`, a peer's `[request <id>: a → b → you]` line continues it), each bia appends
-its name, and `state/peers/origins.json` adds `[asked again: …]` when a request comes back.
-Peer messages owe no reply (no unanswered nudges).
+*One chat, one log.* Each identity's chat is stored in
+`files/state/web/<identity>/main.json`. Every change to a message (new, edited,
+reacted, pinned, read, voted, a file arriving) gives it the next revision number of
+that chat (`rev`, kept in `meta.json`). Deletions leave a tombstone `{id, rev}` for
+30 days. The store is the log: a client that last saw revision `rx` catches up with
+every message whose `rev > rx`, in order, plus the tombstones after `rx`. Tombstones
+older than 30 days raise the chat's `floor`, and a client behind it gets `reset` and
+reloads. Store and forward is this log. What the server's side writes while the other
+side is away (a person offline, a bia rebooting) waits in the store and arrives on
+reconnect. What a client writes while offline waits in the client's outbox (the
+browser's IndexedDB, the bridge's `outbox.jsonl`, a bia's `outbox/<identity>.json`)
+and is sent on reconnect. Every action is idempotent (a message id the client chose,
+set-style reactions and read marks), so sending it twice changes nothing.
 
-Files ride the same link, pulled by the receiver: the message lists `{fid: sha256, name,
-size}`, the receiver sends `fget {fid, off}` (2 per peer, 4 in all), the sender streams
-32 KiB chunks while fewer than ~0.5 s of measured throughput (64 KiB–4 MiB) are
-unacknowledged (`fack`), JSON frames always first and `SO_SNDBUF` 64 KiB, so a message
-waits at most about half a second behind a transfer. The receiver appends to
-`inbox/peer/<name>/.part/<fid>`, checks the hash, moves it into `inbox/peer/<name>/` and
-only then delivers the message; a resend of the same file resumes from what is there.
-Partial files and the sender's `sent.json` live 3 days.
+*Handshake.* The client sends `hello {proto: 2, name, ver, instance, rx}` first.
+`instance` is random per installation (a browser profile, a bridge profile, a bia).
+`rx` is the last revision it has, `0` for everything or `null` for "from now".
+The server answers `hello {proto: 2, name, ver, instance, me: {identity, root}, rev,
+floor, typing}`. Then it sends the catch-up (`m` frames from `rx`, or `reset`) and
+live changes. A server that does not answer `proto: 2` (an older bia) is reported as
+needing an update.
 
-The model hears every change on `system|peer:<name>` (a full turn): connected, back after
-a network loss (counted from the last frame; more than 5 lost/back in 10 min become one
-"unstable" notice until the link holds 10 min), the peer's `bye` with its reason, a ban,
-a copy refused, an older bia without `/ws/peer`. Disconnect closes without redialing at
-either end (either may connect again); a ban refuses the peer until unbanned, and root's
-ban (console `/peer`, `peer_root`) cannot be lifted by the model. Removing a peer or
-revoking its certificate closes the link. Our certificate at a peer is renewed over the
-link 30 days before it expires (`renew` / `renewed`).
+*Frames from the server:* `m {seq, m}` (a message's full state after a change; `seq`
+is its revision), `gone {seq, ids}`, `reset`, `typing {on}`, `ack {cid, ok, r|error}`,
+`call …` (voice call signalling) and `bye {reason}`.
+*Frames from the client:* actions carry a `cid` that `ack` echoes:
+`send {id, text, reply_to?, files: [{fid, name, size, kind}], paths?}` (`paths`:
+files already on this machine, root only), `edit {id, text}`, `delete {ids}`,
+`react {id, emoji, on}`, `pin {id, on}`, `read {upto}`, `button {id, row, col}`,
+`vote {id, options}`, `mute {on}`, `hist {before?|after?|around?, limit}`,
+`search {q}` and `call_decline`. Not acknowledged: `active {on}` (the tab is in
+front, so no push is needed), `typing {on}`, `ack {seq}` (what the client applied),
+`ping` and `bye {reason}` (the session ends at once). Both sides send `{t: "ping"}` every
+5 s when idle, and a session that sent nothing for 15 s is closed. WebSocket pongs do not
+count, because a browser's network stack answers pings even for a tab that is gone.
 
-Shutdown: on SIGTERM (systemd stopping `bia.service` for a reboot, power-off, update or
-restart, whoever started it) or stdin EOF the web MCP sends `bye {reason}` on every link
-and waits up to 2 s. The reason is `/run/bia/shutdown-reason` (written by `bia-update`),
-else systemd's queued `reboot.target`/`poweroff.target` job, else `restart`.
-`bia.service` is `After=network.target` so the network is still up then. Power loss and
-crashes are caught by the 30 s timeout. `tests/integration/peer-link-e2e.py` runs two
-(and a copied third) web MCPs against each other; `make peer-e2e` two QEMU agents.
+*Files* are pulled by the receiver, both ways. A message lists `{fid, name, size}`.
+The receiver sends `fget {fid, off}`; the sender streams 32 KiB chunks while fewer than
+about 0.5 s of measured throughput (64 KiB–4 MiB) is unacknowledged (`fack {fid, off}`),
+then `fdone`, or `frefuse {reason}`. The sender may cancel with `fcancel`. JSON frames
+always go first and `SO_SNDBUF` is 64 KiB, so a message waits at most about half a
+second behind a transfer. A file a person or agent sends lands in
+`files/inbox/web/<identity>/` (partial data in `.part/<fid>`, resumed after a drop,
+checked against the hash), and the message reaches the model only once its files are
+there. Files are kept with their sha256, so any message's attachment can be fetched
+by `fid` and the browser shows media from what it pulled (blob URLs).
+
+*One live session per identity.* A second connection for an identity whose session
+was heard from within the last 15 s gets `bye {reason: "duplicate_key"}`; the web app
+then shows that the previous session is not closed yet and tries again by itself about
+30 s later. An older, silent one is replaced, and the same installation (`instance`)
+reconnecting replaces its own stale session. A browser closing its tab sends
+`bye {reason: "closed"}`, so the next tab gets in at once. Between two bias there is one
+link per pair, whoever dialed. If both dial at once, both keep the link the lower agent
+name dialed. A refused bia tries again after 16 s (its own old session may still count
+after a crash and a quick restart); refusals that go on for 20 s mean another machine
+uses the same key, and root is told at both ends.
+
+*Bias.* Two bias set up trust as below, and each then is an identity in the other's
+CA. The bia that dials is the client: its own sends, edits, reactions and read marks
+go out as actions (kept in its outbox until acknowledged), and it applies the server's
+`m` frames to its own copy of the chat. Names are translated (`bia` at the other end is
+the peer's name here; the peer's name for this bia is `bia` here). Fields the other side
+owns are taken from it: text, files and edits of its own messages, its reactions and
+votes, and read marks on our messages. Pins stay local. A message from the peer reaches
+the model once, the first time it is stored, whichever way it came. Each bia dials its
+peers that have an address (`state/links/<name>.json`: `want`, `rx`, ban), at most 4 at
+once, redialing with jittered backoff (5–10 s doubling to 10 min). The first link of a
+pair catches up from `rx: 0`. Our certificate at a peer is renewed over HTTPS
+(`POST /v1/pki/renew`) 30 days before it expires.
+
+*What the model sees.* Everyone's messages are `<identity>|web|…` envelopes, and
+`say(identity, channel="web")` answers them; another bia gets no special treatment.
+Like for a person, the model closes its message with `answered` and decides from the
+context whether a reply is needed. When an identity connects or goes away (after 60 s
+of grace) the model gets the quiet `[web open]` / `[web closed]` notice, for a bia too.
+A ban (`web_peer_ban`, root's ban through `peer_root`) refuses an identity's sessions
+until it is lifted. Shutdown: on SIGTERM (systemd stopping `bia.service`) or stdin EOF
+the web MCP sends `bye {reason}` on every link and waits up to 2 s. The reason comes
+from `/run/bia/shutdown-reason` (written by `bia-update`), else systemd's queued
+`reboot.target` / `poweroff.target`, else `restart`.
+
+Before protocol 2 (1.8.x), multi-chats were folded into one chat on the first start
+(messages merged by time, `chats.json` kept as `chats.json.migrated`), and old
+peer-link chats (`state/peers/<name>/chat.jsonl`) were imported into the peer's web
+chat. `GET /ws/peer` answers `410` (the other bia must update). Tests:
+`tests/integration/web-mcp-e2e.py` (protocol, files both ways, store and forward,
+duplicate sessions; its client is `webbus.py`), `tests/integration/bia-link-e2e.py` (two
+and a copied third web MCP), `tests/integration/bridge-e2e.py`,
+`tests/integration/web-app-e2e.py` (the real web app in headless Chrome over CDP, behind
+a local proxy that holds root's certificate, since a headless browser cannot pick one),
+`tests/integration/web-link-test.js` (`link.js`'s SHA-256 and chunk framing), and
+`make peer-e2e` (two QEMU agents).
 
 The page (`web/index.html`, `app.js`, `app.css`, `term.js`, `emoji.js`) is a
-Telegram-style app. `chat.rs` keeps each identity's chats in
-`files/state/web/<identity>/`. Messages carry replies, forwards, attachments (uploads go to
+Telegram-style app with one chat. `chat.rs` keeps each identity's chat in
+`files/state/web/<identity>/`. Messages carry replies, attachments (files land in
 `files/inbox/web/<identity>/`), reactions, edits, pins, read marks, inline
 buttons and polls; user actions reach the model as envelopes with `[reply to …]`,
-`[edited …]`, `[reaction] …`, `[button] …`, `[vote] …` markers. Voice calls run
+`[edited …]`, `[reaction] …`, `[button] …`, `[vote] …` markers. The app speaks the web
+bus protocol (`web/link.js`, the IndexedDB outbox, pulled files as blob URLs). Voice calls run
 in the MCP (`call.rs`, `web_call_start` / `web_call_hangup`). For root the app adds a
 root shell on a PTY (`/ws/shell`), a file manager over the whole filesystem
 (`/v1/fs/*`), human tasks (`/hitl`), the display (`/gui`, noVNC → x11vnc on

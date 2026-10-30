@@ -253,6 +253,7 @@ details.howto li { margin: 4px 0; }
 .album:not(.n1) .media img, .album:not(.n1) .media video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .media .play { position: absolute; width: 48px; height: 48px; border-radius: 50%; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; color: #fff; pointer-events: none; }
 .media .dur { position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.5); color: #fff; font-size: 12px; padding: 1px 6px; border-radius: 8px; }
+.media .vtile { width: 100%; min-width: 220px; height: 160px; background: #000; }
 
 .doc { display: flex; align-items: center; gap: 12px; padding: 4px 0; min-width: 220px; cursor: pointer; }
 .doc .dicon { width: 48px; height: 48px; border-radius: 50%; background: var(--acc-btn); color: #fff; display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; }
