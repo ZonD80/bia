@@ -107,7 +107,7 @@ in_chroot apt-get install -y --no-install-recommends \
   e2fsprogs dosfstools exfatprogs ntfs-3g \
   util-linux fdisk parted mount procps rsync dpkg-repack \
   efibootmgr \
-  bash ca-certificates wget curl bzip2 xz-utils openssh-client \
+  bash ca-certificates wget curl bzip2 xz-utils pigz openssh-client \
   python3-minimal \
   wpasupplicant iw \
   tzdata systemd-timesyncd adduser passwd login sudo libnss-myhostname \

@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 1.9.1
+
+### Changes
+- Backups and updates pack bia's files several times faster: packing now uses every processor core instead of one (about 9 minutes down to 2–3 on a 7 GB home). The backup files are the same kind as before, so old and new backups unfold either way.
+
+### For bia
+- pigz now comes with the system, and carry_fold, carry_unfold and the update fold use it by themselves. In your own scripts that pack big folders, use `tar -I pigz` instead of `tar -z`.
+
 ## 1.9.0
 
 ### Changes

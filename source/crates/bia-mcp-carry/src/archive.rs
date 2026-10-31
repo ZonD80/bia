@@ -359,7 +359,7 @@ fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, to
     let list = meta.0.join("members");
     members.write_list(&list)?;
     let unpacked = members.bytes + manifest_len;
-    ctx.log(format!("fold: compressing {unpacked} bytes into {}", dest.display()));
+    ctx.log(format!("fold: compressing {unpacked} bytes with {} into {}", gzip_program(), dest.display()));
     tar_create(&meta.0, base, &list, dest)?;
     let path = if stamp {
         let named = named_with_unfolded(dest, unpacked);
@@ -1730,10 +1730,20 @@ fn under_files(path: &Path) -> Result<PathBuf, String> {
     }
     Ok(abs)
 }
+/// pigz when the system has it (gzip on every core: a 7 GB fold drops from minutes to
+/// about one), else plain gzip. The archive is gzip either way.
+fn gzip_program() -> &'static str {
+    let found = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).any(|d| d.join("pigz").is_file()))
+        .unwrap_or(false);
+    if found { "pigz" } else { "gzip" }
+}
+
 /// gzip tar of `meta/manifest.json` plus the NUL-separated `list` of paths under `base`.
 fn tar_create(meta: &Path, base: &Path, list: &Path, dest: &Path) -> Result<(), String> {
     let st = Command::new("tar")
-        .arg("-czf")
+        .arg(format!("--use-compress-program={}", gzip_program()))
+        .arg("-cf")
         .arg(dest)
         .args(["--no-recursion", "--null", "--ignore-failed-read", "--warning=no-file-changed"])
         .arg("-C")
@@ -1757,7 +1767,8 @@ fn tar_extract(archive: &Path, dest: &Path) -> Result<(), String> {
     let st = Command::new("tar")
         .arg("-C")
         .arg(dest)
-        .arg("-xzf")
+        .arg(format!("--use-compress-program={}", gzip_program()))
+        .arg("-xf")
         .arg(archive)
         .status()
         .map_err(|e| format!("tar: {e}"))?;
