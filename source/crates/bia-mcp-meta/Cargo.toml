@@ -3,7 +3,7 @@ name = "bia-mcp-meta"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MCPs: Facebook Messenger and Instagram DMs through bia-meta (mautrix-meta)"
+description = "MCPs: Facebook Messenger and Instagram DMs through bia-meta (mautrix-meta), MAX through bia_max.py (PyMax)"
 
 [dependencies]
 bia-mcp = { path = "../bia-mcp" }
@@ -11,10 +11,17 @@ bia-speech = { path = "../bia-speech" }
 serde.workspace = true
 serde_json.workspace = true
 libc.workspace = true
+base64 = "0.22"
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[bin]]
 name = "bia-mcp-messenger"
 path = "src/bin/messenger.rs"
+
+[[bin]]
+name = "bia-mcp-max"
+path = "src/bin/max.rs"
 
 [[bin]]
 name = "bia-mcp-instagram"

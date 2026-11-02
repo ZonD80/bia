@@ -18,6 +18,9 @@ const BINS: &[&str] = &[
 ];
 
 pub fn find_bin() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("BIA_CHROME_BIN").map(PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p); // tests: Chromium, which Debian has for every architecture
+    }
     BINS.iter()
         .map(PathBuf::from)
         .find(|p| p.is_file())
@@ -145,6 +148,10 @@ fn spawn(bin: &Path) -> Result<u32, String> {
             "--no-default-browser-check",
             "--disable-infobars",
             "--disable-gpu",
+            // readable as elements (screen_snapshot): its own dialogs, like Select a certificate
+            "--force-renderer-accessibility",
+            // the bus below has no keyring: the profile's saved logins stay readable as they are
+            "--password-store=basic",
         ])
         .env("HOME", &home)
         .env("USER", USER)
@@ -153,8 +160,10 @@ fn spawn(bin: &Path) -> Result<u32, String> {
         .env("XAUTHORITY", home.join(".Xauthority"))
         .env("XDG_RUNTIME_DIR", &runtime)
         .env("LANG", "C.UTF-8")
-        // root's session bus and fcitx5 settings from bia-session are not this user's
-        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        // bia's own session bus, where accessibility lives; root's and its fcitx5 settings from
+        // bia-session are not this user's
+        .env("DBUS_SESSION_BUS_ADDRESS", format!("unix:path={}/bus", runtime.display()))
+        .env("ACCESSIBILITY_ENABLED", "1")
         .env_remove("GLFW_IM_MODULE")
         .env_remove("GTK_IM_MODULE")
         .env_remove("QT_IM_MODULE")
@@ -440,7 +449,8 @@ fn chrome_pids(bin: &Path) -> Vec<u32> {
         };
         let cmd = fs::read(ent.path().join("cmdline")).unwrap_or_default();
         let text = String::from_utf8_lossy(&cmd);
-        let exe = text.split('\0').next().unwrap_or("");
+        // Chromium rewrites its title, arguments and all, into one string
+        let exe = text.split(['\0', ' ']).next().unwrap_or("");
         if exe.ends_with(name)
             || exe.ends_with("/chrome")
             || exe.contains("/opt/google/chrome/")

@@ -292,6 +292,22 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "responses": {"200": {"description": "{identity, serial, path, urls, expires_in}"}}
                 }
             },
+            "/v1/pki/biaconfig": {
+                "post": {
+                    "tags": ["pki"],
+                    "summary": "Make a password-encrypted .biaconfig with a new client certificate, this bia's address and CA (root)",
+                    "security": [{"mtls": []}],
+                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["identity"], "properties": {
+                        "identity": {"type": "string"},
+                        "role": {"type": "string", "enum": ["user", "agent"]},
+                        "trust": {"type": "string", "enum": ["root", "normal"]},
+                        "address": {"type": "string", "description": "how the other side reaches this bia; added to the server certificate"},
+                        "name": {"type": "string"},
+                        "password": {"type": "string", "description": "at least 10 characters; generated when left out"}
+                    }}}}},
+                    "responses": {"200": {"description": "{identity, serial, file_name, file (base64), password, generated, addresses}"}}
+                }
+            },
             "/v1/pki/revoke": {
                 "post": {
                     "tags": ["pki"],

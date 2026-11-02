@@ -1,4 +1,7 @@
-//! Display :0 as a person would see it: resolution, a screenshot, mouse and keys.
+//! Display :0 as a person would see it: resolution, a screenshot, mouse and keys. And what apps
+//! show to accessibility (desktop.rs): elements with refs, windows, the clipboard.
+mod desktop;
+
 use bia_mcp::{arg_str, arg_u32_opt, Server};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -8,6 +11,96 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn main() {
     Server::new("screen", env!("CARGO_PKG_VERSION"))
+        .tool(
+            "apps",
+            "Apps readable as elements (on the accessibility bus) with their windows. Start with this, or screen_launch, for a desktop app; then screen_snapshot. Chrome's pages go through the chrome MCP; its dialogs and menus can be read here.",
+            json_obj(),
+            |_, _| desktop::call("apps", serde_json::json!({})),
+        )
+        .tool(
+            "snapshot",
+            "What an app shows as elements, each with a ref like 3f2a:e7, its role, name, state, actions and center x,y. Prefer this to pixels for desktop apps: screen_act on a ref is exact and needs no mouse. Refs last until the window changes; a stale one is refused, then snapshot again. Big app: look inside one part with root=<ref>.",
+            serde_json::json!({"type": "object", "properties": {
+                "app": {"type": "string", "description": "a name from screen_apps"},
+                "root": {"type": "string", "description": "a ref: only what is inside it"},
+                "all": {"type": "boolean", "description": "also labels and other things that cannot be acted on (default false)"},
+                "limit": {"type": "integer", "description": "at most this many lines (default 400)"}
+            }}),
+            |_, a| desktop::call("snapshot", a),
+        )
+        .tool(
+            "find",
+            "Find elements in an app by words (in name, text, role) and/or exact role (button, text, check box, menu, …). Each hit has a ref for screen_act.",
+            serde_json::json!({"type": "object", "required": ["app"], "properties": {
+                "app": {"type": "string", "description": "a name from screen_apps"},
+                "text": {"type": "string"},
+                "role": {"type": "string"}
+            }}),
+            |_, a| desktop::call("find", a),
+        )
+        .tool(
+            "get",
+            "Everything about one element by its ref: its whole text, value, states, actions and box.",
+            serde_json::json!({"type": "object", "required": ["ref"], "properties": {"ref": {"type": "string"}}}),
+            |_, a| desktop::call("get", a),
+        )
+        .tool(
+            "act",
+            "Do something to an element by its ref, through the app itself, without moving the mouse (click falls back to the real mouse when the element has no action). action: click, focus, set (replace the text or number with value), type (insert value at the caret), clear, check, uncheck, toggle, expand, collapse, select, scroll_to, or do (value is one of its named actions). Snapshot again to see the effect.",
+            serde_json::json!({"type": "object", "required": ["ref", "action"], "properties": {
+                "ref": {"type": "string"},
+                "action": {"type": "string"},
+                "value": {"description": "the text or number for set and type; the action's name for do"}
+            }}),
+            |_, a| desktop::call("act", a),
+        )
+        .tool(
+            "launch",
+            "Start a desktop program as bia so that it is readable as elements: command is what to run, as a string or a list. Waits until its window is up (up to wait seconds, default 15). Programs started with bash may not show in screen_apps.",
+            serde_json::json!({"type": "object", "required": ["command"], "properties": {
+                "command": {"description": "e.g. mousepad, or [\"mousepad\", \"/home/bia/files/notes.txt\"]"},
+                "wait": {"type": "integer"}
+            }}),
+            |_, a| desktop::call("launch", a),
+        )
+        .tool(
+            "close_app",
+            "Ask an app to close all its windows, as a person would. It may ask to save first.",
+            serde_json::json!({"type": "object", "required": ["app"], "properties": {"app": {"type": "string"}}}),
+            |_, a| desktop::call("close_app", a),
+        )
+        .tool(
+            "windows",
+            "All windows on screen: id, pid, place, size and title, including apps that are not readable as elements.",
+            json_obj(),
+            |_, _| desktop::call("windows", serde_json::json!({})),
+        )
+        .tool(
+            "window",
+            "Change one window (id from screen_windows). action: focus, close, maximize, minimize, restore, move (x, y), resize (w, h).",
+            serde_json::json!({"type": "object", "required": ["window", "action"], "properties": {
+                "window": {"type": "string"}, "action": {"type": "string"},
+                "x": {"type": "integer"}, "y": {"type": "integer"}, "w": {"type": "integer"}, "h": {"type": "integer"}
+            }}),
+            |_, a| desktop::call("window", a),
+        )
+        .tool(
+            "clipboard",
+            "The desktop's clipboard, as text. action: get (default), set (with text), clear.",
+            serde_json::json!({"type": "object", "properties": {
+                "action": {"type": "string"}, "text": {"type": "string"}
+            }}),
+            |_, a| desktop::call("clipboard", a),
+        )
+        .tool(
+            "wait",
+            "Wait until something is on screen, instead of guessing a delay: window (part of a title) and/or text in an app's elements (with app). gone=true waits until it has left. timeout in seconds, default 15, at most 120.",
+            serde_json::json!({"type": "object", "properties": {
+                "window": {"type": "string"}, "text": {"type": "string"}, "app": {"type": "string"},
+                "gone": {"type": "boolean"}, "timeout": {"type": "integer"}
+            }}),
+            |_, a| desktop::call("wait", a),
+        )
         .tool(
             "info",
             "Width and height of the screen in pixels, where the mouse is, and the name of the focused window. x and y start at the top-left.",
@@ -103,19 +196,27 @@ fn display(cmd: &mut Command) {
     cmd.env("XAUTHORITY", xauth);
 }
 
+/// Long enough for screen_type of a long text at 12 ms a key; a stuck X call must not hold the MCP.
+const RUN_SECS: u32 = 120;
+/// timeout(1)'s exit code when it had to stop the command.
+const TIMED_OUT: i32 = 124;
+
 fn run(bin: &str, args: &[&str]) -> Result<String, String> {
-    let mut cmd = Command::new(bin);
-    cmd.args(args);
+    run_within(bin, args, RUN_SECS)
+}
+
+fn run_within(bin: &str, args: &[&str], secs: u32) -> Result<String, String> {
+    let mut cmd = Command::new("timeout");
+    cmd.args(["-k", "2", &secs.to_string(), bin]).args(args);
     display(&mut cmd);
-    let out = cmd.output().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            format!("{bin} is not installed")
-        } else {
-            format!("{bin}: {e}")
-        }
-    })?;
+    let out = cmd.output().map_err(|e| format!("{bin}: {e}"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    match out.status.code() {
+        Some(TIMED_OUT) | None => return Err(format!("{bin} did not finish within {secs}s and was stopped")),
+        Some(126) | Some(127) => return Err(format!("{bin} is not installed")),
+        _ => {}
+    }
     if !out.status.success() {
         let msg = if !stderr.is_empty() { stderr } else { stdout };
         return Err(format!("{bin} failed: {msg}"));
@@ -224,7 +325,7 @@ fn click(args: &Value) -> Result<String, String> {
     let button = arg_u32_opt(args, "button").unwrap_or(1);
     let repeat = arg_u32_opt(args, "repeat").unwrap_or(1).clamp(1, 3);
     if button == 0 {
-        run("xdotool", &["mousemove", "--sync", &x.to_string(), &y.to_string()])?;
+        run("xdotool", &["mousemove", &x.to_string(), &y.to_string()])?;
         return Ok(format!("moved to {x},{y}"));
     }
     if !(1..=3).contains(&button) {
@@ -234,7 +335,6 @@ fn click(args: &Value) -> Result<String, String> {
         "xdotool",
         &[
             "mousemove",
-            "--sync",
             &x.to_string(),
             &y.to_string(),
             "click",
@@ -275,7 +375,7 @@ fn cursor_move_human(args: &Value) -> Result<String, String> {
         }
         run(
             "xdotool",
-            &["mousemove", "--sync", &step.x.to_string(), &step.y.to_string()],
+            &["mousemove", &step.x.to_string(), &step.y.to_string()],
         )?;
         if i + 1 == steps.len() {
             break;
@@ -377,13 +477,11 @@ fn drag(args: &Value) -> Result<String, String> {
         "xdotool",
         &[
             "mousemove",
-            "--sync",
             &x.to_string(),
             &y.to_string(),
             "mousedown",
             "1",
             "mousemove",
-            "--sync",
             &x2.to_string(),
             &y2.to_string(),
             "mouseup",
@@ -405,7 +503,6 @@ fn scroll(args: &Value) -> Result<String, String> {
         "xdotool",
         &[
             "mousemove",
-            "--sync",
             &x.to_string(),
             &y.to_string(),
             "click",
@@ -449,6 +546,22 @@ fn key(combo: &str) -> Result<String, String> {
     }
     run("xdotool", &["key", "--", combo])?;
     Ok(format!("pressed {combo}"))
+}
+
+#[cfg(test)]
+mod run_tests {
+    use super::run_within;
+
+    #[test]
+    fn a_stuck_command_is_stopped_and_a_missing_one_said() {
+        let start = std::time::Instant::now();
+        let e = run_within("sleep", &["30"], 1).unwrap_err();
+        assert!(e.contains("did not finish within 1s"), "{e}");
+        assert!(start.elapsed().as_secs() < 10);
+        assert!(run_within("no-such-program-here", &[], 5).unwrap_err().contains("is not installed"));
+        assert_eq!(run_within("echo", &["fine"], 5).unwrap(), "fine");
+        assert!(run_within("false", &[], 5).unwrap_err().contains("failed"));
+    }
 }
 
 #[cfg(test)]

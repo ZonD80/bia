@@ -73,6 +73,9 @@ pub struct Server {
     up: Option<Result<(), String>>,
     /// The address bia was put on (the done page shows it after the login is gone).
     target: String,
+    /// bia's key as a .biaconfig: its password, and what became of the last try.
+    config_password: String,
+    config_note: Option<Result<String, String>>,
     /// The ChatGPT sign-in went to this server (the window drops its copy).
     pub chatgpt_used: bool,
     tx: Sender<Msg>,
@@ -111,6 +114,8 @@ impl Server {
             up: None,
             chatgpt_used: false,
             target: String::new(),
+            config_password: bia_pki::biaconfig::generate_password().unwrap_or_default(),
+            config_note: None,
             tx,
             rx,
         }
@@ -692,6 +697,29 @@ impl FlashApp {
                         let _ = bia_deploy::chatgpt::open_browser(&dir.to_string_lossy());
                     }
                 });
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("Share as .biaconfig").strong());
+                ui.label("One file with this key and bia's address, locked with a password: the bia deploy apps open it and go straight to the chat. Whoever opens it holds this same certificate, so revoking it later ends it here too.");
+                ui.horizontal(|ui| {
+                    ui.label("Password");
+                    ui.add(egui::TextEdit::singleline(&mut self.srv.config_password).desired_width(220.0));
+                    if ui.button("📋  Copy").clicked() {
+                        ui.ctx().copy_text(self.srv.config_password.clone());
+                    }
+                    if ui.button("Save .biaconfig…").clicked() {
+                        let name = bia_pki::biaconfig::file_name(&host);
+                        if let Some(to) = rfd::FileDialog::new().set_file_name(&name).add_filter("bia config", &[bia_pki::biaconfig::EXTENSION]).save_file() {
+                            self.srv.config_note = Some(save_config(&dir, &host, &self.srv.config_password, &to));
+                        }
+                    }
+                });
+                match &self.srv.config_note {
+                    Some(Ok(saved)) => check(ui, true, &format!("{saved}: send the password another way, never next to the file")),
+                    Some(Err(e)) => {
+                        ui.colored_label(egui::Color32::from_rgb(200, 60, 50), e);
+                    }
+                    None => {}
+                }
             });
         }
         if self.srv.land {
@@ -705,6 +733,18 @@ impl FlashApp {
             self.srv.land = land;
         }
     }
+}
+
+/// bia's key in `dir` as a .biaconfig at `to`, private to whoever runs this.
+fn save_config(dir: &std::path::Path, host: &str, password: &str, to: &std::path::Path) -> Result<String, String> {
+    let sealed = bia_pki::biaconfig::seal_folder(dir, host, "", password).map_err(|e| format!("{e:#}"))?;
+    std::fs::write(to, sealed).map_err(|e| format!("{}: {e}", to.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(to, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(to.display().to_string())
 }
 
 fn check(ui: &mut egui::Ui, done: bool, text: &str) {

@@ -192,7 +192,7 @@ pub fn ensure_volume_writable() -> Result<()> {
 
 /// Telegram and web drops land here. Empty dirs so the folders exist before the first file.
 pub fn ensure_inbox(files: &Path) {
-    for d in ["inbox/web", "inbox/telegram", "inbox/whatsapp", "inbox/messenger", "inbox/instagram"] {
+    for d in ["inbox/web", "inbox/telegram", "inbox/whatsapp", "inbox/messenger", "inbox/instagram", "inbox/max"] {
         let p = files.join(d);
         if fs::create_dir_all(&p).is_ok() {
             let keep = p.join(".keep");

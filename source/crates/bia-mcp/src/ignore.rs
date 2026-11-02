@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Rules {
-    /// channel (telegram:-100…, whatsapp:…@g.us, messenger:…, instagram:…) → rule
+    /// channel (telegram:-100…, whatsapp:…@g.us, messenger:…, instagram:…, max:…) → rule
     #[serde(default)]
     pub chats: BTreeMap<String, Rule>,
 }

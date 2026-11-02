@@ -19,12 +19,16 @@ pub enum DeployError {
     /// A server this phone knows answered with another host key (reinstalled, or someone in
     /// between). Connecting again with `accept = now` trusts the new one.
     HostKeyChanged { known: String, now: String },
+    /// A .biaconfig for an address that already has a different key on this phone. It may be
+    /// the only copy of root's: importing with `replace` is a person's decision.
+    OtherKeyHere { host: String },
 }
 
 impl std::fmt::Display for DeployError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DeployError::Failed { reason } => f.write_str(reason),
+            DeployError::OtherKeyHere { host } => write!(f, "another key for {host} is already on this phone"),
             DeployError::HostKeyChanged { known, now } => write!(f, "this server's identity changed: it was {known}, now it is {now}"),
         }
     }
@@ -40,6 +44,8 @@ impl From<anyhow::Error> for DeployError {
         }
     }
 }
+
+use bia_pki::biaconfig;
 
 type R<T> = Result<T, DeployError>;
 
@@ -432,7 +438,10 @@ pub fn land_secret() -> String {
 /// A bia this phone deployed, whose key (bia-root.p12) and CA (ca.crt) are kept here.
 #[derive(uniffi::Record)]
 pub struct SavedBia {
+    /// What is dialled: a host or IP, with a port if it is not 443.
     pub host: String,
+    /// What a person calls it (from a .biaconfig); may be empty.
+    pub name: String,
     pub folder: String,
     /// When its key was saved (unix seconds).
     pub saved_at: u64,
@@ -454,11 +463,69 @@ pub fn saved_bias() -> Vec<SavedBia> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            Some(SavedBia { host: e.file_name().to_string_lossy().into_owned(), folder: folder.display().to_string(), saved_at })
+            // a folder's name is made safe for a file system: an import says the real address
+            let read = |f: &str| std::fs::read_to_string(folder.join(f)).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+            let host = read(ADDRESS_FILE).unwrap_or_else(|| e.file_name().to_string_lossy().into_owned());
+            let name = read(NAME_FILE).unwrap_or_default();
+            Some(SavedBia { host, name, folder: folder.display().to_string(), saved_at })
         })
         .collect();
     out.sort_by(|a, b| b.saved_at.cmp(&a.saved_at));
     out
+}
+
+const ADDRESS_FILE: &str = "address";
+const NAME_FILE: &str = "name";
+
+fn failed(e: impl std::fmt::Display) -> DeployError {
+    DeployError::Failed { reason: e.to_string() }
+}
+
+/// Whether a file is a .biaconfig at all, before asking anyone for its password.
+#[uniffi::export]
+pub fn is_biaconfig(path: String) -> bool {
+    std::fs::read(path).is_ok_and(|b| biaconfig::is_biaconfig(&b))
+}
+
+/// A strong password for a .biaconfig.
+#[uniffi::export]
+pub fn biaconfig_password() -> R<String> {
+    biaconfig::generate_password().map_err(|e| failed(format!("{e:#}")))
+}
+
+/// This phone's key for one bia as a .biaconfig to pass on; returns the file's path. Whoever
+/// opens it holds this same certificate: it cannot be revoked apart from this phone's.
+#[uniffi::export]
+pub fn biaconfig_export(folder: String, host: String, name: String, password: String, out_dir: String) -> R<String> {
+    let sealed = biaconfig::seal_folder(Path::new(&folder), &host, &name, &password).map_err(|e| failed(format!("{e:#}")))?;
+    let out = Path::new(&out_dir);
+    std::fs::create_dir_all(out).map_err(failed)?;
+    let path = out.join(biaconfig::file_name(&host));
+    std::fs::write(&path, sealed).map_err(failed)?;
+    Ok(path.display().to_string())
+}
+
+/// A .biaconfig kept on this phone: its key and CA, for the chat and to pass on. The CA is only
+/// trusted for that address, in this app. Saved keys show the first address.
+#[uniffi::export]
+pub fn biaconfig_import(path: String, password: String, replace: bool) -> R<SavedBia> {
+    let raw = std::fs::read(&path).map_err(|e| failed(format!("{path}: {e}")))?;
+    let c = biaconfig::open(&raw, &password).map_err(|e| failed(format!("{e:#}")))?;
+    let host = c.addresses.iter().map(|a| a.trim()).find(|a| !a.is_empty()).ok_or_else(|| failed("no address"))?.to_string();
+    let folder = remote::server_folder(&host)?;
+    if !replace {
+        if let Ok(old) = std::fs::read(folder.join("bia-root.p12")) {
+            if old != c.p12 {
+                return Err(DeployError::OtherKeyHere { host });
+            }
+        }
+    }
+    std::fs::create_dir_all(&folder).map_err(failed)?;
+    std::fs::write(folder.join("bia-root.p12"), &c.p12).map_err(failed)?;
+    std::fs::write(folder.join("ca.crt"), &c.ca).map_err(failed)?;
+    std::fs::write(folder.join(ADDRESS_FILE), &host).map_err(failed)?;
+    std::fs::write(folder.join(NAME_FILE), &c.name).map_err(failed)?;
+    Ok(SavedBia { host, name: c.name, folder: folder.display().to_string(), saved_at: 0 })
 }
 
 /// The password on bia-root.p12.

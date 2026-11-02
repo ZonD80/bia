@@ -180,8 +180,9 @@ pub fn show(code: &str, _art: &str, seq: u64, timeout_secs: u64) -> Result<Strin
         }
         let pid = spawn_watcher()?;
         WINDOW_PID.store(pid, Ordering::SeqCst);
-        let _ = Command::new("xdotool")
-            .args(["search", "--sync", "--class", CLASS, "windowactivate", "--sync"])
+        // it waits for the window to appear: not for ever on a thread others depend on
+        let _ = Command::new("timeout")
+            .args(["-k", "2", "10", "xdotool", "search", "--sync", "--class", CLASS, "windowactivate", "--sync"])
             .env("DISPLAY", display())
             .env("XAUTHORITY", xauthority())
             .stdout(Stdio::null())

@@ -139,6 +139,21 @@ fn main() {
             }), &["identity"]),
             pki::issue,
         )
+        .tool(
+            "pki_biaconfig",
+            "Make a .biaconfig (only when root asks): a new client certificate with this bia's address and CA, in one password-encrypted file that the bia deploy apps and chrome_cert_import open. identity is the CN, role user or agent, trust root or normal (default root for identity=root, else normal). address is how the other side reaches this bia, put first (it is added to the server certificate); without it, the addresses this machine knows. Without password one is generated. The file can be revoked by its serial (web_pki_revoke).",
+            obj(json!({
+                "identity": {"type": "string"},
+                "address": {"type": "string", "description": "host or IP, with :port if not this bia's port"},
+                "addresses": {"type": "array", "items": {"type": "string"}, "description": "more addresses"},
+                "name": {"type": "string", "description": "what to call this bia in the app"},
+                "password": {"type": "string", "description": "at least 10 characters; leave out to have a strong one generated"},
+                "role": {"type": "string", "description": "user or agent (default user)"},
+                "trust": {"type": "string", "description": "root or normal"},
+                "from": {"type": "array", "items": {"type": "string"}, "description": "optional: addresses or networks (CIDR) the certificate works from"}
+            }), &["identity"]),
+            pki::biaconfig,
+        )
         .tool("pki_list", "Client certificates this machine has issued.", obj(json!({}), &[]), pki::list)
         .tool("pki_revoke", "Revoke an issued client certificate by serial (from web_pki_list).",
             obj(json!({"serial": {"type": "string"}}), &["serial"]), pki::revoke)

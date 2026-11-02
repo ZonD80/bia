@@ -219,6 +219,7 @@ fn root_only(path: &str) -> bool {
         || path == "/v1/status"
         || path == "/v1/pki/certs"
         || path == "/v1/pki/issue"
+        || path == "/v1/pki/biaconfig"
         || path == "/v1/pki/revoke"
         || path == "/v1/peers"
         || path == "/v1/peers/action"
@@ -932,6 +933,29 @@ impl Web {
                         format!("{e:#}").as_bytes(),
                         None,
                     ),
+                }
+            }
+            ("POST", "/v1/pki/biaconfig") => {
+                let v = json_body();
+                // the page asks for what this bia was reached at; the file is only ever in this answer
+                match crate::pki::make_biaconfig(&self.pki, self.port, &v) {
+                    Ok(m) => {
+                        self.con.log(&format!("  web: {} made a .biaconfig for {} ({})", id.identity, m.identity, m.serial));
+                        let name = format!("{}-{}.{}", m.identity.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_', "-"), m.serial.chars().take(8).collect::<String>(), bia_pki::biaconfig::EXTENSION);
+                        respond_json(
+                            stream,
+                            json!({
+                                "identity": m.identity,
+                                "serial": m.serial,
+                                "file_name": name,
+                                "file": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &m.sealed),
+                                "password": m.password,
+                                "generated": m.generated,
+                                "addresses": m.addresses,
+                            }),
+                        )
+                    }
+                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", e.as_bytes(), None),
                 }
             }
             ("GET", "/v1/pki/requests") => {
@@ -2465,9 +2489,10 @@ fn send_file(stream: &mut dyn Write, p: &Path, name: &str, attachment: bool, ran
 /// Login QRs the chat MCPs are showing (each writes its current one to files/<bus>/qr.png
 /// and deletes it once logged in): root's app shows them in a popup, as the screen does in
 /// a window. A file older than two minutes is a leftover (the QRs rotate every ~20–30 s).
-const QR_BUSES: [(&str, &str, &str); 2] = [
+const QR_BUSES: [(&str, &str, &str); 3] = [
     ("telegram", "Telegram", "Scan it in the Telegram app of that account: Settings › Devices › Link Desktop Device."),
     ("whatsapp", "WhatsApp", "Scan it in WhatsApp on the phone: Settings › Linked devices › Link a device."),
+    ("max", "MAX", "Scan it in the MAX app on a phone already logged in."),
 ];
 
 fn qr_http(files: &std::path::Path, path: &str, stream: &mut dyn Write) {

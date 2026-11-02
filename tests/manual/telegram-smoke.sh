@@ -15,8 +15,8 @@ cat <<'EOF'
 
 Manual MCP smoke (via agent or mcp client):
   1. telegram_status          → stack=ferogram+tgcalls, auth=waiting_phone|ready
-  2. telegram_login(phone)    → waiting_code
-  3. telegram_submit_code     → ready (or waiting_password → submit_password)
+  2. telegram_login           → waiting_qr; scan it → ready (or waiting_password → submit_password)
+  3. telegram_login(phone)    → waiting_code, then telegram_submit_code (when nobody can scan)
   4. telegram_send / search / history
   5. telegram_call_start or accept → inbound [call ready]
   6. telegram_call_say        → audible TTS via Media::audio

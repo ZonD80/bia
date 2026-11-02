@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -21,6 +22,8 @@ import uniffi.bia_deploy_mobile.Server
 import uniffi.bia_deploy_mobile.SshKey
 import uniffi.bia_deploy_mobile.Target
 import uniffi.bia_deploy_mobile.WaitListener
+import uniffi.bia_deploy_mobile.biaconfigImport
+import uniffi.bia_deploy_mobile.isBiaconfig
 import uniffi.bia_deploy_mobile.chatgptSignIn
 import uniffi.bia_deploy_mobile.defaultModel
 import uniffi.bia_deploy_mobile.identifyKey
@@ -40,6 +43,8 @@ enum class How { Password, Key, NewKey }
 /** The wizard: bia's brain, then the server. Every core call runs off the main thread. */
 class DeployModel : ViewModel() {
     var page by mutableStateOf(Page.Brain)
+    /** The bia whose chat is open, over everything else. */
+    var chat by mutableStateOf<ChatTarget?>(null)
 
     // ---- brain ----
     var provider by mutableStateOf("")
@@ -76,6 +81,7 @@ class DeployModel : ViewModel() {
                 error = when (e) {
                     is DeployException.Failed -> e.reason
                     is DeployException.HostKeyChanged -> "this server's identity changed"
+                    is DeployException.OtherKeyHere -> "another key for ${e.host} is already on this phone"
                 }
             } catch (e: Exception) {
                 error = e.message ?: e.toString()
@@ -257,4 +263,80 @@ class DeployModel : ViewModel() {
         saved.clear(); saved.addAll(savedBias())
         page = Page.Keys
     }
+
+    // ---- .biaconfig ----
+    /** A file waiting for its password. */
+    var configFile by mutableStateOf<File?>(null)
+    var configProblem by mutableStateOf<String?>(null)
+    /** The address that already has another key: asks before replacing it. */
+    var configOtherKey by mutableStateOf<String?>(null)
+    var configBusy by mutableStateOf(false)
+
+    fun offerConfig(cache: File, copy: (File) -> Unit) {
+        chat = null
+        error = null
+        closeConfig()
+        val dest = File(File(cache, "biaconfig").apply { mkdirs() }, "incoming.biaconfig")
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) { copy(dest); isBiaconfig(dest.path) }
+                if (ok) configFile = dest
+                else {
+                    dest.delete()
+                    error = "this is not a .biaconfig file"
+                    openKeys()
+                }
+            } catch (e: Exception) {
+                error = e.message ?: e.toString()
+            }
+        }
+    }
+
+    fun closeConfig() {
+        configFile?.delete()
+        configFile = null
+        configProblem = null
+        configOtherKey = null
+    }
+
+    fun importConfig(password: String, replace: Boolean = false) {
+        val file = configFile ?: return
+        if (configBusy) return
+        configBusy = true
+        configProblem = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { biaconfigImport(file.path, password, replace) }
+                closeConfig()
+                openKeys()
+            } catch (e: DeployException.OtherKeyHere) {
+                configOtherKey = e.host
+            } catch (e: DeployException.Failed) {
+                configProblem = e.reason
+            } catch (e: Exception) {
+                configProblem = e.message ?: e.toString()
+            } finally {
+                configBusy = false
+            }
+        }
+    }
+}
+
+/** Copies a file someone offered, refusing what cannot be a .biaconfig (the format's own limit). */
+fun java.io.InputStream.copyLimited(dest: File) {
+    val limit = 1024 * 1024
+    val bytes = readNBytesCompat(limit + 1)
+    if (bytes.size > limit) throw IllegalArgumentException("this is too big to be a .biaconfig")
+    dest.writeBytes(bytes)
+}
+
+private fun java.io.InputStream.readNBytesCompat(n: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(16 * 1024)
+    while (out.size() < n) {
+        val got = read(buf, 0, minOf(buf.size, n - out.size()))
+        if (got < 0) break
+        out.write(buf, 0, got)
+    }
+    return out.toByteArray()
 }

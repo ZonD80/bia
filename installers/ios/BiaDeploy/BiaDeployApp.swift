@@ -17,6 +17,7 @@ struct BiaDeployApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
+                .onOpenURL { model.offerConfig($0) }
         }
     }
 }

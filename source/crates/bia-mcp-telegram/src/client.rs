@@ -810,7 +810,7 @@ impl Tg {
                 .into();
         }
         self.set_phase("waiting_code");
-        format!("auth: waiting_code — the login code was sent {where_}. Get it from there, then call telegram_submit_code.{resend} If no code arrives within a couple of minutes (Telegram often holds codes back for apps like this one, even when it says it sent them), stop waiting and log in by QR instead: telegram_login_qr (the Telegram app on a signed-in phone scans it; no code at all).")
+        format!("auth: waiting_code — the login code was sent {where_}. Get it from there, then call telegram_submit_code.{resend} If no code arrives within a couple of minutes (Telegram often holds codes back for apps like this one, even when it says it sent them), stop waiting and log in by QR instead: telegram_login without a phone (the Telegram app on a signed-in phone scans it; no code at all).")
     }
 
     /// Log in by QR (Telegram app on a signed-in phone: Settings > Devices > Link Desktop
@@ -882,7 +882,7 @@ impl Tg {
             }
             Err(e) => {
                 self.set_phase("waiting_phone");
-                self.qr_notice(&format!("[telegram] the QR was scanned, but the 2FA step failed: {e}; start again with telegram_login_qr"));
+                self.qr_notice(&format!("[telegram] the QR was scanned, but the 2FA step failed: {e}; start again with telegram_login"));
             }
         }
     }
@@ -924,7 +924,7 @@ impl Tg {
                     Err(e) => {
                         crate::qr_win::close();
                         self.set_phase("waiting_phone");
-                        self.qr_notice(&format!("[telegram] QR login stopped: {e}; start again with telegram_login_qr"));
+                        self.qr_notice(&format!("[telegram] QR login stopped: {e}; start again with telegram_login"));
                         return;
                     }
                 }
@@ -933,14 +933,14 @@ impl Tg {
         if self.phase() == "waiting_qr" {
             crate::qr_win::close();
             self.set_phase("waiting_phone");
-            self.qr_notice("[telegram] the login QR was not scanned within 5 minutes; telegram_login_qr shows a new one");
+            self.qr_notice("[telegram] the login QR was not scanned within 5 minutes; telegram_login shows a new one");
         }
     }
 
     /// Telegram asked for a login email: send its verification code there.
     pub fn submit_email(&self, email: &str) -> Result<String, String> {
         let client = self.ensure_connected()?;
-        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending login; call telegram_login(phone) first".to_string())?;
+        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending code login; telegram_login(phone) starts one".to_string())?;
         if token.delivery != CodeDelivery::SetUpEmailRequired {
             return Err("Telegram did not ask for a login email for this login; send the code with telegram_submit_code".into());
         }
@@ -960,7 +960,7 @@ impl Tg {
     /// The code did not arrive: Telegram sends it again, by the next method it offers.
     pub fn resend_code(&self) -> Result<String, String> {
         let client = self.ensure_connected()?;
-        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending login; call telegram_login(phone) first".to_string())?;
+        let token = self.inner.lock().unwrap().auth.login.clone().ok_or_else(|| "no pending code login; telegram_login(phone) starts one".to_string())?;
         self.block_on(async {
             match client.resend_code(&token, Some("the code did not arrive")).await {
                 Ok(SendCodeOutcome::CodeRequired(t)) => Ok(self.code_pending(t)),
@@ -969,7 +969,7 @@ impl Tg {
                     let _ = client.save_session().await;
                     Ok(format!("auth: ready — welcome back, {name}"))
                 }
-                Err(e) if e.is("SEND_CODE_UNAVAILABLE") => Err("Telegram has no other way to send this code. Log in by QR instead: telegram_login_qr (no code needed)".into()),
+                Err(e) if e.is("SEND_CODE_UNAVAILABLE") => Err("Telegram has no other way to send this code. Log in by QR instead: telegram_login without a phone (no code needed)".into()),
                 Err(e) => Err(format!("resend_code: {e}")),
             }
         })
@@ -1022,7 +1022,7 @@ impl Tg {
                             .into(),
                     )
                 }
-                Err(SignInError::InvalidCode) => Err("invalid or expired code: ask for it again (telegram_resend_code), or log in by QR without a code: telegram_login_qr".into()),
+                Err(SignInError::InvalidCode) => Err("invalid or expired code: ask for it again (telegram_resend_code), or log in by QR without a code: telegram_login without a phone".into()),
                 Err(SignInError::SignUpRequired) => {
                     Err("phone not registered; sign up in the official Telegram app first".into())
                 }
@@ -1162,7 +1162,7 @@ impl Tg {
             Ok(false) => {
                 self.set_unauthorized();
                 Ok(format!(
-                    "telegram not logged in ({}); call login(phone), or login_qr when codes do not arrive",
+                    "telegram not logged in ({}); call telegram_login and scan the QR",
                     self.phase()
                 ))
             }

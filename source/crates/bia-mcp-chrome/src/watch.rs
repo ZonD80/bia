@@ -1,5 +1,5 @@
 //! Poll Chrome's remote-debugging `/json/list` and push inbound events for tab/window open+close,
-//! and for native file dialogs opening.
+//! and for native file dialogs and certificate dialogs opening.
 use bia_mcp::Ctx;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -45,10 +45,16 @@ impl Watcher {
         let mut known: HashMap<String, Page> = HashMap::new();
         let mut seeded = false;
         let mut dialogs = dialog::Seen::default();
+        let mut cert_dialogs = crate::certs::DialogWatch::default();
         loop {
             thread::sleep(POLL);
             let ctx = self.ctx.lock().unwrap().clone();
             dialogs.poll(ctx.as_ref());
+            for text in cert_dialogs.poll(proc::debug_ready()) {
+                if let Some(ctx) = ctx.as_ref() {
+                    ctx.inbound("system", "chrome", "", &text);
+                }
+            }
             if !proc::debug_ready() {
                 // Chrome stopped / debugging down — don't spam [tab closed] for every page.
                 known.clear();

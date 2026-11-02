@@ -214,25 +214,52 @@ pub fn on_event(ev: Value) {
         "chat" => note_title(s(&ev, "chat"), s(&ev, "title")),
         "logged_out" => {
             state::update_cfg(p, |c| c.logged_in = false);
-            console(&format!(
-                "[{} logged out: {}] Sign in to {} again in Chrome (chrome MCP), then call {}_login.",
-                p.name(),
-                s(&ev, "reason"),
-                match p {
-                    Platform::Messenger => "https://www.facebook.com",
-                    Platform::Instagram => "https://www.instagram.com",
-                },
-                p.name()
-            ));
+            let again = match p {
+                Platform::Messenger => "Sign in to https://www.facebook.com again in Chrome (chrome MCP), then call messenger_login.".to_string(),
+                Platform::Instagram => "Sign in to https://www.instagram.com again in Chrome (chrome MCP), then call instagram_login.".to_string(),
+                Platform::Max => "Log in again with max_login and scan the QR.".to_string(),
+            };
+            console(&format!("[{} logged out: {}] {again}", p.name(), s(&ev, "reason")));
+        }
+        "logged_in" => logged_in(&ev),
+        "call" => crate::calls::changed(&ev),
+        "qr" => {
+            match crate::qr_win::show(s(&ev, "link")) {
+                Ok(()) => {}
+                Err(e) => log(&format!("{} QR window: {e}", p.name())),
+            }
         }
         "status" => {
             let st = s(&ev, "state");
             let err = s(&ev, "error");
             if st == "error" && !err.is_empty() {
                 log(&format!("{}: {err}", p.name()));
+                if b(&ev, "login") {
+                    crate::qr_win::close();
+                    console(&format!("[{} login stopped] {err}", p.name()));
+                }
             }
         }
         _ => {}
+    }
+}
+
+/// A login finished by itself (a QR scanned, a session restored after a code).
+fn logged_in(ev: &Value) {
+    let p = platform();
+    crate::qr_win::close();
+    let (id, name) = (s(ev, "id").to_string(), s(ev, "name").to_string());
+    let was_in = state::load_cfg(p).logged_in;
+    state::update_cfg(p, |c| {
+        c.logged_in = true;
+        c.id = id.clone();
+        c.name = name.clone();
+        if c.last_seen == 0 {
+            c.last_seen = state::now_secs();
+        }
+    });
+    if !was_in {
+        console(&format!("[{} logged in as {name}, id {id}] Messages arrive on {}:<chat>.", p.name(), p.name()));
     }
 }
 
@@ -293,6 +320,17 @@ fn deliver(ev: &Value, live: bool) {
         let text = s(&ev, "text").trim().to_string();
         if !text.is_empty() {
             parts.push(text);
+        }
+        for n in ev.get("notes").and_then(Value::as_array).cloned().unwrap_or_default() {
+            if let Some(n) = n.as_str() {
+                parts.push(n.to_string());
+            }
+        }
+        if let Some(l) = ev.get("location").filter(|l| l.is_object()) {
+            let (lat, lon) = (l.get("lat").and_then(Value::as_f64), l.get("lon").and_then(Value::as_f64));
+            if let (Some(lat), Some(lon)) = (lat, lon) {
+                parts.push(bia_mcp::share::location_text(lat, lon, s(l, "name"), "", None, None, ""));
+            }
         }
         let mut voice: Option<PathBuf> = None;
         for a in ev.get("attachments").and_then(Value::as_array).cloned().unwrap_or_default() {
@@ -457,8 +495,10 @@ fn reacted(ev: &Value) {
     }
     let emoji = s(ev, "emoji").trim();
     let body = if emoji.is_empty() { "[reaction] removed".to_string() } else { format!("[reaction] {emoji}") };
+    // MAX does not always say who reacted in a group
+    let who = if sender.is_empty() { "someone".to_string() } else { label(sender, s(ev, "sender_name")) };
     // the envelope id is the message reacted to (what react/delete need)
-    inbound(&label(sender, s(ev, "sender_name")), chat, id, &body, 0);
+    inbound(&who, chat, id, &body, 0);
 }
 
 #[cfg(test)]

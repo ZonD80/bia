@@ -23,6 +23,22 @@ targets:
       # the Rust core (installers/bia-deploy-mobile), made by build-core.sh
       - framework: BiaDeployCore.xcframework
         embed: false
+    info:
+      path: BiaDeploy/Info.plist
+      properties:
+        # .biaconfig files open here (merged with the generated keys below)
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: bia config
+            LSHandlerRank: Owner
+            LSItemContentTypes: [biadeploy.config]
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: biadeploy.config
+            UTTypeDescription: bia config
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [biaconfig]
+              public.mime-type: [application/x-biaconfig]
+        LSSupportsOpeningDocumentsInPlace: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: biadeploy.ios
@@ -34,6 +50,7 @@ targets:
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Voice messages and calls in bia's chat.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: bia deploy connects to the server you name, which can be on your local network.
         # only standard encryption (SSH, TLS): exempt from export compliance documentation
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

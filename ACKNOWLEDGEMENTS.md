@@ -71,6 +71,10 @@ QEMU) and Yaaia's communication features (messengers, calls, contacts,
 | [tgcalls](https://github.com/ankit-chaubey/tgcalls) | Telegram voice calls (vendored with a patch in `source/vendor/tgcalls`) |
 | [NTgCalls](https://github.com/pytgcalls/ntgcalls) | native call media library, LGPL-3.0 (vendored binding in `source/vendor/ntgcalls`, `libntgcalls.so` shipped) |
 | [whatsapp-rust](https://crates.io/crates/whatsapp-rust) | WhatsApp linked-device client and VoIP |
+| [PyMax](https://github.com/MaxApiTeam/PyMax) (MIT) | MAX protocol behind the max MCP (`bia_max.py`); its Python packages are listed in `builders/max-requirements.txt` |
+| [Haltia Messenger](https://github.com/haltia-de/messenger) (GPL-3.0-or-later) | MAX's call protocol and the code `bia_max_call.py` is adapted from |
+| [GStreamer](https://gstreamer.freedesktop.org/) (LGPL-2.1-or-later) | WebRTC media of MAX voice calls (`webrtcbin`, from Debian) |
+| [AT-SPI](https://gitlab.gnome.org/GNOME/at-spi2-core) (LGPL-2.1-or-later), [wmctrl](https://packages.debian.org/trixie/wmctrl), [xclip](https://github.com/astrand/xclip) | desktop apps as elements, windows and the clipboard in the screen MCP. Its ref-based way of working follows the idea of [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0); none of its code is used |
 | [mautrix-meta](https://github.com/mautrix/meta) (AGPL-3.0) | Messenger and Instagram protocols in `bia-meta`: messagix, instameow, media download; bia's message handling follows its connectors |
 | [whatsmeow](https://github.com/tulir/whatsmeow) (MPL-2.0) | Messenger's end-to-end encrypted chats (as a registered device) |
 | [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) | pure-Go SQLite for `bia-meta`'s keys and chat index |

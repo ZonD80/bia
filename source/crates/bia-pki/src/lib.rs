@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use time::{Duration, OffsetDateTime};
 
+pub mod biaconfig;
 pub mod client;
 mod net;
 mod p12;
@@ -37,8 +38,12 @@ const PICKUP_TTL_SECS: i64 = 15 * 60;
 /// Password of every PKCS#12 bia hands out. Not a secret (the file itself is the secret);
 /// macOS refuses to import a .p12 with an empty password.
 pub const P12_PASSWORD: &str = "12345678";
-/// Server and client leaf lifetime.
-pub const LEAF_DAYS: i64 = 825;
+/// Server and client leaf lifetime, from now. With the day of backdating below that makes 825
+/// days in all, the most Apple's TLS accepts: one more and iOS and macOS call the server
+/// certificate "not standards compliant", even under a trusted CA.
+pub const LEAF_DAYS: i64 = 824;
+/// The whole validity Apple's TLS allows a server certificate.
+const SERVER_MAX_DAYS: i64 = 825;
 /// Reissue server cert this many days before `not_after`.
 pub const SERVER_RENEW_WITHIN_DAYS: i64 = 30;
 
@@ -253,7 +258,18 @@ impl Pki {
         Some((not_after - now) / 86_400)
     }
 
-    /// Reissue when LAN SANs change or the server cert is within `SERVER_RENEW_WITHIN_DAYS` of expiry.
+    /// Whether the server certificate is valid for longer than Apple's TLS accepts: bias before
+    /// 2.0.0 issued one a day too long.
+    fn server_too_long(&self) -> bool {
+        let Ok(pem) = fs::read_to_string(self.server_cert_path()) else { return false };
+        let Some(der) = pem_to_cert_ders(&pem).ok().and_then(|d| d.into_iter().next()) else { return false };
+        let Ok((_, cert)) = x509_parser::parse_x509_certificate(der.as_ref()) else { return false };
+        let v = cert.validity();
+        (v.not_after.timestamp() - v.not_before.timestamp()) / 86_400 > SERVER_MAX_DAYS
+    }
+
+    /// Reissue when LAN SANs change, the server cert is within `SERVER_RENEW_WITHIN_DAYS` of expiry,
+    /// or it is valid for longer than Apple's TLS accepts.
     pub fn ensure_server_sans(&self, ips: &[std::net::IpAddr]) -> Result<bool> {
         let mut want: Vec<String> = ips.iter().map(|i| i.to_string()).collect();
         // the fixed extras are part of what the current certificate must carry
@@ -269,7 +285,7 @@ impl Pki {
         cur_sorted.sort();
         let sans_ok = want_sorted == cur_sorted && self.server_cert_path().exists();
         let needs_time_renew = match self.server_days_left() {
-            Some(d) => d < SERVER_RENEW_WITHIN_DAYS,
+            Some(d) => d < SERVER_RENEW_WITHIN_DAYS || self.server_too_long(),
             None => true,
         };
         if sans_ok && !needs_time_renew {
@@ -1013,4 +1029,39 @@ fn own_like_files(p: &Path, files: &Path) {
 /// Install the process-wide rustls crypto provider (call once at startup).
 pub fn install_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
+#[cfg(test)]
+mod server_cert_tests {
+    use super::*;
+
+    fn validity_days(pki: &Pki) -> i64 {
+        let pem = fs::read_to_string(pki.server_cert_path()).unwrap();
+        let der = pem_to_cert_ders(&pem).unwrap().into_iter().next().unwrap();
+        let (_, cert) = x509_parser::parse_x509_certificate(der.as_ref()).unwrap();
+        let v = cert.validity();
+        (v.not_after.timestamp() - v.not_before.timestamp()) / 86_400
+    }
+
+    #[test]
+    fn a_server_certificate_stays_within_what_apple_accepts_and_an_old_one_is_replaced() {
+        install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!("bia-pki-days-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let pki = Pki::load_or_create(&dir).unwrap();
+        pki.ensure_server_sans(&[]).unwrap();
+        assert!(validity_days(&pki) <= SERVER_MAX_DAYS, "{}", validity_days(&pki));
+        assert!(!pki.ensure_server_sans(&[]).unwrap(), "a good one stays");
+        // what a bia before 2.0.0 has: 826 days
+        let (ca, key, _) = pki.load_ca_issuer().unwrap();
+        let mut params = CertificateParams::new(vec!["bia".into()]).unwrap();
+        params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
+        params.not_after = OffsetDateTime::now_utc() + Duration::days(825);
+        let leaf = KeyPair::generate().unwrap();
+        fs::write(pki.server_cert_path(), params.signed_by(&leaf, &ca, &key).unwrap().pem()).unwrap();
+        assert_eq!(validity_days(&pki), 826);
+        assert!(pki.ensure_server_sans(&[]).unwrap(), "it is reissued");
+        assert!(validity_days(&pki) <= SERVER_MAX_DAYS);
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

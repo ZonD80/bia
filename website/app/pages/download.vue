@@ -54,10 +54,12 @@
               from GitHub, no Play Store needed
             </p>
           </div>
-          <div class="card host host--soon">
+          <div class="card host">
             <h3>iPhone</h3>
             <p class="host__note">iPhone and iPad</p>
-            <span class="btn btn--ghost host__btn" aria-disabled="true">Coming soon to the App Store</span>
+            <a class="btn btn--primary host__btn" :href="TESTFLIGHT_URL" target="_blank" rel="noopener">Join the TestFlight beta</a>
+            <a class="btn btn--ghost host__btn host__btn--alt" :href="APPDB_URL" target="_blank" rel="noopener">Get it on appdb</a>
+            <p class="host__ver">TestFlight needs Apple’s TestFlight app · free · appdb is another install path</p>
           </div>
         </div>
         <p v-if="version" class="release-note">
@@ -166,15 +168,17 @@
 <script setup lang="ts">
 useSeoMeta({
   title: 'Wake your bia — on a USB stick or your server',
-  description: 'Download bia deploy for Mac, Windows, Linux or Android: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
+  description: 'Download bia deploy for Mac, Windows, Linux, Android or iPhone: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
 })
 
 import type { FlashHost } from '~/composables/useLatestRelease'
 
 type Host = { id: FlashHost; label: string; note: string }
 
-// the phone apps (server only); the iPhone one is not in the App Store yet
+// the phone apps (server only); iPhone is on TestFlight until the App Store listing is live
 const PLAY_URL = 'https://play.google.com/store/apps/details?id=biadeploy.android'
+const TESTFLIGHT_URL = 'https://testflight.apple.com/join/qePtQWqF'
+const APPDB_URL = 'https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0'
 
 const hosts: Host[] = [
   { id: 'macos', label: 'Mac', note: 'Apple Silicon and Intel' },
@@ -206,7 +210,6 @@ function buttonText(host: Host): string {
 .host__btn.is-busy { opacity: 0.7; pointer-events: none; }
 .phones__title { font-size: 1.2rem; margin: 2rem 0 0.25rem; }
 .phones__lead { color: var(--mute); margin: 0 0 1rem; }
-.host--soon .host__btn { cursor: default; opacity: 0.7; }
 .host__ver { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--mute); text-align: center; }
 .release-note { margin: 1rem 0 0; font-size: 0.9rem; color: var(--mute); }
 .release-note--warn { color: #9a6a12; }

@@ -108,14 +108,16 @@ in_chroot apt-get install -y --no-install-recommends \
   util-linux fdisk parted mount procps rsync dpkg-repack \
   efibootmgr \
   bash ca-certificates wget curl bzip2 xz-utils pigz openssh-client \
-  python3-minimal \
+  python3-minimal python3 \
+  python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice \
   wpasupplicant iw \
   tzdata systemd-timesyncd adduser passwd login sudo libnss-myhostname \
   kbd kexec-tools \
   alsa-utils \
   xserver-xorg-core xserver-xorg-input-libinput xserver-xorg-video-dummy xauth x11-xserver-utils x11-utils \
   libgl1-mesa-dri \
-  xdotool scrot \
+  xdotool scrot wmctrl xclip at-spi2-core gir1.2-atspi-2.0 libnss3-tools openssl \
   openbox tint2 x11vnc novnc kitty fonts-dejavu-core fonts-noto-color-emoji fontconfig \
   fonts-noto-cjk fonts-noto-core \
   fcitx5 fcitx5-pinyin fcitx5-hangul fcitx5-anthy fcitx5-unikey dbus-daemon \

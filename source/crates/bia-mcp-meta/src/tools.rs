@@ -1,5 +1,5 @@
-//! The tools of the messenger and instagram MCPs (the agent prefixes them: messenger_send,
-//! instagram_send, …). Each one is a call to bia-meta.
+//! The tools of the messenger, instagram and max MCPs (the agent prefixes them: messenger_send,
+//! max_send, …). Each one is a call to the helper.
 
 use crate::helper::{self, LONG, NORMAL, QUICK};
 use crate::inbound::{self, format_chat};
@@ -107,7 +107,7 @@ fn login(a: &Value) -> ToolResult {
     let who = if username.is_empty() { name.to_string() } else { format!("{name} (@{username})") };
     let extra = match p {
         Platform::Messenger => " Encrypted chats connect in the background (a new device appears in the account's settings as bia's).",
-        Platform::Instagram => "",
+        _ => "",
     };
     // Instagram reports whether the connection came up, not only the accepted cookies
     let conn = match s(&res, "state") {
@@ -164,7 +164,8 @@ fn restore() -> ToolResult {
         "logged_out" => {
             state::update_cfg(p, |c| c.logged_in = false);
             let why = if s(&st, "error").is_empty() { String::new() } else { format!(" ({})", s(&st, "error")) };
-            Ok(format!("{} session ended{why}; sign in again in Chrome and call {}_login", p.title(), p.name()))
+            let again = if p == Platform::Max { "log in again with max_login and scan the QR".to_string() } else { format!("sign in again in Chrome and call {}_login", p.name()) };
+            Ok(format!("{} session ended{why}; {again}", p.title()))
         }
         other => Ok(format!("{} starting ({other}{}); it keeps retrying in the background", p.title(),
             if s(&st, "error").is_empty() { String::new() } else { format!(": {}", s(&st, "error")) })),
@@ -183,7 +184,11 @@ fn logout() -> ToolResult {
         c.last_seen = 0;
     });
     r?;
-    Ok(format!("logged out of {} on this computer (the account stays signed in in Chrome)", p.title()))
+    Ok(if p == Platform::Max {
+        "logged out of MAX on this computer".to_string()
+    } else {
+        format!("logged out of {} on this computer (the account stays signed in in Chrome)", p.title())
+    })
 }
 
 // --- messages ---
@@ -197,10 +202,20 @@ fn sent_line(res: &Value, chat: &str, what: &str) -> String {
     format!("sent {what}message id {} → {}", ids.join(", "), format_chat(chat, &chat_title(chat)))
 }
 
+/// The model writes markdown: MAX formats it itself (PyMax turns it into MAX's own formatting);
+/// Meta's apps get plain text.
+fn outgoing(text: &str) -> String {
+    if platform() == Platform::Max {
+        text.to_string()
+    } else {
+        bia_mcp::md::plain(text)
+    }
+}
+
 fn send(ctx: &Ctx, a: &Value) -> ToolResult {
     require_login()?;
     let chat = chat_arg(a)?;
-    let text = bia_mcp::md::plain(arg_str_opt(a, "text").unwrap_or(""));
+    let text = outgoing(arg_str_opt(a, "text").unwrap_or(""));
     let files = arg_str_list(a, "files");
     if text.trim().is_empty() && files.is_empty() {
         return Err("text or files required".into());
@@ -250,7 +265,7 @@ fn edit(a: &Value) -> ToolResult {
     require_login()?;
     let chat = chat_arg(a)?;
     let id = arg_str(a, "message_id")?.trim().to_string();
-    let text = bia_mcp::md::plain(arg_str(a, "text")?);
+    let text = outgoing(arg_str(a, "text")?);
     call("edit", json!({"chat": chat, "id": id, "text": text}), NORMAL)?;
     Ok(format!("edited message {id} → {}", format_chat(&chat, "")))
 }
@@ -552,7 +567,7 @@ fn group_permissions(a: &Value) -> ToolResult {
     require_login()?;
     let chat = chat_arg(a)?;
     let mut params = json!({"chat": chat});
-    for k in ["only_admins_send", "only_admins_edit_info", "only_admins_add", "join_approval"] {
+    for k in ["only_admins_send", "only_admins_edit_info", "only_admins_add", "join_approval", "all_can_pin", "only_admins_call"] {
         if let Some(v) = a.get(k).and_then(Value::as_bool) {
             params[k] = json!(v);
         }
@@ -654,27 +669,34 @@ pub fn serve(p: Platform) {
     let (n, t) = (p.name(), p.title());
     let hint = p.chat_hint();
     let chat = || json!({"type": "string", "description": hint});
+    let own = format!(
+        "Before the first login, unless root has already made one, tell root that bia needs its own {t} account with its own phone number, separate from root's: root creates it, and bia then signs in with it in Chrome."
+    );
     let login_desc = match p {
         Platform::Messenger => format!(
-            "Log in to Messenger with the Facebook account that is signed in to bia's Chrome (bia never asks for the password here; the session is taken from Chrome). If Chrome is not signed in: start it (chrome MCP), open https://www.facebook.com/ and sign in there (passwords and 2FA codes from the secrets MCP), then call {n}_login again. variant=messenger takes the session from messenger.com instead. cookies is only for a session a person pasted (a Cookie header or a JSON object). This is an unofficial client: Meta may ask for a security check in the browser. Afterwards messages arrive on {n}:<chat>."
+            "Log in to Messenger with bia's Facebook account, signed in to bia's Chrome: Meta has no QR login here. {own} (bia never asks for the password here; the session is taken from Chrome). If Chrome is not signed in: start it (chrome MCP), open https://www.facebook.com/ and sign in there (passwords and 2FA codes from the secrets MCP), then call {n}_login again. variant=messenger takes the session from messenger.com instead. cookies is only for a session a person pasted (a Cookie header or a JSON object). This is an unofficial client: Meta may ask for a security check in the browser. Afterwards messages arrive on {n}:<chat>."
         ),
+        Platform::Max => String::new(),
         Platform::Instagram => format!(
-            "Log in to Instagram with the account that is signed in to bia's Chrome (no password here; the session is taken from Chrome). If Chrome is not signed in: start it (chrome MCP), open https://www.instagram.com/accounts/login/ and sign in (passwords and 2FA codes from the secrets MCP), then call {n}_login again. cookies is only for a session a person pasted (a Cookie header or a JSON object). This is an unofficial client: Instagram may ask for a security check in the browser. Afterwards messages arrive on {n}:<chat>."
+            "Log in to Instagram with bia's account, signed in to bia's Chrome: Instagram has no QR login here. {own} (No password here; the session is taken from Chrome). If Chrome is not signed in: start it (chrome MCP), open https://www.instagram.com/accounts/login/ and sign in (passwords and 2FA codes from the secrets MCP), then call {n}_login again. cookies is only for a session a person pasted (a Cookie header or a JSON object). This is an unofficial client: Instagram may ask for a security check in the browser. Afterwards messages arrive on {n}:<chat>."
         ),
     };
-    let mut server = Server::new(n, env!("CARGO_PKG_VERSION"))
-        .tool("login", &login_desc, json!({"type": "object", "properties": {
+    let mut server = Server::new(n, env!("CARGO_PKG_VERSION"));
+    if p != Platform::Max {
+        server = server.tool("login", &login_desc, json!({"type": "object", "properties": {
             "variant": {"type": "string", "description": "Messenger only: facebook (default) or messenger (messenger.com)"},
             "cookies": {"description": "optional: a session a person pasted, as a Cookie header string or a JSON object of cookie names to values"}
         }}), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             login(&a)
-        })
+        });
+    }
+    server = server
         .tool("status", &format!("Whether bia is logged in to {t}, the account, the connection state and banned chats."), json!({"type": "object", "properties": {}}), |ctx, _| {
             inbound::set_ctx(ctx.clone());
             status()
         })
-        .tool("logout", &format!("Log out of {t} on this computer (forgets the session and the chat index here; Chrome stays signed in). Call {n}_login to log in again."), json!({"type": "object", "properties": {}}), |ctx, _| {
+        .tool("logout", &format!("Log out of {t} on this computer (forgets the session here{}). Call {n}_login to log in again.", if p == Platform::Max { "" } else { " and the chat index; Chrome stays signed in" }), json!({"type": "object", "properties": {}}), |ctx, _| {
             inbound::set_ctx(ctx.clone());
             logout()
         })
@@ -682,7 +704,7 @@ pub fn serve(p: Platform) {
             inbound::set_ctx(ctx.clone());
             restore()
         })
-        .tool("send", &format!("Send a {t} message. text is the message (markdown is turned into plain text; links keep their address). files are paths under /home/bia/files: pictures and videos are sent as media, .ogg/.opus as a voice message, anything else as a file. reply_to quotes a message id."), obj(json!({
+        .tool("send", &format!("Send a {t} message. text is the message ({}). files are paths under /home/bia/files: pictures and videos are sent as media, .ogg/.opus as a voice message, anything else as a file. reply_to quotes a message id.", if p == Platform::Max { "markdown is shown as formatting" } else { "markdown is turned into plain text; links keep their address" }), obj(json!({
             "chat_id": chat(),
             "text": {"type": "string", "description": "the message; optional with files"},
             "files": {"type": "array", "items": {"type": "string"}, "description": "file paths under /home/bia/files"},
@@ -808,11 +830,6 @@ pub fn serve(p: Platform) {
             let m = arg_str(&a, "member")?;
             simple("remove_member", json!({"chat": chat, "member": m}), format!("removed {m} from {}", format_chat(&chat, "")))
         })
-        .tool("join_group", &format!("Join a {t} group by its invite link ({}): this answers how, through bia's Chrome.",
-            if p == Platform::Instagram { "ig.me/j/…" } else { "m.me/j/…" }), obj(json!({
-            "link": {"type": "string", "description": "the group's invite link"}
-        }), &["link"]), move |_ctx, a| join_group(p, a.get("link").and_then(Value::as_str).unwrap_or(""))
-        )
         .tool("leave_group", &format!("Leave a {t} group."), obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             let chat = chat_arg(&a)?;
@@ -835,30 +852,44 @@ pub fn serve(p: Platform) {
             let on = arg_bool(&a, "on", true);
             simple("block", json!({"user": user, "on": on}), format!("{} {user} on {t}", if on { "blocked" } else { "unblocked" }))
         })
-        .tool("accept_request", &format!("Accept a {t} message request (a chat flagged message request) so it moves to the inbox."), obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
-            inbound::set_ctx(ctx.clone());
-            let chat = chat_arg(&a)?;
-            simple("accept", json!({"chat": chat}), format!("accepted {}", format_chat(&chat, "")))
-        })
-        .tool("delete_chat", &format!("Delete a whole {t} chat from this account's inbox (not for the other people). This cannot be undone."), obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
-            inbound::set_ctx(ctx.clone());
-            let chat = chat_arg(&a)?;
-            simple("delete_chat", json!({"chat": chat}), format!("deleted chat {}", format_chat(&chat, "")))
-        })
-        .tool("mute", &format!("Mute a {t} chat's notifications: seconds to mute, -1 forever, 0 unmutes."), obj(json!({
+        .tool("delete_chat", &format!("Delete a whole {t} chat from this account's inbox{}. This cannot be undone.", if p == Platform::Max { "; everyone=true deletes it for the other people too, where MAX allows it" } else { " (not for the other people)" }), obj(json!({
             "chat_id": chat(),
-            "seconds": {"type": "integer", "description": "-1 forever, 0 unmute, else seconds"}
-        }), &["chat_id", "seconds"]), |ctx, a| {
+            "everyone": {"type": "boolean", "description": "MAX only: also for the other people (default false)"}
+        }), &["chat_id"]), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             let chat = chat_arg(&a)?;
-            let secs = a.get("seconds").and_then(Value::as_i64).ok_or("seconds required")?;
-            let what = match secs {
-                0 => "unmuted".to_string(),
-                x if x < 0 => "muted".to_string(),
-                x => format!("muted for {x}s"),
-            };
-            simple("mute", json!({"chat": chat, "seconds": secs}), format!("{what} {}", format_chat(&chat, "")))
+            simple("delete_chat", json!({"chat": chat, "everyone": arg_bool(&a, "everyone", false)}), format!("deleted chat {}", format_chat(&chat, "")))
         });
+    if p != Platform::Max {
+        server = server
+            .tool("join_group", &format!("Join a {t} group by its invite link ({}): this answers how, through bia's Chrome.",
+                if p == Platform::Instagram { "ig.me/j/…" } else { "m.me/j/…" }), obj(json!({
+                "link": {"type": "string", "description": "the group's invite link"}
+            }), &["link"]), move |_ctx, a| join_group(p, a.get("link").and_then(Value::as_str).unwrap_or(""))
+            )
+            .tool("accept_request", &format!("Accept a {t} message request (a chat flagged message request) so it moves to the inbox."), obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+                inbound::set_ctx(ctx.clone());
+                let chat = chat_arg(&a)?;
+                simple("accept", json!({"chat": chat}), format!("accepted {}", format_chat(&chat, "")))
+            })
+            .tool("mute", &format!("Mute a {t} chat's notifications: seconds to mute, -1 forever, 0 unmutes."), obj(json!({
+                "chat_id": chat(),
+                "seconds": {"type": "integer", "description": "-1 forever, 0 unmute, else seconds"}
+            }), &["chat_id", "seconds"]), |ctx, a| {
+                inbound::set_ctx(ctx.clone());
+                let chat = chat_arg(&a)?;
+                let secs = a.get("seconds").and_then(Value::as_i64).ok_or("seconds required")?;
+                let what = match secs {
+                    0 => "unmuted".to_string(),
+                    x if x < 0 => "muted".to_string(),
+                    x => format!("muted for {x}s"),
+                };
+                simple("mute", json!({"chat": chat, "seconds": secs}), format!("{what} {}", format_chat(&chat, "")))
+            });
+    }
+    if p == Platform::Max {
+        server = max_tools(server);
+    }
     if p == Platform::Messenger {
         server = server
             .tool("group_permissions", "Change an encrypted Messenger group's settings; only what you pass changes. only_admins_send: only admins may send. only_admins_edit_info: only admins may change the name, description and photo. only_admins_add: only admins may add people. join_approval: admins approve who joins by link. disappearing_seconds: delete messages after this time (0 off, e.g. 86400 a day). Classic (unencrypted) groups only have admins. You must be an admin.", obj(json!({
@@ -917,7 +948,226 @@ pub fn serve(p: Platform) {
     });
 }
 
-/// While an account is logged in, keep bia-meta running and connected.
+// --- MAX: what only it has ---
+
+/// The login states as the next step for the model.
+fn max_next_step(res: &Value) -> ToolResult {
+    let (id, name) = (s(res, "id"), s(res, "name"));
+    match s(res, "state") {
+        "ready" => {
+            state::update_cfg(Platform::Max, |c| {
+                c.logged_in = true;
+                c.id = id.to_string();
+                c.name = name.to_string();
+                if c.last_seen == 0 {
+                    c.last_seen = state::now_secs();
+                }
+            });
+            crate::qr_win::close();
+            Ok(format!("logged in to MAX as {name}, id {id}. Messages arrive on max:<chat>."))
+        }
+        "waiting_code" => Ok("auth: waiting_code — MAX sent a login code by SMS. Get it from root, then call max_submit_code. A wrong code ends the attempt.".into()),
+        "waiting_password" => {
+            let hint = if s(res, "hint").is_empty() { String::new() } else { format!(" (hint: {})", s(res, "hint")) };
+            let wrong = if res.get("wrong").and_then(Value::as_bool).unwrap_or(false) { "that password was wrong. " } else { "" };
+            Ok(format!("auth: waiting_password — {wrong}this account has a two-step password{hint}: call max_submit_password."))
+        }
+        other => Ok(format!("auth: {other}{}", if s(res, "error").is_empty() { String::new() } else { format!(": {}", s(res, "error")) })),
+    }
+}
+
+/// By QR unless a phone number is given.
+fn max_login(a: &Value) -> ToolResult {
+    if let Some(phone) = arg_str_opt(a, "phone").map(str::trim).filter(|x| !x.is_empty()) {
+        return max_next_step(&call("login", json!({"phone": phone}), NORMAL)?);
+    }
+    let res = call("login_qr", json!({}), NORMAL)?;
+    if s(&res, "state") != "waiting_qr" {
+        return max_next_step(&res);
+    }
+    Ok(format!(
+        "auth: waiting_qr — root scans the QR with the MAX app on the phone with bia's account. It is in a MAX QR window on display :0 and at {}. You are told when it is done; a two-step password then asks for max_submit_password.",
+        crate::qr_win::png_path().display()
+    ))
+}
+
+fn max_set_profile(a: &Value) -> ToolResult {
+    require_login()?;
+    let mut params = json!({});
+    for k in ["first_name", "last_name", "description"] {
+        if let Some(v) = arg_str_opt(a, k) {
+            params[k] = json!(v);
+        }
+    }
+    if let Some(ph) = arg_str_opt(a, "photo").filter(|x| !x.trim().is_empty()) {
+        params["photo"] = json!(file_path(ph)?);
+    }
+    if params.as_object().is_none_or(|o| o.is_empty()) {
+        return Err("pass first_name, last_name, description and/or photo".into());
+    }
+    call("set_profile", params, LONG)?;
+    Ok("MAX profile updated".into())
+}
+
+fn max_send_location(a: &Value) -> ToolResult {
+    require_login()?;
+    let chat = chat_arg(a)?;
+    let coord = |k: &str| a.get(k).and_then(Value::as_f64).ok_or(format!("{k} required, in decimal degrees"));
+    let (lat, lon) = (coord("latitude")?, coord("longitude")?);
+    let name = arg_str_opt(a, "name").unwrap_or("").trim();
+    let address = arg_str_opt(a, "address").unwrap_or("").trim();
+    let place: Vec<&str> = [name, address].into_iter().filter(|x| !x.is_empty()).collect();
+    let map = format!("https://www.openstreetmap.org/?mlat={lat}&mlon={lon}#map=16/{lat}/{lon}");
+    let text = if place.is_empty() { format!("{lat}, {lon}\n{map}") } else { format!("{}\n{lat}, {lon}\n{map}", place.join(", ")) };
+    let res = call("send", json!({"chat": chat, "text": text}), NORMAL)?;
+    Ok(format!("{} (as a map link: this client cannot send a MAX location pin)", sent_line(&res, &chat, "location, ")))
+}
+
+fn max_tools(server: Server) -> Server {
+    let hint = Platform::Max.chat_hint();
+    let chat = || json!({"type": "string", "description": hint});
+    server
+        .tool("login", &format!("Log in to MAX by QR (the default), or with a phone number and SMS code. {} The QR shows in a MAX QR window on display :0 and in root's web app; a line says when the login is done. Voice calls need a QR login. Pass phone only when nobody can scan; the code then goes to max_submit_code. This replaces a login already here. bia uses an unofficial MAX client, so MAX may restrict the account: say that too.", bia_mcp::own_account("MAX")), json!({"type": "object", "properties": {
+            "phone": {"type": "string", "description": "only when nobody can scan a QR: the number with country code, for example +79991234567"}
+        }}), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            max_login(&a)
+        })
+        .tool("submit_code", "The login code MAX sent by SMS, after max_login.", obj(json!({
+            "code": {"type": "string", "description": "the code"}
+        }), &["code"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            let code = match a.get("code") {
+                Some(Value::Number(n)) => n.to_string(),
+                _ => arg_str(&a, "code")?.to_string(),
+            };
+            max_next_step(&call("submit_code", json!({"code": code}), NORMAL)?)
+        })
+        .tool("submit_password", "This account's two-step password, when a login asks for it.", obj(json!({
+            "password": {"type": "string", "description": "the password"}
+        }), &["password"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            max_next_step(&call("submit_password", json!({"password": arg_str(&a, "password")?}), NORMAL)?)
+        })
+        .tool("set_profile", "Change this account's MAX profile: first_name, last_name, description (its bio; empty clears it) and/or photo (an image under /home/bia/files). Only what you pass changes.", json!({"type": "object", "properties": {
+            "first_name": {"type": "string"},
+            "last_name": {"type": "string"},
+            "description": {"type": "string", "description": "the bio; empty clears it"},
+            "photo": {"type": "string", "description": "image path under /home/bia/files"}
+        }}), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            max_set_profile(&a)
+        })
+        .tool("send_location", "Send a place on MAX: it goes as text with its coordinates and a map link, because this client cannot send a MAX location pin. Received locations arrive as [location] lines.", obj(json!({
+            "chat_id": chat(),
+            "latitude": {"type": "number"},
+            "longitude": {"type": "number"},
+            "name": {"type": "string", "description": "optional place name"},
+            "address": {"type": "string", "description": "optional address"}
+        }), &["chat_id", "latitude", "longitude"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            max_send_location(&a)
+        })
+        .tool("send_contact", "Send a MAX user as a contact card. user is their id, or a phone number if they are on MAX. Received contacts arrive as [contact] lines.", obj(json!({
+            "chat_id": chat(),
+            "user": {"type": "string", "description": "MAX id or phone number with country code"}
+        }), &["chat_id", "user"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            require_login()?;
+            let chat = chat_arg(&a)?;
+            let res = call("send_contact", json!({"chat": chat, "user": arg_str(&a, "user")?}), NORMAL)?;
+            Ok(sent_line(&res, &chat, "contact, "))
+        })
+        .tool("group_invite_link", "An invite link to a MAX group you administer (anyone with it can join). new=true replaces the old link.", obj(json!({
+            "chat_id": chat(),
+            "new": {"type": "boolean", "description": "make a new link; the old one stops working"}
+        }), &["chat_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            require_login()?;
+            let chat = chat_arg(&a)?;
+            let r = call("invite_link", json!({"chat": chat, "new": arg_bool(&a, "new", false)}), NORMAL)?;
+            Ok(format!("{} — {}", format_chat(&chat, ""), s(&r, "link")))
+        })
+        .tool("join_group", "Join a MAX group or channel by its invite link.", obj(json!({
+            "link": {"type": "string", "description": "the link, e.g. https://max.ru/join/…"}
+        }), &["link"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            require_login()?;
+            let r = call("join", json!({"link": arg_str(&a, "link")?}), NORMAL)?;
+            Ok(format!("joined {}", chat_row(&r)))
+        })
+        .tool("group_permissions", "Change a MAX group's settings; only what you pass changes. only_admins_add: only admins add people. only_admins_edit_info: only the owner changes the name and photo. all_can_pin: everyone may pin messages. only_admins_call: only admins start calls. You must be an admin.", obj(json!({
+            "chat_id": chat(),
+            "only_admins_add": {"type": "boolean"},
+            "only_admins_edit_info": {"type": "boolean"},
+            "all_can_pin": {"type": "boolean"},
+            "only_admins_call": {"type": "boolean"}
+        }), &["chat_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            group_permissions(&a)
+        })
+        .tool("join_requests", "Pending requests to join a MAX group or channel. Answer each with max_answer_join_request.", obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            join_requests(&a)
+        })
+        .tool("answer_join_request", "Approve (approve=true, default) or decline a request to join a MAX group.", obj(json!({
+            "chat_id": chat(),
+            "member": {"type": "string", "description": "the person's id from max_join_requests"},
+            "approve": {"type": "boolean", "description": "true approves (default), false declines"}
+        }), &["chat_id", "member"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            let chat = chat_arg(&a)?;
+            let m = arg_str(&a, "member")?;
+            let approve = arg_bool(&a, "approve", true);
+            simple("answer_join", json!({"chat": chat, "member": m, "approve": approve}),
+                format!("{} {m}'s request to join {}", if approve { "approved" } else { "declined" }, format_chat(&chat, "")))
+        })
+        .tool("call_status", "Whether a MAX voice call is on or ringing, whether calls can work here, and how much audio has passed.", json!({"type": "object", "properties": {}}), |ctx, _| {
+            inbound::set_ctx(ctx.clone());
+            crate::calls::status()
+        })
+        .tool("call_start", "Start a MAX voice call to one person, only when root asked for this call: never redial or call around, because MAX may restrict an account for odd calls. chat_id is a dialog from max_chats or max_search, or the person's id. Wait for [call ready] or [call ended]. When the talk is over, end it yourself with call_hangup. Needs a QR login.", obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            require_login()?;
+            crate::calls::start(&chat_arg(&a)?)
+        })
+        .tool("call_accept", "Accept the ringing MAX voice call. chat_id is the max:<chat> of the [incoming call] message. It rings for at most 90 seconds. Speak with say or call_say after [call ready].", obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            require_login()?;
+            crate::calls::accept(&chat_arg(&a)?)
+        })
+        .tool("call_hangup", "End the MAX voice call, or cancel one that is still ringing. Use it when the talk is done or they say goodbye; do not wait for them to disconnect. A goodbye still being spoken plays out first.", json!({"type": "object", "properties": {
+            "chat_id": {"type": "string", "description": "optional: the call's chat"}
+        }}), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")))
+        })
+        .tool("call_reject", "Reject the ringing MAX voice call.", json!({"type": "object", "properties": {
+            "chat_id": {"type": "string", "description": "optional: the chat of the [incoming call]"}
+        }}), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")))
+        })
+        .tool("call_say", "Speak text into the active MAX call with a local voice. lang is the language of the text (defaults to the person's preferred language from the addressbook); mark other-language parts inline: <lang=fr>Le Petit Bistro</lang>. A language without a voice fails at once: lang_install it (lang MCP). Keep it short, and do not call again until [you finished speaking] arrives.", obj(json!({
+            "chat_id": chat(),
+            "text": {"type": "string", "description": "short text to speak"},
+            "lang": {"type": "string", "description": "en, ru, es-MX, …"}
+        }), &["chat_id", "text"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            crate::calls::say(&chat_arg(&a)?, arg_str(&a, "text")?, arg_str_opt(&a, "lang").unwrap_or(""))
+        })
+        .tool("pin", "Pin one message in a MAX chat. Unpinning is done in the MAX app.", obj(json!({
+            "chat_id": chat(),
+            "message_id": {"type": "string", "description": "the message to pin"}
+        }), &["chat_id", "message_id"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            let chat = chat_arg(&a)?;
+            let id = arg_str(&a, "message_id")?.trim().to_string();
+            simple("pin", json!({"chat": chat, "id": id, "on": true}), format!("pinned message {id} → {}", format_chat(&chat, "")))
+        })
+}
+
+/// While an account is logged in, keep its helper running and connected.
 fn supervise(p: Platform) {
     let _ = std::thread::Builder::new().name("meta-supervisor".into()).spawn(move || loop {
         std::thread::sleep(Duration::from_secs(30));

@@ -592,7 +592,7 @@ impl Dream {
 // ---------------------------------------------------------------- the owner's quiet window
 
 /// Owner activity: journal messages from root (console, web) or a chat linked to a contact
-/// with root trust (telegram, whatsapp, messenger, instagram).
+/// with root trust (telegram, whatsapp, messenger, instagram, max).
 fn owner_times(state_dir: &Path, since: u64) -> Vec<u64> {
     let ab = crate::addressbook::AddressBook::load(&state_dir.join("addressbook.json"));
     let st = crate::memory::Store::open(state_dir);

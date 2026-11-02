@@ -31,7 +31,7 @@ INTERNAL_IMG=${INTERNAL_IMG:-dist/internal.img}
 BUILDER="bia-build:$ARCH"
 NTGCALLS_VER=${NTGCALLS_VER:-v3.0.0}
 
-ALL_MCPS=(system telegram whatsapp secrets chrome screen carry messenger instagram)
+ALL_MCPS=(system telegram whatsapp secrets chrome screen carry messenger instagram max)
 
 usage() {
   echo "usage: tools/patch-mcp.sh <mcp…|all>" >&2
@@ -47,7 +47,7 @@ for arg in "$@"; do
     all)
       MCPS=("${ALL_MCPS[@]}")
       ;;
-    system|telegram|whatsapp|secrets|chrome|screen|carry|messenger|instagram)
+    system|telegram|whatsapp|secrets|chrome|screen|carry|messenger|instagram|max)
       MCPS+=("$arg")
       ;;
     *)
@@ -209,7 +209,7 @@ for name, off, size in partitions("/img"):
                 continue
             for mcp in mcps:
                 mcp_root = os.path.join(root, mcp)
-                if not os.path.isdir(mcp_root) and mcp in ("messenger", "instagram"):
+                if not os.path.isdir(mcp_root) and mcp in ("messenger", "instagram", "max"):
                     # new in this release: put the whole MCP folder in place
                     copy_file(f"/work/source/flash/MCPs/{mcp}/mcp.json", os.path.join(mcp_root, "mcp.json"), mode=0o644)
                 if not os.path.isdir(mcp_root):
@@ -225,6 +225,18 @@ for name, off, size in partitions("/img"):
                 copy_file(src, dest, mode=0o755)
                 if mcp == "messenger":
                     copy_file(f"/work/source/flash/MCPs/messenger/bin/{rarch}/bia-meta", os.path.join(dest_dir, "bia-meta"), mode=0o755)
+                if mcp == "screen":
+                    copy_file("/work/source/flash/MCPs/screen/bia_desktop.py", os.path.join(mcp_root, "bia_desktop.py"), mode=0o644)
+                if mcp == "max":
+                    # the protocol side: PyMax and its packages for this architecture, and our script
+                    for script in ("bia_max.py", "bia_max_call.py"):
+                        copy_file(f"/work/source/flash/MCPs/max/{script}", os.path.join(mcp_root, script), mode=0o644)
+                    py = f"/work/source/flash/MCPs/max/py/{rarch}"
+                    for base, _, names in os.walk(py):
+                        for n in names:
+                            sub = os.path.join(mcp_root, "py", rarch, os.path.relpath(base, py))
+                            os.makedirs(sub, exist_ok=True)
+                            copy_file(os.path.join(base, n), os.path.join(sub, n), mode=0o644)
                 written += 1
                 print(f"   part={name!r} mcp={mcp}")
 

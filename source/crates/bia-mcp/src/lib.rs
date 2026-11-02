@@ -10,6 +10,13 @@ pub mod lanes;
 pub mod md;
 pub mod share;
 
+/// What the model says before bia's first login to a messenger: the account is bia's own.
+pub fn own_account(app: &str) -> String {
+    format!(
+        "Before the first login, unless root has already made one, tell root that bia needs its own {app} account with its own phone number, separate from root's: root creates it in the {app} app on a phone with that number, then scans the QR with that app."
+    )
+}
+
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, Write};

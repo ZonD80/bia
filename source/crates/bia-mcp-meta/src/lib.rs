@@ -1,18 +1,24 @@
-//! The messenger and instagram MCPs: bia's side of a Meta account. The protocol runs in
-//! `bia-meta` (Go, on mautrix-meta), one process per account; this crate starts it, turns
-//! what it hears into messages for the model (in order per chat, with files downloaded and
-//! voice notes transcribed), and offers the tools.
+//! The messenger, instagram and max MCPs: bia's side of an account. The protocol runs in a
+//! helper, one process per account (`bia-meta` in Go on mautrix-meta; `bia_max.py` on PyMax),
+//! speaking the same JSON lines; this crate starts it, turns what it hears into messages for
+//! the model (in order per chat, with files downloaded and voice notes transcribed), and offers
+//! the tools.
 
+pub mod audio_out;
+pub mod calls;
 pub mod helper;
 pub mod inbound;
+pub mod qr_win;
 pub mod state;
 pub mod tools;
+pub mod tts;
 
-/// Which Meta app this MCP is.
+/// Which app this MCP is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Platform {
     Messenger,
     Instagram,
+    Max,
 }
 
 impl Platform {
@@ -21,6 +27,7 @@ impl Platform {
         match self {
             Platform::Messenger => "messenger",
             Platform::Instagram => "instagram",
+            Platform::Max => "max",
         }
     }
 
@@ -28,6 +35,7 @@ impl Platform {
         match self {
             Platform::Messenger => "Messenger",
             Platform::Instagram => "Instagram",
+            Platform::Max => "MAX",
         }
     }
 
@@ -42,11 +50,20 @@ impl Platform {
         t.strip_prefix(&pre).unwrap_or(t).trim().to_string()
     }
 
+    /// The helper's name, for messages about it.
+    pub fn helper(self) -> &'static str {
+        match self {
+            Platform::Max => "bia_max.py",
+            _ => "bia-meta",
+        }
+    }
+
     /// What a chat_id looks like, for tool descriptions.
     pub fn chat_hint(self) -> &'static str {
         match self {
             Platform::Messenger => "a chat id from messenger_chats or messenger_search: a person's Facebook id (digits), t<digits> for a group, <digits>@g.us for an encrypted group; a name or profile link also works",
             Platform::Instagram => "a chat id from instagram_chats or instagram_search (digits), or @username / a profile link",
+            Platform::Max => "a chat id from max_chats, max_search or max_resolve (a number, negative for most groups)",
         }
     }
 }

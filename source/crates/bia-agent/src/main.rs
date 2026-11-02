@@ -7,6 +7,7 @@ mod buses;
 mod clock;
 mod config;
 mod console;
+mod cut;
 mod dream;
 mod gguf;
 mod hw;
@@ -550,6 +551,9 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             start(&mut tools, name, "session on disk");
         }
     }
+    if paths.files.join("max").join("session.db").exists() {
+        start(&mut tools, "max", "session on disk");
+    }
     // The web bus is always up when enabled (people reach bia there before any login).
     if cfg.web.enabled {
         start(&mut tools, "web", "web app");
@@ -918,7 +922,7 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
         "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: bia, an assistant that lives on this computer. Then tell them, briefly, one line each:\n\
 - ask them what your name should be; remember it and use it from then on.\n\
 - {web}.\n\
-- you can log in to their Telegram and WhatsApp (they can write and call you there) and to their Messenger and Instagram, and message for them; ask whether they want that.\n\
+- you can have your own Telegram, WhatsApp and MAX accounts, so they can write and call you there, and your own Messenger and Instagram. Each needs a separate account with its own phone number, not theirs: they create it in the app on a phone with that number and scan a QR code to log you in; ask whether they want that.\n\
 - you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
 - you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
 End by asking what your name should be and what they would like to start with. Do not call tools for this greeting."
@@ -1082,8 +1086,10 @@ mod welcome_tests {
             "very first start",
             "Write in English",
             "https://10.0.0.5/",
-            "Telegram and WhatsApp",
+            "Telegram, WhatsApp and MAX",
             "Messenger and Instagram",
+            "its own phone number",
+            "scan a QR code",
             "own accounts",
             "ChatGPT plan",
             "what your name should be",

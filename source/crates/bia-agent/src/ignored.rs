@@ -20,7 +20,7 @@ pub const CH_IGNORED: &str = "ignored";
 /// How the notes about ignored chats begin (dreams leave them out).
 pub const NOTE_HEAD: &str = "[ignored chats, kept from you:";
 /// Buses whose chats can be ignored (never the console, web chats or bia's own channels).
-const BUSES: &[&str] = &["telegram:", "whatsapp:", "messenger:", "instagram:"];
+const BUSES: &[&str] = &["telegram:", "whatsapp:", "messenger:", "instagram:", "max:"];
 /// Ignored messages shown with one that wakes the model.
 const WOKE_CONTEXT: usize = 5;
 /// chat_restore: messages per call by default, and the most.
@@ -173,7 +173,7 @@ pub fn woke(mut ib: Inbound, why: &str) -> Inbound {
 /// chat_ignore
 pub fn ignore(chat: &str, wake: &[String], why: &str) -> Result<String> {
     if !can_ignore(chat) {
-        bail!("{chat} cannot be ignored: only telegram, whatsapp, messenger and instagram chats (a chat id as channels lists it, e.g. telegram:-1001234567890)");
+        bail!("{chat} cannot be ignored: only telegram, whatsapp, messenger, instagram and max chats (a chat id as channels lists it, e.g. telegram:-1001234567890)");
     }
     for p in wake {
         ignore::compile(p).map_err(anyhow::Error::msg)?;

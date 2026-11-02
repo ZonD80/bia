@@ -21,6 +21,7 @@ bindgen = ["uniffi/cli"]
 
 [dependencies]
 bia-deploy = { path = "../bia-deploy" }
+bia-pki = { path = "../../source/crates/bia-pki" }
 uniffi = "0.32"
 anyhow.workspace = true
 serde_json.workspace = true

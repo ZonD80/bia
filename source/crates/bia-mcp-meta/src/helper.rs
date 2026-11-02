@@ -1,4 +1,4 @@
-//! The bia-meta process: requests go in as JSON lines and are answered by id; events come
+//! The helper process (bia-meta or bia_max.py): requests go in as JSON lines and are answered by id; events come
 //! out unasked and are handled in order on one thread. When it dies it is started again on
 //! the next call (and by the supervisor while an account is logged in).
 
@@ -62,6 +62,20 @@ pub fn init(p: Platform, on_event: fn(Value)) -> &'static Helper {
     h
 }
 
+/// bia_max.py: in the MCP's folder (BIA_MAX_SCRIPT overrides).
+fn max_script() -> Result<PathBuf, String> {
+    if let Ok(s) = std::env::var("BIA_MAX_SCRIPT") {
+        return Ok(PathBuf::from(s));
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    // MCPs/max/bin/<arch>/bia-mcp-max → MCPs/max/bia_max.py
+    let script = exe.ancestors().nth(3).map(|d| d.join("bia_max.py")).unwrap_or_default();
+    if script.is_file() {
+        return Ok(script);
+    }
+    Err(format!("{} is missing: the max MCP is incomplete; an OS update (carry_update) puts it back", script.display()))
+}
+
 /// bia-meta: next to this binary, else in the messenger MCP (instagram shares it).
 fn binary() -> Result<PathBuf, String> {
     if let Ok(b) = std::env::var("BIA_META_BIN") {
@@ -102,10 +116,21 @@ impl Helper {
                 return Ok(());
             }
         }
-        let bin = binary()?;
         let dir = state::account_dir(self.p);
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        let mut child = Command::new(&bin)
+        let (bin, mut command) = if self.p == Platform::Max {
+            let script = max_script()?;
+            // -I: only the bundled packages, nothing from the current or a user directory.
+            // The speech libraries of this MCP are not for Python's.
+            let mut c = Command::new("python3");
+            c.arg("-I").arg(&script).env_remove("LD_LIBRARY_PATH");
+            (script, c)
+        } else {
+            let b = binary()?;
+            let c = Command::new(&b);
+            (b, c)
+        };
+        let mut child = command
             .args(["--platform", self.p.name(), "--dir"])
             .arg(&dir)
             .stdin(Stdio::piped())
@@ -131,7 +156,7 @@ impl Helper {
             for line in BufReader::new(stderr).lines() {
                 let Ok(line) = line else { break };
                 // all of it (a panic's stack too) into logs/mcp-<platform>.log
-                eprintln!("bia-meta: {line}");
+                eprintln!("{}: {line}", get().p.helper());
                 warn_line(&line);
             }
         });
@@ -139,6 +164,11 @@ impl Helper {
     }
 
     fn incoming(&self, v: Value) {
+        // call audio must not wait behind other events
+        if v.get("event").and_then(Value::as_str) == Some("call_audio") {
+            crate::calls::heard(&v);
+            return;
+        }
         if v.get("event").is_some() {
             let _ = self.events.send(v);
             return;
@@ -162,12 +192,12 @@ impl Helper {
             }
         }
         for (_, tx) in self.pending.lock().unwrap().drain() {
-            let _ = tx.send(Err("bia-meta stopped (it is restarted by itself); try again".into()));
+            let _ = tx.send(Err(format!("{} stopped (it is restarted by itself); try again", self.p.helper())));
         }
-        crate::inbound::log(&format!("{}: bia-meta stopped", self.p.name()));
+        crate::inbound::log(&format!("{}: {} stopped", self.p.name(), self.p.helper()));
     }
 
-    /// Call a bia-meta method and wait for its answer.
+    /// Call a helper method and wait for its answer.
     pub fn call(&self, method: &str, params: Value, timeout: Duration) -> Reply {
         self.ensure()?;
         let id = self.next.fetch_add(1, Ordering::SeqCst);
@@ -178,23 +208,32 @@ impl Helper {
             let mut g = self.proc_.lock().unwrap();
             match g.as_mut() {
                 Some(p) => writeln!(p.stdin, "{line}").and_then(|_| p.stdin.flush()).map_err(|e| e.to_string()),
-                None => Err("bia-meta is not running".into()),
+                None => Err(format!("{} is not running", self.p.helper())),
             }
         };
         if let Err(e) = wrote {
             self.pending.lock().unwrap().remove(&id);
-            return Err(format!("bia-meta: {e}"));
+            return Err(format!("{}: {e}", self.p.helper()));
         }
         match rx.recv_timeout(timeout) {
             Ok(r) => r,
             Err(_) => {
                 self.pending.lock().unwrap().remove(&id);
                 Err(format!(
-                    "bia-meta did not answer {method} within {}s; try again, and check {}_status if it keeps happening",
+                    "{} did not answer {method} within {}s; try again, and check {}_status if it keeps happening",
+                    self.p.helper(),
                     timeout.as_secs(),
                     self.p.name()
                 ))
             }
+        }
+    }
+
+    /// A line the helper does not answer (call audio, sixteen a second). Dropped when it is down.
+    pub fn notify(&self, method: &str, params: Value) {
+        let line = json!({"method": method, "params": params}).to_string();
+        if let Some(p) = self.proc_.lock().unwrap().as_mut() {
+            let _ = writeln!(p.stdin, "{line}").and_then(|_| p.stdin.flush());
         }
     }
 
@@ -214,10 +253,10 @@ pub const NORMAL: Duration = Duration::from_secs(150);
 /// Uploads and downloads.
 pub const LONG: Duration = Duration::from_secs(16 * 60);
 
-/// bia-meta logs on stderr (kept in the MCP's log); warnings and errors also reach the
+/// The helper logs on stderr (kept in the MCP's log); warnings and errors also reach the
 /// agent console (rate limited).
 fn warn_line(line: &str) {
-    let important = [" WRN ", " ERR ", " FTL ", "panic"].iter().any(|k| line.contains(k));
+    let important = [" WRN ", " ERR ", " FTL ", "panic", "Traceback"].iter().any(|k| line.contains(k));
     if !important {
         return;
     }

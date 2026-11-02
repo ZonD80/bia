@@ -72,7 +72,7 @@ What bia receives: your text with `[reply to <id> from <who>: "…"]` markers an
 - `GET /ws/term?rows=&cols=` — the live agent console (raw terminal bytes, status header included). Send `{t:"line", v}` to type a console line (an empty line interrupts the model), `{t:"resize", rows, cols}`.
 - `GET /ws/shell?rows=&cols=` — a root login shell on a PTY: binary frames are keystrokes and output; `{t:"resize", rows, cols}` as text.
 - Files (absolute paths): `GET /v1/fs/list?path=`, `GET /v1/fs/get?path=[&dl=1]` (folders stream as tar), `POST /v1/fs/put?path=&overwrite=1` (raw body), `POST /v1/fs/op {op: mkdir|touch|rename|move|copy|delete|chmod|du, …}`. Legacy `/v1/files`, `/v1/file` are relative to `/home/bia/files`.
-- Certificates: `GET /v1/pki/certs`, `POST /v1/pki/issue`, `POST /v1/pki/revoke {serial}`. Requests from other agents: `GET /v1/pki/requests`, `POST /v1/pki/requests/<id>/approve`, `POST /v1/pki/requests/<id>/deny {reason?}`. Status: `GET /v1/status`.
+- Certificates: `GET /v1/pki/certs`, `POST /v1/pki/issue`, `POST /v1/pki/biaconfig`, `POST /v1/pki/revoke {serial}`. Requests from other agents: `GET /v1/pki/requests`, `POST /v1/pki/requests/<id>/approve`, `POST /v1/pki/requests/<id>/deny {reason?}`. Status: `GET /v1/status`.
 - HITL: `/v1/hitl`, `/hitl/{id}` (page embeds `/gui`), `POST /v1/hitl/{id}/finish {ok, note}`.
 - Display: `/gui` bridges to VNC on `127.0.0.1:5900`. Never open `:5900` on the LAN.
 

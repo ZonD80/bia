@@ -81,6 +81,39 @@ meta_mcp() {
            cargo build -q -p bia-mcp-meta && python3 -I tests/integration/meta-mcp-e2e.py "$CARGO_TARGET_DIR/debug" $OUT/bia-meta'
 }
 
+# max MCP with the real bia_max.py and PyMax against a fake MAX server, on the guest's Python (trixie)
+max_mcp() {
+  builder 'cargo build -q -p bia-mcp-meta' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 python3-venv python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice >/dev/null 2>&1 &&
+     python3 -m venv /tmp/v && /tmp/v/bin/pip install -q --no-deps --require-hashes -r builders/max-requirements.txt &&
+     BIA_MAX_SITE=\$(/tmp/v/bin/python -c 'import site; print(site.getsitepackages()[0])') python3 -I tests/integration/max-mcp-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-max source/flash/MCPs/max/bia_max.py"
+}
+
+# .biaconfig: the real web MCP makes one, the real chrome MCP opens it into a real NSS database
+biaconfig() {
+  builder 'cargo build -q -p bia-mcp-chrome -p bia-mcp-web' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 libnss3-tools openssl ca-certificates curl util-linux procps >/dev/null && \
+     python3 -I tests/integration/biaconfig-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-web /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome"
+}
+
+# client certificates: the real chrome MCP and Chromium against an HTTPS server that demands one
+chrome_cert() {
+  builder 'cargo build -q -p bia-mcp-chrome' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-daemon xvfb openbox chromium chromium-l10n libnss3-tools openssl ca-certificates curl wmctrl xclip xdotool util-linux procps fonts-dejavu-core >/dev/null 2>&1 &&
+     python3 -I tests/integration/chrome-cert-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome source/flash/MCPs/screen/bia_desktop.py"
+}
+
+# the screen MCP's desktop tools: Xvfb, Openbox, AT-SPI and a real GTK app, on the guest's Debian
+screen_desktop() {
+  builder 'cargo build -q -p bia-mcp-screen' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 python3-gi gir1.2-atspi-2.0 at-spi2-core dbus-daemon xvfb openbox mousepad wmctrl xclip xdotool scrot util-linux >/dev/null 2>&1 &&
+     python3 -I tests/integration/screen-desktop-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-screen source/flash/MCPs/screen/bia_desktop.py"
+}
+
 # ignored chats: rules, unread and wake-ups through the messenger MCP with a fake bia-meta
 ignore_mcp() {
   builder 'cargo build -q -p bia-mcp-meta && python3 -I tests/integration/ignore-e2e.py "$CARGO_TARGET_DIR/debug"'
@@ -96,6 +129,10 @@ for stage in "$@"; do
       run bia-bridge bridge
       run meta-mcp meta_mcp
       run ignore-mcp ignore_mcp
+      run max-mcp max_mcp
+      run screen-desktop screen_desktop
+      run chrome-cert chrome_cert
+      run biaconfig biaconfig
       run web-markdown node tests/integration/web-md-test.js
       run web-link node tests/integration/web-link-test.js
       # the web app in headless Chrome, on this host (skips when there is no Chrome here)

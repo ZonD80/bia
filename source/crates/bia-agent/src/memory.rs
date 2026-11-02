@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-const JOURNAL: &str = "journal.jsonl";
+pub const JOURNAL: &str = "journal.jsonl";
 const REFLECTIONS: &str = "reflections.jsonl";
 const STUB_NAME: &str = "reflection";
 
@@ -663,7 +663,7 @@ pub fn tool_messages(dir: &Path, args: &Value) -> Result<String> {
         return Ok(lines.join("\n"));
     }
     for m in rows.into_iter().take(80) {
-        let preview: String = m.content.chars().take(240).collect();
+        let preview: String = crate::dream::redact(&m.content).chars().take(240).collect();
         lines.push(format!(
             "{} {} {}",
             m.id,

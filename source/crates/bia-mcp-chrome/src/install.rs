@@ -168,7 +168,7 @@ fn manifest_version(dir: &Path) -> String {
         .unwrap_or_else(|| "0.0.0".into())
 }
 
-fn sysroot() -> PathBuf {
+pub(crate) fn sysroot() -> PathBuf {
     std::env::var_os("BIA_SYSROOT").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
@@ -237,7 +237,7 @@ fn native_host_dirs() -> Vec<PathBuf> {
     ]
 }
 
-fn policy_dirs() -> Vec<PathBuf> {
+pub(crate) fn policy_dirs() -> Vec<PathBuf> {
     let root = sysroot();
     vec![
         root.join("etc/opt/chrome/policies/managed"),

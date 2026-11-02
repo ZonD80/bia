@@ -148,7 +148,8 @@ pub struct CloudModel {
     pub ctx: u32,
 }
 
-/// Models `key` can use at `provider` (its `/models` list), sorted by id.
+/// Models `key` can use at `provider` (its `/models` list). OpenRouter's come most popular first,
+/// as it ranks them; everyone else's sorted by id, as they have no such ranking.
 pub fn list_models(provider: &str, key: &str, base_url: &str) -> Result<Vec<CloudModel>> {
     #[derive(Deserialize)]
     struct Item {
@@ -178,6 +179,11 @@ pub fn list_models(provider: &str, key: &str, base_url: &str) -> Result<Vec<Clou
             .get(&format!("{base}/v1/models?limit=1000"))
             .header("x-api-key", key.trim())
             .header("anthropic-version", "2023-06-01")
+    } else if provider == "openrouter" {
+        agent
+            .get(&format!("{base}/models"))
+            .query("sort", "most-popular")
+            .header("Authorization", &format!("Bearer {}", key.trim()))
     } else {
         agent
             .get(&format!("{base}/models"))
@@ -202,7 +208,9 @@ pub fn list_models(provider: &str, key: &str, base_url: &str) -> Result<Vec<Clou
             }
         })
         .collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
+    if provider != "openrouter" {
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+    }
     Ok(out)
 }
 

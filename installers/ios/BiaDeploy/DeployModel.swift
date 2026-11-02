@@ -1,6 +1,10 @@
 import SwiftUI
 
 enum Page { case brain, server, keys }
+struct IncomingConfig: Identifiable {
+    let path: String
+    var id: String { path }
+}
 enum Step { case login, connecting, hostKey, checking, confirm, running, installed }
 enum How: String, CaseIterable { case password = "Password", key = "Key", newKey = "New key" }
 
@@ -8,6 +12,8 @@ enum How: String, CaseIterable { case password = "Password", key = "Key", newKey
 @MainActor
 final class DeployModel: ObservableObject {
     @Published var page = Page.brain
+    /// The bia whose chat is open, over everything else.
+    @Published var chat: ChatTarget?
 
     // ---- brain ----
     @Published var provider = ""
@@ -39,6 +45,7 @@ final class DeployModel: ObservableObject {
         switch e as? DeployError {
         case .Failed(let m)?: return m
         case .HostKeyChanged?: return "this server's identity changed"
+        case .OtherKeyHere(let host)?: return "another key for \(host) is already on this phone"
         case nil: return e.localizedDescription
         }
     }
@@ -215,6 +222,72 @@ final class DeployModel: ObservableObject {
     func openKeys() {
         saved = savedBias()
         page = .keys
+    }
+
+    // MARK: .biaconfig
+    /// A private copy of a file waiting for its password.
+    @Published var configFile: IncomingConfig?
+    @Published var configProblem: String?
+    /// The address that already has another key: asks before replacing it.
+    @Published var configOtherKey: String?
+    @Published var configBusy = false
+
+    /// A file opened from elsewhere or picked: copied in, since the original may vanish.
+    func offerConfig(_ url: URL) {
+        error = nil
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let fm = FileManager.default
+        let dest = fm.temporaryDirectory.appendingPathComponent("incoming-\(UUID().uuidString).biaconfig")
+        do {
+            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            guard size <= 1024 * 1024 else { throw CocoaError(.fileReadTooLarge) }
+            try fm.copyItem(at: url, to: dest)
+        } catch {
+            self.error = "this file could not be read: \(error.localizedDescription)"
+            return
+        }
+        // the system's copy in Documents/Inbox holds a key: not left behind
+        if url.path.contains("/Inbox/") { try? fm.removeItem(at: url) }
+        guard isBiaconfig(path: dest.path) else {
+            try? fm.removeItem(at: dest)
+            self.error = "this is not a .biaconfig file"
+            return
+        }
+        closeConfig()
+        let incoming = IncomingConfig(path: dest.path)
+        if chat != nil {
+            // a sheet cannot open while the chat's cover is closing
+            chat = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.configFile = incoming }
+        } else {
+            configFile = incoming
+        }
+    }
+
+    func closeConfig() {
+        if let f = configFile { try? FileManager.default.removeItem(atPath: f.path) }
+        configFile = nil
+        configProblem = nil
+        configOtherKey = nil
+    }
+
+    func importConfig(password: String, replace: Bool = false) {
+        guard let file = configFile, !configBusy else { return }
+        configBusy = true
+        configProblem = nil
+        Task {
+            defer { configBusy = false }
+            do {
+                _ = try await Task.detached { try biaconfigImport(path: file.path, password: password, replace: replace) }.value
+                closeConfig()
+                openKeys()
+            } catch DeployError.OtherKeyHere(let host) {
+                configOtherKey = host
+            } catch {
+                configProblem = message(error)
+            }
+        }
     }
 
     func again() {

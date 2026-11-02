@@ -3,7 +3,7 @@
 #   builders/build.sh <arm64|x86_64> [rust|mcps|rootfs|all] [mcp…]
 # For rust, optional trailing names limit which crates to build:
 #   system secrets chrome screen carry telegram whatsapp meta agent
-# (meta = the messenger and instagram MCPs and their Go helper bia-meta)
+# (meta = the messenger, instagram and max MCPs, bia-meta in Go and max's Python packages)
 set -euo pipefail
 ARCH=${1:-arm64}; WHAT=${2:-all}
 if [ "$#" -ge 2 ]; then shift 2; else shift "$#" || true; fi
@@ -69,6 +69,28 @@ go_meta() {
   ls -l "$OUT/bia-meta"
 }
 
+# PyMax and its packages for the max MCP: the guest's Python (Debian trixie, 3.13), this
+# architecture, exact versions and hashes. Skipped while the requirements have not changed.
+max_py() {
+  local dest=/work/source/flash/MCPs/max/py/$RARCH req=/work/builders/max-requirements.txt stamp sum
+  stamp=$dest/.requirements.sha256
+  sum=$(sha256sum "$req" | cut -d' ' -f1)
+  if [ "$(cat "$stamp" 2>/dev/null)" = "$sum" ]; then
+    echo "== max python packages for $RARCH up to date"
+    return
+  fi
+  echo "== max python packages for $RARCH"
+  python3 -m pip --version >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-pip; }
+  rm -rf "$dest"
+  python3 -m pip install -q --no-deps --require-hashes --only-binary=:all: --implementation cp --python-version 3.13 \
+    --abi cp313 --abi abi3 --abi none \
+    --platform "manylinux_2_28_$RARCH" --platform "manylinux_2_17_$RARCH" --platform "manylinux2014_$RARCH" --platform "manylinux_2_5_$RARCH" --platform "manylinux1_$RARCH" --platform any \
+    --target "$dest" -r "$req"
+  find "$dest" -name __pycache__ -type d -prune -exec rm -rf {} +
+  echo "$sum" >"$stamp"
+  du -sh "$dest"
+}
+
 rust() {
   local triple rf_var
   triple=$(rustc -vV | sed -n 's/^host: //p')
@@ -103,7 +125,7 @@ rust() {
         bridge) main_pkgs+=(bia-bridge) ;;
         telegram) want_tg=1 ;;
         whatsapp) want_wa=1 ;;
-        meta|messenger|instagram) want_meta=1 ;;
+        meta|messenger|instagram|max) want_meta=1 ;;
         *) echo "unknown rust filter: $f (want agent|system|web|secrets|chrome|screen|carry|lang|bridge|telegram|whatsapp|meta)" >&2; exit 1 ;;
       esac
     done
@@ -185,11 +207,13 @@ rust() {
   fi
   if [ "$want_meta" = 1 ]; then
     export "$rf_var=$base_flags"
-    echo "   building bia-mcp-meta (messenger + instagram)"
+    echo "   building bia-mcp-meta (messenger + instagram + max)"
     cargo build --release --target "$triple" -p bia-mcp-meta
     strip -o "$OUT/bia-mcp-messenger" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-messenger"
     strip -o "$OUT/bia-mcp-instagram" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-instagram"
+    strip -o "$OUT/bia-mcp-max" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-max"
     go_meta
+    max_py
   fi
   ls -l "$OUT"/bia-* 2>/dev/null || true
 }
@@ -197,7 +221,7 @@ rust() {
 mcps() {
   echo "== assembling MCP folders for $RARCH"
   local M=/work/source/flash/MCPs
-  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH"
+  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH" "$M/max/bin/$RARCH"
   cp "$OUT/bia-mcp-system" "$M/system/bin/$RARCH/"
   cp "$OUT/bia-mcp-web" "$M/web/bin/$RARCH/"
   # the bia serves bia-bridge to agents (web/bridge/); macOS comes from tools/bridge-macos.sh
@@ -216,6 +240,8 @@ mcps() {
   # instagram uses messenger's bia-meta (one Go binary for both)
   cp "$OUT/bia-mcp-messenger" "$OUT/bia-meta" "$M/messenger/bin/$RARCH/"
   cp "$OUT/bia-mcp-instagram" "$M/instagram/bin/$RARCH/"
+  cp "$OUT/bia-mcp-max" "$M/max/bin/$RARCH/"
+  max_py
 }
 
 rootfs() {

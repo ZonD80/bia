@@ -62,6 +62,165 @@ pub fn issue(ctx: &Ctx, args: Value) -> Result<String, String> {
     }
 }
 
+/// `addr`, split into what its certificate must name and how it is dialled with this port.
+fn address_of(addr: &str, port: u16) -> Result<(String, String), String> {
+    let a = addr.trim().trim_start_matches("https://").trim_end_matches('/');
+    if a.is_empty() || a.contains(char::is_whitespace) || a.contains('/') || a.contains('@') {
+        return Err(format!("{addr:?} is not an address: a host name or IP, with :port if it is not this bia's"));
+    }
+    if let Ok(ip) = a.parse::<std::net::IpAddr>() {
+        let host = ip.to_string();
+        let shown = if ip.is_ipv6() { format!("[{host}]") } else { host.clone() };
+        return Ok((host, if port == 443 { shown } else { format!("{shown}:{port}") }));
+    }
+    if let Some(rest) = a.strip_prefix('[') {
+        let (h, tail) = rest.split_once(']').ok_or_else(|| format!("{addr:?} is not an address"))?;
+        h.parse::<std::net::Ipv6Addr>().map_err(|_| format!("{addr:?} is not an address"))?;
+        return Ok((h.to_string(), if tail.is_empty() { if port == 443 { format!("[{h}]") } else { format!("[{h}]:{port}") } } else { a.to_string() }));
+    }
+    match a.rsplit_once(':') {
+        Some((h, p)) if p.parse::<u16>().is_ok() => Ok((h.to_string(), a.to_string())),
+        Some(_) => Err(format!("{addr:?} is not an address")),
+        None => Ok((a.to_string(), if port == 443 { a.to_string() } else { format!("{a}:{port}") })),
+    }
+}
+
+/// What `make_biaconfig` hands back.
+pub struct MadeConfig {
+    pub sealed: Vec<u8>,
+    pub password: String,
+    pub generated: bool,
+    pub addresses: Vec<String>,
+    /// The server certificate had to learn an address: it does within seconds.
+    pub added: bool,
+    pub serial: String,
+    pub identity: String,
+    pub role: String,
+    pub trust: String,
+}
+
+/// A `.biaconfig` for a new client certificate, which can be revoked by itself. Arguments are
+/// checked first: a refused request leaves no certificate and no new server name behind.
+pub fn make_biaconfig(pki: &Pki, port: u16, args: &Value) -> Result<MadeConfig, String> {
+    use bia_pki::biaconfig::{self as file, BiaConfig};
+    let identity = args.get("identity").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    if identity.is_empty() || identity.len() > 64 || !identity.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '@' | ':')) {
+        return Err("identity: letters, digits, - _ . @ :".into());
+    }
+    let text = |k: &str| args.get(k).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty());
+    let role = match text("role") {
+        Some("agent") => "agent",
+        _ => "user",
+    };
+    let trust = match text("trust") {
+        Some("root") => "root",
+        Some("normal") => "normal",
+        _ if identity == "root" => "root",
+        _ => "normal",
+    };
+    let from = cidrs(args, "from")?;
+    let generated = text("password").is_none();
+    let password = match text("password") {
+        Some(p) => p.to_string(),
+        None => file::generate_password().map_err(|e| format!("{e:#}"))?,
+    };
+    file::check_password(&password).map_err(|e| format!("{e:#}"))?;
+
+    // what was asked for first; then what the certificate already names, then this machine's own
+    let (mut names, mut ips) = pki.server_extra();
+    let mut dial: Vec<String> = args.get("addresses").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default();
+    if let Some(one) = text("address") {
+        dial.insert(0, one.to_string());
+    }
+    let mut added = false;
+    let mut addresses = vec![];
+    for a in &dial {
+        let (host, shown) = address_of(a, port)?;
+        // a client refuses a server certificate that does not name the address it dialled
+        match host.parse::<std::net::IpAddr>() {
+            Ok(ip) if !ips.contains(&ip) => {
+                ips.push(ip);
+                added = true;
+            }
+            Err(_) if !names.contains(&host) => {
+                names.push(host);
+                added = true;
+            }
+            _ => {}
+        }
+        addresses.push(shown);
+    }
+    if dial.is_empty() {
+        for n in &names {
+            addresses.push(address_of(n, port)?.1);
+        }
+        for ip in &ips {
+            addresses.push(address_of(&ip.to_string(), port)?.1);
+        }
+        for o in crate::listen::https_origins(port) {
+            if let Ok((_, a)) = address_of(&o, port) {
+                if !addresses.contains(&a) && !a.starts_with("127.") && !a.starts_with("localhost") {
+                    addresses.push(a);
+                }
+            }
+        }
+    }
+    if addresses.is_empty() {
+        return Err("this machine has no address yet: pass address, how the other side reaches it".into());
+    }
+    if added {
+        pki.set_server_extra(&names, &ips).map_err(|e| format!("{e:#}"))?;
+    }
+    let (p12, meta) = pki.issue_from(&identity, role, trust, &from).map_err(|e| format!("issue: {e:#}"))?;
+    let config = BiaConfig {
+        name: text("name").unwrap_or("").to_string(),
+        addresses: addresses.clone(),
+        ca: pki.ca_pem().map_err(|e| format!("{e:#}"))?,
+        p12,
+    };
+    let sealed = match file::seal(&config, &password) {
+        Ok(b) => b,
+        Err(e) => {
+            // nothing goes out: the certificate made for it must not stay valid
+            let _ = pki.revoke(&meta.serial);
+            return Err(format!("{e:#}"));
+        }
+    };
+    Ok(MadeConfig { sealed, password, generated, addresses, added, serial: meta.serial, identity: meta.identity, role: meta.role, trust: meta.trust })
+}
+
+/// The tool: the same file, kept in files/biaconfig for say(files=…).
+pub fn biaconfig(ctx: &Ctx, args: Value) -> Result<String, String> {
+    use bia_pki::biaconfig as file;
+    let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
+    let m = make_biaconfig(&pki, web_port(), &args)?;
+    let dir = files_dir().join("biaconfig");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let safe: String = m.identity.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '-' }).collect();
+    let tail: String = m.serial.chars().take(8).collect();
+    let path = dir.join(format!("{safe}-{tail}.{}", file::EXTENSION));
+    std::fs::write(&path, &m.sealed).map_err(|e| format!("{}: {e}", path.display()))?;
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        // the agent is root: bia's own backups and say(files=…) must still read it
+        if let Ok(owner) = std::fs::metadata(files_dir()) {
+            let _ = std::os::unix::fs::chown(&dir, Some(owner.uid()), Some(owner.gid()));
+            let _ = std::os::unix::fs::chown(&path, Some(owner.uid()), Some(owner.gid()));
+        }
+    }
+    ctx.log(format!("issued {} cert for {} in a .biaconfig (role={} trust={})", m.serial, m.identity, m.role, m.trust));
+    let password_line = if m.generated { format!("password {}", m.password) } else { "the password you were given".to_string() };
+    Ok(format!(
+        "{}, serial {}, for {}: {} Encrypted with {password_line}. Send the file with say(files=[…]) and tell the password another way, never in the same chat: whoever has both is {} on this machine. web_pki_revoke(serial) ends it at any time. Delete the file once it has arrived.",
+        path.display(),
+        m.serial,
+        m.addresses.join(", "),
+        if m.added { "The server certificate names these addresses within seconds." } else { "" },
+        m.identity,
+    ))
+}
+
 pub fn list(_: &Ctx, _: Value) -> Result<String, String> {
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     let list = pki.list_issued().map_err(|e| format!("{e:#}"))?;

@@ -1,6 +1,7 @@
 //! Chrome MCP. Lifecycle + passkey native host; page automation is Google chrome-devtools-mcp.
 mod bridge;
 mod cdp;
+mod certs;
 mod crx;
 mod devtools;
 mod dialog;
@@ -37,6 +38,7 @@ fn main() {
     }
     let updates = install::Updates::new();
     dialog::prepare();
+    certs::restore();
     install::warm(&dir, &updates);
     install::serve(updates.clone());
     let bridge = bridge::Bridge::start(&dir);
@@ -164,6 +166,67 @@ fn main() {
                 "cancel": {"type": "boolean", "description": "close the dialog without choosing"}
             }}),
             |_, a| dialog::choose(&a),
+        );
+
+    server = server
+        .tool(
+            "cert_import",
+            "Import a client certificate so Chrome can log in to websites that ask for one: a .p12/.pfx, a .biaconfig (its address comes back too), or a certificate file plus key_path. Only for a certificate root gave for bia's own use. The password goes through password_secret (the name of a secret in the secrets MCP), which stays out of the conversation; password is only for a password that is already in it. Then chrome_cert_select and chrome_restart.",
+            json!({"type": "object", "required": ["path"], "properties": {
+                "path": {"type": "string", "description": "the file: absolute, or under /home/bia/files"},
+                "key_path": {"type": "string", "description": "its private key, when path is not a .p12/.pfx"},
+                "password_secret": {"type": "string", "description": "name of the secret holding the file's password"},
+                "password": {"type": "string", "description": "the password itself; prefer password_secret"}
+            }}),
+            |_, a| certs::import(&a),
+        )
+        .tool(
+            "cert_trust",
+            "Trust a private CA, when root asks: websites it signed then open without a warning, in Chrome and (system=true, default) for everything on this machine such as curl. A CA can vouch for any website, so never do it just to get past a certificate warning.",
+            json!({"type": "object", "required": ["path"], "properties": {
+                "path": {"type": "string", "description": "the CA's certificate, PEM or DER: absolute, or under /home/bia/files"},
+                "name": {"type": "string", "description": "a name for it; default its common name"},
+                "system": {"type": "boolean", "description": "true (default): this whole machine; false: Chrome only"}
+            }}),
+            |_, a| certs::trust(&a),
+        )
+        .tool(
+            "cert_list",
+            "Client certificates and trusted CAs in bia's store with their subject, issuer, serial and expiry, and which site gets which certificate by itself.",
+            json!({"type": "object", "properties": {}}),
+            |_, _| certs::list(),
+        )
+        .tool(
+            "cert_select",
+            "Make Chrome use a client certificate for a site without asking; refused when another has the same subject and issuer, since Chrome could then send either. site is a host (portal.example.com), a URL, or Chrome's pattern (https://[*.]example.com). cert can be left out when there is only one. Without such a rule Chrome opens a certificate dialog and the page waits: a [certificate dialog opened] notice arrives, answer it with chrome_choose_certificate.",
+            json!({"type": "object", "required": ["site"], "properties": {
+                "site": {"type": "string"},
+                "cert": {"type": "string", "description": "its name from chrome_cert_list"}
+            }}),
+            |_, a| certs::select(&a),
+        )
+        .tool(
+            "choose_certificate",
+            "Answer Chrome's certificate dialog after a [certificate dialog opened] notice: cert is a name it offers (or from chrome_cert_list, which says exactly which one), serial says which when names repeat, issuer narrows by issuer, cancel=true closes it without choosing and the site may then refuse the page. All can be left out when only one is on offer.",
+            json!({"type": "object", "properties": {
+                "cert": {"type": "string"},
+                "issuer": {"type": "string"},
+                "serial": {"type": "string", "description": "as the notice or chrome_cert_list shows it"},
+                "cancel": {"type": "boolean"}
+            }}),
+            |_, a| certs::choose(&a),
+        )
+        .tool(
+            "cert_unselect",
+            "Stop picking a certificate by itself for a site.",
+            json!({"type": "object", "required": ["site"], "properties": {"site": {"type": "string"}}}),
+            |_, a| certs::unselect(&a),
+        )
+        .tool(
+            "cert_remove",
+            "Remove a certificate by its name from chrome_cert_list: a client certificate goes with its private key, a CA from Chrome and from the system, and rules using it go too. This cannot be undone.",
+            json!({"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}),
+            |_, a| certs::remove(&a),
         );
 
     let google_tools = dt.list_tools().unwrap_or_else(|e| {

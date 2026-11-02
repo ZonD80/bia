@@ -307,7 +307,7 @@ impl Geometry {
     }
 
     fn click(&self, cx: i32, cy: i32) -> Result<(), String> {
-        x("xdotool", &["mousemove", "--sync", &cx.to_string(), &cy.to_string(), "click", "1"]).map(|_| ())
+        x("xdotool", &["mousemove", &cx.to_string(), &cy.to_string(), "click", "1"]).map(|_| ())
     }
 }
 
@@ -499,12 +499,17 @@ fn x(bin: &str, args: &[&str]) -> Result<String, String> {
         let home = format!("{HOME}/.Xauthority");
         if Path::new(&home).is_file() { home } else { "/run/bia/Xauthority".into() }
     });
-    let out = Command::new(bin)
+    // a stuck X call must not hold the watcher, which polls with this, or a tool
+    let out = Command::new("timeout")
+        .args(["-k", "2", "30", bin])
         .args(args)
         .env("DISPLAY", display)
         .env("XAUTHORITY", xauth)
         .output()
         .map_err(|e| format!("{bin}: {e}"))?;
+    if out.status.code() == Some(124) || out.status.code().is_none() {
+        return Err(format!("{bin} did not finish within 30s and was stopped"));
+    }
     if !out.status.success() {
         return Err(format!("{bin} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }

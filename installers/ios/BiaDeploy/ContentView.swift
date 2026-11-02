@@ -14,7 +14,7 @@ struct ContentView: View {
                     Text("bia").font(.system(size: 34, weight: .bold)).foregroundStyle(accent)
                     Text(" deploy").font(.system(size: 34)).foregroundStyle(.secondary)
                     Spacer()
-                    if model.page == .brain && !model.saved.isEmpty { Button("bia keys") { model.openKeys() } }
+                    if model.page == .brain { Button("bia keys") { model.openKeys() } }
                 }
                 switch model.page {
                 case .brain: BrainPage(model: model)
@@ -30,9 +30,27 @@ struct ContentView: View {
         }
         .background(Color(.systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
+        .fullScreenCover(item: $model.chat) { ChatPage(target: $0) }
+        .sheet(item: $model.configFile, onDismiss: { model.closeConfig() }) { _ in ImportSheet(model: model) }
         #if DEBUG
         .task {
+            // for testing: `-importConfig <path> -importPassword <password> [-importReplace YES]`
+            if let path = UserDefaults.standard.string(forKey: "importConfig") {
+                model.offerConfig(URL(fileURLWithPath: path))
+                if let pw = UserDefaults.standard.string(forKey: "importPassword") {
+                    model.importConfig(password: pw, replace: UserDefaults.standard.bool(forKey: "importReplace"))
+                }
+            }
+            // for testing: `-exportConfig <host> -exportPassword <password> -exportTo <dir>`
+            if let host = UserDefaults.standard.string(forKey: "exportConfig"), let b = savedBias().first(where: { $0.host == host }),
+               let pw = UserDefaults.standard.string(forKey: "exportPassword"), let to = UserDefaults.standard.string(forKey: "exportTo") {
+                NSLog("bia export: %@", (try? biaconfigExport(folder: b.folder, host: b.host, name: b.name, password: pw, outDir: to)) ?? "failed")
+            }
             // store screenshots: `-demo <scene>` (made-up data, no network)
+            // a saved bia's chat at once, for testing: `-chat <host>`
+            if let host = UserDefaults.standard.string(forKey: "chat"), let b = model.saved.first(where: { $0.host == host }) {
+                model.chat = ChatTarget(host: b.host, folder: b.folder)
+            }
             if let scene = UserDefaults.standard.string(forKey: "demo") {
                 let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("bia-deploy", isDirectory: true)
@@ -380,7 +398,10 @@ struct InstalledStep: View {
                 if model.land {
                     Text("It waits at \(host) for your bia. Tell your bia: fly to \(host) with land secret \(model.secret)")
                 } else if let u = url {
-                    PrimaryButton(title: "Open bia") { openURL(u) }
+                    if let folder = model.done?.folder {
+                        PrimaryButton(title: "Open bia's chat") { model.chat = ChatTarget(host: host, folder: folder) }
+                    }
+                    Button("Open in a browser instead") { openURL(u) }
                 }
             case false?:
                 Text("bia did not answer yet").font(.title3.weight(.semibold))
@@ -401,12 +422,21 @@ struct KeyCard: View {
     let host: String
     /// set in the list of saved keys: one short card per bia (the page explains them once)
     var savedAt: Date? = nil
+    var name: String = ""
+    @State private var exporting = false
 
     var body: some View {
+        content.sheet(isPresented: $exporting) { ExportSheet(folder: folder, host: host, name: name) }
+    }
+
+    @ViewBuilder private var content: some View {
         if let savedAt {
             Card {
-                Text("bia at \(host)").font(.title3.weight(.semibold))
+                Text(name.isEmpty ? "bia at \(host)" : name).font(.title3.weight(.semibold))
+                if !name.isEmpty { Text(host).font(.subheadline).foregroundStyle(.secondary) }
                 Text("key saved \(savedAt.formatted(date: .abbreviated, time: .omitted))").font(.subheadline).foregroundStyle(.secondary)
+                PrimaryButton(title: "Open chat") { model.chat = ChatTarget(host: host, folder: folder) }
+                Text("For a browser:").font(.footnote).foregroundStyle(.secondary)
                 HStack {
                     Button("Install") { model.installProfile(folder: folder, host: host) }.buttonStyle(.bordered)
                     ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
@@ -414,6 +444,7 @@ struct KeyCard: View {
                     }
                     .buttonStyle(.bordered)
                 }
+                Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
             }
         } else {
             full
@@ -424,6 +455,7 @@ struct KeyCard: View {
         Card {
             Text("bia's key").font(.title3.weight(.semibold))
             Text("bia-\(host).p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password \(p12Password())).")
+            Text("bia's chat in this app uses it by itself. The steps below are for a browser.").font(.subheadline).foregroundStyle(.secondary)
             Text("Install it on this phone: Safari offers it as a profile. Then Settings › General › VPN & Device Management installs it, and Settings › General › About › Certificate Trust Settings turns on full trust for \"bia \(host) certificate authority\".")
                 .font(.subheadline)
             PrimaryButton(title: "Install bia's key") { model.installProfile(folder: folder, host: host) }
@@ -431,6 +463,9 @@ struct KeyCard: View {
                 Label("Share bia's key…", systemImage: "square.and.arrow.up")
             }
             Text("Share sends it to a computer or another phone (AirDrop, Mail, Files); it asks for the password above when it is installed.")
+                .font(.footnote).foregroundStyle(.secondary)
+            Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
+            Text("A .biaconfig also carries bia's address and is locked with its own password: another bia deploy app opens it and gets the chat.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -453,19 +488,114 @@ func shareCopies(folder: String, host: String) -> [URL] {
 /// Every bia this phone deployed: its key, to install or share again later.
 struct KeysPage: View {
     @ObservedObject var model: DeployModel
+    @State private var picking = false
     var body: some View {
         Button("‹  Back") { model.page = .brain }
         Card {
             Text("bia keys").font(.title3.weight(.semibold))
+            Button("Import a .biaconfig…") { picking = true }.buttonStyle(.bordered)
+                .fileImporter(isPresented: $picking, allowedContentTypes: [UTType(exportedAs: "biadeploy.config")]) { result in
+                    if case .success(let url) = result { model.offerConfig(url) }
+                }
             if model.saved.isEmpty {
-                Text("No bia's keys on this phone yet: they are kept here after a deploy.")
+                Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
             } else {
-                Text("Each is root's certificate for one bia, the only way into it (password \(p12Password())). Install offers it to this device as a profile; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
+                Text("Each is a certificate for one bia, the way into it (password \(p12Password())). Install offers it to this device as a profile; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         }
         ForEach(model.saved, id: \.folder) { b in
-            KeyCard(model: model, folder: b.folder, host: b.host, savedAt: Date(timeIntervalSince1970: TimeInterval(b.savedAt)))
+            KeyCard(model: model, folder: b.folder, host: b.host, savedAt: Date(timeIntervalSince1970: TimeInterval(b.savedAt)), name: b.name)
+        }
+    }
+}
+
+/// A .biaconfig opened on this phone: its password, then what happens to a key already here.
+struct ImportSheet: View {
+    @ObservedObject var model: DeployModel
+    @State private var password = ""
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let other = model.configOtherKey {
+                    Section("Replace the key for \(other)?") {
+                        Text("This phone already has a different key for \(other). If it is root's and no copy exists elsewhere, replacing it can lock root out of that bia.")
+                        Button("Replace", role: .destructive) {
+                            model.configOtherKey = nil
+                            model.importConfig(password: password, replace: true)
+                        }
+                        Button("Keep the old key") { model.closeConfig() }
+                    }
+                } else {
+                    Section {
+                        Text("It holds a key to a bia and that bia's address. Only import a file from someone trusted.")
+                        SecureField("Password", text: $password)
+                        if let p = model.configProblem { Text(p).foregroundStyle(.red) }
+                    }
+                    Section {
+                        Button(model.configBusy ? "Opening…" : "Import") { model.importConfig(password: password) }
+                            .disabled(model.configBusy || password.isEmpty)
+                    }
+                }
+            }
+            .navigationTitle("Open .biaconfig")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.closeConfig() }.disabled(model.configBusy) } }
+        }
+    }
+}
+
+/// This phone's key as a .biaconfig, for the share sheet.
+struct ExportSheet: View {
+    let folder: String
+    let host: String
+    let name: String
+    @Environment(\.dismiss) private var dismiss
+    @State private var password = (try? biaconfigPassword()) ?? ""
+    @State private var problem: String?
+    @State private var busy = false
+    @State private var file: URL?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text("Whoever opens it holds this same certificate, with everything it can do on this bia. Revoking it later ends it for this phone too.")
+                    TextField("Password", text: $password).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: password) { _ in file = nil }
+                    Button("Copy the password") { UIPasteboard.general.string = password }
+                    Text("Send the password another way, never next to the file.").font(.footnote).foregroundStyle(.secondary)
+                    if let problem { Text(problem).foregroundStyle(.red) }
+                }
+                Section {
+                    if let file {
+                        ShareLink(item: file, subject: Text("bia \(host)")) { Label("Share \(file.lastPathComponent)", systemImage: "square.and.arrow.up") }
+                    } else {
+                        Button(busy ? "Locking…" : "Make the file") { make() }.disabled(busy || password.isEmpty)
+                    }
+                }
+            }
+            .navigationTitle("Share as .biaconfig")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }
+        .onDisappear { if let file { try? FileManager.default.removeItem(at: file) } }
+    }
+
+    private func make() {
+        busy = true
+        problem = nil
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("biaconfig-\(UUID().uuidString)", isDirectory: true).path
+        let (f, h, n, p) = (folder, host, name, password)
+        Task {
+            defer { busy = false }
+            do {
+                let path = try await Task.detached { try biaconfigExport(folder: f, host: h, name: n, password: p, outDir: out) }.value
+                file = URL(fileURLWithPath: path)
+            } catch DeployError.Failed(let reason) {
+                problem = reason
+            } catch {
+                problem = error.localizedDescription
+            }
         }
     }
 }

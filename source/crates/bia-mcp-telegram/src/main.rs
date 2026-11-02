@@ -115,13 +115,16 @@ fn main() {
     let server = Server::new("telegram", env!("CARGO_PKG_VERSION"))
         .tool(
             "login",
-            "Start Telegram login. phone is the number with country code, for example +420123456789. The answer says where the code went (the Telegram app on another device, SMS, email, …): get the code from there and call telegram_submit_code. If Telegram first wants a login email (auth: waiting_email), call telegram_submit_email. When codes do not arrive, use telegram_login_qr instead (no code needed).",
-            json!({"type": "object", "required": ["phone"], "properties": {
-                "phone": {"type": "string", "description": "phone number with country code, for example +420123456789"}
+            &format!("Log in to Telegram by QR (the default), or with a phone number and code. {} The QR shows in a Telegram QR window on display :0, in root's web app and as a PNG (/home/bia/files/telegram/qr.png); scan it in the Telegram app of bia's account: Settings > Devices > Link Desktop Device. It refreshes until scanned (up to 5 minutes); a system|telegram line says when the login is done or needs the 2FA password (telegram_submit_password). Pass phone only when nobody can scan: the answer says where the code went, for telegram_submit_code; if Telegram first wants a login email (auth: waiting_email), call telegram_submit_email.", bia_mcp::own_account("Telegram")),
+            json!({"type": "object", "properties": {
+                "phone": {"type": "string", "description": "only when nobody can scan a QR: the number with country code, for example +420123456789"}
             }}),
             |ctx, a| {
                 Tg::global().set_ctx(ctx.clone());
-                Tg::global().login(arg_str(&a, "phone")?)
+                match arg_str_opt(&a, "phone").map(str::trim).filter(|p| !p.is_empty()) {
+                    Some(phone) => Tg::global().login(phone),
+                    None => Tg::global().login_qr(),
+                }
             },
         )
         .tool(
@@ -131,15 +134,6 @@ fn main() {
             |ctx, a| {
                 Tg::global().set_ctx(ctx.clone());
                 Tg::global().submit_code(arg_str(&a, "code")?)
-            },
-        )
-        .tool(
-            "login_qr",
-            "Log in to Telegram by scanning a QR code, without any code by app, SMS or email: shows the QR in a Telegram QR window on display :0 and as a PNG (/home/bia/files/telegram/qr.png). Scan it in the Telegram app of that account on a phone where it is signed in: Settings > Devices > Link Desktop Device. It refreshes until scanned (up to 5 minutes); a system|telegram line says when the login is done or needs the 2FA password (telegram_submit_password). Use it when login codes do not arrive.",
-            json!({"type": "object", "properties": {}}),
-            |ctx, _| {
-                Tg::global().set_ctx(ctx.clone());
-                Tg::global().login_qr()
             },
         )
         .tool(
@@ -153,7 +147,7 @@ fn main() {
         )
         .tool(
             "resend_code",
-            "The login code did not arrive: Telegram sends it again by its next method (often SMS, then a call). The answer says where it went. If Telegram offers no other method, or it still does not arrive, use telegram_login_qr.",
+            "The login code did not arrive: Telegram sends it again by its next method (often SMS, then a call). The answer says where it went. If Telegram offers no other method, or it still does not arrive, log in by QR: telegram_login without a phone.",
             json!({"type": "object", "properties": {}}),
             |ctx, _| {
                 Tg::global().set_ctx(ctx.clone());

@@ -33,6 +33,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import uniffi.bia_deploy_mobile.biaconfigExport
+import uniffi.bia_deploy_mobile.biaconfigPassword
 import uniffi.bia_deploy_mobile.keyGuides
 import uniffi.bia_deploy_mobile.languages
 import uniffi.bia_deploy_mobile.p12Password
@@ -52,6 +57,11 @@ fun BiaTheme(content: @Composable () -> Unit) {
 
 @Composable
 fun App(m: DeployModel) {
+    m.configFile?.let { ImportDialog(m) }
+    m.chat?.let { target ->
+        ChatScreen(target) { m.chat = null }
+        return
+    }
     BackHandler(enabled = (m.page == Page.Server && m.step == Step.Login) || m.page == Page.Keys) { m.page = Page.Brain }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // on a tablet the wizard stays a readable column in the middle
@@ -69,7 +79,7 @@ fun App(m: DeployModel) {
                 Text("bia", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text(" deploy", fontSize = 34.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                 Spacer(Modifier.weight(1f))
-                if (m.page == Page.Brain && m.saved.isNotEmpty()) TextButton({ m.openKeys() }) { Text("bia keys") }
+                if (m.page == Page.Brain) TextButton({ m.openKeys() }) { Text("bia keys") }
             }
             when (m.page) {
                 Page.Brain -> BrainPage(m)
@@ -392,7 +402,10 @@ private fun InstalledStep(m: DeployModel) {
                     Text("bia is up!", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = Good)
                 }
                 if (m.land) Text("It waits at $host for your bia. Tell your bia: fly to $host with land secret ${m.secret}")
-                else Primary("Open bia") { open(context, url) }
+                else {
+                    d.folder?.let { folder -> Primary("Open bia's chat") { m.chat = ChatTarget(host, folder) } }
+                    TextButton({ open(context, url) }) { Text("Open in a browser instead") }
+                }
             }
             false -> {
                 Title("bia did not answer yet")
@@ -401,14 +414,16 @@ private fun InstalledStep(m: DeployModel) {
             }
         }
     }
-    d.folder?.let { folder -> KeyCard(folder, host) }
+    d.folder?.let { folder -> KeyCard(m, folder, host) }
     if (m.land) LandSecretCard(m)
     TextButton({ m.again() }) { Text("Set up another server") }
 }
 
 @Composable
-private fun KeyCard(folder: String, host: String, savedAt: ULong? = null) {
+private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong? = null, name: String = "") {
     val context = LocalContext.current
+    var exporting by remember { mutableStateOf(false) }
+    if (exporting) ExportDialog(folder, host, name) { exporting = false }
     var caSaved by remember { mutableStateOf(false) }
     val saveCa = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-x509-ca-cert")) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -421,19 +436,24 @@ private fun KeyCard(folder: String, host: String, savedAt: ULong? = null) {
     // in the list of saved keys: one short card per bia (the page explains them once)
     if (savedAt != null) {
         Card {
-            Title("bia at $host")
+            Title(name.ifEmpty { "bia at $host" })
+            if (name.isNotEmpty()) Weak(host)
             Weak("key saved " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(savedAt.toLong() * 1000)))
+            Primary("Open chat") { m.chat = ChatTarget(host, folder) }
+            Weak("For a browser:")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton({ installKey(context, folder, host) }) { Text("Install") }
                 OutlinedButton({ share(context, folder, host) }) { Text("Share…") }
                 TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
             }
+            OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
         }
         return
     }
     Card {
         Title("bia's key")
         Text("bia-$host.p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password ${p12Password()}).")
+        Weak("bia's chat in this app uses it by itself. The steps below are for a browser on this phone.")
         Text("1. Install it, so the browser can show it to bia:", fontWeight = FontWeight.SemiBold)
         OutlinedButton({ installKey(context, folder, host) }) { Text("Install bia's key") }
         Text("2. Trust bia's certificate authority, so the browser opens bia without a warning:", fontWeight = FontWeight.SemiBold)
@@ -449,6 +469,8 @@ private fun KeyCard(folder: String, host: String, savedAt: ULong? = null) {
             TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
         }
         Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); it asks for the password above when it is installed.")
+        OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
+        Weak("A .biaconfig also carries bia's address and is locked with its own password: another bia deploy app opens it and gets the chat.")
     }
 }
 
@@ -482,13 +504,108 @@ private fun share(context: android.content.Context, folder: String, host: String
 /** Every bia this phone deployed: its key, to install or share again later. */
 @Composable
 private fun KeysPage(m: DeployModel) {
+    val context = LocalContext.current
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        m.offerConfig(context.cacheDir) { dest -> context.contentResolver.openInputStream(uri)?.use { it.copyLimited(dest) } }
+    }
     TextButton({ m.page = Page.Brain }) { Text("‹  Back") }
     Card {
         Title("bia keys")
-        if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy.")
-        else Weak("Each is root's certificate for one bia, the only way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
+        OutlinedButton({ pick.launch(arrayOf("*/*")) }) { Text("Import a .biaconfig…") }
+        if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
+        else Weak("Each is a certificate for one bia, the way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
     }
-    m.saved.forEach { b -> KeyCard(b.folder, b.host, b.savedAt) }
+    m.saved.forEach { b -> KeyCard(m, b.folder, b.host, b.savedAt, b.name) }
+}
+
+/** A .biaconfig opened on this phone: its password, then what happens to a key already here. */
+@Composable
+private fun ImportDialog(m: DeployModel) {
+    var password by remember { mutableStateOf("") }
+    val other = m.configOtherKey
+    if (other != null) {
+        AlertDialog(
+            onDismissRequest = { m.closeConfig() },
+            title = { Text("Replace the key for $other?") },
+            text = { Text("This phone already has a different key for $other. If it is root's and no copy exists elsewhere, replacing it can lock root out of that bia.") },
+            confirmButton = { TextButton({ m.configOtherKey = null; m.importConfig(password, true) }) { Text("Replace") } },
+            dismissButton = { TextButton({ m.closeConfig() }) { Text("Keep the old key") } },
+        )
+        return
+    }
+    AlertDialog(
+        onDismissRequest = { if (!m.configBusy) m.closeConfig() },
+        title = { Text("Open .biaconfig") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("It holds a key to a bia and that bia's address. Only import a file from someone trusted.")
+                OutlinedTextField(
+                    password, { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    enabled = !m.configBusy,
+                )
+                m.configProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = { TextButton({ m.importConfig(password) }, enabled = !m.configBusy && password.isNotEmpty()) { Text(if (m.configBusy) "Opening…" else "Import") } },
+        dismissButton = { TextButton({ m.closeConfig() }, enabled = !m.configBusy) { Text("Cancel") } },
+    )
+}
+
+/** This phone's key as a .biaconfig, for the share sheet. */
+@Composable
+private fun ExportDialog(folder: String, host: String, name: String, close: () -> Unit) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf(runCatching { biaconfigPassword() }.getOrDefault("")) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!busy) close() },
+        title = { Text("Share as .biaconfig") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Whoever opens it holds this same certificate, with everything it can do on this bia. Revoking it later ends it for this phone too.")
+                OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, enabled = !busy)
+                TextButton({ clipboard.setText(AnnotatedString(password)) }) { Text("Copy the password") }
+                Weak("Send the password another way, never next to the file.")
+                problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                busy = true
+                problem = null
+                scope.launch {
+                    try {
+                        val dir = File(context.cacheDir, "share").apply { deleteRecursively(); mkdirs() }
+                        val path = withContext(Dispatchers.IO) { biaconfigExport(folder, host, name, password, dir.path) }
+                        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.share", File(path))
+                        val send = Intent(Intent.ACTION_SEND)
+                            .setType("application/x-biaconfig")
+                            .putExtra(Intent.EXTRA_STREAM, uri)
+                            .putExtra(Intent.EXTRA_SUBJECT, "bia $host")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        send.clipData = android.content.ClipData.newUri(context.contentResolver, "bia config", uri)
+                        context.startActivity(Intent.createChooser(send, "Share .biaconfig"))
+                        close()
+                    } catch (e: uniffi.bia_deploy_mobile.DeployException.Failed) {
+                        problem = e.reason
+                    } catch (e: Exception) {
+                        problem = e.message ?: e.toString()
+                    } finally {
+                        busy = false
+                    }
+                }
+            }, enabled = !busy && password.isNotEmpty()) { Text(if (busy) "Locking…" else "Share…") }
+        },
+        dismissButton = { TextButton(close, enabled = !busy) { Text("Cancel") } },
+    )
 }
 
 private fun open(context: android.content.Context, url: String) {

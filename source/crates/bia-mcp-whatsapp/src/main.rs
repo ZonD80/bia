@@ -90,7 +90,7 @@ fn main() {
     let server = Server::new("whatsapp", env!("CARGO_PKG_VERSION"))
         .tool(
             "login",
-            "Start WhatsApp login (QR only; there is no phone number, SMS code or password). Writes a temporary scannable PNG at /home/bia/files/whatsapp/qr.png (mention that path so the human can open or you can attach it; it is deleted when auth completes), opens it in a WhatsApp QR window on display :0, and sends a system notice. The human scans it in WhatsApp > Settings > Linked devices > Link a device. QR codes rotate about every 20 seconds. Afterwards call whatsapp_status until auth=ready.",
+            &format!("Start WhatsApp login (QR only; there is no phone number, SMS code or password). {} Writes a temporary scannable PNG at /home/bia/files/whatsapp/qr.png (mention that path so the human can open or you can attach it; it is deleted when auth completes), opens it in a WhatsApp QR window on display :0, and sends a system notice. Root scans it in WhatsApp > Settings > Linked devices > Link a device, on the phone with bia's account. QR codes rotate about every 20 seconds. Afterwards call whatsapp_status until auth=ready.", bia_mcp::own_account("WhatsApp")),
             json!({"type": "object", "properties": {}}),
             |ctx, _| {
                 Wa::global().set_ctx(ctx.clone());

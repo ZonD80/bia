@@ -1601,6 +1601,40 @@ impl Repl {
         );
     }
 
+    /// memory_cut: erase one message, or list the messages holding a fragment. The conversation
+    /// is saved twice so that its .bak is clean too, then the old copies are overwritten.
+    fn cut_call(&mut self, args: &Value) -> (String, bool) {
+        let arg = |k: &str| args.get(k).and_then(|v| v.as_str()).map(str::trim).unwrap_or("").to_string();
+        let (id, fragment) = (arg("id"), arg("find"));
+        let Some(files) = self.memory.dir.parent().map(|p| p.to_path_buf()) else {
+            return ("error: no files directory".into(), true);
+        };
+        if !fragment.is_empty() {
+            return match crate::cut::find(&files, &self.history, &fragment) {
+                Ok(s) => (s, false),
+                Err(e) => (format!("error: {e:#}"), true),
+            };
+        }
+        if id.is_empty() {
+            return ("error: id or find required".into(), true);
+        }
+        let old = crate::cut::hold(&[self.state_path.clone(), self.state_path.with_extension("json.bak")]);
+        match crate::cut::cut_message(&files, &mut self.history, &id) {
+            Ok(report) => {
+                self.tools.forget_schemas();
+                if let Some(l) = self.llm.as_mut() {
+                    l.reset();
+                }
+                self.fmm_ctx_used = self.history_token_estimate();
+                self.save_state(false);
+                self.save_state(false);
+                crate::cut::zero(old);
+                (report.text(), false)
+            }
+            Err(e) => (format!("error: {e:#}"), true),
+        }
+    }
+
     /// set_model_config: show or change context, round limit and local sampling. Changes that
     /// touch the brain are followed by a short test request and undone when it fails.
     fn model_config_call(&mut self, args: &Value) -> (String, bool) {
@@ -1855,6 +1889,8 @@ now: {now}", done.join("\n")), failed)
             let con = self.con.clone();
             let (result, is_err) = if name == "set_model_config" {
                 self.model_config_call(&args)
+            } else if name == "memory_cut" {
+                self.cut_call(&args)
             } else {
                 self.tools.call(&name, &args, &mut |line| {
                     con.writeln(&con.c(GRAY, &format!("     {line}")))
@@ -2054,6 +2090,8 @@ now: {now}", done.join("\n")), failed)
                 let con = self.con.clone();
                 let (result, is_err) = if name == "set_model_config" {
                     self.model_config_call(&args)
+                } else if name == "memory_cut" {
+                    self.cut_call(&args)
                 } else {
                     self.tools.call(name, &args, &mut |l| {
                         con.writeln(&con.c(GRAY, &format!("     {l}")))

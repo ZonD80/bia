@@ -308,6 +308,11 @@ both_arches() {
   done
   [[ -f source/flash/MCPs/chrome/devtools/build/src/bin/chrome-devtools-mcp.js ]] || missing+=("chrome/devtools")
   [[ ${#missing[@]} -eq 0 ]] || die "chrome MCP payload missing: ${missing[*]} (tools/fetch-chrome-devtools.sh)"
+  # max's protocol side needs PyMax and its packages for both architectures
+  for r in aarch64 x86_64; do
+    [[ -f source/flash/MCPs/max/py/$r/.requirements.sha256 ]] || missing+=("max/py/$r")
+  done
+  [[ ${#missing[@]} -eq 0 ]] || die "max MCP packages missing: ${missing[*]} (make ARCH=arm64 mcps; make ARCH=x86_64 mcps)"
   # the bia serves bia-bridge for every platform, from the same build
   for f in linux-x86_64 linux-arm64 windows-x86_64.exe macos; do
     [[ -s source/flash/MCPs/web/bridge/bia-bridge-$f ]] || missing+=("web/bridge/bia-bridge-$f")

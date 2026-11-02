@@ -5,6 +5,29 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.0
+
+### Changes
+- .biaconfig: one password-protected file with a certificate and bia's address. bia makes one when root asks, each with its own certificate that can be revoked alone. The iPhone and Android apps open them, go straight to the chat, and can pass a key on as one too; the web app's Settings and the computer's bia deploy can make them as well. Opening a file never silently replaces a key already on the phone.
+- The bia deploy apps for iPhone and Android now have bia's whole web app inside them, chat included: open it from the phone that deployed that bia, with nothing to install. Installing bia's key for other browsers still works as before.
+- When an OpenRouter key is entered, models are listed most popular first, on phones and computers.
+- bia's server certificate now works with Apple's rules: it was valid one day too long, which iPhones and Macs can refuse. It is replaced by itself after this update.
+- bia can log in to websites that ask for a client certificate: it imports the certificate, trusts a company's private certificate authority when asked, and picks the right certificate for each site without a prompt.
+- bia can now use desktop programs properly: it reads a program's buttons, menus and fields directly instead of guessing from a picture, presses them exactly, manages windows and uses the clipboard.
+- bia now asks for its own accounts: before logging in to a messenger it asks the owner to create a separate account with its own phone number, and logs in by scanning a QR code where the app allows it (Telegram, WhatsApp, MAX).
+- MAX is here: bia can use its own MAX account like any person, with chats, files, voice messages, reactions, edits, groups and bans. It logs in by QR. It takes one-to-one voice calls too (no group or video calls), and places go out as map links. It uses an unofficial client, so MAX could restrict the account.
+- bia can now erase a single message from its memory for good, for example a password or key that landed in a chat. A short [cut] mark stays in its place. It cleans bia's own context, memory and logs on this computer; copies in the chat app, in backups, or already seen by a cloud model stay, so a leaked secret still has to be replaced.
+
+### For bia
+- .biaconfig: web_pki_biaconfig(identity, address, name), only when root asks. It generates a password unless given one and adds address to the server certificate. Send the file with say(files=[…]), the password by another channel, and delete the file once it arrived. web_pki_revoke(serial) ends it. chrome_cert_import also opens a .biaconfig (password through password_secret) and returns that bia's address.
+- Client certificates: chrome_cert_import (password through password_secret), chrome_cert_select(site), chrome_restart; chrome_cert_trust for a private CA, only when root asks. Chrome is now readable with screen_snapshot. A certificate dialog arrives as [certificate dialog opened] on system|chrome: chrome_choose_certificate(cert=<name>) or cancel=true.
+- Desktop apps as elements: screen_launch or screen_apps, screen_snapshot, screen_act on a ref, screen_wait; screen_windows, screen_window, screen_clipboard. Prefer these to pixels for desktop apps; keep the chrome MCP for web pages and screen_ocr for what does not show as elements.
+- Accounts are your own: before a first login to any messenger, tell root you need your own account with its own phone number, separate from root's; root creates it in the app, then scans your QR. If you are logged in to root's account, tell root about this once and leave that login as it is unless root asks.
+- telegram_login now shows a QR by default; telegram_login(phone) is for when nobody can scan. telegram_login_qr is gone.
+- New MCP max (discover path mcp/max): max_login shows a QR. Tell root before the first login that the client is unofficial and MAX may restrict the account. Calls: max_call_start only when root asks, never redial; [incoming call] → max_call_accept. Its chats are channels max:<chat id>, and say works there as on telegram.
+- New: memory_cut (discover path memory). memory_cut(find="<harmless part>") lists the m_… ids holding some text, without showing it; memory_cut(id="m_…") erases one message. Never pass the secret itself as find. Cut every id it lists, one call each.
+- If you waited for this update to clean a secret out of your logs, do it now: find it, cut each message, run find again until nothing holds it, and stop cleaning those files by hand. Tell root what memory_cut cannot reach (chat platforms, backups, what a cloud model saw) and that the secret should be replaced.
+
 ## 1.9.1
 
 ### Changes

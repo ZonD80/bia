@@ -2705,12 +2705,35 @@ async function renderSettings() {
         loadCerts();
       } catch (e) { set(out, h('div', { class: 'err-line' }, e.message)); }
     };
+    const confAddr = h('input', { class: 'input', value: location.host });
+    const confName = h('input', { class: 'input', placeholder: 'optional, what to call this bia' });
+    const confPass = h('input', { class: 'input', type: 'text', autocomplete: 'off', placeholder: 'leave empty for a strong one' });
+    const confOut = h('div');
+    const makeConfig = async () => {
+      set(confOut);
+      try {
+        const r = await POST('/v1/pki/biaconfig', { identity: issueId.value.trim(), role: role.value, trust: trust.value, address: confAddr.value.trim(), name: confName.value.trim(), password: confPass.value });
+        const bytes = Uint8Array.from(atob(r.file), c => c.charCodeAt(0));
+        const blob = new Blob([bytes], { type: 'application/x-biaconfig' });
+        saveBlob(blob, r.file_name);
+        confPass.value = '';
+        set(confOut, h('p', { class: 'muted' }, `${r.file_name} is downloaded, for ${r.identity} at ${r.addresses.join(', ')}. Send the file and the password by different channels: whoever has both is ${r.identity} on this machine. Revoke serial ${r.serial} below to end it.`),
+          h('div', { class: 'copyline' }, h('code', null, r.password), iconBtn('copy', 'Copy the password', () => copyText(r.password, 'Copied'))),
+          h('button', { class: 'btn', onclick: () => saveBlob(blob, r.file_name) }, ic('download'), 'Download again'));
+        loadCerts();
+      } catch (e) { set(confOut, h('div', { class: 'err-line' }, e.message)); }
+    };
     const certs = h('div', { id: 'certList' }, 'Loading…');
     kids.push(h('div', { class: 'card' }, h('h3', null, ic('shield'), 'Certificates'),
       h('p', { class: 'muted', style: 'margin-top:0' }, 'Give someone (or another agent) access: issue a certificate and send them the pickup link. They also need the CA.'),
       h('div', { class: 'field' }, h('label', null, 'Identity'), issueId),
       h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', null, 'Role'), role), h('div', { class: 'field grow' }, h('label', null, 'Trust'), trust)),
       h('button', { class: 'btn', onclick: issue }, ic('key'), 'Issue certificate'), out,
+      h('h3', { style: 'margin-top:18px' }, 'Or as a .biaconfig file'),
+      h('p', { class: 'muted', style: 'margin-top:0' }, 'One password-protected file with a new certificate for the identity above and this bia\u2019s address. The bia deploy apps open it and go straight to the chat.'),
+      h('div', { class: 'field' }, h('label', null, 'Address'), confAddr),
+      h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', null, 'Name'), confName), h('div', { class: 'field grow' }, h('label', null, 'Password'), confPass)),
+      h('button', { class: 'btn', onclick: makeConfig }, ic('download'), 'Make .biaconfig'), confOut,
       h('h3', { style: 'margin-top:18px' }, 'Requests from other agents'), h('div', { id: 'reqList' }, 'Loading…'),
       h('h3', { style: 'margin-top:18px' }, 'Other bias'), h('div', { id: 'peerList' }, 'Loading…'),
       h('h3', { style: 'margin-top:18px' }, 'Issued'), certs));

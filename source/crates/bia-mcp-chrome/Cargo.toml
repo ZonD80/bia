@@ -13,6 +13,7 @@ path = "src/main.rs"
 bia-mcp = { path = "../bia-mcp" }
 libc.workspace = true
 bia-mcp-secrets = { path = "../bia-mcp-secrets" }
+bia-pki = { path = "../bia-pki" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

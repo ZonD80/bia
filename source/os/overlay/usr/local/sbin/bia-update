@@ -436,7 +436,7 @@ live_esp_mount() {
 # in the live inbox journal and Telegram's catch-up watermark, not in the archive, and
 # the unfold puts the older files back. Stopped (SIGSTOP), they take nothing in;
 # Telegram and WhatsApp keep what arrives for the next boot's catch-up.
-BUSES='/bia-(mcp-(telegram|whatsapp|messenger|instagram)|meta)( |$)'
+BUSES='/bia-(mcp-(telegram|whatsapp|messenger|instagram|max)|meta)( |$)|/bia_max\.py( |$)'
 
 hold_buses() {
   pkill -STOP -f "$BUSES" 2>/dev/null || true
