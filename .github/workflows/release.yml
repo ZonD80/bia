@@ -81,7 +81,7 @@ jobs:
           make ARCH=${{ matrix.arch }} mcps
           sudo chown -R "$(id -u):$(id -g)" dist source/flash
       - name: Pack (a tar keeps the executable bits an artifact would drop)
-        run: tar -czf mcps-${{ matrix.arch }}.tgz dist/${{ matrix.arch }} source/flash/MCPs/*/bin/${{ matrix.rarch }} source/flash/MCPs/web/bridge
+        run: tar -czf mcps-${{ matrix.arch }}.tgz dist/${{ matrix.arch }} source/flash/MCPs/*/bin/${{ matrix.rarch }} source/flash/MCPs/max/py/${{ matrix.rarch }} source/flash/MCPs/web/bridge
       - uses: actions/upload-artifact@v7
         with:
           name: mcps-${{ matrix.arch }}
