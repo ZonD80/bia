@@ -69,7 +69,10 @@ final class DeployModel: ObservableObject {
             self.provider = info.provider
             self.baseUrl = info.baseUrl
             self.models = info.models
-            if self.model.isEmpty { self.model = defaultModel(provider: info.provider) }
+            if self.model.isEmpty {
+                self.model = info.defaultModel
+                if let c = info.models.first(where: { $0.id == self.model })?.ctx, c > 0 { self.ctx = c }
+            }
         }
     }
 

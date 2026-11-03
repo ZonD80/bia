@@ -8,6 +8,7 @@ use bia_deploy::chatgpt::{self, ChatGptAuth};
 use bia_deploy::hf::{self, HfModel, HfRepo};
 use bia_deploy::{
     default_model, filter_models, is_deepseek_or_qwen_key, list_models, list_removable, probe_key,
+    starting_model,
     parse_progress, provider_for_key, test_model, write_stick, KEY_GUIDES, KEY_STEPS, PROVIDERS, CloudModel, DiskInfo, FlashOptions, FmmInput,
     LocalFiles, LOCAL_FILES_NAME, LOCAL_FMM_CANDIDATES,
 };
@@ -110,6 +111,8 @@ struct FlashApp {
     detected_key: String,
     base_url: String,
     model: String,
+    /// Someone picked, typed or loaded it: the key's list no longer replaces it.
+    model_chosen: bool,
     cloud_models: Vec<CloudModel>,
     model_query: String,
     /// ChatGPT sign-in for this stick (provider `chatgpt`; `api_key` holds its access token).
@@ -180,6 +183,7 @@ impl FlashApp {
             signing_in: false,
             signin_error: None,
             model: "x-ai/grok-4.6".into(),
+            model_chosen: false,
             ctx: "131072".into(),
             use_fmm: true,
             use_model: false,
@@ -290,6 +294,7 @@ impl FlashApp {
                 self.api_key = c.api_key;
                 self.detected_key = self.api_key.clone();
                 self.base_url = c.base_url;
+                self.model_chosen = !c.model.trim().is_empty();
                 self.model = c.model;
                 self.ctx = c.ctx.to_string();
                 self.use_fmm = true;
@@ -1200,7 +1205,9 @@ impl FlashApp {
         if self.use_fmm {
             egui::Grid::new("model").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
                 ui.label("Model");
-                ui.add(egui::TextEdit::singleline(&mut self.model).desired_width(360.0));
+                if ui.add(egui::TextEdit::singleline(&mut self.model).desired_width(360.0)).changed() {
+                    self.model_chosen = true;
+                }
                 ui.end_row();
                 if !self.cloud_models.is_empty() {
                     ui.label("Search");
@@ -1232,6 +1239,7 @@ impl FlashApp {
                         }
                     });
                 if let Some((id, ctx)) = pick {
+                    self.model_chosen = true;
                     self.model = id;
                     if ctx > 0 {
                         self.ctx = ctx.min(2_000_000).to_string();
@@ -1359,6 +1367,14 @@ impl eframe::App for FlashApp {
                 }
                 NetMsg::Cloud(key, Ok(models)) if key == self.api_key.trim() => {
                     self.append_log(&format!("{}: {} models", self.provider, models.len()));
+                    if !self.model_chosen {
+                        if let Some(d) = starting_model(self.provider.trim(), &models) {
+                            self.model = d.id.clone();
+                            if d.ctx > 0 {
+                                self.ctx = d.ctx.min(2_000_000).to_string();
+                            }
+                        }
+                    }
                     if self.provider == "chatgpt" && self.model.trim().is_empty() {
                         if let Some(d) = chatgpt::default_model(&models) {
                             self.model = d.id.clone();

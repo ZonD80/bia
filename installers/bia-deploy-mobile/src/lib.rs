@@ -116,6 +116,14 @@ pub struct KeyInfo {
     pub provider: String,
     pub base_url: String,
     pub models: Vec<CloudModel>,
+    /// The model to start from when none is chosen yet.
+    pub default_model: String,
+}
+
+fn key_info(provider: &str, base_url: String, list: Vec<bia_deploy::CloudModel>) -> KeyInfo {
+    let default_model = bia_deploy::starting_model(provider, &list)
+        .map_or_else(|| bia_deploy::default_model(provider).to_string(), |m| m.id.clone());
+    KeyInfo { provider: provider.into(), base_url, models: models(list), default_model }
 }
 
 /// The provider of a pasted key and its models (asks the APIs when the format is shared).
@@ -124,10 +132,10 @@ pub fn identify_key(key: String) -> R<KeyInfo> {
     let key = key.trim().to_string();
     if let Some(p) = bia_deploy::provider_for_key(&key) {
         let m = bia_deploy::list_models(p, &key, "")?;
-        return Ok(KeyInfo { provider: p.into(), base_url: String::new(), models: models(m) });
+        return Ok(key_info(p, String::new(), m));
     }
     let (p, base, m) = bia_deploy::probe_key(&key)?;
-    Ok(KeyInfo { provider: p.into(), base_url: base, models: models(m) })
+    Ok(key_info(p, base, m))
 }
 
 #[uniffi::export]

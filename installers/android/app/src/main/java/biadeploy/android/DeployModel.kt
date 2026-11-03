@@ -25,7 +25,6 @@ import uniffi.bia_deploy_mobile.WaitListener
 import uniffi.bia_deploy_mobile.biaconfigImport
 import uniffi.bia_deploy_mobile.isBiaconfig
 import uniffi.bia_deploy_mobile.chatgptSignIn
-import uniffi.bia_deploy_mobile.defaultModel
 import uniffi.bia_deploy_mobile.identifyKey
 import uniffi.bia_deploy_mobile.landSecret
 import uniffi.bia_deploy_mobile.newKey
@@ -101,7 +100,10 @@ class DeployModel : ViewModel() {
             provider = info.provider
             baseUrl = info.baseUrl
             models.clear(); models.addAll(info.models)
-            if (model.isBlank()) model = defaultModel(info.provider)
+            if (model.isBlank()) {
+                model = info.defaultModel
+                info.models.firstOrNull { it.id == model }?.ctx?.takeIf { it > 0u }?.let { ctx = it }
+            }
         }
     }
 

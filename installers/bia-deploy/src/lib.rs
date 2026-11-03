@@ -29,7 +29,7 @@ pub use disk::{list_removable, DiskInfo};
 pub use local_files::{LocalFiles, LOCAL_FILES_NAME};
 pub use fmm::{
     api_base, default_model, filter_models, fmm_config_json, is_deepseek_or_qwen_key, list_models,
-    probe_key, provider_for_key, CloudModel, FmmInput, KeyGuide, ESP_FMM_REL, KEY_GUIDES, KEY_STEPS,
+    probe_key, provider_for_key, starting_model, CloudModel, FmmInput, KeyGuide, ESP_FMM_REL, KEY_GUIDES, KEY_STEPS,
     LOCAL_FMM_CANDIDATES, PROVIDERS,
 };
 pub use image::{build_image, ImageSources};

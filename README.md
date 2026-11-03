@@ -6,7 +6,7 @@ screen is a prompt that talks to an LLM (a cloud model, or optionally one
 running on that machine). The agent
 owns the box: it can run shell commands, manage disks and the network, drive
 Chrome, see and click the desktop, keep passwords and passkeys, answer you on
-Telegram or WhatsApp (including voice calls), Messenger or Instagram, schedule work, remember things,
+Telegram, WhatsApp or MAX (including voice calls), Messenger or Instagram, schedule work, remember things,
 and update or move itself to another machine.
 
 - **Cloud brain.** Frontier Model Mode (FMM) runs the agent on a cloud model
@@ -89,7 +89,7 @@ where it left off.
 │   │   ├── bia-mcp-screen/    screenshot + mouse/keyboard on display :0
 │   │   ├── bia-mcp-telegram/  Telegram user account (ferogram) + voice calls (tgcalls)
 │   │   ├── bia-mcp-whatsapp/  WhatsApp linked device (whatsapp-rust) + voice calls
-│   │   ├── bia-mcp-meta/      Messenger and Instagram DMs (two MCPs) in front of bia-meta
+│   │   ├── bia-mcp-meta/      Messenger and Instagram DMs (two MCPs) in front of bia-meta; MAX (third MCP) in front of bia_max.py (PyMax)
 │   ├── go/bia-meta/           Go helper on mautrix-meta: messagix, whatsmeow (encrypted chats), instameow
 │   │   ├── bia-mcp-carry/     backup (fold/unfold), machine-to-machine "fly", OS update
 │   │   ├── bia-mcp-lang/      languages heard/spoken: catalog, verified installs, settings
@@ -230,6 +230,10 @@ x86_64, local llama.cpp with GPU backends, FMM, web app (an MCP bus) with mTLS,
 Telegram and WhatsApp (text + voice), Messenger and Instagram DMs, Chrome + passkeys, screen control,
 secrets, memory, schedules, backup / fly / OS update through the rescue image
 (e2e-tested on arm64).
+
+Built but not yet tried on a real account: MAX (`mcp/max`), bia's own MAX account with QR login, chats,
+files, voice messages, reactions, edits, groups, bans and one-to-one voice calls. Its tests run against a
+fake server. Not there: group and video calls, live location, mute.
 
 Open: x86_64 run of the update e2e suite, llama.cpp state snapshots, remote
 MCP over HTTP.

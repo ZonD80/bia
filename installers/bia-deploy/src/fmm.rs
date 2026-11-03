@@ -239,6 +239,16 @@ pub fn default_model(provider: &str) -> &'static str {
     }
 }
 
+/// The model to start from once the key's list is in: OpenRouter ranks its list by popularity, so
+/// its first. Others' lists are only sorted by id, so they keep `default_model`.
+pub fn starting_model<'a>(provider: &str, models: &'a [CloudModel]) -> Option<&'a CloudModel> {
+    if provider == "openrouter" {
+        models.first()
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FmmInput {
     /// Empty: taken from the key's prefix.
@@ -407,6 +417,15 @@ pub fn fmm_config_json(input: &FmmInput) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starting_model_is_top_of_openrouters_list_only() {
+        let m = |id: &str| CloudModel { id: id.into(), name: id.into(), ctx: 1000 };
+        let list = [m("top/model"), m("x-ai/grok-4.6")];
+        assert_eq!(starting_model("openrouter", &list).unwrap().id, "top/model");
+        assert!(starting_model("openrouter", &[]).is_none());
+        assert!(starting_model("xai", &list).is_none());
+    }
 
     #[test]
     fn json_enabled_true() {

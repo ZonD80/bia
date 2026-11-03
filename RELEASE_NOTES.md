@@ -5,10 +5,19 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.2
+
+### Changes
+- The iPhone app can open bia's chat at a public IP address: iOS was refusing the connection with a TLS error right after deployment.
+- With an OpenRouter key, the bia deploy apps now start from the top model on OpenRouter's most popular list instead of always Grok. A model someone picked stays as it is.
+
+### For bia
+- Nothing to do.
+
 ## 2.0.1
 
 ### Changes
-- bia's screen now opens in the iPhone and Android apps and in phone browsers. On phones the old viewer could stop on a dark page and never connect, and it showed only one corner of the desktop. The new one fits the whole desktop and says why when it cannot connect.
+- bia's screen has a new viewer for phones. The old one showed only one corner of the desktop. The new one fits the whole desktop and says why when it cannot connect.
 - bia's screen works by touch: tap clicks, hold for a right click, hold and drag to drag, pinch to zoom, two fingers to scroll. A bar adds a keyboard, Esc, Tab, Ctrl, Alt, arrows and Paste.
 - Root shell on phones: what you type now shows as you type it. Some phone keyboards held each word back until space or Enter, so commands ran while the line stayed empty.
 - bia's picture no longer risks showing as a plain blue circle in the apps.
