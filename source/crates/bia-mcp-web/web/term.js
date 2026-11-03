@@ -555,11 +555,15 @@
         e.preventDefault();
         this.paste(e.clipboardData.getData('text'));
       });
-      inp.addEventListener('compositionend', e => { if (e.data) this.send(e.data); inp.value = ''; });
-      inp.addEventListener('input', e => {
-        if (e.isComposing) return;
-        if (inp.value) { this.send(inp.value); inp.value = ''; }
-      });
+      if (matchMedia('(pointer: coarse)').matches) {
+        liveInput(inp, s => { this.follow = true; this.send(s.replace(/\r?\n/g, '\r')); }, () => { this.follow = true; this.send('\x7f'); });
+      } else {
+        inp.addEventListener('compositionend', e => { if (e.data) this.send(e.data); inp.value = ''; });
+        inp.addEventListener('input', e => {
+          if (e.isComposing) return;
+          if (inp.value) { this.send(inp.value); inp.value = ''; }
+        });
+      }
       inp.addEventListener('keydown', e => {
         if (e.isComposing) return;
         const seq = this.keySeq(e);
@@ -636,5 +640,43 @@
     }
   }
 
+  /**
+   * Typing from a phone's on-screen keyboard into a hidden field.
+   * Many keyboards hold each word in an IME composition until a space or Enter, so waiting for
+   * the composition to end shows nothing while typing. Here each change goes out at once, as the
+   * difference from what was already sent: a corrected word arrives as backspaces and new text.
+   * The field always keeps some padding, because a keyboard reports no event at all for
+   * Backspace in an empty field.
+   */
+  function liveInput(el, onText, onBackspace) {
+    const PAD = '    ';
+    let shown = PAD, composing = false, idle = 0;
+    const reset = () => {
+      el.value = PAD;
+      el.setSelectionRange(PAD.length, PAD.length);
+      shown = PAD;
+    };
+    const sync = () => {
+      const was = [...shown], now = [...el.value];
+      let same = 0;
+      while (same < was.length && same < now.length && was[same] === now[same]) same++;
+      for (let i = was.length - same; i > 0; i--) onBackspace();
+      if (now.length > same) onText(now.slice(same).join(''));
+      shown = el.value;
+    };
+    // Emptied only once typing goes quiet: a keyboard may reopen the word it just finished, to
+    // correct it or to continue it, and that has to stay a difference from what was sent.
+    const later = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => { if (!composing) reset(); }, 1500);
+    };
+    el.addEventListener('compositionstart', () => { composing = true; clearTimeout(idle); });
+    el.addEventListener('compositionend', () => { composing = false; sync(); later(); });
+    el.addEventListener('input', () => { sync(); if (!composing) later(); });
+    el.addEventListener('focus', () => { if (!composing) reset(); });
+    reset();
+  }
+
+  window.BiaLiveInput = liveInput;
   window.BiaTerm = Term;
 })();

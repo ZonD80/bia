@@ -8,6 +8,9 @@ Writes /out/bia-root.p12 and /out/ca.crt, as the apps keep them per bia. Copy th
 and optionally `-chatjs <script>` on iOS, intent extra chat on Android, after adb reverse tcp:8443 tcp:8443). Prints what the model would hear, so "[web open] root connected" proves the websocket came
 up with the certificate. A line in /out/say is sent to root. JSON in /out/make-biaconfig calls
 pki_biaconfig with those arguments and prints what it says.
+
+For the Display, run it on debian:trixie-slim with novnc, x11vnc, xvfb and openbox installed and x11vnc on :0, as the
+image has them: the builder is bookworm, whose noVNC is an older one. A restart makes a new CA, so copy the keys again.
 """
 import json, os, shutil, ssl, subprocess, sys, tempfile, threading, time, urllib.request
 

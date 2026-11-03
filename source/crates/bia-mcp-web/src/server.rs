@@ -28,6 +28,7 @@ const APPLE_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
 const SW_JS: &str = include_str!("../web/sw.js");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
 const GUI: &str = include_str!("../web/gui.html");
+const DISPLAY: &str = include_str!("../web/display.html");
 const SKILL: &str = include_str!("../web/skills/web-console/SKILL.md");
 const VNC_ADDR: (&str, u16) = ("127.0.0.1", 5900);
 /// JSON bodies; uploads and file writes stream to disk without a cap.
@@ -736,20 +737,14 @@ impl Web {
         let json_body = || serde_json::from_slice::<Value>(body).unwrap_or(json!({}));
 
         if method == "GET" && (path == "/gui" || path == "/gui/") {
-            if novnc_root().is_some() {
-                redirect(
-                    stream,
-                    "/gui/novnc/vnc.html?autoconnect=1&resize=remote&path=/gui/ws",
-                );
-            } else {
-                respond(
-                    stream,
-                    200,
-                    "text/html; charset=utf-8",
-                    GUI.as_bytes(),
-                    None,
-                );
-            }
+            let page = if novnc_root().is_some() { DISPLAY } else { GUI };
+            respond(
+                stream,
+                200,
+                "text/html; charset=utf-8",
+                page.as_bytes(),
+                None,
+            );
             return;
         }
         if method == "GET" {

@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.1
+
+### Changes
+- bia's screen now opens in the iPhone and Android apps and in phone browsers. On phones the old viewer could stop on a dark page and never connect, and it showed only one corner of the desktop. The new one fits the whole desktop and says why when it cannot connect.
+- bia's screen works by touch: tap clicks, hold for a right click, hold and drag to drag, pinch to zoom, two fingers to scroll. A bar adds a keyboard, Esc, Tab, Ctrl, Alt, arrows and Paste.
+- Root shell on phones: what you type now shows as you type it. Some phone keyboards held each word back until space or Enter, so commands ran while the line stayed empty.
+- bia's picture no longer risks showing as a plain blue circle in the apps.
+
+### For bia
+- Nothing to do. If root says the screen will not open on a phone, ask for the message it shows.
+
 ## 2.0.0
 
 ### Changes

@@ -451,9 +451,9 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/gui": {
                 "get": {
                     "tags": ["display"],
-                    "summary": "noVNC of display :0 (VNC stays on 127.0.0.1:5900)",
+                    "summary": "Viewer of display :0 on noVNC's core, for mouse and touch (VNC stays on 127.0.0.1:5900)",
                     "security": [{"mtls": []}],
-                    "responses": {"302": {"description": "Redirect to noVNC"}}
+                    "responses": {"200": {"description": "The viewer page"}}
                 }
             },
             "/gui/ws": {

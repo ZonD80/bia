@@ -385,7 +385,7 @@ details.howto li { margin: 4px 0; }
 .term-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
 .term-row { white-space: pre; height: 1.25em; overflow: hidden; }
 .term-measure { position: absolute; visibility: hidden; white-space: pre; font: inherit; }
-.term-input { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; }
+.term-input { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; font-size: 16px; } /* 16px: iOS zooms the page when a smaller field takes focus */
 .term ::selection { background: rgba(94,181,247,.4); }
 .termbar { display: flex; align-items: center; gap: 8px; padding: 8px; background: var(--side); border-top: 1px solid var(--line); flex-shrink: 0; }
 .termbar .prompt { font-family: var(--mono); color: var(--ok); font-weight: 700; }

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>bia · display</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; background: #000; color: #e8edf5; font: 14px/1.4 ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+  body { display: flex; flex-direction: column; }
+  #view { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  #stage { position: absolute; inset: 0; transform-origin: 0 0; }
+  #status { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(26em, calc(100% - 32px)); padding: 16px; border-radius: 12px; background: #14181f; border: 1px solid #2a3140; text-align: center; }
+  #status[hidden], #hint[hidden] { display: none; }
+  #status button { margin-top: 10px; }
+  #hint { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 8px 12px; border-radius: 10px; background: rgba(20, 24, 31, .88); font-size: 13px; text-align: center; pointer-events: none; }
+  #bar { display: none; flex-shrink: 0; gap: 4px; padding: 6px; padding-bottom: max(6px, env(safe-area-inset-bottom)); overflow-x: auto; background: #14181f; border-top: 1px solid #2a3140; }
+  @media (pointer: coarse) { #bar { display: flex; } }
+  button { flex-shrink: 0; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: #2a3140; color: inherit; font: 13px ui-monospace, Menlo, monospace; cursor: pointer; }
+  button.on { background: #3d8bfd; color: #fff; }
+  /* 16px: iOS zooms the page when a smaller field takes focus */
+  #kbd { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="view">
+  <div id="stage"></div>
+  <div id="hint" hidden>Tap clicks. Hold for a right click, hold and drag to drag. Pinch zooms, two fingers scroll.</div>
+  <div id="status"><span id="statusText">Connecting to bia's screen…</span><br><button id="retry" hidden>Try again</button></div>
+</div>
+<div id="bar"></div>
+<textarea id="kbd" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Keyboard for bia's screen"></textarea>
+<script src="/term.js"></script>
+<script>
+// noVNC 1.6 tries a real H.264 decode while its modules load, and every module waits for that.
+// A phone's hardware decoder can leave it pending forever, so the page never starts. x11vnc has
+// no H.264 to offer, so noVNC gets told there is no decoder before anything of its loads.
+try { delete window.VideoDecoder; } catch (e) {}
+if ('VideoDecoder' in window) window.VideoDecoder = { isConfigSupported: async () => ({ supported: false }) };
+</script>
+<script type="module">
+const $ = id => document.getElementById(id);
+const view = $('view'), stage = $('stage'), kbd = $('kbd');
+const touchy = matchMedia('(pointer: coarse)').matches;
+let rfb = null, up = false, retryTimer = 0;
+
+function status(text, canRetry) {
+  $('statusText').textContent = text;
+  $('retry').hidden = !canRetry;
+  $('status').hidden = false;
+}
+$('retry').onclick = () => location.reload();
+
+// ---- connection ----
+let RFB, releaseCapture;
+const late = setTimeout(() => status("The display viewer is taking too long to load. The connection to bia may be slow.", true), 20000);
+try {
+  RFB = (await import('/gui/novnc/core/rfb.js')).default;
+  ({ releaseCapture } = await import('/gui/novnc/core/util/events.js'));
+} catch (e) {
+  status(`The display viewer did not load: ${e.message}`, true);
+  throw e;
+} finally {
+  clearTimeout(late);
+}
+
+function connect() {
+  clearTimeout(retryTimer);
+  stage.textContent = '';
+  rfb = new RFB(stage, `wss://${location.host}/gui/ws`, { shared: true });
+  rfb.scaleViewport = true;
+  rfb.resizeSession = false; // x11vnc refuses it: the phone sees the whole desktop, scaled
+  rfb.focusOnClick = !touchy;
+  rfb.addEventListener('connect', () => {
+    up = true;
+    $('status').hidden = true;
+    place();
+    if (touchy) { $('hint').hidden = false; setTimeout(() => { $('hint').hidden = true; }, 6000); } else rfb.focus();
+  });
+  rfb.addEventListener('disconnect', () => {
+    status(up ? 'The connection to bia\'s screen was lost. Trying again…' : 'bia\'s screen is not answering: its graphical session or x11vnc may be down. Trying again…', true);
+    up = false;
+    retryTimer = setTimeout(connect, 3000);
+  });
+  rfb.addEventListener('securityfailure', e => status(`The screen refused the connection: ${e.detail.reason || e.detail.status}`, true));
+}
+connect();
+
+// ---- zoom and pan: a transform on the stage; the canvas keeps every desktop pixel ----
+let z = 1, tx = 0, ty = 0;
+const canvas = () => stage.querySelector('canvas');
+function place() {
+  const c = canvas();
+  if (!c) return;
+  const W = view.clientWidth, H = view.clientHeight;
+  const axis = (t, size, start, room) => {
+    if (z * size <= room) return (room - z * size) / 2 - z * start; // smaller than the view: centred
+    return Math.min(-z * start, Math.max(room - z * (start + size), t));
+  };
+  tx = axis(tx, c.offsetWidth, c.offsetLeft, W);
+  ty = axis(ty, c.offsetHeight, c.offsetTop, H);
+  stage.style.transform = `translate(${tx}px, ${ty}px) scale(${z})`;
+}
+new ResizeObserver(place).observe(view);
+function zoomAt(next, x, y) {
+  next = Math.min(8, Math.max(1, next));
+  tx = x - (x - tx) * next / z;
+  ty = y - (y - ty) * next / z;
+  z = next;
+  place();
+}
+
+// ---- touch becomes mouse events on noVNC's canvas ----
+// noVNC reads positions from the canvas's on-screen box and divides by its own scale alone,
+// so a position inside our zoom is brought back to what it would be without that zoom.
+function mouse(type, x, y, button, buttons) {
+  const c = canvas();
+  if (!c) return;
+  const b = c.getBoundingClientRect();
+  c.dispatchEvent(new MouseEvent(type, { clientX: b.left + (x - b.left) / z, clientY: b.top + (y - b.top) / z, button, buttons, bubbles: true, cancelable: true }));
+  // A press raises noVNC's full-page capture layer, and only a mouseup that reaches that layer
+  // lowers it. Ours goes to the canvas, so left up it would swallow the next tap.
+  if (type === 'mouseup') releaseCapture();
+}
+function click(x, y, button) {
+  mouse('mousemove', x, y, 0, 0);
+  mouse('mousedown', x, y, button, button === 2 ? 2 : 1);
+  mouse('mouseup', x, y, button, 0);
+}
+function wheel(x, y, dx, dy) {
+  const c = canvas();
+  if (!c) return;
+  const b = c.getBoundingClientRect();
+  c.dispatchEvent(new WheelEvent('wheel', { clientX: b.left + (x - b.left) / z, clientY: b.top + (y - b.top) / z, deltaX: dx, deltaY: dy, deltaMode: 0, bubbles: true, cancelable: true }));
+}
+
+const HOLD_MS = 450, SLOP = 10, TWO_TAP_MS = 300;
+let mode = '', start = null, last = null, holdTimer = 0, moved = false;
+const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+const mid = t => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+function own(e) { e.preventDefault(); e.stopPropagation(); }
+view.addEventListener('touchstart', e => {
+  if (e.target.closest('button')) return;
+  own(e);
+  const t = e.touches;
+  if (t.length === 1) { // one finger on the glass is always a new gesture, whatever ended before it
+    clearTimeout(holdTimer);
+    if (mode === 'drag') mouse('mouseup', last.x, last.y, 0, 0);
+    const p = { x: t[0].clientX, y: t[0].clientY };
+    mode = 'one'; start = p; last = p; moved = false;
+    holdTimer = setTimeout(() => {
+      mode = 'held';
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, HOLD_MS);
+  } else if (t.length >= 2) {
+    clearTimeout(holdTimer);
+    if (mode === 'drag') mouse('mouseup', last.x, last.y, 0, 0);
+    const m = mid(t);
+    mode = 'two'; start = { ...m, d: dist(t), at: Date.now() }; last = { ...m, d: dist(t) }; moved = false;
+  }
+}, { capture: true, passive: false });
+
+view.addEventListener('touchmove', e => {
+  if (!mode) return;
+  own(e);
+  const t = e.touches;
+  if (mode === 'two' && t.length >= 2) {
+    const m = mid(t), d = dist(t);
+    if (!moved && Math.abs(d - start.d) < SLOP * 2 && Math.hypot(m.x - start.x, m.y - start.y) < SLOP) return;
+    if (!moved) { moved = Math.abs(d - start.d) >= SLOP * 2 ? 'pinch' : 'scroll'; }
+    if (moved === 'pinch') {
+      const r = view.getBoundingClientRect();
+      zoomAt(z * d / last.d, m.x - r.left, m.y - r.top);
+      tx += m.x - last.x; ty += m.y - last.y;
+      place();
+    } else {
+      // the content follows the fingers, and the scroll stays on what it started over
+      wheel(start.x, start.y, -(m.x - last.x) * 2, -(m.y - last.y) * 2);
+    }
+    last = { ...m, d };
+    return;
+  }
+  if (mode === 'two' || t.length !== 1) return; // a finger left of two: wait for the last to lift
+  const p = { x: t[0].clientX, y: t[0].clientY };
+  if (mode === 'one') {
+    if (Math.hypot(p.x - start.x, p.y - start.y) < SLOP) return;
+    clearTimeout(holdTimer);
+    mode = 'pan';
+  } else if (mode === 'held') {
+    if (Math.hypot(p.x - start.x, p.y - start.y) < SLOP) return;
+    mouse('mousemove', start.x, start.y, 0, 0);
+    mouse('mousedown', start.x, start.y, 0, 1);
+    mode = 'drag';
+  }
+  if (mode === 'pan') {
+    // zoomed in, a finger moves the view; at full view it moves the pointer, for hover menus
+    if (z > 1) { tx += p.x - last.x; ty += p.y - last.y; place(); } else mouse('mousemove', p.x, p.y, 0, 0);
+  } else if (mode === 'drag') {
+    mouse('mousemove', p.x, p.y, 0, 1);
+  }
+  last = p;
+}, { capture: true, passive: false });
+
+function touchEnd(e) {
+  if (!mode) return;
+  own(e);
+  clearTimeout(holdTimer);
+  if (e.touches.length) return;
+  if (e.type === 'touchend') {
+    if (mode === 'one') click(start.x, start.y, 0);
+    else if (mode === 'held') click(start.x, start.y, 2);
+    else if (mode === 'two' && !moved && Date.now() - start.at < TWO_TAP_MS) click(start.x, start.y, 2);
+  }
+  if (mode === 'drag') mouse('mouseup', last.x, last.y, 0, 0);
+  mode = '';
+}
+view.addEventListener('touchend', touchEnd, { capture: true, passive: false });
+view.addEventListener('touchcancel', touchEnd, { capture: true, passive: false });
+
+// ---- keys ----
+const XK = { Esc: 0xff1b, Tab: 0xff09, Enter: 0xff0d, Bksp: 0xff08, Del: 0xffff, Home: 0xff50, End: 0xff57, '←': 0xff51, '↑': 0xff52, '→': 0xff53, '↓': 0xff54, PgUp: 0xff55, PgDn: 0xff56 };
+const MODS = { Ctrl: [0xffe3, 'ControlLeft'], Alt: [0xffe9, 'AltLeft'], Super: [0xffeb, 'MetaLeft'] };
+const held = new Set();
+function press(sym) {
+  if (!rfb || !up) return;
+  rfb.sendKey(sym, null);
+  if (held.size) {
+    for (const m of held) rfb.sendKey(MODS[m][0], MODS[m][1], false);
+    held.clear();
+    renderBar();
+  }
+}
+// X keysyms: Latin-1 as itself, the rest of Unicode at 0x01000000 + its code point
+const symOf = cp => (cp < 0x100 ? cp : 0x01000000 + cp);
+function type(text) {
+  for (const ch of text) {
+    if (ch === '\n' || ch === '\r') press(XK.Enter);
+    else if (ch === '\t') press(XK.Tab);
+    else press(symOf(ch.codePointAt(0)));
+  }
+}
+window.BiaLiveInput(kbd, type, () => press(XK.Bksp));
+kbd.addEventListener('keydown', e => {
+  // a keyboard's own keys that never reach the text: only a real key names itself here
+  const named = { Escape: XK.Esc, Tab: XK.Tab, ArrowLeft: XK['←'], ArrowUp: XK['↑'], ArrowRight: XK['→'], ArrowDown: XK['↓'], Home: XK.Home, End: XK.End, PageUp: XK.PgUp, PageDown: XK.PgDn, Delete: XK.Del, Backspace: XK.Bksp, Enter: XK.Enter };
+  if (e.isComposing || !named[e.key]) return;
+  e.preventDefault();
+  press(named[e.key]);
+});
+
+const bar = $('bar');
+function renderBar() {
+  const btn = (label, on, active) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (active) b.className = 'on';
+    b.onmousedown = e => e.preventDefault(); // the on-screen keyboard stays open
+    b.onclick = on;
+    return b;
+  };
+  bar.replaceChildren(
+    btn('Keyboard', () => { if (document.activeElement === kbd) kbd.blur(); else kbd.focus({ preventScroll: true }); renderBar(); }, document.activeElement === kbd),
+    btn('Fit', () => { z = 1; tx = ty = 0; place(); }),
+    ...['Esc', 'Tab'].map(k => btn(k, () => press(XK[k]))),
+    ...Object.keys(MODS).map(m => btn(m, () => {
+      if (!rfb || !up) return;
+      const on = !held.has(m);
+      if (on) held.add(m); else held.delete(m);
+      rfb.sendKey(MODS[m][0], MODS[m][1], on);
+      renderBar();
+    }, held.has(m))),
+    ...['←', '↑', '↓', '→', 'Home', 'End', 'PgUp', 'PgDn', 'Enter', 'Bksp', 'Del'].map(k => btn(k, () => press(XK[k]))),
+    btn('Paste', async () => { try { type(await navigator.clipboard.readText()); } catch { status('This browser will not share its clipboard here.', false); setTimeout(() => { if (up) $('status').hidden = true; }, 2500); } }),
+    btn('Ctrl+Alt+Del', () => { if (rfb && up) rfb.sendCtrlAltDel(); }),
+  );
+}
+kbd.addEventListener('focus', renderBar);
+kbd.addEventListener('blur', renderBar);
+renderBar();
+</script>
+</body>
+</html>
