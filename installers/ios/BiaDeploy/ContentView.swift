@@ -14,7 +14,7 @@ struct ContentView: View {
                     Text("bia").font(.system(size: 34, weight: .bold)).foregroundStyle(accent)
                     Text(" deploy").font(.system(size: 34)).foregroundStyle(.secondary)
                     Spacer()
-                    if model.page == .brain { Button("bia keys") { model.openKeys() } }
+                    if model.page == .brain { Button("your bias") { model.openKeys() }.buttonStyle(.bordered).tint(accent) }
                 }
                 switch model.page {
                 case .brain: BrainPage(model: model)
@@ -492,7 +492,7 @@ struct KeysPage: View {
     var body: some View {
         Button("‹  Back") { model.page = .brain }
         Card {
-            Text("bia keys").font(.title3.weight(.semibold))
+            Text("your bias").font(.title3.weight(.semibold))
             Button("Import a .biaconfig…") { picking = true }.buttonStyle(.bordered)
                 .fileImporter(isPresented: $picking, allowedContentTypes: [UTType(exportedAs: "biadeploy.config")]) { result in
                     if case .success(let url) = result { model.offerConfig(url) }

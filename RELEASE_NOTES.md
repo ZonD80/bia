@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.3
+
+### Changes
+- bia's web app on iPhones: with the keyboard open, the chat was squeezed and the sidebar showed under it. Chat, search, shell and screen now stay above the keyboard, the newest messages stay in view, and the page no longer zooms in when a field is tapped.
+- In the bia deploy apps for iPhone and Android, "bia keys" is now a "your bias" button.
+
+### For bia
+- Nothing to do.
+
 ## 2.0.2
 
 ### Changes

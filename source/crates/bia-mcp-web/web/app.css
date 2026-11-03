@@ -101,7 +101,9 @@ details.howto li { margin: 4px 0; }
 .err-line { color: var(--err); min-height: 1.3em; font-size: 14px; margin-top: 8px; }
 
 /* ---------- layout ---------- */
-#app { display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); height: 100%; }
+#app { position: fixed; top: 0; left: 0; right: 0; display: grid; grid-template-columns: var(--side-w) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: var(--app-h, 100%); }
+/* iOS zooms the page when a field under 16px takes focus */
+@media (pointer: coarse) { input, textarea, select { font-size: max(16px, var(--fs)) !important; } }
 #side { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; position: relative; height: 100%; }
 #main { position: relative; min-width: 0; height: 100%; background: var(--chat-bg); }
 /* the phone rule must come after this one: both are !important */
@@ -348,7 +350,7 @@ details.howto li { margin: 4px 0; }
 .qrbody { text-align: center; }
 .qrbody .qrimg { width: 100%; max-width: 320px; aspect-ratio: 1; image-rendering: pixelated; background: #fff; border-radius: 10px; }
 .qrbody .muted { color: var(--dim); font-size: 13px; }
-.modal-back { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; animation: fade .15s; }
+.modal-back { position: fixed; top: 0; left: 0; right: 0; height: var(--app-h, 100%); background: rgba(0,0,0,.5); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; animation: fade .15s; }
 @keyframes fade { from { opacity: 0; } }
 .modal { background: var(--panel); border-radius: 16px; box-shadow: var(--shadow); width: 100%; max-width: 440px; max-height: 90vh; display: flex; flex-direction: column; animation: pop .15s ease; }
 .modal.wide { max-width: 760px; }

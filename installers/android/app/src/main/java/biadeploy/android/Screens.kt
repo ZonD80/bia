@@ -79,7 +79,7 @@ fun App(m: DeployModel) {
                 Text("bia", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text(" deploy", fontSize = 34.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                 Spacer(Modifier.weight(1f))
-                if (m.page == Page.Brain) TextButton({ m.openKeys() }) { Text("bia keys") }
+                if (m.page == Page.Brain) OutlinedButton({ m.openKeys() }) { Text("your bias") }
             }
             when (m.page) {
                 Page.Brain -> BrainPage(m)
@@ -511,7 +511,7 @@ private fun KeysPage(m: DeployModel) {
     }
     TextButton({ m.page = Page.Brain }) { Text("‹  Back") }
     Card {
-        Title("bia keys")
+        Title("your bias")
         OutlinedButton({ pick.launch(arrayOf("*/*")) }) { Text("Import a .biaconfig…") }
         if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
         else Weak("Each is a certificate for one bia, the way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")

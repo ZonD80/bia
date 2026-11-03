@@ -1003,7 +1003,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   Safari view, so the app keeps running; the core retries OpenAI requests for 90 s,
   since Android keeps a background app off the network while that page is in front.
   Each deployed bia's key and CA stay in the app's folder (`servers/<host>/`); the
-  "bia keys" page lists them to install again or send through the share sheet
+  "your bias" page lists them to install again or send through the share sheet
   (`bia-<host>.p12`, `bia-<host>-ca.crt`; Android shares copies through a
   FileProvider limited to the cache's `share/`). Builds: `build-apk.sh`,
   `build-aab.sh` (Play upload key `~/biaDeployPlayKeys.jks` + `keystore.properties`,

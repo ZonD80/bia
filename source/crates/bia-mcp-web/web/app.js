@@ -9,6 +9,33 @@ const BIA_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHAAAABwCAYAAADG
 // utilities
 // ======================================================================
 const $ = (s, el = document) => el.querySelector(s);
+
+// iOS does not resize the page for its keyboard: it scrolls the page and leaves the layout taller
+// than what can be seen, so the sidebar shows under the chat. The app is pinned to what is visible.
+(function keepToVisibleArea() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  let stick = true;
+  document.addEventListener('scroll', e => {
+    if (e.target && e.target.id === 'msgs') { const m = e.target; stick = m.scrollTop + m.clientHeight >= m.scrollHeight - 80; }
+  }, true);
+  let shown = 0;
+  const fit = () => {
+    if (vv.scale > 1.01) return; // someone's own pinch zoom pans freely
+    const height = Math.round(vv.height);
+    if (height !== shown) {
+      shown = height;
+      document.documentElement.style.setProperty('--app-h', height + 'px');
+      const m = document.getElementById('msgs');
+      if (m && stick) requestAnimationFrame(() => { m.scrollTop = m.scrollHeight; });
+    }
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+  };
+  vv.addEventListener('resize', fit);
+  vv.addEventListener('scroll', fit);
+  window.addEventListener('scroll', fit);
+  fit();
+})();
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 
 function h(tag, props, ...kids) {
