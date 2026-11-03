@@ -9,7 +9,7 @@ owner, For bia as concrete steps with tool names. Keep each item to one line.
 
 ### Changes
 - bia's web app on iPhones: with the keyboard open, the chat was squeezed and the sidebar showed under it. Chat, search, shell and screen now stay above the keyboard, the newest messages stay in view, and the page no longer zooms in when a field is tapped.
-- In the bia deploy apps for iPhone and Android, "bia keys" is now a "your bias" button.
+- In the bia deploy apps for iPhone and Android, "bia keys" is now a "your bias" button, and a saved bia can be removed from the phone there. That deletes only the phone's key: bia keeps running.
 
 ### For bia
 - Nothing to do.

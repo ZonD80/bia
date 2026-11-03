@@ -424,6 +424,14 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
     val context = LocalContext.current
     var exporting by remember { mutableStateOf(false) }
     if (exporting) ExportDialog(folder, host, name) { exporting = false }
+    var removing by remember { mutableStateOf(false) }
+    if (removing) AlertDialog(
+        onDismissRequest = { removing = false },
+        title = { Text("Remove ${name.ifEmpty { "bia at $host" }} from this phone?") },
+        text = { Text("This deletes the key kept on this phone. bia keeps running on its server. If this is the only copy of root's key, root is locked out of that bia for good.") },
+        confirmButton = { TextButton({ removing = false; m.forget(folder) }) { Text("Remove", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton({ removing = false }) { Text("Cancel") } },
+    )
     var caSaved by remember { mutableStateOf(false) }
     val saveCa = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-x509-ca-cert")) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -447,6 +455,7 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
                 TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
             }
             OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
+            TextButton({ removing = true }) { Text("Remove from this phone…", color = MaterialTheme.colorScheme.error) }
         }
         return
     }

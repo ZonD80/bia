@@ -455,6 +455,24 @@ pub struct SavedBia {
     pub saved_at: u64,
 }
 
+/// Delete one saved bia's folder from this phone: its key, CA, address and name. bia itself is not
+/// touched. Only a folder directly in `servers` can go.
+fn remove_saved(servers: &Path, folder: &Path) -> Result<(), String> {
+    let servers = servers.canonicalize().map_err(|e| e.to_string())?;
+    let target = folder.canonicalize().map_err(|e| e.to_string())?;
+    if target.parent() != Some(servers.as_path()) {
+        return Err(format!("{} is not a saved bia", folder.display()));
+    }
+    std::fs::remove_dir_all(&target).map_err(|e| e.to_string())
+}
+
+/// Forget a bia on this phone. See `remove_saved`.
+#[uniffi::export]
+pub fn forget_bia(folder: String) -> R<()> {
+    let servers = bia_deploy::app_dir().map(|d| d.join("servers")).ok_or_else(|| failed("no app folder"))?;
+    remove_saved(&servers, Path::new(&folder)).map_err(failed)
+}
+
 /// The bias whose keys are on this phone, newest first: for sharing a key again later.
 #[uniffi::export]
 pub fn saved_bias() -> Vec<SavedBia> {
@@ -635,4 +653,35 @@ fn uuid_like(seed: &str) -> String {
 #[uniffi::export]
 pub fn server_folder(host: String) -> R<String> {
     Ok(remote::server_folder(&host)?.display().to_string())
+}
+
+#[cfg(test)]
+mod forget_tests {
+    use super::remove_saved;
+
+    #[test]
+    fn removes_only_a_saved_bias_folder() {
+        let root = std::env::temp_dir().join(format!("bia-forget-{}", std::process::id()));
+        let servers = root.join("servers");
+        let bia = servers.join("203.0.113.7");
+        let nested = bia.join("inner");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(bia.join("bia-root.p12"), b"key").unwrap();
+        let other = servers.join("203.0.113.8");
+        std::fs::create_dir_all(&other).unwrap();
+
+        assert!(remove_saved(&servers, &servers).is_err());
+        assert!(remove_saved(&servers, &outside).is_err());
+        assert!(remove_saved(&servers, &nested).is_err());
+        assert!(remove_saved(&servers, &servers.join("203.0.113.8/../../outside")).is_err());
+        assert!(outside.exists() && nested.exists());
+
+        remove_saved(&servers, &bia).unwrap();
+        assert!(!bia.exists());
+        assert!(other.exists(), "another bia stays");
+        assert!(remove_saved(&servers, &bia).is_err(), "already gone");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

@@ -227,6 +227,12 @@ final class DeployModel: ObservableObject {
         page = .keys
     }
 
+    /// This phone's key and address for a bia. bia itself keeps running.
+    func forget(folder: String) {
+        do { try forgetBia(folder: folder) } catch { self.error = message(error) }
+        saved = savedBias()
+    }
+
     // MARK: .biaconfig
     /// A private copy of a file waiting for its password.
     @Published var configFile: IncomingConfig?

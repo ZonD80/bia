@@ -30,6 +30,7 @@ import uniffi.bia_deploy_mobile.landSecret
 import uniffi.bia_deploy_mobile.newKey
 import uniffi.bia_deploy_mobile.readKey
 import uniffi.bia_deploy_mobile.SavedBia
+import uniffi.bia_deploy_mobile.forgetBia
 import uniffi.bia_deploy_mobile.savedBias
 import uniffi.bia_deploy_mobile.savedKeys
 import uniffi.bia_deploy_mobile.waitUp
@@ -264,6 +265,12 @@ class DeployModel : ViewModel() {
     fun openKeys() {
         saved.clear(); saved.addAll(savedBias())
         page = Page.Keys
+    }
+
+    /** This phone's key and address for a bia. bia itself keeps running. */
+    fun forget(folder: String) {
+        runCatching { forgetBia(folder) }.onFailure { error = it.message }
+        saved.clear(); saved.addAll(savedBias())
     }
 
     // ---- .biaconfig ----

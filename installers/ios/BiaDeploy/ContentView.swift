@@ -424,9 +424,16 @@ struct KeyCard: View {
     var savedAt: Date? = nil
     var name: String = ""
     @State private var exporting = false
+    @State private var removing = false
 
     var body: some View {
         content.sheet(isPresented: $exporting) { ExportSheet(folder: folder, host: host, name: name) }
+            .alert("Remove \(name.isEmpty ? "bia at \(host)" : name) from this phone?", isPresented: $removing) {
+                Button("Remove", role: .destructive) { model.forget(folder: folder) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This deletes the key kept on this phone. bia keeps running on its server. If this is the only copy of root's key, root is locked out of that bia for good.")
+            }
     }
 
     @ViewBuilder private var content: some View {
@@ -445,6 +452,7 @@ struct KeyCard: View {
                     .buttonStyle(.bordered)
                 }
                 Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
+                Button("Remove from this phone…", role: .destructive) { removing = true }
             }
         } else {
             full
