@@ -32,7 +32,10 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.
 - **Android:** bia deploy puts bia on a server from the phone:
   [Google Play](https://play.google.com/store/apps/details?id=biadeploy.android), or the
   [APK](https://github.com/ZonD80/bia/releases/latest/download/bia-deploy-android.apk) from the latest release.
-- **iPhone:** coming soon to the App Store.
+- **iPhone:** bia deploy puts bia on a server from the phone:
+  [App Store](https://apps.apple.com/app/bia-deploy/id6827948196),
+  [TestFlight](https://testflight.apple.com/join/qePtQWqF), or
+  [appdb](https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0).
 - **A Linux server over ssh:** `curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash`
 
 ### Lineage

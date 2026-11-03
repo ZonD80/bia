@@ -57,9 +57,10 @@
           <div class="card host">
             <h3>iPhone</h3>
             <p class="host__note">iPhone and iPad</p>
-            <a class="btn btn--primary host__btn" :href="TESTFLIGHT_URL" target="_blank" rel="noopener">Join the TestFlight beta</a>
+            <a class="btn btn--primary host__btn" :href="APP_STORE_URL" target="_blank" rel="noopener">Download on the App Store</a>
+            <a class="btn btn--ghost host__btn host__btn--alt" :href="TESTFLIGHT_URL" target="_blank" rel="noopener">Join the TestFlight beta</a>
             <a class="btn btn--ghost host__btn host__btn--alt" :href="APPDB_URL" target="_blank" rel="noopener">Get it on appdb</a>
-            <p class="host__ver">TestFlight needs Apple’s TestFlight app · free · appdb is another install path</p>
+            <p class="host__ver">App Store · TestFlight for betas · appdb is another install path</p>
           </div>
         </div>
         <p v-if="version" class="release-note">
@@ -175,8 +176,9 @@ import type { FlashHost } from '~/composables/useLatestRelease'
 
 type Host = { id: FlashHost; label: string; note: string }
 
-// the phone apps (server only); iPhone is on TestFlight until the App Store listing is live
+// the phone apps (server only)
 const PLAY_URL = 'https://play.google.com/store/apps/details?id=biadeploy.android'
+const APP_STORE_URL = 'https://apps.apple.com/app/bia-deploy/id6827948196'
 const TESTFLIGHT_URL = 'https://testflight.apple.com/join/qePtQWqF'
 const APPDB_URL = 'https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0'
 
