@@ -4568,7 +4568,7 @@ done
     fn background_start_job_answers_every_command_while_starting() {
         let dir = std::env::temp_dir().join(format!("bia-startjob-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        for (name, cmd) in [("slow", r#""/bin/sh","args":["server.sh"]"#), ("broken", r#""/nonexistent/server""#)] {
+        for (name, cmd) in [("slow", r#""/bin/sh","args":["server.sh"]"#), ("broken", r#""/bin/sh","args":["-c","sleep 2; exit 1"]"#)] {
             let mcp = dir.join("MCPs").join(name);
             std::fs::create_dir_all(&mcp).unwrap();
             std::fs::write(mcp.join("server.sh"), slow_mcp(2).replace("\"tun\"", &format!("\"{name}\""))).unwrap();
@@ -4624,7 +4624,8 @@ done
         let (r, _) = t.call("discover", &json!({"path": "mcp/slow", "enable": true}), &mut log);
         assert!(r.contains("already enabled"), "{r}");
 
-        // a start that fails: its job says why; the next enable tries again (and fails again)
+        // a start that fails: its job says why; the next enable tries again (and fails again).
+        // It fails after a moment: a command that cannot run could fail before the send below.
         let r = t.start_job("broken").unwrap();
         let bjob = r.rsplit("job:").next().unwrap().trim().to_string();
         let op = crate::outbox::Op::Send { text: "lost".into(), files: vec![] };

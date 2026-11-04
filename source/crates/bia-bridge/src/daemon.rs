@@ -199,9 +199,9 @@ impl Daemon {
     }
 }
 
-/// Run the daemon for `name` in the foreground (`bia-bridge daemon`).
-pub fn run(name: &str) -> Result<()> {
-    let p = Profile::load(name)?;
+/// Run the daemon for this agent's profile `name` in the foreground (`bia-bridge daemon`).
+pub fn run(agent: &str, name: &str) -> Result<()> {
+    let p = Profile::load(agent, name)?;
     if crate::ipc::ping(&p).is_ok() {
         return Ok(()); // one is running already
     }

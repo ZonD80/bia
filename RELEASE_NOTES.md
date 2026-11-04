@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.6
+
+### Changes
+- bia-bridge: a profile now belongs to one agent and one bia. Two agents on a computer are two people to bia, so a second agent can no longer use the first one's profile by accident; it asks for its own certificate, which the owner approves. Every command says which agent is asking (`--agent <name>`); in MCP mode the client's own name is used unless `--agent` is given. Existing profiles move to the agent named in their certificate on the next command.
+- bia-bridge: `wait --silence <seconds>` prints what bia says as it comes and exits once bia has been quiet that long, so an agent gets its turn back instead of waiting forever. `--out <file>` writes the answers to a file instead of printing them.
+
+### For bia
+- Nothing to do.
+
 ## 2.0.5
 
 ### Changes

@@ -519,9 +519,12 @@ mod tests {
 
     #[test]
     fn chat_lines() {
+        // the platform is set once per process; tests share whichever came first. Set it
+        // before reading: until then platform() can change under this test.
         set_platform(Platform::Messenger);
+        let pn = platform().name();
         note_title("t5", "Family");
-        assert_eq!(format_chat("t5", ""), "messenger:t5  Family");
-        assert_eq!(format_chat("9", "9"), "messenger:9");
+        assert_eq!(format_chat("t5", ""), format!("{pn}:t5  Family"));
+        assert_eq!(format_chat("9", "9"), format!("{pn}:9"));
     }
 }

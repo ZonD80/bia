@@ -208,7 +208,9 @@ the agent issues (`/pki issue`).
 Other agents (Claude Code, Claude Desktop, Cursor, scripts) talk to a bia with
 `bia-bridge` (release assets for macOS, Linux, Windows; `source/crates/bia-bridge`):
 `bia-bridge connect https://<machine-ip> --identity <name>`, the owner approves, then
-`bia-bridge send` / `bia-bridge wait`, or `claude mcp add bia -- bia-bridge mcp`.
+`bia-bridge --agent <name> send` / `bia-bridge --agent <name> wait --silence 60`, or
+`claude mcp add bia -- bia-bridge mcp --agent <name>`. Each agent has its own profile and
+certificate on each bia.
 
 ## Adding an MCP
 

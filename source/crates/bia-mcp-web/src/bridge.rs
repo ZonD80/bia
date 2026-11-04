@@ -81,7 +81,7 @@ pub fn list() -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "files": files,
         "mcp": {"command": "bia-bridge", "args": ["mcp"]},
-        "how": "pick your platform, download it with this bia's CA pinned (GET /v1/pki/ca, compare its sha256 with ca_sha256 in /.well-known/bia.json), check the sha256 here, make it executable, then: bia-bridge connect https://<this address> --identity <your name>",
+        "how": "pick your platform, download it with this bia's CA pinned (GET /v1/pki/ca, compare its sha256 with ca_sha256 in /.well-known/bia.json), check the sha256 here, make it executable, then: bia-bridge connect https://<this address> --identity <your own name>, and --agent <your own name> on later commands",
     })
 }
 

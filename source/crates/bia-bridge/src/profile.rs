@@ -1,6 +1,8 @@
-//! Profiles: one per bia this machine talks to, under the bridge's home folder
-//! (`BIA_BRIDGE_HOME`, else the OS config folder). Each holds the key (made here, never
-//! sent), the certificate, the pinned CA, the request, the inbox and the daemon's port.
+//! Profiles: one per agent and bia, `<home>/<agent>/<bia>/` under the bridge's home folder
+//! (`BIA_BRIDGE_HOME`, else the OS config folder). The agent is the certificate's identity:
+//! two agents on one machine are two people to a bia, and never share a profile. Each holds
+//! the key (made here, never sent), the certificate, the pinned CA, the request, the inbox
+//! and the daemon's port.
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -29,11 +31,11 @@ pub fn home() -> PathBuf {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Profile {
-    /// Profile name (`--bia`).
+    /// The bia's name for this agent (`--bia`).
     pub name: String,
     /// `https://host[:port]` of the bia.
     pub url: String,
-    /// This client's identity there (the certificate's CN).
+    /// The agent: its identity there (the certificate's CN).
     pub identity: String,
     /// The bia's CA fingerprint (sha256 hex), pinned at the first contact.
     pub ca_sha256: String,
@@ -50,30 +52,66 @@ pub struct Profile {
     pub message: String,
     #[serde(default)]
     pub created: u64,
+    /// Still in the old `<home>/<name>/` folder, on its way to the agent's own.
+    #[serde(skip)]
+    pub legacy: bool,
 }
 
 pub fn valid_name(n: &str) -> bool {
     !n.is_empty() && n.len() <= 64 && n.chars().all(|c| c.is_ascii_alphanumeric() || "-_.@".contains(c)) && !n.starts_with('.')
 }
 
+/// Before 2.0.6 a profile was `<home>/<name>/`, for whichever agent ran the command. Each moves
+/// to the agent its certificate names; any other agent then has to ask for its own.
+pub fn migrate() {
+    for e in fs::read_dir(home()).into_iter().flatten().flatten() {
+        let (old, name) = (e.path(), e.file_name().to_string_lossy().to_string());
+        let Ok(b) = fs::read(old.join("profile.json")) else { continue };
+        let Ok(mut p) = serde_json::from_slice::<Profile>(&b) else { continue };
+        if !valid_name(&p.identity) || !valid_name(&name) {
+            continue;
+        }
+        p.name = name.clone();
+        p.legacy = true;
+        let _ = crate::ipc::stop(&p); // its daemon works in the old folder
+        // through a side name: the agent can be called the same as the old profile
+        let side = home().join(format!(".moving-{name}"));
+        let target = Profile::dir_of(&p.identity, &name);
+        if target.exists() || fs::rename(&old, &side).is_err() {
+            continue;
+        }
+        let moved = target.parent().is_some_and(|t| fs::create_dir_all(t).is_ok()) && fs::rename(&side, &target).is_ok();
+        if !moved {
+            let _ = fs::rename(&side, &old);
+        }
+    }
+}
+
 impl Profile {
-    pub fn dir_of(name: &str) -> PathBuf {
-        home().join(name)
+    pub fn dir_of(agent: &str, name: &str) -> PathBuf {
+        home().join(agent).join(name)
     }
     pub fn dir(&self) -> PathBuf {
-        Self::dir_of(&self.name)
+        if self.legacy {
+            return home().join(&self.name);
+        }
+        Self::dir_of(&self.identity, &self.name)
     }
     pub fn path(&self, f: &str) -> PathBuf {
         self.dir().join(f)
     }
 
-    pub fn load(name: &str) -> Result<Profile> {
-        if !valid_name(name) {
-            bail!("bad profile name {name:?}");
+    pub fn load(agent: &str, name: &str) -> Result<Profile> {
+        if !valid_name(name) || !valid_name(agent) {
+            bail!("bad agent or bia name {agent:?} {name:?}");
         }
-        let p = Self::dir_of(name).join("profile.json");
-        let b = fs::read(&p).with_context(|| format!("no profile {name} (bia-bridge connect <url> makes one)"))?;
-        Ok(serde_json::from_slice(&b)?)
+        let f = Self::dir_of(agent, name).join("profile.json");
+        let b = fs::read(&f).with_context(|| format!("{agent} has no bia called {name} (bia-bridge connect <url> --identity {agent} --as {name} asks for its own certificate)"))?;
+        let p: Profile = serde_json::from_slice(&b)?;
+        if p.identity != agent {
+            bail!("{} belongs to {}, not {agent}", f.display(), p.identity);
+        }
+        Ok(p)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -84,28 +122,42 @@ impl Profile {
         Ok(())
     }
 
-    pub fn list() -> Vec<Profile> {
-        let mut out: Vec<Profile> = fs::read_dir(home())
+    /// One agent's profiles.
+    pub fn of_agent(agent: &str) -> Vec<Profile> {
+        let mut out: Vec<Profile> = fs::read_dir(home().join(agent))
             .into_iter()
             .flatten()
             .flatten()
-            .filter_map(|e| Profile::load(&e.file_name().to_string_lossy()).ok())
+            .filter_map(|e| Profile::load(agent, &e.file_name().to_string_lossy()).ok())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
     }
 
-    /// `--bia <name>`, else `BIA_BRIDGE_PROFILE`, else the only profile there is.
-    pub fn pick(name: Option<&str>) -> Result<Profile> {
+    /// Every agent's profiles on this machine.
+    pub fn list() -> Vec<Profile> {
+        let mut out: Vec<Profile> = fs::read_dir(home())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|e| Profile::of_agent(&e.file_name().to_string_lossy()))
+            .collect();
+        out.sort_by(|a, b| (&a.identity, &a.name).cmp(&(&b.identity, &b.name)));
+        out
+    }
+
+    /// `agent`'s profile `--bia <name>`, else `BIA_BRIDGE_PROFILE`, else the only one it has.
+    /// Never another agent's: to a bia that would be somebody else talking.
+    pub fn pick(agent: &str, name: Option<&str>) -> Result<Profile> {
         if let Some(n) = name.map(str::to_string).or_else(|| std::env::var("BIA_BRIDGE_PROFILE").ok()).filter(|n| !n.is_empty()) {
-            return Profile::load(&n);
+            return Profile::load(agent, &n);
         }
-        let all = Profile::list();
+        let all = Profile::of_agent(agent);
         match all.len() {
-            0 => Err(anyhow!("no bia yet: bia-bridge connect https://<bia address> --identity <your name>")),
+            0 => Err(anyhow!("{agent} has no bia yet: bia-bridge connect https://<bia address> --identity {agent}. Each agent asks for its own certificate; another agent's profile is not {agent}'s to use.")),
             1 => Ok(all.into_iter().next().unwrap()),
             _ => Err(anyhow!(
-                "several bias ({}); choose one with --bia <name>",
+                "{agent} has several bias ({}); choose one with --bia <name>",
                 all.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
             )),
         }
@@ -148,9 +200,49 @@ pub fn random_hex(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn names() {
         assert!(valid_name("fred") && valid_name("claude-code@mac") && !valid_name("../x") && !valid_name(".x") && !valid_name(""));
+    }
+
+    #[test]
+    fn agents_keep_to_their_own_profiles() {
+        let h = std::env::temp_dir().join(format!("bia-bridge-prof-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&h);
+        std::env::set_var("BIA_BRIDGE_HOME", &h);
+        // the old layout, once with an agent named like the profile
+        for (name, who) in [("fred", "claude-code"), ("sam", "sam")] {
+            fs::create_dir_all(h.join(name)).unwrap();
+            let old = json!({"name": name, "url": "https://x", "identity": who, "ca_sha256": "", "state": "active"});
+            fs::write(h.join(name).join("profile.json"), old.to_string()).unwrap();
+            fs::write(h.join(name).join("key.pem"), who).unwrap();
+        }
+        migrate();
+        assert!(!h.join("fred").exists());
+        assert_eq!(fs::read_to_string(h.join("claude-code/fred/key.pem")).unwrap(), "claude-code");
+        assert_eq!(fs::read_to_string(h.join("sam/sam/key.pem")).unwrap(), "sam");
+        migrate();
+        assert_eq!(Profile::list().len(), 2, "running it again changes nothing");
+
+        assert_eq!(Profile::pick("claude-code", None).unwrap().name, "fred");
+        // the only profile on the machine is still somebody else's
+        assert!(Profile::pick("grok", None).unwrap_err().to_string().contains("grok has no bia"));
+        assert!(Profile::pick("grok", Some("fred")).is_err());
+        assert!(Profile::load("../claude-code", "fred").is_err());
+
+        // two agents, one bia
+        let grok = Profile { name: "fred".into(), identity: "grok".into(), url: "https://x".into(), ..Default::default() };
+        grok.save().unwrap();
+        assert_eq!(grok.dir(), h.join("grok/fred"));
+        assert_eq!(Profile::pick("grok", None).unwrap().identity, "grok");
+        assert_eq!(Profile::pick("claude-code", Some("fred")).unwrap().identity, "claude-code");
+
+        // a folder holding somebody else's profile is refused
+        fs::create_dir_all(h.join("mallory/fred")).unwrap();
+        fs::copy(h.join("grok/fred/profile.json"), h.join("mallory/fred/profile.json")).unwrap();
+        assert!(Profile::load("mallory", "fred").unwrap_err().to_string().contains("belongs to grok"));
+        let _ = fs::remove_dir_all(&h);
     }
 }

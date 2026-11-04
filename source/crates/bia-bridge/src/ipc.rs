@@ -42,7 +42,7 @@ pub fn ensure(p: &Profile) -> Result<()> {
     }
     let exe = std::env::current_exe()?;
     let mut c = std::process::Command::new(exe);
-    c.args(["daemon", "--bia", &p.name])
+    c.args(["daemon", "--agent", &p.identity, "--bia", &p.name])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

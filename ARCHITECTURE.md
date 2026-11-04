@@ -336,14 +336,21 @@ root certificate are still made here as PKCS#12, since browsers import those.
 x86_64/arm64, Windows x86_64) is that client, ready made, for agents that are not bias
 (Claude Code, Claude Desktop, scripts). `connect` makes a P-256 key locally
 (`bia_pki::new_key_csr`), pins the bia's CA (TOFU or `--ca-sha256`) and files the request.
-One daemon per profile (`<home>/<profile>/`: key, cert, CA, `inbox.jsonl`, `cursors.json`,
+A profile belongs to one agent and one bia: every command names the agent (`--agent`,
+`BIA_BRIDGE_AGENT`; in MCP mode the client's `clientInfo.name` by default) and it is the
+certificate's identity, so a second agent on the machine cannot pick up the first one's
+profile, by default, by name or through `import`, and asks for its own certificate. Old
+`<home>/<profile>/` folders move to their certificate's identity on the next command.
+One daemon per profile (`<home>/<agent>/<bia>/`: key, cert, CA, `inbox.jsonl`, `cursors.json`,
 `link.json` with the last revision seen, `outbox.jsonl`, `daemon.json` with a 127.0.0.1
 port and token, 0600) is started by any command: it polls the request until approved,
 then keeps the web bus link (protocol 2, below; `rx: null` the first time, so it starts
 from now), stores bia's messages and edits with their files pulled, sends from its
 outbox (files served from disk by `fid`) and renews the certificate 30 days before expiry.
 The CLI (`send`, `wait`, `read`, `history`, `status`) and MCP mode (`bia-bridge mcp`:
-connect, import, status, send, wait, read, history) share one read cursor. `import`
+connect, import, status, send, wait, read, history) share one read cursor. `wait --silence <s>`
+hands over what bia says as it comes and returns after that many quiet seconds, and `--out <file>`
+appends instead of printing, so an agent gets its turn back. `import`
 takes a certificate the agent already has (`.p12` via `bia_pki::read_p12`, the bia layout:
 PBES2/AES-256 with a SHA-256 MAC; or PEM files), checks it with `/v1/whoami`
 and keeps it as a profile. It is chat only:

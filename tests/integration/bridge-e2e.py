@@ -89,8 +89,11 @@ def start_web():
     return w
 
 
-def br(*args, timeout=120):
-    r = subprocess.run([bridge, *args], env=benv, capture_output=True, text=True, timeout=timeout)
+def br(*args, timeout=120, agent="claude"):
+    env = dict(benv)
+    if agent:
+        env["BIA_BRIDGE_AGENT"] = agent
+    r = subprocess.run([bridge, *args], env=env, capture_output=True, text=True, timeout=timeout)
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
@@ -99,12 +102,12 @@ web = start_web()
 # ---- connect: key here, request there, the owner approves, the daemon collects
 rc, out = br("connect", URL, "--identity", "claude", "--note", "bridge e2e", "--as", "home")
 check(rc == 0 and "Asked https://127.0.0.1:8443" in out and "pending" not in out.lower() or "approve" in out, f"connect: {out[:140]}")
-check(os.path.exists(f"{home}/home/key.pem") and not os.path.exists(f"{home}/home/cert.pem"), "key made here, no certificate yet")
+check(os.path.exists(f"{home}/claude/home/key.pem") and not os.path.exists(f"{home}/claude/home/cert.pem"), "key made here, no certificate yet")
 if os.name == "posix":
-    check(oct(os.stat(f"{home}/home/key.pem").st_mode & 0o777) == "0o600", "key is private to this user")
+    check(oct(os.stat(f"{home}/claude/home/key.pem").st_mode & 0o777) == "0o600", "key is private to this user")
 rc, out = br("status")
 check(rc == 0 and "waiting for the owner" in out, f"status pending: {out}")
-req_id = json.load(open(f"{home}/home/profile.json"))["request"]
+req_id = json.load(open(f"{home}/claude/home/profile.json"))["request"]
 txt, err = web.tool("pki_approve", id=req_id, message="welcome, claude")
 check(not err, f"owner approves: {txt[:80]}")
 for _ in range(60):
@@ -114,7 +117,7 @@ for _ in range(60):
         break
     time.sleep(1)
 check(s.get("state") == "active" and s.get("online"), f"daemon collected the certificate and opened the link: {s}")
-check(os.path.exists(f"{home}/home/cert.pem"), "certificate stored")
+check(os.path.exists(f"{home}/claude/home/cert.pem"), "certificate stored")
 rc, out = br("read")
 check("approved this client as claude" in out and "welcome, claude" in out, f"approval note with the owner's message: {out}")
 
@@ -181,7 +184,7 @@ n = web.inbound("said while you were down", 60)
 check(n is not None and n["identity"] == "claude", f"delivered once the bia is back: {n}")
 
 # ---- MCP mode (Claude Code & co.)
-m = Mcp([bridge, "mcp"], benv)
+m = Mcp([bridge, "mcp", "--agent", "claude"], benv)
 names = [t["name"] for t in m.rpc("tools/list")["result"]["tools"]]
 check({"connect", "import", "status", "send", "wait", "read", "history"} <= set(names) and "chats" not in names, f"MCP tools: {names}")
 txt, err = m.tool("status")
@@ -203,20 +206,86 @@ check(not err and m is not None, f"owner issues a .p12 for alice: {txt[:100]}")
 nov = ssl.create_default_context(); nov.check_hostname = False; nov.verify_mode = ssl.CERT_NONE
 p12 = f"{root}/alice.p12"
 open(p12, "wb").write(urllib.request.urlopen(URL + m.group(0), context=nov).read())
-rc, out = br("import", URL, "--p12", p12, "--password", "nope", "--as", "alice")
+rc, out = br("import", URL, "--p12", p12, "--as", "stolen")
+check(rc != 0 and "identity on a bia is claude, not alice" in out, f"another agent's certificate is refused: {out[:120]}")
+rc, out = br("import", URL, "--p12", p12, "--password", "nope", "--as", "alice", agent="alice")
 check(rc != 0 and "wrong .p12 password" in out, f"wrong password refused: {out}")
-rc, out = br("import", URL, "--p12", p12, "--as", "alice")
+rc, out = br("import", URL, "--p12", p12, "--as", "alice", agent="alice")
 check(rc == 0 and "Imported: alice" in out and "as alice" in out, f"import .p12: {out}")
-rc, out = br("send", "--bia", "alice", "hi from alice")
+rc, out = br("send", "--bia", "alice", "hi from alice", agent="alice")
 n = web.inbound("hi from alice")
 check(n is not None and n["identity"] == "alice", f"imported identity talks: {n}")
-rc, out = br("import", URL, "--cert", f"{home}/home/cert.pem", "--key", f"{home}/home/key.pem", "--ca", f"{home}/home/ca.pem", "--as", "pemcopy")
+rc, out = br("import", URL, "--cert", f"{home}/claude/home/cert.pem", "--key", f"{home}/claude/home/key.pem", "--ca", f"{home}/claude/home/ca.pem", "--as", "pemcopy")
 check(rc == 0 and "as claude" in out, f"import PEM files: {out}")
 time.sleep(3)
 rc, out = br("status", "--bia", "pemcopy")
 check("approved" in out and "another bia-bridge with this certificate" in out, f"a copy of the same certificate is refused while the first is connected: {out}")
+rc, out = br("status")
+check(rc != 0 and "several bias" in out, f"two of its own need --bia: {out}")
 rc, out = br("forget", "--bia", "pemcopy")
-br("stop", "--bia", "alice")
+br("stop", "--bia", "alice", agent="alice")
+
+# ---- another agent on this machine is another person
+rc, out = br("status", agent=None)
+check(rc != 0 and "which agent is this" in out, f"no agent named: {out[:100]}")
+rc, out = br("status", agent="grok")
+check(rc != 0 and "grok has no bia" in out, f"claude's only profile is not grok's: {out[:120]}")
+rc, out = br("send", "--bia", "home", "pretending", agent="grok")
+check(rc != 0 and web.inbound("pretending", 2) is None, f"nor by name: {out[:120]}")
+rc, out = br("import", URL, "--cert", f"{home}/claude/home/cert.pem", "--key", f"{home}/claude/home/key.pem", "--ca", f"{home}/claude/home/ca.pem", "--as", "home", agent="grok")
+check(rc != 0 and "not claude" in out, f"nor by importing its certificate: {out[:120]}")
+rc, out = br("connect", URL, "--identity", "claude", "--as", "x", agent="grok")
+check(rc != 0, f"nor by asking under its name: {out[:120]}")
+rc, out = br("connect", URL, "--identity", "grok", "--as", "home", agent="grok")
+check(rc == 0, f"its own request, for the same bia and name: {out[:100]}")
+req3 = json.load(open(f"{home}/grok/home/profile.json"))["request"]
+web.tool("pki_approve", id=req3, message="welcome, grok")
+for _ in range(60):
+    if json.loads(br("status", "--json", agent="grok")[1]).get("online"):
+        break
+    time.sleep(1)
+br("send", "from grok", agent="grok")
+n = web.inbound("from grok")
+check(n is not None and n["identity"] == "grok", f"grok speaks as grok: {n}")
+br("send", "from claude too")
+n = web.inbound("from claude too")
+check(n is not None and n["identity"] == "claude", f"claude still speaks as claude, both linked: {n}")
+txt = br("profiles", agent=None)[1]
+check("agent grok" in txt and "agent claude" in txt, f"profiles name the agent: {txt}")
+m = Mcp([bridge, "mcp"], benv)
+txt, err = m.tool("status")
+check(err and "which agent is this" in txt, f"MCP with no name at all: {txt[:100]}")
+m.rpc("initialize", {"clientInfo": {"name": "Some Client"}})
+txt, err = m.tool("status")
+check(err and "Some-Client has no bia" in txt, f"MCP with no --agent is its client, which has no profile: {txt[:100]}")
+m.p.terminate()
+
+# ---- give the turn back: exit after N seconds of silence
+web.tool("send", identity="grok", channel="web", text="first part")
+t0 = time.time()
+threading.Timer(2, lambda: web.tool("send", identity="grok", channel="web", text="second part")).start()
+rc, out = br("wait", "--silence", "4", agent="grok")
+took = time.time() - t0
+check(rc == 0 and "first part" in out and "second part" in out, f"--silence collects until bia is quiet: {out[:160]}")
+check(5 <= took <= 12, f"and exits about 4 s after the last word: {took:.1f} s")
+t0 = time.time()
+rc, out = br("wait", "--silence", "2", agent="grok")
+check(rc == 0 and time.time() - t0 < 6 and "0 message" in out, f"nothing said: it exits too: {out}")
+log = f"{root}/answers.txt"
+web.tool("send", identity="grok", channel="web", text="into the file")
+r = subprocess.run([bridge, "wait", "--silence", "2", "--out", log], env=dict(benv, BIA_BRIDGE_AGENT="grok"), capture_output=True, text=True, timeout=60)
+check(r.returncode == 0 and r.stdout == "" and "into the file" in open(log).read(), f"--out goes to the file, not stdout: {r.stdout!r}")
+t0 = time.time()
+rc, out = br("wait", "--silence", "30", "--timeout", "2", agent="grok")
+check(time.time() - t0 < 8, "--timeout limits the whole wait")
+rc, out = br("wait", "--silence", "2", "--out", "/nonexistent/dir/x", agent="grok")
+check(rc != 0 and "/nonexistent" in out, f"a bad file fails at once: {out[:80]}")
+m = Mcp([bridge, "mcp", "--agent", "grok"], benv)
+web.tool("send", identity="grok", channel="web", text="to the mcp silently")
+txt, err = m.tool("wait", silence_secs=2)
+check(not err and "to the mcp silently" in txt, f"mcp wait silence_secs: {txt[:100]}")
+m.p.terminate()
+br("stop", agent="grok")
 
 # ---- the bia serves the bridge, from the same build
 import urllib.error
@@ -238,7 +307,7 @@ check(disc["bridge"]["list"] == "/v1/bridge" and any(f["platform"] == PLAT for f
 mybin = f"{root}/bin/bia-bridge"
 os.makedirs(f"{root}/bin")
 shutil.copy2(bridge, mybin)
-r = subprocess.run([mybin, "update", "--bia", "home"], env=benv, capture_output=True, text=True, timeout=60)
+r = subprocess.run([mybin, "update", "--agent", "claude", "--bia", "home"], env=benv, capture_output=True, text=True, timeout=60)
 check(r.returncode == 0 and "already the bia's build" in r.stdout, f"update: already current ({r.stdout.strip()}{r.stderr.strip()})")
 st = json.loads(br("status", "--bia", "home", "--json")[1])
 check(st.get("bia_version") == st.get("bridge_version") and st.get("bia_version"), f"status knows the bia's version: {st.get('bia_version')} / {st.get('bridge_version')}")
@@ -246,30 +315,28 @@ if PLAT.startswith("linux"):
     # a different build on the bia (one byte more: an ELF still runs) replaces this one
     open(f"{served}/bia-bridge-{PLAT}", "ab").write(b"\0")
     want = hashlib.sha256(open(f"{served}/bia-bridge-{PLAT}", "rb").read()).hexdigest()
-    r = subprocess.run([mybin, "update", "--bia", "home"], env=benv, capture_output=True, text=True, timeout=60)
+    r = subprocess.run([mybin, "update", "--agent", "claude", "--bia", "home"], env=benv, capture_output=True, text=True, timeout=60)
     check(r.returncode == 0 and "updated" in r.stdout and hashlib.sha256(open(mybin, "rb").read()).hexdigest() == want, f"update replaced the program: {r.stdout.strip()}{r.stderr.strip()}")
     r = subprocess.run([mybin, "version"], capture_output=True, text=True)
     check(r.returncode == 0, "the updated program runs")
     shutil.copy2(bridge, f"{served}/bia-bridge-{PLAT}")
 
 # ---- a denied request
-rc, out = br("connect", URL, "--identity", "eve", "--as", "other")
+rc, out = br("connect", URL, "--identity", "eve", "--as", "other", agent="eve")
 check(rc == 0, f"second profile: {out[:80]}")
-req2 = json.load(open(f"{home}/other/profile.json"))["request"]
+req2 = json.load(open(f"{home}/eve/other/profile.json"))["request"]
 web.tool("pki_deny", id=req2, reason="not today")
 for _ in range(60):
-    s = json.loads(br("status", "--bia", "other", "--json")[1])
+    s = json.loads(br("status", "--bia", "other", "--json", agent="eve")[1])
     if s.get("state") != "pending":
         break
     time.sleep(1)
 check(s.get("state") == "denied" and "not today" in s.get("message", ""), f"denial seen with its reason: {s}")
-rc, out = br("status")
-check(rc != 0 and "several bias" in out, f"two profiles need --bia: {out}")
-rc, out = br("profiles")
+rc, out = br("profiles", agent=None)
 check("home" in out and "other" in out, f"profiles: {out}")
 
-for prof in ("home", "other", "alice"):
-    br("stop", "--bia", prof)
+for who, prof in (("claude", "home"), ("eve", "other"), ("alice", "alice"), ("grok", "home")):
+    br("stop", "--bia", prof, agent=who)
 web.p.terminate()
 shutil.rmtree(root, ignore_errors=True)
 print(f"\n{'FAILED: ' + str(len(failed)) if failed else 'all passed'}")

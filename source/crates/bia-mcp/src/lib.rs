@@ -23,6 +23,13 @@ use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// The name the MCP client gave at `initialize` (`clientInfo.name`), once it has.
+static CLIENT_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn client_name() -> Option<String> {
+    CLIENT_NAME.get().cloned()
+}
+
 pub type ToolResult = Result<String, String>;
 pub type Handler = Box<dyn Fn(&Ctx, Value) -> ToolResult + Send + Sync>;
 
@@ -163,11 +170,16 @@ impl Server {
         let id = req.get("id").cloned();
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let result: Result<Value, (i64, String)> = match method {
-            "initialize" => Ok(json!({
+            "initialize" => {
+                if let Some(n) = req.pointer("/params/clientInfo/name").and_then(|n| n.as_str()) {
+                    let _ = CLIENT_NAME.set(n.to_string());
+                }
+                Ok(json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": self.name, "version": self.version}
-            })),
+                }))
+            }
             "notifications/initialized" => return None,
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({
