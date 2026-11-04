@@ -175,7 +175,7 @@ fn main() {
             json!({"type": "object", "required": ["request", "answer"], "properties": {
                 "request": {"type": "string", "description": "the id in the notice, for example p1762300000"},
                 "answer": {"type": "string", "enum": ["approve", "deny"]},
-                "passkey": {"type": "string", "description": "which passkey, when the notice lists several"}
+                "passkey": {"type": "string", "description": "which passkey, when the notice lists several: its name, or just the account in it"}
             }}),
             {
                 let b = bridge.clone();

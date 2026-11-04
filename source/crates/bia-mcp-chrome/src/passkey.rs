@@ -85,7 +85,7 @@ impl Table {
         let o = &self.open[at];
         if approve && o.method == "passkey_get" {
             match pick {
-                Some(p) if !o.names.iter().any(|n| n == p) => {
+                Some(p) if chosen(&o.names, p).is_none() => {
                     return Err(format!("{} is not on offer. Choose passkey= from: {}", quoted(p), names_of(o)));
                 }
                 None if o.names.len() > 1 => {
@@ -227,6 +227,20 @@ fn notice(o: &Open) -> String {
     out
 }
 
+/// The passkey a name means: its full name, or just the account in "account @ site" when only
+/// one on offer has that account. Anything else means nothing, so a guess signs with nothing.
+pub fn chosen<'a>(names: &'a [String], pick: &str) -> Option<&'a str> {
+    if let Some(n) = names.iter().find(|n| *n == pick) {
+        return Some(n);
+    }
+    let account = format!("{pick} @ ");
+    let mut fits = names.iter().filter(|n| n.starts_with(&account));
+    match (fits.next(), fits.next()) {
+        (Some(n), None) => Some(n),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +277,17 @@ mod tests {
         for want in ["guess", "https://top.test", "autofill", "about 60 s", "passkey=<name>"] {
             assert!(line.contains(want), "{want}: {line}");
         }
+    }
+
+    #[test]
+    fn a_passkey_can_be_named_by_its_account() {
+        let names: Vec<String> = vec!["ann @ a.test".into(), "bob @ a.test".into(), "bob @ b.test".into(), "My key".into()];
+        assert_eq!(chosen(&names, "ann @ a.test"), Some("ann @ a.test"));
+        assert_eq!(chosen(&names, "ann"), Some("ann @ a.test"));
+        assert_eq!(chosen(&names, "My key"), Some("My key"));
+        assert_eq!(chosen(&names, "bob"), None, "two passkeys have that account");
+        assert_eq!(chosen(&names, "an"), None, "not a part of a name");
+        assert_eq!(chosen(&names, ""), None);
     }
 
     #[test]

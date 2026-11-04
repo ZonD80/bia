@@ -70,7 +70,22 @@ function rpc(id, method, params) {
 }
 
 chrome.alarms.create("bia-keepalive", { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener(() => { if (!port) connect(); });
+chrome.alarms.onAlarm.addListener(() => {
+  if (!port) connect();
+  applyUpdate();
+});
+
+// Chrome holds a new version back until the add-on is idle, and the port to the host means it never
+// is: without this a new add-on would sit on disk until Chrome restarts. A request waiting for an
+// answer is not cut off; the alarm tries again.
+let updateReady = false;
+function applyUpdate() {
+  if (updateReady && pending.size === 0 && running.size === 0) chrome.runtime.reload();
+}
+chrome.runtime.onUpdateAvailable.addListener(() => {
+  updateReady = true;
+  applyUpdate();
+});
 connect();
 
 // ---- WebAuthn proxy ----------------------------------------------------------------------

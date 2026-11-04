@@ -156,6 +156,8 @@ else:
     while time.time() < end and on_disk(ext) != [new]:
         time.sleep(5)
     print("on disk after waiting:", on_disk(ext), flush=True)
+    prefs = json.load(open(f"{PROFILE}/Default/Preferences")).get("extensions", {}).get("settings", {}).get(ext, {})
+    check(prefs.get("manifest", {}).get("version") == new, f"it runs {new} without a Chrome restart: {prefs.get('manifest', {}).get('version')}")
     check(connected(), "the add-on is connected after the update")
     tool("restart")
     check(connected(), "and after a Chrome restart")

@@ -101,6 +101,7 @@ impl Bridge {
             let _ = write_msg(&self.shared, &json!({"id": open.wire_id, "error": passkey::DENIED}));
             return Ok(format!("Denied. {origin} was told no; nothing was signed or created."));
         }
+        let pick = pick.and_then(|p| passkey::chosen(&open.names, p));
         match passkey::ceremony(&open, pick) {
             Ok(result) => {
                 log(&self.shared, format!("passkey approved {} origin={origin} rp={rp}", open.method));

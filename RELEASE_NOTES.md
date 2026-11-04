@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.8
+
+### Changes
+- Chrome now starts using a new add-on as soon as it has fetched it. Before, the add-on's constant connection kept the new version waiting on disk until Chrome's next restart. A passkey request waiting for an answer is not cut off: the add-on waits for it.
+- Choosing a passkey in chrome_passkey_answer now also works with just the account name, not only the full "account @ site".
+
+### For bia
+- Call chrome_restart once after this update: the add-on running now is older and cannot reload itself. If Chrome has fetched the new add-on already, that restart starts it; if not, Chrome starts it by itself. Do not delete anything in the Chrome profile.
+- Any MCP or script of yours that runs /usr/bin/python3 and needs a pip package: point its mcp.json command or shebang at /home/bia/.venv/bin/python3. MCPs do not start from bash, so they do not get the venv by themselves.
+
 ## 2.0.7
 
 ### Changes
