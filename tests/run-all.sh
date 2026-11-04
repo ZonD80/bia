@@ -106,6 +106,14 @@ chrome_cert() {
      python3 -I tests/integration/chrome-cert-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome source/flash/MCPs/screen/bia_desktop.py"
 }
 
+# passkey approval: the real extension in Chromium; nothing is signed until the model approves
+chrome_passkey() {
+  builder 'cargo build -q -p bia-mcp-chrome' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 dbus-daemon xvfb openbox chromium libnss3-tools openssl ca-certificates curl wmctrl xdotool util-linux procps fonts-dejavu-core >/dev/null 2>&1 &&
+     python3 -I tests/integration/chrome-passkey-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome"
+}
+
 # the screen MCP's desktop tools: Xvfb, Openbox, AT-SPI and a real GTK app, on the guest's Debian
 screen_desktop() {
   builder 'cargo build -q -p bia-mcp-screen' || return 1
@@ -132,6 +140,7 @@ for stage in "$@"; do
       run max-mcp max_mcp
       run screen-desktop screen_desktop
       run chrome-cert chrome_cert
+      run chrome-passkey chrome_passkey
       run biaconfig biaconfig
       run web-markdown node tests/integration/web-md-test.js
       run web-link node tests/integration/web-link-test.js

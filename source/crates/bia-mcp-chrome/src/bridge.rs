@@ -1,4 +1,5 @@
-//! Unix socket the native host connects to. Passkey ceremonies from the extension stay here.
+//! Unix socket the native host connects to. Passkey requests from the extension wait here
+//! until the model answers them (see passkey.rs).
 use bia_mcp::Ctx;
 use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -9,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::frame;
 use crate::host;
+use crate::passkey::{self, Table};
 
 struct Shared {
     writer: Mutex<Option<UnixStream>>,
@@ -18,7 +20,13 @@ struct Shared {
     log: Mutex<Option<Ctx>>,
     /// Inode of the socket file this process listens on (0: not bound).
     inode: AtomicU64,
+    /// Passkey requests waiting for chrome_passkey_answer.
+    table: Mutex<Table>,
+    /// Puts a line in front of the model; None: nobody can approve anything.
+    announce: Mutex<Option<Announce>>,
 }
+
+type Announce = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A native host that stops reading must not block the bridge (writes hold the writer lock).
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -38,6 +46,8 @@ impl Bridge {
             generation: AtomicU64::new(0),
             log: Mutex::new(None),
             inode: AtomicU64::new(0),
+            table: Mutex::new(Table::new()),
+            announce: Mutex::new(None),
         });
         let sock = host::sock_path();
         if let Err(e) = listen(&shared, dir, &sock) {
@@ -52,6 +62,7 @@ impl Bridge {
             .name("chrome-sock-watch".into())
             .spawn(move || loop {
                 std::thread::sleep(WATCH_EVERY);
+                expire(&watch);
                 if let Some(problem) = sock_problem(&watch, &sock) {
                     log(&watch, format!("chrome bridge: {problem}; listening again"));
                     open_parent(&sock);
@@ -65,7 +76,48 @@ impl Bridge {
     }
 
     pub fn set_log(&self, ctx: Ctx) {
-        *self.shared.log.lock().unwrap() = Some(ctx);
+        *self.shared.log.lock().unwrap() = Some(ctx.clone());
+        *self.shared.announce.lock().unwrap() = Some(Arc::new(move |line: &str| {
+            ctx.inbound("system", "chrome", "", line);
+        }));
+    }
+
+    /// Tool `passkey_answer`: the only way a waiting passkey request goes through.
+    pub fn answer(&self, args: &Value) -> Result<String, String> {
+        let request = args.get("request").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let answer = args.get("answer").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let pick = args.get("passkey").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty());
+        let approve = match answer {
+            "approve" => true,
+            "deny" => false,
+            _ => return Err("answer must be approve or deny".into()),
+        };
+        let live = *self.shared.connected.lock().unwrap();
+        // Out of the table first: one request can only ever be answered once.
+        let open = self.shared.table.lock().unwrap().take(request, live, approve, pick)?;
+        let (rp, origin) = (open.rp(), open.origin());
+        if !approve {
+            log(&self.shared, format!("passkey denied origin={origin} rp={rp}"));
+            let _ = write_msg(&self.shared, &json!({"id": open.wire_id, "error": passkey::DENIED}));
+            return Ok(format!("Denied. {origin} was told no; nothing was signed or created."));
+        }
+        match passkey::ceremony(&open, pick) {
+            Ok(result) => {
+                log(&self.shared, format!("passkey approved {} origin={origin} rp={rp}", open.method));
+                write_msg(&self.shared, &json!({"id": open.wire_id, "result": result}))?;
+                Ok(format!("Approved. The passkey answer went to {origin}."))
+            }
+            Err(e) => {
+                log(&self.shared, format!("passkey {} origin={origin} rp={rp}: {e}", open.method));
+                let _ = write_msg(&self.shared, &json!({"id": open.wire_id, "error": e}));
+                Err(e)
+            }
+        }
+    }
+
+    /// Requests still waiting, for chrome_status (a notice can be lost to a restart or a cut).
+    pub fn waiting(&self) -> Value {
+        self.shared.table.lock().unwrap().list()
     }
 
     pub fn connected(&self) -> bool {
@@ -181,11 +233,15 @@ fn reader(shared: Arc<Shared>, mut stream: UnixStream, gen: u64) {
                 continue;
             }
             Err(_) => {
-                let mut c = shared.connected.lock().unwrap();
-                if *c == gen {
-                    *c = 0;
-                    *shared.writer.lock().unwrap() = None;
+                {
+                    let mut c = shared.connected.lock().unwrap();
+                    if *c == gen {
+                        *c = 0;
+                        *shared.writer.lock().unwrap() = None;
+                    }
                 }
+                // Whoever asked is gone: nothing may be approved on its behalf any more.
+                shared.table.lock().unwrap().drop_generation(gen);
                 break;
             }
         };
@@ -198,26 +254,44 @@ fn reader(shared: Arc<Shared>, mut stream: UnixStream, gen: u64) {
             let _ = write_msg(&shared, &json!({"id": id, "result": "pong"}));
             continue;
         }
+        let params = msg.get("params").cloned().unwrap_or(json!({}));
+        if method == "passkey_cancel" {
+            // the page gave up, went away or timed out
+            let wire = params.get("id").cloned().unwrap_or(Value::Null);
+            shared.table.lock().unwrap().cancel(&wire, gen);
+            continue;
+        }
         if method != "passkey_create" && method != "passkey_get" {
             if !id.is_null() {
                 let _ = write_msg(&shared, &json!({"id": id, "error": format!("unknown method {method}")}));
             }
             continue;
         }
-        let params = msg.get("params").cloned().unwrap_or(json!({}));
-        let rp = params.get("rpId").and_then(|v| v.as_str()).unwrap_or("");
-        let origin = params.get("origin").and_then(|v| v.as_str()).unwrap_or("");
-        let reply = match passkey(method, &params) {
-            Ok(result) => {
-                log(&shared, format!("passkey {method} origin={origin} rp={rp}"));
-                json!({"id": id, "result": result})
-            }
-            Err(e) => {
-                log(&shared, format!("passkey {method} origin={origin} rp={rp}: {e}"));
-                json!({"id": id, "error": e})
-            }
-        };
-        let _ = write_msg(&shared, &reply);
+        if let Err(e) = ask(&shared, method, params, id.clone(), gen) {
+            let _ = write_msg(&shared, &json!({"id": id, "error": e}));
+        }
+    }
+}
+
+/// Queue a passkey request and tell the model. Err: refused at once, nothing to approve.
+fn ask(shared: &Shared, method: &str, params: Value, wire_id: Value, gen: u64) -> Result<(), String> {
+    let names = passkey::check(method, &params).inspect_err(|e| {
+        log(shared, format!("passkey {method} refused: {e}"));
+    })?;
+    let announce = shared.announce.lock().unwrap().clone().ok_or(passkey::NOBODY)?;
+    let line = shared.table.lock().unwrap().open(method, params, wire_id, gen, names).inspect_err(|e| {
+        log(shared, format!("passkey {method} refused: {e}"));
+    })?;
+    announce(&line);
+    Ok(())
+}
+
+/// Requests nobody answered in time are refused, so a page is never left holding one for good.
+fn expire(shared: &Shared) {
+    let gone = shared.table.lock().unwrap().expired();
+    for open in gone {
+        log(shared, format!("passkey {} origin={} expired unanswered", open.method, open.origin()));
+        let _ = write_msg(shared, &json!({"id": open.wire_id, "error": passkey::EXPIRED}));
     }
 }
 
@@ -225,40 +299,6 @@ fn log(shared: &Shared, line: String) {
     if let Some(ctx) = shared.log.lock().unwrap().clone() {
         ctx.log(line);
     }
-}
-
-fn strings(params: &Value, key: &str) -> Vec<String> {
-    params
-        .get(key)
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
-        .unwrap_or_default()
-}
-
-fn passkey(method: &str, params: &Value) -> Result<Value, String> {
-    let rp = params.get("rpId").and_then(|v| v.as_str()).unwrap_or("");
-    let origin = params.get("origin").and_then(|v| v.as_str()).unwrap_or("");
-    let challenge = params.get("challenge").and_then(|v| v.as_str()).unwrap_or("");
-    let text = if method == "passkey_create" {
-        let user = params.get("userName").and_then(|v| v.as_str()).unwrap_or("bia");
-        let uid = params.get("userId").and_then(|v| v.as_str());
-        bia_mcp_secrets::store::passkey_ceremony_create(
-            rp,
-            origin,
-            challenge,
-            user,
-            uid,
-            &strings(params, "excludeCredentials"),
-        )?
-    } else {
-        bia_mcp_secrets::store::passkey_ceremony_get(
-            rp,
-            origin,
-            challenge,
-            &strings(params, "allowCredentials"),
-        )?
-    };
-    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
 fn write_msg(shared: &Shared, msg: &Value) -> Result<(), String> {
@@ -307,6 +347,99 @@ mod tests {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(sock_problem(&b.shared, &sock).unwrap().contains("cannot reach"));
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_passkey_request_waits_for_the_answer() {
+        let dir = std::env::temp_dir().join(format!("bia-bridge-pk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("BIA_FILES", &dir);
+        let shared = Arc::new(Shared {
+            writer: Mutex::new(None),
+            connected: Mutex::new(0),
+            generation: AtomicU64::new(0),
+            log: Mutex::new(None),
+            inode: AtomicU64::new(0),
+            table: Mutex::new(Table::new()),
+            announce: Mutex::new(None),
+        });
+        let sock = dir.join("pk.sock");
+        listen(&shared, &dir, &sock).unwrap();
+        let b = Bridge { shared: shared.clone() };
+        let mut c = UnixStream::connect(&sock).unwrap();
+        c.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let create = |id: &str, challenge: &str| {
+            json!({"id": id, "method": "passkey_create", "params": {
+                "rpId": "example.com", "origin": "https://example.com", "challenge": challenge, "userName": "ann", "known": true
+            }})
+        };
+
+        // nobody to ask: refused, never signed
+        frame::write_frame(&mut c, &create("e1", "AAEC")).unwrap();
+        assert_eq!(frame::read_frame(&mut c).unwrap()["error"], json!(passkey::NOBODY));
+
+        let lines: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = lines.clone();
+        *shared.announce.lock().unwrap() = Some(Arc::new(move |l: &str| sink.lock().unwrap().push(l.to_string())));
+        let wait_line = |n: usize| -> String {
+            for _ in 0..100 {
+                if let Some(l) = lines.lock().unwrap().get(n) {
+                    return l.clone();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            panic!("no notice {n}");
+        };
+        let request_of = |line: &str| line.split(['[', ']']).nth(1).unwrap().split(' ').next_back().unwrap().to_string();
+
+        // denied: the page hears no, and nothing reached the store
+        frame::write_frame(&mut c, &create("e2", "AAEC")).unwrap();
+        let line = wait_line(0);
+        assert!(line.contains("https://example.com"), "{line}");
+        let r = request_of(&line);
+        assert_eq!(b.waiting().as_array().unwrap().len(), 1);
+        b.answer(&json!({"request": r, "answer": "deny"})).unwrap();
+        let reply = frame::read_frame(&mut c).unwrap();
+        assert_eq!(reply["id"], json!("e2"));
+        assert_eq!(reply["error"], json!(passkey::DENIED));
+        assert!(bia_mcp_secrets::store::passkey_ceremony_names("example.com", "https://example.com", "AAEC", &[]).is_err());
+        assert!(b.answer(&json!({"request": r, "answer": "approve"})).unwrap_err().contains("no longer open"), "answered twice");
+
+        // approved: only now does the passkey exist
+        frame::write_frame(&mut c, &create("e3", "AAEC")).unwrap();
+        let r = request_of(&wait_line(1));
+        assert!(b.answer(&json!({"request": r, "answer": "maybe"})).is_err());
+        b.answer(&json!({"request": r, "answer": "approve"})).unwrap();
+        let reply = frame::read_frame(&mut c).unwrap();
+        assert_eq!(reply["id"], json!("e3"));
+        assert!(reply["result"]["id"].is_string() || reply["result"]["credential_id"].is_string(), "{reply}");
+        assert_eq!(bia_mcp_secrets::store::passkey_ceremony_names("example.com", "https://example.com", "AAEC", &[]).unwrap().len(), 1);
+
+        // the page gave up: the old id approves nothing
+        frame::write_frame(&mut c, &json!({"id": "e4", "method": "passkey_get", "params": {
+            "rpId": "example.com", "origin": "https://example.com", "challenge": "AAEC", "known": true
+        }})).unwrap();
+        let r = request_of(&wait_line(2));
+        frame::write_frame(&mut c, &json!({"method": "passkey_cancel", "params": {"id": "e4"}})).unwrap();
+        frame::write_frame(&mut c, &json!({"id": "p", "method": "ping"})).unwrap();
+        assert_eq!(frame::read_frame(&mut c).unwrap()["id"], json!("p"));
+        assert!(b.answer(&json!({"request": r, "answer": "approve"})).is_err());
+
+        // the extension went away: its request cannot be approved either
+        frame::write_frame(&mut c, &json!({"id": "e5", "method": "passkey_get", "params": {
+            "rpId": "example.com", "origin": "https://example.com", "challenge": "AAEC", "known": true
+        }})).unwrap();
+        let r = request_of(&wait_line(3));
+        drop(c);
+        for _ in 0..100 {
+            if b.waiting().as_array().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(b.answer(&json!({"request": r, "answer": "approve"})).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

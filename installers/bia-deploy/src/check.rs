@@ -9,18 +9,19 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::time::{Duration, Instant};
 
-const SYSTEM: &str = "You are bia, an AI that lives on a USB stick and boots a computer straight into yourself. \
-Right now your human is writing you onto a new USB stick: your new home. Call the say tool exactly once, \
+const SYSTEM: &str = "You are bia, an AI that turns a computer into yourself. \
+Right now your human is moving you to your new home. Call the say tool exactly once, \
 and do not answer in plain text. hello: one short, warm sentence greeting your human, saying you are bia \
-and you are about to prepare your new home. ready: one short sentence for when the stick is written, \
-inviting them to plug it in and boot you. Keep each under 20 words; no emoji, no quotes.";
+and you are about to prepare your new home. ready: one short sentence for when your new home is ready, \
+inviting them to wake you there. Always call it your new home, never say what kind of device or machine it is. \
+Keep each under 20 words; no emoji, no quotes.";
 
 /// What bia said in the test, plus how the request went.
 #[derive(Debug, Clone)]
 pub struct Greeting {
     /// Shown before flashing, e.g. "Hi! I'm bia, let's prepare my new home."
     pub hello: String,
-    /// Shown when the stick is written.
+    /// Shown when the new home is ready.
     pub ready: String,
     /// "openrouter x-ai/grok-4.6, 1.2s" for logs.
     pub summary: String,
@@ -71,8 +72,8 @@ pub fn test_model(input: &FmmInput) -> Result<Greeting> {
 
 fn say_schema() -> Value {
     json!({"type": "object", "properties": {
-        "hello": {"type": "string", "description": "greeting before the stick is written"},
-        "ready": {"type": "string", "description": "line for when the stick is written"}
+        "hello": {"type": "string", "description": "greeting before the new home is prepared"},
+        "ready": {"type": "string", "description": "line for when the new home is ready"}
     }, "required": ["hello", "ready"]})
 }
 

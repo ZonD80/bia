@@ -11,7 +11,7 @@
   function announce(options) {
     try {
       const ch = options && options.publicKey && options.publicKey.challenge;
-      if (ch) document.dispatchEvent(new CustomEvent("bia-webauthn", { detail: b64url(ch) }));
+      if (ch) document.dispatchEvent(new CustomEvent("bia-webauthn", { detail: JSON.stringify({ challenge: b64url(ch), mediation: String(options.mediation || "") }) }));
     } catch (e) {}
   }
   const create = creds.create.bind(creds);

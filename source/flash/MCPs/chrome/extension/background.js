@@ -1,5 +1,6 @@
 // bia chrome passkey proxy. Page automation is chrome-devtools-mcp over remote debugging.
-// WebAuthn ceremonies are completed from the secrets store on the native host.
+// WebAuthn requests wait on the native host until the model approves or denies them; only then
+// does the host sign from the secrets store. The host decides: nothing here can skip it.
 
 const HOST = "com.bia.chrome";
 
@@ -55,23 +56,15 @@ function post(msg) {
   if (port) port.postMessage(msg);
 }
 
-function rpc(method, params) {
+// No timer: an approval takes as long as it takes. The host expires what nobody answers,
+// the page's own timeout arrives as onRequestCanceled, and a lost port rejects everything.
+function rpc(id, method, params) {
   return new Promise((resolve, reject) => {
     if (!port) {
       reject(new Error("native host down"));
       return;
     }
-    const id = "e" + nextId++;
-    const timer = setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error("passkey timed out"));
-      }
-    }, 15000);
-    pending.set(id, {
-      resolve: (v) => { clearTimeout(timer); resolve(v); },
-      reject: (e) => { clearTimeout(timer); reject(e); },
-    });
+    pending.set(id, { resolve, reject });
     post({ id, method, params });
   });
 }
@@ -95,7 +88,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   if (!msg || msg.type !== "bia-webauthn" || !sender.origin) return;
   const challenge = b64urlNorm(msg.challenge);
   if (!challenge) return;
-  const info = { origin: sender.origin, tabId: sender.tab ? sender.tab.id : null, at: Date.now() };
+  const info = {
+    origin: sender.origin,
+    top: sender.tab && sender.tab.url ? originOf(sender.tab.url) : "",
+    conditional: msg.mediation === "conditional",
+    known: true,
+  };
   callers.set(challenge, info);
   setTimeout(() => callers.delete(challenge), 120000);
   const wait = callerWaits.get(challenge);
@@ -105,19 +103,27 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
 });
 
-function callerOrigin(challenge) {
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch (e) {
+    return "";
+  }
+}
+
+function caller(challenge) {
   const key = b64urlNorm(challenge);
   const known = callers.get(key);
-  if (known) return Promise.resolve(known.origin);
+  if (known) return Promise.resolve(known);
   // The content script message can land just after the proxy event.
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       callerWaits.delete(key);
-      focusedOrigin().then(resolve);
+      focusedOrigin().then((origin) => resolve({ origin, top: origin, conditional: false, known: false }));
     }, 1500);
     callerWaits.set(key, (info) => {
       clearTimeout(timer);
-      resolve(info.origin);
+      resolve(info);
     });
   });
 }
@@ -125,11 +131,7 @@ function callerOrigin(challenge) {
 function focusedOrigin() {
   return chrome.tabs.query({ active: true, lastFocusedWindow: true }).then((tabs) => {
     const tab = tabs[0];
-    try {
-      return new URL(tab && tab.url ? tab.url : "").origin;
-    } catch (e) {
-      return "";
-    }
+    return tab && tab.url ? originOf(tab.url) : "";
   });
 }
 
@@ -158,64 +160,88 @@ async function attachProxy() {
   }
 }
 
+// requestId -> {rpcId, canceled}; lets a page's abort or timeout retire the waiting request.
+const running = new Map();
+
+async function ceremony(req, method, params, complete) {
+  const job = { rpcId: "e" + nextId++, canceled: false };
+  running.set(req.requestId, job);
+  try {
+    const details = JSON.parse(req.requestDetailsJson);
+    const who = await caller(details.challenge);
+    if (job.canceled) return;
+    const res = await rpc(job.rpcId, method, {
+      origin: who.origin,
+      topOrigin: who.top,
+      known: who.known,
+      conditional: who.conditional,
+      timeoutMs: details.timeout || 0,
+      challenge: details.challenge,
+      ...params(details, who.origin),
+    });
+    if (job.canceled) return;
+    const response = {
+      clientDataJSON: res.clientDataJSON,
+      authenticatorData: res.authenticatorData,
+      ...(res.attestationObject
+        ? {
+            attestationObject: res.attestationObject,
+            transports: ["internal"],
+            publicKey: res.publicKey,
+            publicKeyAlgorithm: res.publicKeyAlgorithm,
+          }
+        : { signature: res.signature, userHandle: res.userHandle || null }),
+    };
+    await complete({
+      requestId: req.requestId,
+      responseJson: JSON.stringify({
+        id: res.credential_id,
+        rawId: res.credential_id,
+        type: "public-key",
+        authenticatorAttachment: "platform",
+        response,
+        clientExtensionResults: {},
+      }),
+    });
+  } catch (e) {
+    if (!job.canceled) complete({ requestId: req.requestId, error: webauthnError(e) });
+  } finally {
+    running.delete(req.requestId);
+  }
+}
+
 if (chrome.webAuthenticationProxy) {
-  chrome.webAuthenticationProxy.onIsUvpaaRequest.addListener((req) => {
-    chrome.webAuthenticationProxy.completeIsUvpaaRequest({ requestId: req.requestId, isUvpaa: true });
+  const proxy = chrome.webAuthenticationProxy;
+  proxy.onIsUvpaaRequest.addListener((req) => {
+    proxy.completeIsUvpaaRequest({ requestId: req.requestId, isUvpaa: true });
   });
-  chrome.webAuthenticationProxy.onCreateRequest.addListener(async (req) => {
-    try {
-      const details = JSON.parse(req.requestDetailsJson);
-      const origin = await callerOrigin(details.challenge);
+  proxy.onCreateRequest.addListener((req) => {
+    ceremony(req, "passkey_create", (details, origin) => {
       const algs = (details.pubKeyCredParams || []).map((p) => p.alg);
       if (algs.length && !algs.includes(-7)) throw new Error("NotSupportedError: only ES256 passkeys are supported");
-      const res = await rpc("passkey_create", {
+      return {
         rpId: (details.rp && details.rp.id) || hostOf(origin),
         userName: (details.user && (details.user.name || details.user.displayName)) || "bia",
         userId: details.user && details.user.id,
-        challenge: details.challenge,
-        origin,
         excludeCredentials: (details.excludeCredentials || []).map((c) => c.id).filter(Boolean),
-      });
-      const response = res && res.response ? res.response : res;
-      chrome.webAuthenticationProxy.completeCreateRequest({
-        requestId: req.requestId,
-        credential: JSON.stringify({
-          id: res.id,
-          rawId: res.rawId || res.id,
-          type: "public-key",
-          authenticatorAttachment: "platform",
-          response,
-          clientExtensionResults: {},
-        }),
-      });
-    } catch (e) {
-      chrome.webAuthenticationProxy.completeCreateRequest({ requestId: req.requestId, error: webauthnError(e) });
-    }
+      };
+    }, (done) => proxy.completeCreateRequest(done));
   });
-  chrome.webAuthenticationProxy.onGetRequest.addListener(async (req) => {
-    try {
-      const details = JSON.parse(req.requestDetailsJson);
-      const origin = await callerOrigin(details.challenge);
-      const res = await rpc("passkey_get", {
-        rpId: details.rpId || hostOf(origin),
-        challenge: details.challenge,
-        origin,
-        allowCredentials: (details.allowCredentials || []).map((c) => c.id).filter(Boolean),
-      });
-      const response = res && res.response ? res.response : res;
-      chrome.webAuthenticationProxy.completeGetRequest({
-        requestId: req.requestId,
-        credential: JSON.stringify({
-          id: res.id,
-          rawId: res.rawId || res.id,
-          type: "public-key",
-          authenticatorAttachment: "platform",
-          response,
-          clientExtensionResults: {},
-        }),
-      });
-    } catch (e) {
-      chrome.webAuthenticationProxy.completeGetRequest({ requestId: req.requestId, error: webauthnError(e) });
+  proxy.onGetRequest.addListener((req) => {
+    ceremony(req, "passkey_get", (details, origin) => ({
+      rpId: details.rpId || hostOf(origin),
+      allowCredentials: (details.allowCredentials || []).map((c) => c.id).filter(Boolean),
+    }), (done) => proxy.completeGetRequest(done));
+  });
+  proxy.onRequestCanceled.addListener((requestId) => {
+    const job = running.get(requestId);
+    if (!job) return;
+    job.canceled = true;
+    const wait = pending.get(job.rpcId);
+    if (wait) {
+      pending.delete(job.rpcId);
+      wait.reject(new Error("canceled"));
+      post({ method: "passkey_cancel", params: { id: job.rpcId } });
     }
   });
   // Events reach an extension only after it becomes the active proxy.

@@ -660,24 +660,13 @@ fn same_credential(stored: Option<&str>, wanted: &str) -> bool {
 /// Registration from the Chrome extension. Stores a new passkey and returns the create response fields.
 /// Errors start with the DOMException name the page should see.
 pub fn passkey_ceremony_create(rp_id: &str, origin: &str, challenge: &str, user_name: &str, user_id: Option<&str>, exclude: &[String]) -> Result<String, String> {
+    passkey_ceremony_check_create(rp_id, origin, challenge, exclude)?;
     let rp_id = rp_id.trim();
-    if rp_id.is_empty() {
-        return Err("SecurityError: rp_id is required".into());
-    }
-    origin_ok(origin, rp_id).map_err(|e| format!("SecurityError: {e}"))?;
     let ch = ceremony_challenge(challenge)?;
     let user_name = if user_name.trim().is_empty() { "bia" } else { user_name.trim() };
     let description = {
         let _lock = StoreLock::acquire()?;
         let items = load()?;
-        let excluded = items.iter().any(|e| {
-            e.kind == "passkey"
-                && e.rp_id.as_deref().unwrap_or("").eq_ignore_ascii_case(rp_id)
-                && exclude.iter().any(|id| same_credential(e.credential_id.as_deref(), id))
-        });
-        if excluded {
-            return Err(format!("InvalidStateError: a passkey for {rp_id} is already registered with this account"));
-        }
         let base = format!("{user_name} @ {rp_id}");
         if !items.iter().any(|e| e.description == base) {
             base
@@ -698,31 +687,67 @@ pub fn passkey_ceremony_create(rp_id: &str, origin: &str, challenge: &str, user_
     passkey_create_with(&description, rp_id, user_name, user_id, Some(ch), Some(origin), false)
 }
 
-/// Login from the Chrome extension. Picks the one stored passkey for this rp and signs.
-pub fn passkey_ceremony_get(rp_id: &str, origin: &str, challenge: &str, allow: &[String]) -> Result<String, String> {
+/// Would this registration be refused anyway? Asked before anyone is bothered to approve it.
+pub fn passkey_ceremony_check_create(rp_id: &str, origin: &str, challenge: &str, exclude: &[String]) -> Result<(), String> {
     let rp_id = rp_id.trim();
     if rp_id.is_empty() {
         return Err("SecurityError: rp_id is required".into());
     }
     origin_ok(origin, rp_id).map_err(|e| format!("SecurityError: {e}"))?;
-    let ch = ceremony_challenge(challenge)?;
+    ceremony_challenge(challenge)?;
+    let _lock = StoreLock::acquire()?;
+    let items = load()?;
+    let excluded = items.iter().any(|e| {
+        e.kind == "passkey"
+            && e.rp_id.as_deref().unwrap_or("").eq_ignore_ascii_case(rp_id)
+            && exclude.iter().any(|id| same_credential(e.credential_id.as_deref(), id))
+    });
+    if excluded {
+        return Err(format!("InvalidStateError: a passkey for {rp_id} is already registered with this account"));
+    }
+    Ok(())
+}
+
+/// Names of the stored passkeys this login could use; an error when it could use none.
+pub fn passkey_ceremony_names(rp_id: &str, origin: &str, challenge: &str, allow: &[String]) -> Result<Vec<String>, String> {
+    let rp_id = rp_id.trim();
+    if rp_id.is_empty() {
+        return Err("SecurityError: rp_id is required".into());
+    }
+    origin_ok(origin, rp_id).map_err(|e| format!("SecurityError: {e}"))?;
+    ceremony_challenge(challenge)?;
     let allow: Vec<String> = allow.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    let _lock = StoreLock::acquire()?;
+    let names: Vec<String> = load()?
+        .iter()
+        .filter(|e| e.kind == "passkey" && e.rp_id.as_deref().unwrap_or("").eq_ignore_ascii_case(rp_id))
+        .filter(|e| allow.is_empty() || allow.iter().any(|id| same_credential(e.credential_id.as_deref(), id)))
+        .map(|e| e.description.clone())
+        .collect();
+    if names.is_empty() {
+        return Err(format!("NotAllowedError: no passkey for {rp_id}"));
+    }
+    Ok(names)
+}
+
+/// Login from the Chrome extension, once approved. `pick` names the passkey when several fit.
+pub fn passkey_ceremony_get(rp_id: &str, origin: &str, challenge: &str, allow: &[String], pick: Option<&str>) -> Result<String, String> {
+    let rp_id = rp_id.trim();
+    let names = passkey_ceremony_names(rp_id, origin, challenge, allow)?;
+    let name = match pick {
+        Some(p) if names.iter().any(|n| n == p) => p.to_string(),
+        Some(p) => return Err(format!("NotAllowedError: {p} is not a passkey for this request")),
+        None if names.len() == 1 => names[0].clone(),
+        None => return Err(format!("NotAllowedError: several passkeys for {rp_id}: {}", names.join(", "))),
+    };
+    let ch = ceremony_challenge(challenge)?;
     let key = {
         let _lock = StoreLock::acquire()?;
-        let items = load()?;
-        let mut hits: Vec<&Entry> = items
+        load()?
             .iter()
-            .filter(|e| e.kind == "passkey" && e.rp_id.as_deref().unwrap_or("").eq_ignore_ascii_case(rp_id))
-            .filter(|e| allow.is_empty() || allow.iter().any(|id| same_credential(e.credential_id.as_deref(), id)))
-            .collect();
-        if hits.is_empty() {
-            return Err(format!("NotAllowedError: no passkey for {rp_id}"));
-        }
-        if hits.len() > 1 {
-            let names: Vec<&str> = hits.iter().map(|e| e.description.as_str()).collect();
-            return Err(format!("NotAllowedError: several passkeys for {rp_id}: {}", names.join(", ")));
-        }
-        hits.pop().unwrap().uuid.clone()
+            .find(|e| e.kind == "passkey" && e.description == name)
+            .map(|e| e.uuid.clone())
+            .ok_or_else(|| format!("NotAllowedError: no passkey for {rp_id}"))?
     };
     passkey_assert_with(&key, &ch, Some(origin), Some(rp_id))
 }
@@ -773,7 +798,7 @@ mod tests {
         let err = passkey_ceremony_create("example.com", origin, challenge, "ann", None, &[format!("{cred}=")]).unwrap_err();
         assert!(err.starts_with("InvalidStateError:"), "{err}");
 
-        let got: Value = serde_json::from_str(&passkey_ceremony_get("example.com", origin, challenge, &[cred.clone()]).unwrap()).unwrap();
+        let got: Value = serde_json::from_str(&passkey_ceremony_get("example.com", origin, challenge, &[cred.clone()], None).unwrap()).unwrap();
         assert_eq!(got["userHandle"], "dXNlcjE");
         let auth = crate::b64url_decode(got["authenticatorData"].as_str().unwrap()).unwrap();
         let cdj_bytes = crate::b64url_decode(got["clientDataJSON"].as_str().unwrap()).unwrap();
@@ -794,7 +819,7 @@ mod tests {
         msg.extend_from_slice(&sha2::Sha256::digest(&cdj_bytes));
         vk.verify(&msg, &sig).unwrap();
 
-        assert!(passkey_ceremony_get("other.com", "https://other.com", challenge, &[]).unwrap_err().starts_with("NotAllowedError:"));
+        assert!(passkey_ceremony_get("other.com", "https://other.com", challenge, &[], None).unwrap_err().starts_with("NotAllowedError:"));
         let _ = fs::remove_dir_all(&dir);
     }
 

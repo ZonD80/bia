@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.5
+
+### Changes
+- bia deploy: when bia first wakes up during deployment, it now talks about its "new home" instead of a USB stick, which made no sense on a phone or when moving to a server.
+- Passkeys in Chrome now wait for approval, as in a password manager: when a site wants to sign in with a passkey, confirm something with one or create a new one, bia is told which site and what it wants, and nothing happens until bia approves or denies. It can ask root first, and root can tell it when to ask.
+- Passkeys now really finish in Chrome: the site gets its answer. Before, the add-on's answer never reached the page, so the site saw a failure.
+
+### For bia
+- If Chrome is running, call chrome_restart so it loads the new add-on.
+- From now on a [passkey request] line on system|chrome waits for chrome_passkey_answer(request, answer="approve" or "deny"): approve only what you are doing on that site or what root asked for, otherwise ask root first.
+
 ## 2.0.3
 
 ### Changes

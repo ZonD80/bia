@@ -1,7 +1,7 @@
 {
   "name": "chrome",
-  "version": "2.0.3",
-  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. Websites that ask for a client certificate: chrome_cert_import, chrome_cert_select, chrome_restart; without a rule a [certificate dialog opened] line arrives on system|chrome: answer it with chrome_choose_certificate(cert=<name>) or cancel=true; a private CA: chrome_cert_trust. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
+  "version": "2.0.5",
+  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. Websites that ask for a client certificate: chrome_cert_import, chrome_cert_select, chrome_restart; without a rule a [certificate dialog opened] line arrives on system|chrome: answer it with chrome_choose_certificate(cert=<name>) or cancel=true; a private CA: chrome_cert_trust. A site asking for a passkey (sign-in, confirmation or a new one) waits until answered: a [passkey request] line arrives on system|chrome, answer it with chrome_passkey_answer(request=<id>, answer=\"approve\" or \"deny\"); approve only what bia itself is doing on that site or what root asked for, otherwise ask root first. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",
     "x86_64": "bin/x86_64/bia-mcp-chrome"
@@ -18,6 +18,8 @@
     "login",
     "passkey",
     "webauthn",
+    "approve",
+    "deny",
     "captcha",
     "recaptcha",
     "upload",
@@ -46,6 +48,8 @@
     "root|console|<issued>|<delivered>|reload chrome -> chrome_restart()",
     "root|console|<issued>|<delivered>|attach report.pdf to the form -> chrome_take_snapshot(); chrome_click(uid='…' of the upload button); system|chrome [file dialog opened] -> chrome_choose_files(paths=['/home/bia/files/report.pdf'])",
     "root|console|<issued>|<delivered>|there is a captcha on the page -> discover(path='mcp/screen', enable=true); screen_shot(); screen_cursor_move_human(x=…, y=…); screen_click(x=…, y=…)",
-    "root|console|<issued>|<delivered>|bia should log in to portal.example.com with /home/bia/files/bia.p12, password in the secret portal-p12 -> discover(path='mcp/chrome', enable=true); chrome_cert_import(path='/home/bia/files/bia.p12', password_secret='portal-p12'); chrome_cert_select(site='portal.example.com'); chrome_restart()"
+    "root|console|<issued>|<delivered>|bia should log in to portal.example.com with /home/bia/files/bia.p12, password in the secret portal-p12 -> discover(path='mcp/chrome', enable=true); chrome_cert_import(path='/home/bia/files/bia.p12', password_secret='portal-p12'); chrome_cert_select(site='portal.example.com'); chrome_restart()",
+    "system|chrome|<issued>|<delivered>|[passkey request p1762300000] https://github.com wants a signature from a passkey for github.com, while bia is signing in to GitHub for root -> chrome_passkey_answer(request='p1762300000', answer='approve')",
+    "system|chrome|<issued>|<delivered>|[passkey request p1762300001] https://unknown.example wants to create a new passkey, and nobody asked for that -> ask root; if root says no: chrome_passkey_answer(request='p1762300001', answer='deny')"
   ]
 }
