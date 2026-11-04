@@ -213,6 +213,9 @@ fn write_policies(id: &str) -> Result<(), String> {
             id: {
                 "installation_mode": "force_installed",
                 "update_url": url,
+                // without it Chrome uses this URL for the first install only, then the manifest's,
+                // and ours has none: an installed add-on never updates
+                "override_update_url": true,
                 "toolbar_pin": "force_pinned"
             }
         },

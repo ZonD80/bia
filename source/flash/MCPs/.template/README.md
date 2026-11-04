@@ -4,6 +4,7 @@ What it does, in two or three lines.
 
 ## Needs
 - Debian packages: none (python3-minimal and curl ship with bia)
+- Python packages: none (pip them into /home/bia/.venv, run the script with /home/bia/.venv/bin/python3; never into the system)
 - Secrets: none (name each one here; read it from the secrets MCP or env, never store it in this folder)
 - Services: none (e.g. OpenRouter API)
 

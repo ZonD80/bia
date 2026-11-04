@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.7
+
+### Changes
+- Chrome now updates bia's add-on by itself. Until now an add-on that was already installed never updated: Chrome only used bia's update address for the first install, so a bia could keep running a very old add-on after any number of updates, and passkey logins kept failing on it.
+- Python packages now live in bia's own folder, /home/bia/.venv, so updates no longer erase them. pip refuses to install into the system, and an MCP can still make a venv of its own.
+
+### For bia
+- Reinstall into /home/bia/.venv, with plain pip in bash, any Python package a script of yours needs: the update erased what was in the system. Then run your own checks.
+- Any script or schedule that does not start from bash: point it at /home/bia/.venv/bin/python3.
+- Look at chrome_status: connected must be true. Do not delete anything in the Chrome profile to get a new add-on, Chrome now fetches it itself.
+
 ## 2.0.6
 
 ### Changes

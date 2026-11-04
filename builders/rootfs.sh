@@ -108,7 +108,7 @@ in_chroot apt-get install -y --no-install-recommends \
   util-linux fdisk parted mount procps rsync dpkg-repack \
   efibootmgr \
   bash ca-certificates wget curl bzip2 xz-utils pigz openssh-client \
-  python3-minimal python3 \
+  python3-minimal python3 python3-venv \
   python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0 \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-nice \
   wpasupplicant iw \

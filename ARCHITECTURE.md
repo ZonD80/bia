@@ -668,7 +668,7 @@ messaging and other browser interactions are hard to get right, and the
 extension is expected to keep evolving. Keeping the signing key with the
 system lets bia agents improve the extension themselves: change
 `extension/`, bump the manifest version, repack it with this key (the
-extension id stays the same, so force-installed Chrome picks up the update)
+extension id stays the same, and the policy's `override_update_url` makes Chrome ask the MCP's update server for updates too, not only for the first install)
 and propose the updated version back to the project.
 
 ## OS update through the rescue image

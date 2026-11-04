@@ -1,0 +1,55 @@
+#!/bin/sh
+# bia's own Python environment, /home/bia/.venv: pip installs here, never into the system.
+# It sees the image's Python modules (gi and so on), and updates keep it with /home/bia.
+# On another architecture or Python (a land, a newer image) its compiled parts cannot load, so
+# it is made again and the same packages are installed again as soon as there is a network.
+# Runs before the agent on every start; the usual case only checks.
+set -u
+V=${BIA_VENV:-/home/bia/.venv}
+U=${BIA_VENV_USER:-bia}
+LIST=$V/.reinstall
+as_user() { if [ "$(id -un)" = "$U" ]; then "$@"; else runuser -u "$U" -- "$@"; fi; }
+
+if [ "${1:-}" = --reinstall ]; then
+  # one at a time: a package that is gone from PyPI must not stop the others
+  tries=0
+  while [ -s "$LIST" ] && [ "$tries" -lt 30 ]; do
+    tries=$((tries + 1))
+    left=
+    for p in $(cat "$LIST"); do
+      as_user "$V/bin/pip" install -q "$p" || left="$left$p
+"
+    done
+    printf '%s' "$left" >"$LIST"
+    [ -s "$LIST" ] && sleep "${BIA_VENV_RETRY:-60}"
+  done
+  [ -s "$LIST" ] && echo "bia-venv: still missing: $(tr '\n' ' ' <"$LIST") (list in $LIST)" >&2
+  exit 0
+fi
+
+id "$U" >/dev/null 2>&1 || exit 0
+want=$(python3 -I -c 'import platform,sys; print(platform.machine(), "%d.%d" % sys.version_info[:2])') || exit 0
+have=$(cat "$V/.bia-python" 2>/dev/null || true)
+if [ -x "$V/bin/python3" ] && "$V/bin/python3" -I -c '' 2>/dev/null && { [ "$have" = "$want" ] || [ -z "$have" ]; }; then
+  [ -n "$have" ] || echo "$want" >"$V/.bia-python"
+else
+  pkgs=
+  for d in "$V"/lib/python*/site-packages/*.dist-info; do
+    [ -d "$d" ] || continue
+    n=$(basename "$d" .dist-info)
+    case "$n" in pip-*|setuptools-*|wheel-*) continue ;; esac
+    pkgs="$pkgs${n%-*}==${n##*-}
+"
+  done
+  [ ! -e "$V" ] || chown -R "$U:$U" "$V"
+  as_user python3 -I -m venv --clear --system-site-packages "$V" || exit 1
+  echo "$want" >"$V/.bia-python"
+  printf '%s' "$pkgs" >"$LIST"
+fi
+# root's bash writes here too; bia must be able to change what root installed
+find "$V" ! -user "$U" -exec chown -h "$U:$U" {} + 2>/dev/null
+if [ -s "$LIST" ]; then
+  systemd-run --quiet --no-block --unit=bia-venv-reinstall /usr/local/sbin/bia-venv --reinstall 2>/dev/null \
+    || echo "bia-venv: run bia-venv --reinstall to bring back: $(tr '\n' ' ' <"$LIST")" >&2
+fi
+exit 0
