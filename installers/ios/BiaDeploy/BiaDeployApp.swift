@@ -17,6 +17,7 @@ struct BiaDeployApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
+                .tint(accent)
                 .onOpenURL { model.offerConfig($0) }
         }
     }

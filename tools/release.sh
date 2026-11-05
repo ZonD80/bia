@@ -623,11 +623,43 @@ if [[ $BUILD_ONLY -eq 1 ]]; then
 fi
 if [[ $EXISTS -eq 0 ]]; then
   echo "== creating release $TAG on ${SHA:0:12}"
-  gh release create "$TAG" -R "$REPO" --target "$SHA" --title "bia $VERSION" --notes "$NOTES"
+  # Not latest yet: releases/latest/download/<name> must not point here while assets are missing.
+  gh release create "$TAG" -R "$REPO" --target "$SHA" --title "bia $VERSION" --notes "$NOTES" --latest=false
 fi
+# What is uploaded already and identical stays, so a re-run sends only the rest. GitHub's
+# upload fails now and then with a different 4xx/5xx each time: each file gets three tries.
+# bia-os.json comes last and only after every other file, because it names them.
+uploaded() { gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[] | select(.state == "uploaded") | [.name, .digest // ""] | @tsv'; }
+sha_of() { python3 -c 'import hashlib,sys; h=hashlib.sha256(); f=open(sys.argv[1],"rb"); [h.update(b) for b in iter(lambda: f.read(1<<20), b"")]; print(h.hexdigest())' "$1"; }
+send() { # file
+  local n
+  for n in 1 2 3; do
+    # --clobber: an OS rebuilt for a missing manifest entry replaces its old image.
+    gh release upload "$TAG" -R "$REPO" --clobber "$1" && return 0
+    echo "   upload of $(basename "$1") failed (try $n of 3)" >&2
+    [[ $n -eq 3 ]] || sleep "${RELEASE_UPLOAD_WAIT:-20}"
+  done
+  return 1
+}
+ONLINE=$(uploaded)
+FAILED=()
+MANIFEST=""
 echo "== uploading ${#UPLOAD[@]} files"
-# --clobber: an OS rebuilt for a missing manifest entry replaces its old image.
-gh release upload "$TAG" -R "$REPO" --clobber "${UPLOAD[@]}"
+for f in ${UPLOAD[@]+"${UPLOAD[@]}"}; do
+  name=$(basename "$f")
+  if [[ $name == bia-os.json ]]; then MANIFEST=$f; continue; fi
+  if grep -qxF "$name"$'\t'"sha256:$(sha_of "$f")" <<<"$ONLINE"; then
+    echo "   same  $name"
+    continue
+  fi
+  send "$f" || FAILED+=("$name")
+done
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  die "not uploaded: ${FAILED[*]}. The release is not marked latest and bia-os.json was not updated. Run the publish again."
+fi
+if [[ -n "$MANIFEST" ]]; then
+  send "$MANIFEST" || die "bia-os.json was not uploaded. The release is not marked latest. Run the publish again."
+fi
 # Assets of the old OS packaging (zstd root parts + boot bundle) for a rebuilt arch.
 for a in ${OS_BUILT[@]+"${OS_BUILT[@]}"}; do
   while read -r name; do
@@ -635,4 +667,20 @@ for a in ${OS_BUILT[@]+"${OS_BUILT[@]}"}; do
     gh release delete-asset "$TAG" "$name" -R "$REPO" -y
   done < <(grep -E "^bia-(root-$a\.[0-9]+\.zst|boot-$a\.tar\.zst)$" <<<"$HAVE" || true)
 done
+# Latest only once every package is there, and never back to an older version.
+HAVE=$(uploaded | cut -f1)
+MISSING=()
+for p in "${ALL[@]}"; do complete "$p" || MISSING+=("$p"); done
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  echo "== $TAG is NOT latest; still missing: ${MISSING[*]}"
+  echo "   Re-run the failed jobs (or tools/release.sh): only the missing packages are built."
+else
+  CURRENT=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+  if [[ -n "$CURRENT" && "$CURRENT" != "$TAG" && "$(printf '%s\n%s\n' "${CURRENT#v}" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+    echo "== $TAG is complete; latest stays $CURRENT, which is newer"
+  else
+    gh release edit "$TAG" -R "$REPO" --latest >/dev/null
+    echo "== $TAG is complete and latest"
+  fi
+fi
 echo "== done: $(gh release view "$TAG" -R "$REPO" --json url -q .url)"

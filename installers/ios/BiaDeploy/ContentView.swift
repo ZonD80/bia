@@ -1,7 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-private let accent = Color(red: 0.149, green: 0.361, blue: 0.627)
+/// bia's blue for what is filled, under white text.
+private let accentFill = Color(red: 0.149, green: 0.361, blue: 0.627)
+/// bia's blue for words and outlines: the filled blue is too dark to read on a dark background.
+let accent = Color(UIColor { $0.userInterfaceStyle == .dark
+    ? UIColor(red: 0.498, green: 0.659, blue: 0.878, alpha: 1)
+    : UIColor(red: 0.149, green: 0.361, blue: 0.627, alpha: 1) })
 private let good = Color(red: 0.157, green: 0.627, blue: 0.275)
 
 struct ContentView: View {
@@ -14,7 +19,7 @@ struct ContentView: View {
                     Text("bia").font(.system(size: 34, weight: .bold)).foregroundStyle(accent)
                     Text(" deploy").font(.system(size: 34)).foregroundStyle(.secondary)
                     Spacer()
-                    if model.page == .brain { Button("your bias") { model.openKeys() }.buttonStyle(.bordered).tint(accent) }
+                    if model.page == .brain { Button("Your bias") { model.openKeys() }.buttonStyle(.bordered).tint(accent) }
                 }
                 switch model.page {
                 case .brain: BrainPage(model: model)
@@ -27,6 +32,10 @@ struct ContentView: View {
             // on an iPad the wizard stays a readable column in the middle
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
+        }
+        // the page stops at the status bar, so it never runs under the clock and icons
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Color.clear.frame(height: 0).background(Color(.systemGroupedBackground))
         }
         .background(Color(.systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
@@ -73,7 +82,7 @@ struct Card<Content: View>: View {
 
 struct PrimaryButton: View {
     let title: String
-    var color: Color = accent
+    var color: Color = accentFill
     var enabled = true
     let action: () -> Void
     var body: some View {
@@ -137,8 +146,9 @@ struct BrainPage: View {
             } else {
                 Button { model.signInChatGpt() } label: {
                     Text("Continue with ChatGPT").font(.headline).frame(maxWidth: .infinity).frame(height: 48)
+                        .foregroundStyle(Color(.systemBackground))
                 }
-                .buttonStyle(.borderedProminent).tint(.black).clipShape(RoundedRectangle(cornerRadius: 22))
+                .buttonStyle(.borderedProminent).tint(Color(.label)).clipShape(RoundedRectangle(cornerRadius: 22))
                 .disabled(model.busy != nil)
                 Text("Or use an API key").foregroundStyle(.secondary)
                 SecureField("API key", text: $model.apiKey)
@@ -192,7 +202,7 @@ struct BrainPage: View {
             if let h = model.hello {
                 Text("bia:  \(h)").font(.title3).foregroundStyle(.white).padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(accent, in: RoundedRectangle(cornerRadius: 16))
+                    .background(accentFill, in: RoundedRectangle(cornerRadius: 16))
             }
             PrimaryButton(title: "Continue  ›") { model.land = false; model.page = .server }
         } else {
@@ -253,7 +263,7 @@ struct LoginStep: View {
                 SecureField("The server's password", text: $model.password).textFieldStyle(.roundedBorder)
                 Text("bia uses the password only now, to log in; it is not saved.").font(.footnote).foregroundStyle(.secondary)
             case .key:
-                Button("Choose the key file…") { picking = true }
+                Button("Choose the key file…") { picking = true }.buttonStyle(.bordered)
                     .fileImporter(isPresented: $picking, allowedContentTypes: [.data, .text, .item]) { r in
                         if case .success(let url) = r {
                             let ok = url.startAccessingSecurityScopedResource()
@@ -275,7 +285,7 @@ struct LoginStep: View {
                     HStack {
                         Button("Copy") { UIPasteboard.general.string = k.public }.buttonStyle(.bordered)
                         ShareLink(item: k.public) { Text("Share") }.buttonStyle(.bordered)
-                        Button("Make another") { model.makeKey() }
+                        Button("Make another") { model.makeKey() }.buttonStyle(.bordered)
                     }
                     Text("2. When the server is ready, type its address above and press Connect.").bold()
                 } else {
@@ -406,7 +416,7 @@ struct InstalledStep: View {
             case false?:
                 Text("bia did not answer yet").font(.title3.weight(.semibold))
                 Text(model.upError ?? "")
-                if !model.land, let u = url { Button("Try to open it anyway") { openURL(u) } }
+                if !model.land, let u = url { Button("Try to open it anyway") { openURL(u) }.buttonStyle(.bordered) }
             }
         }
         if let folder = model.done?.folder { KeyCard(model: model, folder: folder, host: host) }
@@ -470,6 +480,7 @@ struct KeyCard: View {
             ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
                 Label("Share bia's key…", systemImage: "square.and.arrow.up")
             }
+            .buttonStyle(.bordered)
             Text("Share sends it to a computer or another phone (AirDrop, Mail, Files); it asks for the password above when it is installed.")
                 .font(.footnote).foregroundStyle(.secondary)
             Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
@@ -500,7 +511,7 @@ struct KeysPage: View {
     var body: some View {
         Button("‹  Back") { model.page = .brain }
         Card {
-            Text("your bias").font(.title3.weight(.semibold))
+            Text("Your bias").font(.title3.weight(.semibold))
             Button("Import a .biaconfig…") { picking = true }.buttonStyle(.bordered)
                 .fileImporter(isPresented: $picking, allowedContentTypes: [UTType(exportedAs: "biadeploy.config")]) { result in
                     if case .success(let url) = result { model.offerConfig(url) }

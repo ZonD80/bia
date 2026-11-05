@@ -337,7 +337,8 @@ jobs:
   publish:
     needs: [linux, macos, android, ios]
     # what did build is published even when another runner failed (e.g. macOS signing
-    # without its secrets); a later run builds only what is still missing
+    # without its secrets); a later run builds only what is still missing. The release becomes
+    # latest only when every package is there (tools/release.sh)
     # a pushed tag has no inputs (and null == false in these expressions): it always publishes
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.publish) }}
     runs-on: ubuntu-24.04

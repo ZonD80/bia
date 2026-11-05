@@ -103,6 +103,8 @@ private struct ChatWeb: UIViewRepresentable {
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
+        web.isOpaque = false // no white flash in dark mode before bia's page has drawn
+        web.backgroundColor = .systemBackground
         #if DEBUG
         if #available(iOS 16.4, *) { web.isInspectable = true }
         #endif

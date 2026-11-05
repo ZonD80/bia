@@ -1,5 +1,6 @@
 package biadeploy.android
 
+import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,15 +46,26 @@ import uniffi.bia_deploy_mobile.languages
 import uniffi.bia_deploy_mobile.p12Password
 import java.io.File
 
-/** bia's blue, as in the desktop app. */
+/** bia's blue, as in the desktop app: what buttons are filled with, under white text. */
 private val Accent = Color(0xFF265CA0)
 private val Good = Color(0xFF28A046)
 
 @Composable
 fun BiaTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
-    val scheme = if (dark) darkColorScheme(primary = Color(0xFF7FA8E0), secondary = Accent)
-    else lightColorScheme(primary = Accent, secondary = Accent, background = Color(0xFFF2F2F2), surface = Color.White)
+    val scheme = if (dark) darkColorScheme(primary = Color(0xFF7FA8E0), secondary = Accent, background = Color(0xFF121318), surface = Color(0xFF1C1D22),
+        secondaryContainer = Color(0xFF2A3F5F), onSecondaryContainer = Color(0xFFDCE7F7), surfaceVariant = Color(0xFF2A2C33), onSurfaceVariant = Color(0xFFC6C8D0))
+    else lightColorScheme(primary = Accent, secondary = Accent, background = Color(0xFFF2F2F2), surface = Color.White,
+        secondaryContainer = Color(0xFFD6E3F5), onSecondaryContainer = Color(0xFF0F2A4D), surfaceVariant = Color(0xFFE8EAEE), onSurfaceVariant = Color(0xFF44474E))
+    // the system bars are see-through here: their icons must suit what this app draws under them
+    val view = LocalView.current
+    if (!view.isInEditMode) SideEffect {
+        val window = (view.context as Activity).window
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !dark
+            isAppearanceLightNavigationBars = !dark
+        }
+    }
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
@@ -64,14 +78,19 @@ fun App(m: DeployModel) {
     }
     BackHandler(enabled = (m.page == Page.Server && m.step == Step.Login) || m.page == Page.Keys) { m.page = Page.Brain }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        // on a tablet the wizard stays a readable column in the middle
-        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
+        // on a tablet the wizard stays a readable column in the middle; the scrolling stops at the
+        // status bar, so the page never runs under its clock and icons
+        Box(
+            Modifier.fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .verticalScroll(rememberScrollState()),
+            contentAlignment = Alignment.TopCenter,
+        ) {
         Column(
             Modifier
                 .widthIn(max = 640.dp)
                 .fillMaxWidth()
-                .systemBarsPadding()
-                .imePadding()
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
@@ -79,7 +98,7 @@ fun App(m: DeployModel) {
                 Text("bia", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 Text(" deploy", fontSize = 34.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                 Spacer(Modifier.weight(1f))
-                if (m.page == Page.Brain) OutlinedButton({ m.openKeys() }) { Text("your bias") }
+                if (m.page == Page.Brain) OutlinedButton({ m.openKeys() }) { Text("Your bias") }
             }
             when (m.page) {
                 Page.Brain -> BrainPage(m)
@@ -106,10 +125,19 @@ private fun Title(text: String) = Text(text, fontSize = 20.sp, fontWeight = Font
 private fun Weak(text: String) = Text(text, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f), fontSize = 14.sp)
 
 @Composable
-private fun Primary(text: String, enabled: Boolean = true, color: Color = Accent, onClick: () -> Unit) =
-    Button(onClick, enabled = enabled, shape = RoundedCornerShape(22.dp), colors = ButtonDefaults.buttonColors(containerColor = color), modifier = Modifier.fillMaxWidth().height(48.dp)) {
+private fun Primary(text: String, enabled: Boolean = true, danger: Boolean = false, onClick: () -> Unit) {
+    val colors = if (danger) ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error, contentColor = MaterialTheme.colorScheme.onError)
+    else ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White)
+    Button(onClick, enabled = enabled, shape = RoundedCornerShape(22.dp), colors = colors, modifier = Modifier.fillMaxWidth().height(48.dp)) {
         Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/** Buttons side by side: one kind of button, and those that do not fit go to the next line. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Buttons(content: @Composable () -> Unit) =
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { content() }
 
 @Composable
 private fun ErrorCard(text: String) {
@@ -129,7 +157,7 @@ private fun Busy(text: String) = Row(verticalAlignment = Alignment.CenterVertica
 
 @Composable
 private fun Check(done: Boolean, text: String) = Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    Text(if (done) "✔" else "○", color = if (done) Good else Accent, fontWeight = FontWeight.Bold)
+    Text(if (done) "✔" else "○", color = if (done) Good else MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
     Text(text, color = if (done) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
 }
 
@@ -147,9 +175,11 @@ private fun BrainPage(m: DeployModel) {
                 TextButton({ m.signOutChatGpt() }) { Text("Sign out") }
             }
         } else {
+            val dark = isSystemInDarkTheme()
             Button({ m.signInChatGpt() }, enabled = m.busy == null, shape = RoundedCornerShape(22.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF101010)), modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                Text("Continue with ChatGPT", color = Color.White)
+                colors = ButtonDefaults.buttonColors(containerColor = if (dark) Color.White else Color(0xFF101010), contentColor = if (dark) Color(0xFF101010) else Color.White),
+                modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text("Continue with ChatGPT")
             }
             Weak("Or use an API key")
             OutlinedTextField(m.apiKey, { m.keyChanged(it) }, label = { Text("API key") }, singleLine = true,
@@ -293,12 +323,12 @@ private fun LoginStep(m: DeployModel) {
                     Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                         Text(k.public, fontFamily = FontFamily.Monospace, fontSize = 12.sp, modifier = Modifier.padding(8.dp))
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Buttons {
                         OutlinedButton({ clip.setText(AnnotatedString(k.public)) }) { Text("Copy") }
                         OutlinedButton({
                             context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, k.public), "SSH key"))
                         }) { Text("Share") }
-                        TextButton({ m.makeKey() }) { Text("Make another") }
+                        OutlinedButton({ m.makeKey() }) { Text("Make another") }
                     }
                     Text("2. When the server is ready, type its address above and press Connect.", fontWeight = FontWeight.SemiBold)
                 }
@@ -316,9 +346,7 @@ private fun LandSecretCard(m: DeployModel) {
         Title("Land secret")
         Weak("This server becomes an empty bia that waits for one of your bias to fly its agent there. That bia needs this secret:")
         Text(m.secret, fontFamily = FontFamily.Monospace, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton({ clip.setText(AnnotatedString(m.secret)) }) { Text("Copy") }
-        }
+        OutlinedButton({ clip.setText(AnnotatedString(m.secret)) }) { Text("Copy") }
         var own by remember { mutableStateOf(false) }
         TextButton({ own = !own }) { Text("Use the secret my bia made instead") }
         if (own) OutlinedTextField(m.secret, { m.secret = it }, singleLine = true, textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
@@ -336,7 +364,7 @@ private fun HostKeyStep(m: DeployModel) {
         }
         Text("bia knew it as $known, now it says $now.", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         Text("A server that was reinstalled gets a new fingerprint. If you did not reinstall it, stop here: someone may be in between.")
-        Primary("It was reinstalled: trust the new one", color = MaterialTheme.colorScheme.error) { m.connect(accept = now) }
+        Primary("It was reinstalled: trust the new one", danger = true) { m.connect(accept = now) }
         TextButton({ m.back() }) { Text("Back") }
     }
 }
@@ -368,7 +396,7 @@ private fun ConfirmStep(m: DeployModel) {
             Checkbox(understood, { understood = it })
             Text("I understand, nothing on this server needs to be kept")
         }
-        Primary("Replace ${f.hostname} with bia", enabled = understood, color = MaterialTheme.colorScheme.error) { m.run() }
+        Primary("Replace ${f.hostname} with bia", enabled = understood, danger = true) { m.run() }
         TextButton({ m.back() }) { Text("Back") }
     }
     if (p.land) LandSecretCard(m)
@@ -449,10 +477,10 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
             Weak("key saved " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(savedAt.toLong() * 1000)))
             Primary("Open chat") { m.chat = ChatTarget(host, folder) }
             Weak("For a browser:")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Buttons {
                 OutlinedButton({ installKey(context, folder, host) }) { Text("Install") }
                 OutlinedButton({ share(context, folder, host) }) { Text("Share…") }
-                TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
+                OutlinedButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
             }
             OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
             TextButton({ removing = true }) { Text("Remove from this phone…", color = MaterialTheme.colorScheme.error) }
@@ -467,15 +495,15 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
         OutlinedButton({ installKey(context, folder, host) }) { Text("Install bia's key") }
         Text("2. Trust bia's certificate authority, so the browser opens bia without a warning:", fontWeight = FontWeight.SemiBold)
         Weak("Android lets apps only hand it over: save it, then in Settings › Security › Encryption & credentials › Install a certificate › CA certificate, pick the saved file.")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Buttons {
             OutlinedButton({ saveCa.launch("bia-$host-ca.crt") }) { Text(if (caSaved) "Saved ✔" else "Save it") }
             OutlinedButton({
                 try { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } catch (_: ActivityNotFoundException) {}
             }) { Text("Open Settings") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Buttons {
             OutlinedButton({ share(context, folder, host) }) { Text("Share bia's key…") }
-            TextButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
+            OutlinedButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
         }
         Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); it asks for the password above when it is installed.")
         OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
@@ -520,7 +548,7 @@ private fun KeysPage(m: DeployModel) {
     }
     TextButton({ m.page = Page.Brain }) { Text("‹  Back") }
     Card {
-        Title("your bias")
+        Title("Your bias")
         OutlinedButton({ pick.launch(arrayOf("*/*")) }) { Text("Import a .biaconfig…") }
         if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
         else Weak("Each is a certificate for one bia, the way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
@@ -538,7 +566,7 @@ private fun ImportDialog(m: DeployModel) {
             onDismissRequest = { m.closeConfig() },
             title = { Text("Replace the key for $other?") },
             text = { Text("This phone already has a different key for $other. If it is root's and no copy exists elsewhere, replacing it can lock root out of that bia.") },
-            confirmButton = { TextButton({ m.configOtherKey = null; m.importConfig(password, true) }) { Text("Replace") } },
+            confirmButton = { TextButton({ m.configOtherKey = null; m.importConfig(password, true) }) { Text("Replace", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton({ m.closeConfig() }) { Text("Keep the old key") } },
         )
         return

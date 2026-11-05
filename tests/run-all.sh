@@ -157,6 +157,7 @@ for stage in "$@"; do
       run chrome-update chrome_update
       run venv venv_default
       run biaconfig biaconfig
+      run release-publish bash tests/integration/release-publish-test.sh
       run web-markdown node tests/integration/web-md-test.js
       run web-link node tests/integration/web-link-test.js
       # the web app in headless Chrome, on this host (skips when there is no Chrome here)

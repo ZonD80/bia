@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.0.9
+
+### Changes
+- bia deploy on Android: the status bar stays readable. In dark mode the chat screen was white under white status icons, and on every screen the page scrolled underneath the clock and icons. The chat screen now follows dark mode too.
+- bia deploy on Android: button text is readable in dark mode. Filled buttons had dark purple text on blue.
+- bia deploy on Android and iOS: buttons side by side now look alike instead of mixing buttons with plain links, the "Your bias" button has a capital letter, and on iOS the page also stops at the status bar and bia's blue is readable in dark mode.
+
+### For bia
+- Nothing to do.
+
 ## 2.0.8
 
 ### Changes
