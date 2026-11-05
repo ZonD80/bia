@@ -1,5 +1,8 @@
 # bia — boot straight into an agent
 
+[![Latest release](https://img.shields.io/github/v/release/ZonD80/bia)](https://github.com/ZonD80/bia/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ZonD80/bia/total)](https://github.com/ZonD80/bia/releases/latest)
+
 bia turns a USB stick (or a disk, or a VM image) into a computer whose whole
 user interface is an LLM agent. Plug it in, boot, and the first thing on the
 screen is a prompt that talks to an LLM (a cloud model, or optionally one
