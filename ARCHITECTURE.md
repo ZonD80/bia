@@ -16,7 +16,7 @@ agent is the only user-facing program; everything else is there to serve it.
  │    bia-rescue/rescue.cpio.gz            offline update overlay         │
  │    bia-rescue/next.cfg                  present only while updating    │
  │    EFI/bia/fmm.json                     optional, seeded by bia-deploy  │
- │    EFI/bia/lang.json                    owner's language (bia-deploy)   │
+ │    EFI/bia/self.json                    language, name, gender (deploy) │
  │    EFI/bia/models.txt                   until bia-grow moved the model │
  │ p2 BIABIOS  1 MiB BIOS boot (x86_64 legacy, GRUB core.img)             │
  │ p3 BIAROOT  ext4: Debian + /home/bia (model, MCPs, files) + swapfile   │
@@ -636,7 +636,11 @@ root, and the console session is root.
 
 The owner's language can be chosen in the flasher (GUI picker, `bia-deploy
 write --lang`, `BIA_LANG=` for `make flash`; the default is the host locale).
-It goes onto the ESP as `EFI/bia/lang.json`. On first boot the agent makes it
+It goes onto the ESP in `EFI/bia/self.json` (`{"lang": "ru", "name": "Fred",
+"gender": "male"}`, with bia's name and gender from the same page of the
+wizard, `--bia-name` / `--gender` on the command line). The agent keeps name
+and gender in `files/state/self.json`, the first line of its system prompt;
+only root changes them (`self_set`). On first boot the agent makes the language
 the default language and enables hearing it. The keyboard is added at once,
 and the voice is downloaded in the background, retried every minute for a
 day while there is no network. The ESP file is then deleted. While the
@@ -754,7 +758,7 @@ back, xz-decoded on the fly: it writes a GPT for the whole stick (same
 partition starts as the image's), keeps the image's MBR boot code, copies the
 BIOS boot partition and BIAROOT, streams a Hugging Face model onto the end of
 BIAROOT, checks the image's SHA-256, and writes the ESP last with `fmm.json`,
-`models.txt` and `lang.json` added. A damaged download therefore leaves the stick unbootable,
+`models.txt` and `self.json` added. A damaged download therefore leaves the stick unbootable,
 never half-written.
 
 `tools/release.sh` publishes `v<workspace version>` on GitHub (`zond80/bia`).
@@ -949,7 +953,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   stick" or "On my server" (`gui_server.rs`, over `remote/`, see "Taking over a running
   Linux"). For sticks it probes the stick's
   size and writes the GPT over all of it, `root.img`, the ESP (via `fatfs`) and
-  BIOS boot; can seed `EFI/bia/fmm.json` and `EFI/bia/lang.json` (`--lang`,
+  BIOS boot; can seed `EFI/bia/fmm.json` and `EFI/bia/self.json` (`--lang`, `--bia-name`, `--gender`,
   `bia-deploy langs`) and put a Hugging Face GGUF on the
   stick (`bia-deploy search` / `files` / `write --model repo[:file]`). The FMM
   provider is detected from the pasted key (prefixes `sk-or-`, `sk-ant-`, `AIza` (Gemini), `xai-`,

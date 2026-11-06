@@ -27,6 +27,28 @@ const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
 const APPLE_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
 const SW_JS: &str = include_str!("../web/sw.js");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
+
+/// A page whose `<title>bia…` names this bia ("Fred · bia"), so the tabs of several bias
+/// differ; app.js keeps whatever title the page came with.
+fn titled(page: &str, name: Option<&str>) -> String {
+    match name {
+        Some(n) => page.replacen("<title>bia", &format!("<title>{} · bia", html_text(n)), 1),
+        None => page.to_string(),
+    }
+}
+
+/// The web app manifest under this bia's name (the home-screen label).
+fn manifest_named(name: Option<&str>) -> String {
+    let Some(n) = name else { return MANIFEST.to_string() };
+    let mut m: Value = serde_json::from_str(MANIFEST).unwrap_or_else(|_| json!({}));
+    m["name"] = format!("{n} · bia").into();
+    m["short_name"] = n.into();
+    serde_json::to_string_pretty(&m).unwrap_or_else(|_| MANIFEST.to_string())
+}
+
+fn html_text(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
 const GUI: &str = include_str!("../web/gui.html");
 const DISPLAY: &str = include_str!("../web/display.html");
 const SKILL: &str = include_str!("../web/skills/web-console/SKILL.md");
@@ -659,7 +681,7 @@ impl Web {
             respond(s, 200, ctype, body.as_bytes(), None)
         };
         match (req.method.as_str(), req.path.as_str()) {
-            ("GET", "/") => asset(stream, "text/html; charset=utf-8", INDEX),
+            ("GET", "/") => asset(stream, "text/html; charset=utf-8", &titled(INDEX, self.pki.chosen_name().as_deref())),
             ("GET", "/app.js") => asset(stream, "text/javascript; charset=utf-8", APP_JS),
             ("GET", "/term.js") => asset(stream, "text/javascript; charset=utf-8", TERM_JS),
             ("GET", "/emoji.js") => asset(stream, "text/javascript; charset=utf-8", EMOJI_JS),
@@ -670,7 +692,7 @@ impl Web {
             ("GET", "/icon.svg" | "/favicon.ico") => asset(stream, "image/svg+xml", ICON),
             ("GET", "/icon-192.png") => respond(stream, 200, "image/png", ICON_PNG, None),
             ("GET", "/apple-touch-icon.png") => respond(stream, 200, "image/png", APPLE_ICON, None),
-            ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", MANIFEST),
+            ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", &manifest_named(self.pki.chosen_name().as_deref())),
             ("GET", "/sw.js") => asset(stream, "text/javascript; charset=utf-8", SW_JS),
             ("GET", "/v1/bridge") => respond_json(stream, crate::bridge::list()),
             ("GET", p) if p.starts_with("/bridge/") => match crate::bridge::file(&p["/bridge/".len()..]) {
@@ -699,6 +721,7 @@ impl Web {
                     "issue": "/v1/pki/bootstrap/root",
                     "ca": "/v1/pki/ca",
                     "ca_sha256": self.ca_sha256(),
+                    "ca_name": self.pki.ca_name(),
                     "origins": self.origins(),
                     // the certificate this browser presented and why it was refused
                     "cert_problem": problem.map(|p| json!({"kind": p.kind, "identity": p.identity})),
@@ -737,7 +760,7 @@ impl Web {
         let json_body = || serde_json::from_slice::<Value>(body).unwrap_or(json!({}));
 
         if method == "GET" && (path == "/gui" || path == "/gui/") {
-            let page = if novnc_root().is_some() { DISPLAY } else { GUI };
+            let page = titled(if novnc_root().is_some() { DISPLAY } else { GUI }, self.pki.chosen_name().as_deref());
             respond(
                 stream,
                 200,
@@ -2757,5 +2780,21 @@ mod qr_tests {
         qr_http(&dir, "/v1/qr/whatsapp.png", &mut gone);
         assert!(String::from_utf8_lossy(&gone).starts_with("HTTP/1.1 404"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn pages_and_manifest_carry_the_name() {
+        assert!(titled(INDEX, Some("Fred")).contains("<title>Fred · bia</title>"));
+        assert!(titled(DISPLAY, Some("<Ann>")).contains("<title>&lt;Ann&gt; · bia · display</title>"));
+        assert_eq!(titled(INDEX, None), INDEX);
+        let m: Value = serde_json::from_str(&manifest_named(Some("Фред"))).unwrap();
+        assert_eq!((m["name"].as_str(), m["short_name"].as_str()), (Some("Фред · bia"), Some("Фред")));
+        assert_eq!(m["start_url"], "/");
+        assert_eq!(manifest_named(None), MANIFEST);
     }
 }

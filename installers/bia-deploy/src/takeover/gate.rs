@@ -20,6 +20,7 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
     bia_pki::install_crypto_provider();
     let pki = Pki::load_or_create(files)?;
     let cfg = pki.server_config()?;
+    let ca_name = pki.ca_name();
     let listener = TcpListener::bind(("0.0.0.0", port))
         .or_else(|_| TcpListener::bind(("::", port)))
         .with_context(|| format!("port {port} is taken; pass --gate-port"))?;
@@ -31,8 +32,8 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
     let (tok, done) = (token.clone(), downloaded.clone());
     std::thread::spawn(move || {
         for tcp in listener.incoming().flatten() {
-            let (cfg, tok, done, p12, ca_sha) =
-                (cfg.clone(), tok.clone(), done.clone(), p12.clone(), ca_sha256.clone());
+            let (cfg, tok, done, p12, ca_sha, ca_name) =
+                (cfg.clone(), tok.clone(), done.clone(), p12.clone(), ca_sha256.clone(), ca_name.clone());
             std::thread::spawn(move || {
                 let mut tcp = tcp;
                 let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(30)));
@@ -59,7 +60,7 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
                 let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let base = format!("/{tok}");
                 let (code, ctype, extra, body): (u16, &str, String, Vec<u8>) = if path == base || path == format!("{base}/") {
-                    (200, "text/html; charset=utf-8", String::new(), page(&tok, &ca_sha).into_bytes())
+                    (200, "text/html; charset=utf-8", String::new(), page(&tok, &ca_sha, &ca_name).into_bytes())
                 } else if path == format!("{base}/root.p12") {
                     (200, "application/x-pkcs12", "Content-Disposition: attachment; filename=\"bia-root.p12\"\r\n".into(), p12)
                 } else {
@@ -83,7 +84,7 @@ pub fn start(files: &std::path::Path, port: u16, p12: Vec<u8>, ca_sha256: String
     Ok(Gate { port, token, downloaded })
 }
 
-fn page(tok: &str, ca_sha: &str) -> String {
+fn page(tok: &str, ca_sha: &str, ca_name: &str) -> String {
     let fp: Vec<String> = ca_sha.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).to_string()).collect();
     format!(
         r#"<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -93,7 +94,7 @@ fn page(tok: &str, ca_sha: &str) -> String {
 <p>This machine is about to become a bia. Afterwards the only way in is its web app on HTTPS, with this certificate.</p>
 <p><a class="b" href="/{tok}/root.p12">Download bia-root.p12</a></p>
 <p>Import <b>bia-root.p12</b> into your browser or system (password <code>12345678</code>). It also holds bia's
-certificate authority, <b>bia agent CA</b>; trust it so your browser knows bia without warnings.
+certificate authority, <b>{ca_name}</b>; trust it so your browser knows bia without warnings.
 Its fingerprint (SHA-256) must match what the terminal shows:</p>
 <p><code>{}</code></p>
 <p>Then go back to the terminal and confirm.</p>

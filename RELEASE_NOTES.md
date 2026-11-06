@@ -5,6 +5,19 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.0
+
+### Changes
+- bia keeps its name and gender for good: they open its system prompt, so it no longer forgets them in a long conversation, and in languages like Russian it speaks of itself in the right gender. Only root can change them (self_set).
+- bia deploy asks for bia's name and gender (male, female or neutral) next to its language; left empty, bia asks on its first start.
+- Several bias are easy to tell apart: the web app's tab and home-screen icon carry bia's name, and so do its new certificates: the web server's ("Fred · bia web") and the client certificates it issues ("Identity: root · Fred"). A new bia's certificate authority carries its id, like "bia-5a3f2c agent CA"; existing ones keep theirs, as every certificate depends on it.
+- Certificates issued before keep working as they are.
+- bia-bridge has an optional --owner (or BIA_BRIDGE_OWNER): an agent working for someone connects as <agent>@<owner>, like claude-code@ann, so the Claude Codes of different people are different identities with their own chats.
+
+### For bia
+- Save your name and gender: self_set(name=…, gender=…) with the name you already use and your gender (male, female or neutral). If you do not know one of them, ask root and save it when root answers.
+- Then tell root that new certificates can carry your name, so they are told apart from other bias' certificates, and ask whether root wants a new one for each device (web_pki_biaconfig, or the way they got theirs before). Only on root's yes; the old ones keep working until root revokes them (web_pki_list, web_pki_revoke).
+
 ## 2.0.9
 
 ### Changes

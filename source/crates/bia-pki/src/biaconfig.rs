@@ -118,7 +118,7 @@ pub fn details(c: &BiaConfig) -> Result<Details> {
     let (_, certs) = p12::parse(&c.p12, P12_PASSWORD).context("this .biaconfig's certificate")?;
     let leaf = certs.first().ok_or_else(|| anyhow!("this .biaconfig has no certificate"))?;
     let (_, cert) = x509_parser::parse_x509_certificate(leaf).map_err(|_| anyhow!("this .biaconfig's certificate cannot be read"))?;
-    let identity = cert.subject().iter_common_name().next().and_then(|n| n.as_str().ok()).unwrap_or("").trim_start_matches("Identity: ").to_string();
+    let identity = cert.subject().iter_common_name().next().and_then(|n| n.as_str().ok()).map(crate::identity_from_cn).unwrap_or_default();
     Ok(Details { identity, serial: cert.raw_serial_as_string().replace(':', ""), not_after: cert.validity().not_after.timestamp() })
 }
 

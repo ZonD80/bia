@@ -80,10 +80,13 @@ fun App(m: DeployModel) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // on a tablet the wizard stays a readable column in the middle; the scrolling stops at the
         // status bar, so the page never runs under its clock and icons
+        val scroll = rememberScrollState()
+        // demo "name" (store screenshots): the end of the brain page, where name and gender are
+        if (m.demoScrollEnd) LaunchedEffect(scroll.maxValue) { scroll.scrollTo(scroll.maxValue) }
         Box(
             Modifier.fillMaxSize()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scroll),
             contentAlignment = Alignment.TopCenter,
         ) {
         Column(
@@ -219,6 +222,17 @@ private fun BrainPage(m: DeployModel) {
         Title("bia's language")
         LanguagePicker(m)
         Weak("bia talks in it from the first boot. Text only: no voice exists, so bia speaks English aloud.")
+    }
+    Card {
+        Title("bia's name")
+        OutlinedTextField(m.biaName, { m.biaName = it.take(40) }, label = { Text("Name") }, placeholder = { Text("e.g. Fred") },
+            singleLine = true, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("male" to "Male", "female" to "Female", "neutral" to "Neutral").forEach { (g, label) ->
+                FilterChip(m.gender == g, { m.gender = if (m.gender == g) "" else g }, label = { Text(label) })
+            }
+        }
+        Weak("bia always knows its name and gender, and its certificates and web page carry the name. Leave them empty and bia asks on its first start.")
     }
     when {
         m.busy != null -> Busy(m.busy!!)
@@ -370,7 +384,7 @@ private fun HostKeyStep(m: DeployModel) {
 }
 
 private fun rowName(k: String) = when (k) {
-    "mode" -> "bia"; "fmm" -> "brain"; "lang" -> "language"; "root certificate" -> "bia's key"
+    "mode" -> "bia"; "fmm" -> "brain"; "lang" -> "language"; "self" -> "bia's name"; "root certificate" -> "bia's key"
     "server certificate" -> "names in its certificate"; else -> k
 }
 

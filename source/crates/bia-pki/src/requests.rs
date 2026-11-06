@@ -426,7 +426,9 @@ mod tests {
             .as_str()
             .unwrap()
             .to_string();
-        assert_eq!(cn, "Identity: peer-bia");
+        // the CN names the bia that issued it (no self.json here: its id)
+        assert_eq!(cn, format!("Identity: peer-bia · {}", pki.bia_id()));
+        assert_eq!(crate::identity_from_cn(&cn), "peer-bia");
         assert!(x.subject().to_string().contains("trust:normal"));
         assert!(
             pki.collect_request(&r.id).is_ok(),
@@ -712,11 +714,11 @@ mod tests {
         let id = a.check_client(s.peer_certificates()).unwrap().unwrap();
         assert_eq!(id.identity, "alice");
 
-        // another bia's certificate (same CA name): handshake succeeds, check_client says why
+        // another bia's certificate: handshake succeeds, check_client says why and whose it is
         let (foreign, foreign_key, _) = client_of(&b, "bob");
         let s = handshake(&a, Some((foreign, &foreign_key)));
         let p = a.check_client(s.peer_certificates()).unwrap_err();
-        assert_eq!((p.kind, p.identity.as_str()), ("other_ca", "Identity: bob"));
+        assert_eq!((p.kind, p.identity.as_str()), ("other_ca", format!("Identity: bob · {}", b.bia_id()).as_str()));
 
         let s = handshake(&a, None);
         assert!(a.check_client(s.peer_certificates()).unwrap().is_none());

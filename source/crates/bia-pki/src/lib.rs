@@ -31,9 +31,18 @@ pub use peers::{Grant, Peer};
 pub use requests::{CertRequest, Status as RequestStatus, POLL_SECS, REQUEST_TTL_SECS};
 pub use seed::{seed, RootSeed, SeedOptions, Seeded};
 
-const CA_NAME: &str = "bia agent CA";
 /// Client cert CN prefix so leaf identities are distinct from the CA subject.
 pub const IDENTITY_CN_PREFIX: &str = "Identity: ";
+/// Since 2.1.0 a client certificate's CN also names the bia that issued it
+/// ("Identity: root · Fred"); the identity is the part before this.
+pub const ISSUER_CN_SEP: &str = " · ";
+
+/// The identity in a client certificate's CN: "Identity: root · Fred", "Identity: root" and
+/// a legacy bare "root" all give "root".
+pub fn identity_from_cn(cn: &str) -> String {
+    let s = cn.strip_prefix(IDENTITY_CN_PREFIX).unwrap_or(cn);
+    s.split(ISSUER_CN_SEP).next().unwrap_or("").trim().to_string()
+}
 const PICKUP_TTL_SECS: i64 = 15 * 60;
 /// Password of every PKCS#12 bia hands out. Not a secret (the file itself is the secret);
 /// macOS refuses to import a .p12 with an empty password.
@@ -111,6 +120,20 @@ impl Pki {
         fs::read_to_string(self.ca_cert_path()).context("read ca.crt")
     }
 
+    /// The CA's subject CN: "bia-5a3f2c agent CA" (since 2.1.0) or "bia agent CA" (older).
+    pub fn ca_name(&self) -> String {
+        self.ca_pem()
+            .ok()
+            .and_then(|pem| pem_to_cert_ders(&pem).ok())
+            .and_then(|d| d.into_iter().next())
+            .and_then(|der| {
+                let (_, c) = x509_parser::parse_x509_certificate(der.as_ref()).ok()?;
+                let cn = c.subject().iter_common_name().next()?.as_str().ok()?.to_string();
+                Some(cn)
+            })
+            .unwrap_or_else(|| "bia agent CA".into())
+    }
+
     pub fn ca_sha256(&self) -> Result<String> {
         let pem = self.ca_pem()?;
         let der = pem_to_cert_ders(&pem)?
@@ -121,9 +144,20 @@ impl Pki {
     }
 
     fn bootstrap_ca(&self) -> Result<()> {
+        // The bia id is chosen before the CA exists (a certificate cannot hold its own
+        // fingerprint), from the CA key, and kept in agent.json, so the CA can carry it.
+        let key = KeyPair::generate()?;
+        let id = match self.stored_id() {
+            Some(id) => id,
+            None => {
+                let id = format!("bia-{}", &hex_sha256(&key.public_key_der())[..6]);
+                self.write_agent_json(|v| v["id"] = id.clone().into())?;
+                id
+            }
+        };
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.distinguished_name.push(DnType::CommonName, CA_NAME);
+        params.distinguished_name.push(DnType::CommonName, format!("{id} agent CA"));
         params
             .distinguished_name
             .push(DnType::OrganizationName, "bia");
@@ -134,7 +168,6 @@ impl Pki {
         ];
         params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
         params.not_after = OffsetDateTime::now_utc() + Duration::days(3650);
-        let key = KeyPair::generate()?;
         let cert = params.self_signed(&key)?;
         fs::write(self.ca_cert_path(), cert.pem()).context("write ca.crt")?;
         fs::write(self.ca_key_path(), key.serialize_pem()).context("write ca.key")?;
@@ -210,7 +243,7 @@ impl Pki {
         let mut params = CertificateParams::new(vec!["bia".into(), "localhost".into()])?;
         params
             .distinguished_name
-            .push(DnType::CommonName, "bia web");
+            .push(DnType::CommonName, format!("{}{ISSUER_CN_SEP}bia web", self.display_name()));
         params
             .distinguished_name
             .push(DnType::OrganizationName, "bia");
@@ -276,6 +309,8 @@ impl Pki {
         let (names, fixed) = self.server_extra();
         want.extend(names.iter().map(|n| format!("dns:{n}")));
         want.extend(fixed.iter().map(|i| format!("fixed:{i}")));
+        // a new name for this bia goes into the server certificate
+        want.push(format!("name:{}", self.display_name()));
         let marker = self.dir.join("server.sans");
         let cur = fs::read_to_string(&marker).unwrap_or_default();
         let cur_list: Vec<&str> = cur.lines().filter(|l| !l.is_empty()).collect();
@@ -418,7 +453,7 @@ impl Pki {
             _ => bail!("trust must be root or normal"),
         };
         let (ca_cert, ca_key, ca_pem) = self.load_ca_issuer()?;
-        let cn = format!("{IDENTITY_CN_PREFIX}{identity}");
+        let cn = format!("{IDENTITY_CN_PREFIX}{identity}{ISSUER_CN_SEP}{}", self.display_name());
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         params
             .distinguished_name
@@ -806,13 +841,8 @@ pub fn client_id_from_certs(certs: Option<&[CertificateDer<'_>]>) -> Option<Clie
     let mut trust = "normal".to_string();
     for attr in subject.iter_common_name() {
         if let Ok(s) = attr.as_str() {
-            // Prefer "Identity: root" form; accept legacy bare CN ("root").
-            identity = Some(
-                s.strip_prefix(IDENTITY_CN_PREFIX)
-                    .unwrap_or(s)
-                    .trim()
-                    .to_string(),
-            );
+            // "Identity: root · Fred", "Identity: root" or a legacy bare CN ("root")
+            identity = Some(identity_from_cn(s));
             break;
         }
     }
@@ -1062,6 +1092,76 @@ mod server_cert_tests {
         assert_eq!(validity_days(&pki), 826);
         assert!(pki.ensure_server_sans(&[]).unwrap(), "it is reissued");
         assert!(validity_days(&pki) <= SERVER_MAX_DAYS);
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod naming_tests {
+    use super::*;
+
+    fn cn_of(pem: &str) -> (String, String) {
+        let der = pem_to_cert_ders(pem).unwrap().into_iter().next().unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(der.as_ref()).unwrap();
+        let cn = |n: &x509_parser::x509::X509Name| n.iter_common_name().next().unwrap().as_str().unwrap().to_string();
+        (cn(c.subject()), cn(c.issuer()))
+    }
+
+    fn fresh(tag: &str) -> (PathBuf, Pki) {
+        install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!("bia-pki-name-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let pki = Pki::load_or_create(&dir).unwrap();
+        (dir, pki)
+    }
+
+    #[test]
+    fn a_new_ca_carries_the_bia_id_which_comes_from_its_key() {
+        let (dir, pki) = fresh("ca");
+        let id = pki.bia_id();
+        assert!(id.starts_with("bia-") && id.len() == 10, "{id}");
+        assert_eq!(pki.agent_name(), id);
+        let (subject, _) = cn_of(&pki.ca_pem().unwrap());
+        assert_eq!(subject, format!("{id} agent CA"));
+        assert_eq!(pki.ca_name(), subject);
+        // recomputable from the CA certificate: sha256 of its public key
+        let der = pem_to_cert_ders(&pki.ca_pem().unwrap()).unwrap().into_iter().next().unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(der.as_ref()).unwrap();
+        assert_eq!(&id[4..], &hex_sha256(c.public_key().raw)[..6]);
+        // a peer name set later keeps the id
+        pki.set_agent_name("fred").unwrap();
+        assert_eq!((pki.agent_name().as_str(), pki.bia_id()), ("fred", id));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_ca_keeps_its_fingerprint_id() {
+        let (dir, pki) = fresh("old");
+        // a bia from before 2.1.0: no id in agent.json
+        fs::remove_file(pki.dir.join("agent.json")).unwrap();
+        assert_eq!(pki.bia_id(), format!("bia-{}", &pki.ca_sha256().unwrap()[..6]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn certificates_name_the_bia_and_the_identity_still_reads() {
+        let (dir, pki) = fresh("certs");
+        let id = pki.bia_id();
+        assert_eq!(cn_of(&fs::read_to_string(pki.server_cert_path()).unwrap()).0, format!("{id} · bia web"));
+        fs::write(dir.join("state/self.json"), r#"{"name": "Фред", "gender": "male"}"#).unwrap();
+        assert_eq!(pki.display_name(), "Фред");
+        assert!(pki.ensure_server_sans(&[]).unwrap(), "a new name reissues the server certificate");
+        assert_eq!(cn_of(&fs::read_to_string(pki.server_cert_path()).unwrap()).0, "Фред · bia web");
+        let key = KeyPair::generate().unwrap();
+        let (cert, _, _) = pki.sign_client("root", "user", "root", &key, &[]).unwrap();
+        let (subject, issuer) = cn_of(&cert.pem());
+        assert_eq!(subject, "Identity: root · Фред");
+        assert_eq!(issuer, format!("{id} agent CA"));
+        let der = cert.der().clone();
+        assert_eq!(client_id_from_certs(Some(&[der])).unwrap().identity, "root");
+        for (cn, want) in [("Identity: root · Фред", "root"), ("Identity: root", "root"), ("root", "root"), ("Identity: a@b.c · x · y", "a@b.c")] {
+            assert_eq!(identity_from_cn(cn), want);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 }

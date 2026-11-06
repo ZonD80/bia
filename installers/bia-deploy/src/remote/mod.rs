@@ -74,7 +74,7 @@ pub struct Deploy {
 
 #[derive(Clone)]
 pub enum Agent {
-    New { fmm: FmmInput, lang: String },
+    New { fmm: FmmInput, lang: String, persona: crate::lang::Persona },
     /// bia waits for one of the owner's bias to fly its agent there with this secret.
     Land { secret: String },
 }
@@ -82,7 +82,7 @@ pub enum Agent {
 fn config(d: &Deploy, wipe: Option<&str>) -> Result<Value> {
     let mut v = json!({});
     match &d.agent {
-        Agent::New { fmm, lang } => {
+        Agent::New { fmm, lang, persona } => {
             let mut f = json!({"provider": fmm.provider, "api_key": fmm.api_key, "model": fmm.model, "ctx": fmm.ctx});
             if !fmm.base_url.trim().is_empty() {
                 f["base_url"] = fmm.base_url.clone().into();
@@ -92,6 +92,8 @@ fn config(d: &Deploy, wipe: Option<&str>) -> Result<Value> {
             }
             v["fmm"] = f;
             v["lang"] = lang.clone().into();
+            // always sent, so the takeover does not ask (empty: bia asks on its first start)
+            v["self"] = json!({"name": persona.name, "gender": persona.gender});
             v["setup"] = "".into();
             // the address typed here reaches bia even behind NAT: put it in the certificate
             let h = d.host.trim().trim_start_matches('[').trim_end_matches(']');
@@ -347,10 +349,11 @@ mod tests {
 
     #[test]
     fn config_for_new_agent_and_land() {
-        let d = Deploy { host: "198.51.100.7".into(), agent: Agent::New { fmm: fmm(), lang: "ru".into() }, os: None };
+        let d = Deploy { host: "198.51.100.7".into(), agent: Agent::New { fmm: fmm(), lang: "ru".into(), persona: crate::lang::Persona { name: "Fred".into(), gender: "male".into() } }, os: None };
         let v = config(&d, None).unwrap();
         assert_eq!(v["pki"]["ips"][0], "198.51.100.7");
         assert_eq!(v["setup"], "");
+        assert_eq!(v["self"], json!({"name": "Fred", "gender": "male"}));
         assert!(v.get("wipe").is_none());
         let d = Deploy { host: "bia.example.com".into(), ..d };
         let v = config(&d, Some("/dev/sda")).unwrap();

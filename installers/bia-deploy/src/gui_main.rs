@@ -104,6 +104,9 @@ struct FlashApp {
     /// The owner's language (catalog code) and the choices.
     lang: String,
     languages: Vec<bia_deploy::lang::Language>,
+    /// bia's name and gender ("" = bia asks on its first start).
+    bia_name: String,
+    bia_gender: String,
     fmm_path: String,
     provider: String,
     api_key: String,
@@ -170,6 +173,8 @@ impl FlashApp {
             arch: "x86_64".into(),
             lang: bia_deploy::lang::host_default(),
             languages: bia_deploy::lang::languages(),
+            bia_name: String::new(),
+            bia_gender: String::new(),
             fmm_path: default_fmm,
             provider: "openrouter".into(),
             api_key: String::new(),
@@ -601,6 +606,7 @@ impl FlashApp {
             model,
             hf_token: self.token(),
             lang: Some(self.lang.clone()),
+            persona: self.persona(),
         };
         self.busy = true;
         self.status = Status::Working {
@@ -784,6 +790,11 @@ impl FlashApp {
         card(ui, |ui| {
             ui.label(egui::RichText::new("bia's language").size(19.0).strong());
             self.lang_section(ui);
+        });
+        ui.add_space(8.0);
+        card(ui, |ui| {
+            ui.label(egui::RichText::new("bia's name").size(19.0).strong());
+            self.persona_section(ui);
         });
         ui.add_space(10.0);
         if self.use_fmm {
@@ -1275,6 +1286,33 @@ impl FlashApp {
                 });
             });
         }
+    }
+
+    /// bia's name and gender, cleaned the way bia_deploy::lang::Persona wants them.
+    pub(crate) fn persona(&self) -> bia_deploy::lang::Persona {
+        let name: String = self.bia_name.chars().filter(|c| !c.is_control() && !matches!(c, '|' | '·')).take(40).collect();
+        bia_deploy::lang::Persona::new(&name, &self.bia_gender).unwrap_or_default()
+    }
+
+    /// bia's name and gender: the first line of its system prompt.
+    fn persona_section(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            ui.add(egui::TextEdit::singleline(&mut self.bia_name).hint_text("e.g. Fred").char_limit(40).desired_width(220.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("Gender");
+            for (g, label) in [("male", "Male"), ("female", "Female"), ("neutral", "Neutral")] {
+                if ui.selectable_label(self.bia_gender == g, label).clicked() {
+                    self.bia_gender = if self.bia_gender == g { String::new() } else { g.into() };
+                }
+            }
+        });
+        ui.label(
+            egui::RichText::new("bia always knows its name and gender, and its certificates and web page carry the name. Leave them empty and bia asks on its first start.")
+                .small()
+                .weak(),
+        );
     }
 
     /// The owner's language.

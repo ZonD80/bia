@@ -323,6 +323,7 @@ mod tests {
                 model: None,
                 hf_token: None,
                 lang: None,
+                persona: Default::default(),
             },
             Box::new(|_| {}),
         )

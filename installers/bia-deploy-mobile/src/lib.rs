@@ -281,12 +281,19 @@ pub struct Target {
     pub host: String,
     pub brain: Option<Brain>,
     pub lang: String,
+    /// bia's name and gender (male, female or neutral); empty: bia asks on its first start.
+    pub bia_name: String,
+    pub gender: String,
     pub land_secret: Option<String>,
 }
 
 fn deploy(t: &Target) -> R<Deploy> {
     let agent = match (&t.brain, &t.land_secret) {
-        (Some(b), _) => Agent::New { fmm: fmm(b)?, lang: t.lang.clone() },
+        (Some(b), _) => Agent::New {
+            fmm: fmm(b)?,
+            lang: t.lang.clone(),
+            persona: bia_deploy::lang::Persona::new(&t.bia_name, &t.gender).map_err(|e| DeployError::Failed { reason: e.to_string() })?,
+        },
         (None, Some(s)) => Agent::Land { secret: s.clone() },
         (None, None) => return Err(DeployError::Failed { reason: "no brain and no land secret".into() }),
     };

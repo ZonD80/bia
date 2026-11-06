@@ -5,7 +5,7 @@
 //! the writer lays its partitions over the whole stick.
 //! Optional FMM keys go on the ESP as `EFI/bia/fmm.json` for the agent to seed
 //! into `/home/bia/files/state/fmm.json` on first boot; the owner's language goes there
-//! as `EFI/bia/lang.json`.
+//! in `EFI/bia/self.json` (with bia's name and gender).
 //! An optional GGUF from Hugging Face is streamed raw onto the end of BIAROOT and listed in
 //! `EFI/bia/models.txt`; on first boot `bia-grow` moves it into `/home/bia/model` and grows
 //! the ext4 over the whole stick.

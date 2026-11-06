@@ -25,6 +25,9 @@ final class DeployModel: ObservableObject {
     @Published var chatgptEmail: String?
     @Published var models: [CloudModel] = []
     @Published var lang = Locale.current.language.languageCode?.identifier ?? "en"
+    /// bia's name and gender (male, female, neutral); empty: bia asks on its first start.
+    @Published var biaName = ""
+    @Published var gender = ""
     @Published var busy: String?
     @Published var error: String?
     @Published var hello: String?
@@ -153,7 +156,10 @@ final class DeployModel: ObservableObject {
     }
 
     private var target: Target {
-        Target(host: cleanHost, brain: land ? nil : brain, lang: lang, landSecret: land ? secret.trimmingCharacters(in: .whitespaces) : nil)
+        let name = String(String(biaName.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0 != "|" && $0 != "·" })
+            .trimmingCharacters(in: .whitespaces).prefix(40))
+        return Target(host: cleanHost, brain: land ? nil : brain, lang: lang, biaName: name, gender: gender,
+                      landSecret: land ? secret.trimmingCharacters(in: .whitespaces) : nil)
     }
 
     private lazy var listener = Listener(model: self)

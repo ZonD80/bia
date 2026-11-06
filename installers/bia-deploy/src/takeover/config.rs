@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub const KNOWN: &[&str] = &[
-    "version", "disk", "wipe", "os", "fmm", "network", "pki", "setup", "instructions", "lang", "reboot",
+    "version", "disk", "wipe", "os", "fmm", "network", "pki", "setup", "instructions", "lang", "self", "reboot",
     "gate_port", "gate_wait", "land",
 ];
 
@@ -40,6 +40,10 @@ pub struct Config {
     pub setup: Option<String>,
     #[serde(default)]
     pub lang: Option<String>,
+    /// bia's name and gender: `{"name": "Fred", "gender": "male"}` (either may be left out:
+    /// bia then asks on its first start).
+    #[serde(default, rename = "self")]
+    pub persona: Option<SelfConf>,
     /// Reboot into the takeover without asking at the end.
     #[serde(default)]
     pub reboot: Option<bool>,
@@ -53,6 +57,14 @@ pub struct Config {
     /// another bia to fly its agent here instead of starting a new one.
     #[serde(default)]
     pub land: Option<Value>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SelfConf {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub gender: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

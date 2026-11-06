@@ -427,6 +427,8 @@ async function showBoot() {
     } catch (e) { err.textContent = 'Pickup failed: ' + e.message; }
   };
 
+  // "bia-5a3f2c agent CA" since 2.1.0; older bias all share "bia agent CA"
+  const caName = info.ca_name || 'bia agent CA';
   // The browser presented a certificate this machine refused (another bia's, expired, revoked).
   const bad = info.cert_problem;
   const why = bad && ({
@@ -439,7 +441,7 @@ async function showBoot() {
     h('h2', null, ic('shield'), 'Wrong certificate selected'),
     h('p', null, `The certificate “${bad.identity || 'unnamed'}” you picked ${why}.`),
     h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 2.'),
-    bad.kind === 'other_ca' ? h('p', null, 'Every bia names its CA “bia agent CA”, so certificates of other machines are offered too. Removing the ones you no longer use from your keychain or certificate store avoids picking them again.') : null) : null;
+    bad.kind === 'other_ca' ? h('p', null, `This bia's CA is “${caName}”. Bias set up before 2.1.0 all name theirs “bia agent CA”, so certificates of other machines are offered too; newer certificates also name the bia that issued them (“Identity: root · Fred”). Removing the ones you no longer use from your keychain or certificate store avoids picking them again.`) : null) : null;
 
   const certStep = h('div', { class: 'step' },
     h('h2', null, h('span', { class: 'num' }, '1'), 'Get your certificate'),
@@ -451,15 +453,15 @@ async function showBoot() {
 
   const importStep = h('div', { class: 'step' },
     h('h2', null, h('span', { class: 'num' }, '2'), 'Import it, trust bia, reload'),
-    h('p', null, 'Import the .p12 file into your browser or OS (password 12345678). It also holds this machine’s certificate authority, “bia agent CA”: trust it, so your browser recognises this machine without warnings. Check first that its fingerprint matches the one shown on the machine (/web on its console). Then reload this page and pick your certificate when asked.'),
+    h('p', null, `Import the .p12 file into your browser or OS (password 12345678). It also holds this machine’s certificate authority, “${caName}”: trust it, so your browser recognises this machine without warnings. Check first that its fingerprint matches the one shown on the machine (/web on its console). Then reload this page and pick your certificate when asked.`),
     fp ? h('div', { class: 'fp' }, 'SHA-256 ' + fp.join(':')) : null,
     howto('How to import and trust', [
-      ['macOS', 'Double-click the .p12 → login keychain → password 12345678. In Keychain Access double-click “bia agent CA” → Trust → “Always Trust”. Chrome and Safari use both.'],
-      ['Windows', 'Double-click the .p12 → Current User → password 12345678 → automatic store; confirm the security warning that installs “bia agent CA”.'],
-      ['Linux (Chrome)', 'chrome://settings/certificates → Your certificates → Import the .p12; then Authorities → “bia agent CA” → Edit → trust it for websites.'],
-      ['Firefox', 'Settings → Privacy & Security → Certificates → View Certificates → Your Certificates → Import; then Authorities → “bia agent CA” → Edit Trust → identify websites.'],
-      ['iPhone / iPad', 'Open the .p12 in Safari → Settings → Profile Downloaded → Install; then Settings → General → About → Certificate Trust Settings → enable “bia agent CA”.'],
-      ['Android', 'Settings → Security → Encryption & credentials → Install a certificate → VPN & app user certificate → the .p12 (it installs “bia agent CA” too).'],
+      ['macOS', `Double-click the .p12 → login keychain → password 12345678. In Keychain Access double-click “${caName}” → Trust → “Always Trust”. Chrome and Safari use both.`],
+      ['Windows', `Double-click the .p12 → Current User → password 12345678 → automatic store; confirm the security warning that installs “${caName}”.`],
+      ['Linux (Chrome)', `chrome://settings/certificates → Your certificates → Import the .p12; then Authorities → “${caName}” → Edit → trust it for websites.`],
+      ['Firefox', `Settings → Privacy & Security → Certificates → View Certificates → Your Certificates → Import; then Authorities → “${caName}” → Edit Trust → identify websites.`],
+      ['iPhone / iPad', `Open the .p12 in Safari → Settings → Profile Downloaded → Install; then Settings → General → About → Certificate Trust Settings → enable “${caName}”.`],
+      ['Android', `Settings → Security → Encryption & credentials → Install a certificate → VPN & app user certificate → the .p12 (it installs “${caName}” too).`],
     ]),
     h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => location.reload() }, ic('refresh'), 'Reload')));
 
@@ -838,11 +840,13 @@ function renderNotifAsk() {
     h('button', { class: 'btn small', onclick: enableNotifications }, 'Turn on'),
     iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); }));
 }
+// the server names the page after this bia ("Fred · bia")
+const BASE_TITLE = document.title || 'bia';
 function updateTitle() {
   let n = 0;
   for (const c of S.chats.values()) if (!c.muted) n += c.unread || 0;
   const t = S.tasks.length;
-  document.title = (n || t ? `(${n + t}) ` : '') + 'bia';
+  document.title = (n || t ? `(${n + t}) ` : '') + BASE_TITLE;
 }
 // markdown → plain text for previews
 function plain(t) {

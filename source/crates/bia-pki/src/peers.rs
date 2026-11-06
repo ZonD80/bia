@@ -99,15 +99,41 @@ impl Pki {
         Ok(key)
     }
 
-    /// This bia's agent name: `pki/agent.json` `name`, else `bia-` + the first 6 hex
-    /// characters of its CA fingerprint (stable across hostname changes).
-    pub fn agent_name(&self) -> String {
+    fn agent_json(&self) -> serde_json::Value {
         fs::read(self.dir.join("agent.json"))
             .ok()
             .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-            .and_then(|v| v["name"].as_str().map(str::to_string))
-            .filter(|n| sanitize_id(n).is_ok())
+            .filter(|v| v.is_object())
+            .unwrap_or_else(|| json!({}))
+    }
+
+    pub(crate) fn write_agent_json(&self, f: impl FnOnce(&mut serde_json::Value)) -> Result<()> {
+        let mut v = self.agent_json();
+        f(&mut v);
+        fs::write(self.dir.join("agent.json"), serde_json::to_vec_pretty(&v)?)?;
+        Ok(())
+    }
+
+    /// The id chosen when the CA was made (CAs since 2.1.0 carry it in their name).
+    pub(crate) fn stored_id(&self) -> Option<String> {
+        self.agent_json()["id"].as_str().map(str::to_string).filter(|n| sanitize_id(n).is_ok())
+    }
+
+    /// This bia's id: `bia-` + 6 hex characters. Since 2.1.0 chosen with the CA and kept in
+    /// `pki/agent.json` `id` (the CA's name carries it); older bias: the first 6 hex
+    /// characters of the CA fingerprint (stable across hostname changes).
+    pub fn bia_id(&self) -> String {
+        self.stored_id()
             .unwrap_or_else(|| format!("bia-{}", &self.ca_sha256().unwrap_or_default().get(..6).unwrap_or("000000")))
+    }
+
+    /// This bia's agent name (its identity at other bias): `pki/agent.json` `name`, else its id.
+    pub fn agent_name(&self) -> String {
+        self.agent_json()["name"]
+            .as_str()
+            .map(str::to_string)
+            .filter(|n| sanitize_id(n).is_ok())
+            .unwrap_or_else(|| self.bia_id())
     }
 
     pub fn set_agent_name(&self, name: &str) -> Result<()> {
@@ -115,8 +141,25 @@ impl Pki {
         if name == "root" {
             bail!("an agent cannot be named root");
         }
-        fs::write(self.dir.join("agent.json"), serde_json::to_vec_pretty(&json!({"name": name}))?)?;
-        Ok(())
+        self.write_agent_json(|v| v["name"] = name.into())
+    }
+
+    /// What people call this bia (`files/state/self.json` `name`, set by the agent's
+    /// self_set), else its id: put into its server and client certificates so several bias
+    /// can be told apart.
+    pub fn display_name(&self) -> String {
+        self.chosen_name().unwrap_or_else(|| self.bia_id())
+    }
+
+    /// The name root gave this bia, if any (`files/state/self.json`).
+    pub fn chosen_name(&self) -> Option<String> {
+        self.dir
+            .parent()
+            .map(|state| state.join("self.json"))
+            .and_then(|p| fs::read(p).ok())
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v["name"].as_str().map(|n| n.trim().to_string()))
+            .filter(|n| !n.is_empty() && n.chars().count() <= 40 && !n.chars().any(char::is_control) && !n.contains(crate::ISSUER_CN_SEP.trim()))
     }
 
     /// CSR (PEM) for the agent key, under the agent name. Public: it holds no secret.

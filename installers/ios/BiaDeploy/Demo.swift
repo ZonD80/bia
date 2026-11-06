@@ -12,6 +12,8 @@ extension DeployModel {
         model = "deepseek/deepseek-v4.1-flash"
         hello = "Hi! I'm awake and ready. Show me my new home and I'll move in."
         markWoken()
+        biaName = "Fred"
+        gender = "male"
         if scene == "brain" { return }
 
         page = .server
@@ -32,6 +34,7 @@ extension DeployModel {
             PlanRow(what: "mode", value: "new agent"),
             PlanRow(what: "fmm", value: "openrouter deepseek/deepseek-v4.1-flash key sk-or-v1-…0000"),
             PlanRow(what: "lang", value: "English (en)"),
+            PlanRow(what: "self", value: "Fred, male"),
             PlanRow(what: "root certificate", value: "made here, kept on this phone"),
             PlanRow(what: "server certificate", value: "bia, localhost, \(host)"),
             PlanRow(what: "disk", value: "/dev/vda 160 GiB QEMU HARDDISK"),

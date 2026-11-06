@@ -59,6 +59,14 @@ print(next((r["version"] for r in json.load(sys.stdin)["runtimes"] if r["identif
         echo "== $name skipped: $type needs iOS ${need} or newer, this runtime is $have (install it: Xcode › Settings › Components)"
         continue
     fi
+    # a new enough runtime may still lack the device (iOS 27.2 has no iPhone Duo): its own list decides
+    if ! xcrun simctl list -j runtimes | python3 -c '
+import json, sys
+r = next((r for r in json.load(sys.stdin)["runtimes"] if r["identifier"] == sys.argv[1]), {})
+sys.exit(0 if any(t["identifier"] == sys.argv[2] for t in r.get("supportedDeviceTypes", [])) else 1)' "$RUNTIME" "$type"; then
+        echo "== $name skipped: runtime $RUNTIME does not support $type (another runtime may: RUNTIME=…)"
+        continue
+    fi
     echo "== $name ($type, $RUNTIME)"
     udid=$(xcrun simctl create "bia-shots-$name" "$type" "$RUNTIME")
     trap 'xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true; xcrun simctl delete "$udid" >/dev/null 2>&1 || true' EXIT

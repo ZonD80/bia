@@ -134,6 +134,7 @@ impl Server {
                 row("mode", "new agent"),
                 row("fmm", "openrouter deepseek/deepseek-v4.1-flash key sk-or-…9f2c"),
                 row("lang", "English (en)"),
+                row("self", "Fred, male"),
                 row("network", "eth0 52:54:00:12:34:56 dhcp"),
                 row("disk", "/dev/sda 40960 MiB"),
                 row("system", "bia 1.4.3 (v1.4.3): 1190 MiB download, 3456 MiB on disk"),
@@ -234,7 +235,7 @@ impl FlashApp {
         let agent = if self.srv.land {
             Agent::Land { secret: self.srv.land_secret.clone() }
         } else {
-            Agent::New { fmm: self.fmm_input(), lang: self.lang.clone() }
+            Agent::New { fmm: self.fmm_input(), lang: self.lang.clone(), persona: self.persona() }
         };
         let host = self.srv.login().map(|l| l.host).unwrap_or_default();
         Deploy { host, agent, os: None }
@@ -572,6 +573,7 @@ impl FlashApp {
                         "mode" => "bia",
                         "fmm" => "brain",
                         "lang" => "language",
+                        "self" => "bia's name",
                         "root certificate" => "bia's key",
                         "server certificate" => "names in its certificate",
                         "land secret" => "land secret",

@@ -9,7 +9,7 @@
 #   land/secret → /etc/bia/land.secret + /etc/bia-land-mode (takeover --land: wait for
 #                 another bia to fly here over the internet; bia-land, carry)
 #
-# FMM keys (EFI/bia/fmm.json) and the language (EFI/bia/lang.json) stay where they are:
+# FMM keys (EFI/bia/fmm.json) and the language, name and gender (EFI/bia/self.json) stay where they are:
 # the agent seeds those itself, as on a flashed stick.
 set -u
 SEED=${BIA_SEED_DIR:-/boot/EFI/bia/seed}

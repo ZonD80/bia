@@ -56,6 +56,11 @@ class DeployModel : ViewModel() {
     var chatgptEmail by mutableStateOf<String?>(null)
     val models = mutableStateListOf<CloudModel>()
     var lang by mutableStateOf(java.util.Locale.getDefault().language.ifEmpty { "en" })
+    /** bia's name and gender (male, female, neutral); empty: bia asks on its first start. */
+    var biaName by mutableStateOf("")
+    /** Debug demo only: show the end of the page (Demo.kt scene "name"). */
+    var demoScrollEnd by mutableStateOf(false)
+    var gender by mutableStateOf("")
     var busy by mutableStateOf<String?>(null)
     var error by mutableStateOf<String?>(null)
     var hello by mutableStateOf<String?>(null)
@@ -180,6 +185,8 @@ class DeployModel : ViewModel() {
         host = cleanHost(),
         brain = if (land) null else brain(),
         lang = lang,
+        biaName = biaName.filter { !it.isISOControl() && it != '|' && it != '·' }.trim().take(40),
+        gender = gender,
         landSecret = if (land) secret.trim() else null,
     )
 

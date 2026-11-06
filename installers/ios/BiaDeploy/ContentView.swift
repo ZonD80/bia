@@ -196,6 +196,20 @@ struct BrainPage: View {
             }
             Text("bia talks in it from the first boot. Text only: no voice exists, so bia speaks English aloud.").font(.footnote).foregroundStyle(.secondary)
         }
+        Card {
+            Text("bia's name").font(.title3.weight(.semibold))
+            TextField("Name, e.g. Fred", text: $model.biaName)
+                .textFieldStyle(.roundedBorder)
+                .autocorrectionDisabled()
+            Picker("Gender", selection: $model.gender) {
+                Text("Ask later").tag("")
+                Text("Male").tag("male")
+                Text("Female").tag("female")
+                Text("Neutral").tag("neutral")
+            }
+            .pickerStyle(.segmented)
+            Text("bia always knows its name and gender, and its certificates and web page carry the name. Leave them empty and bia asks on its first start.").font(.footnote).foregroundStyle(.secondary)
+        }
         if let b = model.busy {
             Busy(text: b)
         } else if model.brainOk {
@@ -340,6 +354,7 @@ private func rowName(_ k: String) -> String {
     case "mode": return "bia"
     case "fmm": return "brain"
     case "lang": return "language"
+    case "self": return "bia's name"
     case "root certificate": return "bia's key"
     case "server certificate": return "names in its certificate"
     default: return k

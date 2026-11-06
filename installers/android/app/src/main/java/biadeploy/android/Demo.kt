@@ -10,7 +10,7 @@ import java.io.File
 /**
  * Debug builds only (store screenshots, play-assets.sh): `am start … --es demo <scene>` fills
  * the wizard with made-up data and no network. Scenes: brain, login, newkey, confirm,
- * running, installed, keys. Addresses are from the documentation ranges (203.0.113.0/24).
+ * running, installed, keys; name is the brain page scrolled to its end (name and gender). Addresses are from the documentation ranges (203.0.113.0/24).
  */
 fun DeployModel.demo(scene: String, filesDir: File) {
     val host = "203.0.113.10"
@@ -20,7 +20,10 @@ fun DeployModel.demo(scene: String, filesDir: File) {
     models.clear()
     hello = "Hi! I'm awake and ready. Show me my new home and I'll move in."
     markWoken()
+    biaName = "Fred"
+    gender = "male"
     if (scene == "brain") return
+    if (scene == "name") { demoScrollEnd = true; return }
 
     page = Page.Server
     this.host = host
@@ -40,6 +43,7 @@ fun DeployModel.demo(scene: String, filesDir: File) {
         PlanRow(what = "mode", value = "new agent"),
         PlanRow(what = "fmm", value = "openrouter deepseek/deepseek-v4.1-flash key sk-or-v1-…0000"),
         PlanRow(what = "lang", value = "English (en)"),
+        PlanRow(what = "self", value = "Fred, male"),
         PlanRow(what = "root certificate", value = "made here, kept on this phone"),
         PlanRow(what = "server certificate", value = "bia, localhost, $host"),
         PlanRow(what = "disk", value = "/dev/vda 160 GiB QEMU HARDDISK"),

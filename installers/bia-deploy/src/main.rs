@@ -148,6 +148,12 @@ enum Cmd {
         /// first boot, with its voice and keyboard. Default: the host's locale, else English.
         #[arg(long)]
         lang: Option<String>,
+        /// bia's name, the first thing in its system prompt (default: bia asks on first start).
+        #[arg(long)]
+        bia_name: Option<String>,
+        /// bia's gender: male, female or neutral (default: bia asks on first start).
+        #[arg(long)]
+        gender: Option<String>,
     },
     /// Print a new land secret (140 bits) for `takeover --land --land-secret`: make it
     /// before the takeover, so whoever sets the server up knows it for the flight.
@@ -179,6 +185,12 @@ enum Cmd {
         /// The owner's language (code or name; default: this computer's).
         #[arg(long)]
         lang: Option<String>,
+        /// bia's name, the first thing in its system prompt (default: bia asks on first start).
+        #[arg(long)]
+        bia_name: Option<String>,
+        /// bia's gender: male, female or neutral (default: bia asks on first start).
+        #[arg(long)]
+        gender: Option<String>,
         /// Land mode: bia waits for one of your bias to fly its agent there.
         #[arg(long)]
         land: bool,
@@ -242,6 +254,12 @@ enum Cmd {
         /// The owner's language (code or name).
         #[arg(long)]
         lang: Option<String>,
+        /// bia's name, the first thing in its system prompt (default: bia asks on first start).
+        #[arg(long)]
+        bia_name: Option<String>,
+        /// bia's gender: male, female or neutral (default: bia asks on first start).
+        #[arg(long)]
+        gender: Option<String>,
         /// DNS name for bia's HTTPS certificate (repeatable).
         #[arg(long)]
         name: Vec<String>,
@@ -486,8 +504,8 @@ fn run() -> Result<()> {
             println!("{}", bia_deploy::takeover::land_secret());
             Ok(())
         }
-        Cmd::Server { host, port, user, ssh_key, new_key, host_key, fmm, lang, land, land_secret, os, yes, no_test, no_trust, no_wait } => {
-            server(ServerArgs { host, port, user, ssh_key, new_key, host_key, fmm, lang, land, land_secret, os, yes, no_test, no_trust, no_wait })
+        Cmd::Server { host, port, user, ssh_key, new_key, host_key, fmm, lang, bia_name, gender, land, land_secret, os, yes, no_test, no_trust, no_wait } => {
+            server(ServerArgs { host, port, user, ssh_key, new_key, host_key, fmm, lang, bia_name, gender, land, land_secret, os, yes, no_test, no_trust, no_wait })
         }
         Cmd::Takeover {
             config,
@@ -502,6 +520,8 @@ fn run() -> Result<()> {
             setup,
             setup_file,
             lang,
+            bia_name,
+            gender,
             name,
             ip,
             root_csr,
@@ -557,6 +577,10 @@ fn run() -> Result<()> {
             }
             if let Some(l) = lang {
                 put("lang", l.into());
+            }
+            if bia_name.is_some() || gender.is_some() {
+                let p = bia_deploy::lang::Persona::new(bia_name.as_deref().unwrap_or(""), gender.as_deref().unwrap_or(""))?;
+                put("self", serde_json::json!({"name": p.name, "gender": p.gender}));
             }
             let mut pk = serde_json::Map::new();
             if !name.is_empty() {
@@ -620,7 +644,10 @@ fn run() -> Result<()> {
             model,
             hf_token,
             lang,
+            bia_name,
+            gender,
         } => {
+            let persona = bia_deploy::lang::Persona::new(bia_name.as_deref().unwrap_or(""), gender.as_deref().unwrap_or(""))?;
             let lang = match lang {
                 Some(l) => bia_deploy::lang::find(&l)
                     .with_context(|| format!("unknown language {l:?} (see bia-deploy langs)"))?,
@@ -727,6 +754,7 @@ fn run() -> Result<()> {
                 model,
                 hf_token,
                 lang: Some(lang.code),
+                persona,
             };
             write_stick(
                 opts,
@@ -763,6 +791,8 @@ struct ServerArgs {
     host_key: Option<String>,
     fmm: Option<PathBuf>,
     lang: Option<String>,
+    bia_name: Option<String>,
+    gender: Option<String>,
     land: bool,
     land_secret: Option<String>,
     os: Option<String>,
@@ -805,7 +835,8 @@ fn server(a: ServerArgs) -> Result<()> {
         }
         let l = a.lang.clone().unwrap_or_else(bia_deploy::lang::host_default);
         let lang = bia_deploy::lang::find(&l).with_context(|| format!("unknown language {l:?} (see bia-deploy langs)"))?;
-        Agent::New { fmm, lang: lang.code }
+        let persona = bia_deploy::lang::Persona::new(a.bia_name.as_deref().unwrap_or(""), a.gender.as_deref().unwrap_or(""))?;
+        Agent::New { fmm, lang: lang.code, persona }
     };
     let auth = match &a.ssh_key {
         Some(p) => Auth::Key {

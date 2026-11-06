@@ -35,7 +35,7 @@ const HELP: &str = "bia-bridge — talk to a bia from any agent or script
                        --out: append to that file instead of printing
   bia-bridge read [--peek] [--out <file>]   what bia said since the last read
   bia-bridge history [--limit <n>]  the chat, both sides (needs the link up)
-  bia-bridge mcp [--agent <your name>]
+  bia-bridge mcp [--agent <your name>] [--owner <whom you work for>]
                        MCP server on stdio (tools: connect, import, status, send, wait, read, history);
                        without --agent or BIA_BRIDGE_AGENT the agent is the MCP client's own name
   bia-bridge update    replace this program with the bia's own build of it (matching versions)
@@ -44,6 +44,10 @@ const HELP: &str = "bia-bridge — talk to a bia from any agent or script
   --agent <name>   who you are, your identity on the bia; or BIA_BRIDGE_AGENT. Needed by every
                    command but connect --identity. A profile belongs to one agent and one bia:
                    another agent is another person and asks for its own certificate.
+  --owner <name>   optional: the person this agent works for; or BIA_BRIDGE_OWNER. The identity
+                   becomes <agent>@<owner> (claude-code@ann), so the same kind of agent run by
+                   different people gets its own certificate and chat, and the bia knows whose
+                   it is.
   --bia <name>     which of your bias (needed only when you have several)    --json  machine output
   --no-daemon      status without starting the background daemon
   Files: BIA_BRIDGE_HOME, else the OS config folder (…/bia-bridge/<agent>/<bia>/).
@@ -58,7 +62,7 @@ struct Args {
 }
 
 const VALUED: &[&str] = &[
-    "--agent", "--bia", "--identity", "--as", "--note", "--ca-sha256", "--reply-to", "--file", "--timeout", "--silence", "--out", "--limit", "--cert", "--key", "--p12", "--password", "--ca",
+    "--agent", "--owner", "--bia", "--identity", "--as", "--note", "--ca-sha256", "--reply-to", "--file", "--timeout", "--silence", "--out", "--limit", "--cert", "--key", "--p12", "--password", "--ca",
 ];
 
 fn parse() -> Args {
@@ -90,14 +94,24 @@ impl Args {
     fn flag(&self, k: &str) -> bool {
         self.flags.iter().any(|f| f == k)
     }
-    /// `--agent`, else `BIA_BRIDGE_AGENT`.
+    /// `--agent`, else `BIA_BRIDGE_AGENT`; with an owner `<agent>@<owner>`.
     fn given_agent(&self) -> Result<Option<String>> {
         let env = std::env::var("BIA_BRIDGE_AGENT").ok();
         let Some(n) = self.opt("--agent").map(str::to_string).or(env).filter(|n| !n.is_empty()) else { return Ok(None) };
+        let n = with_owner(&n, self.owner()?.as_deref()).map_err(|e| anyhow!(e))?;
         if !profile::valid_name(&n) {
             bail!("agent {n:?}: letters, digits and - _ . @");
         }
         Ok(Some(n))
+    }
+    /// `--owner`, else `BIA_BRIDGE_OWNER`: whom this agent works for (optional).
+    fn owner(&self) -> Result<Option<String>> {
+        let env = std::env::var("BIA_BRIDGE_OWNER").ok();
+        let Some(o) = self.opt("--owner").map(str::to_string).or(env).map(|o| o.trim().to_string()).filter(|o| !o.is_empty()) else { return Ok(None) };
+        if !valid_owner(&o) {
+            bail!("owner {o:?}: letters, digits and - _ . (up to 32)");
+        }
+        Ok(Some(o))
     }
     fn agent(&self) -> Result<String> {
         self.given_agent()?.ok_or_else(|| anyhow!("{NO_AGENT}"))
@@ -105,6 +119,21 @@ impl Args {
 }
 
 const NO_AGENT: &str = "which agent is this? Pass --agent <your own name> or set BIA_BRIDGE_AGENT (for MCP: bia-bridge mcp --agent <your own name>). A profile belongs to one agent: use your own name, never another agent's; a new agent asks for its own certificate with bia-bridge connect.";
+
+fn valid_owner(o: &str) -> bool {
+    !o.is_empty() && o.len() <= 32 && o.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+}
+
+/// The identity of `agent` working for `owner`: `claude-code` + `ann` = `claude-code@ann`.
+/// An agent name that already ends in `@ann` stays; one naming another owner is refused.
+fn with_owner(agent: &str, owner: Option<&str>) -> Result<String, String> {
+    let Some(o) = owner else { return Ok(agent.to_string()) };
+    match agent.rsplit_once('@') {
+        Some((_, has)) if has == o => Ok(agent.to_string()),
+        Some((_, has)) => Err(format!("agent {agent} already names owner {has}, not {o}")),
+        None => Ok(format!("{agent}@{o}")),
+    }
+}
 
 /// An agent speaks under its own identity only.
 fn same_agent(agent: &str, identity: &str) -> Result<()> {
@@ -153,6 +182,7 @@ fn run(a: &Args) -> Result<()> {
             let url = a.pos.first().ok_or_else(|| anyhow!("connect needs the bia's https:// address"))?;
             let given = a.given_agent()?;
             let identity = a.opt("--identity").or(given.as_deref()).ok_or_else(|| anyhow!("connect needs --identity <your name> (how the bia will know you)"))?;
+            let identity = &with_owner(identity, a.owner()?.as_deref()).map_err(|e| anyhow!(e))?;
             if let Some(g) = &given {
                 same_agent(g, identity)?;
             }
@@ -299,7 +329,7 @@ fn run(a: &Args) -> Result<()> {
         }
         "daemon" => daemon::run(&a.agent()?, &Profile::pick(&a.agent()?, bia)?.name),
         "mcp" => {
-            mcp(bia.map(str::to_string), a.given_agent()?);
+            mcp(bia.map(str::to_string), a.given_agent()?, a.owner()?);
             Ok(())
         }
         other => bail!("unknown command {other}; bia-bridge help"),
@@ -623,12 +653,14 @@ fn history_text(p: &Profile, msgs: &Value) -> String {
 
 // ---- MCP ----
 
-/// The agent of an MCP session: as configured, else the name its client gave at `initialize`.
-fn session_agent(configured: Option<&str>) -> Result<String, String> {
+/// The agent of an MCP session: as configured (owner included already), else the name its
+/// client gave at `initialize`, with the configured owner.
+fn session_agent(configured: Option<&str>, owner: Option<&str>) -> Result<String, String> {
     if let Some(a) = configured {
         return Ok(a.to_string());
     }
     let name: String = bia_mcp::client_name().unwrap_or_default().trim().chars().map(|c| if c.is_ascii_alphanumeric() || "-_.@".contains(c) { c } else { '-' }).collect();
+    let name = with_owner(&name, owner)?;
     if profile::valid_name(&name) {
         Ok(name)
     } else {
@@ -636,10 +668,11 @@ fn session_agent(configured: Option<&str>) -> Result<String, String> {
     }
 }
 
-fn mcp(default: Option<String>, configured: Option<String>) {
+fn mcp(default: Option<String>, configured: Option<String>, owner: Option<String>) {
     use bia_mcp::{arg_str_list, arg_str_opt, Server};
     profile::migrate();
     let (c_connect, c_import, c_pick) = (configured.clone(), configured.clone(), configured);
+    let (o_connect, o_import, o_pick) = (owner.clone(), owner.clone(), owner);
     let obj = |props: Value, req: &[&str]| json!({"type": "object", "required": req, "properties": props});
     let bia_prop = json!({"type": "string", "description": "which of your bias (only when you have several)"});
     let with_bia = move |mut props: Value| {
@@ -647,7 +680,7 @@ fn mcp(default: Option<String>, configured: Option<String>) {
         props
     };
     let pick = move |a: &Value| -> Result<Profile, String> {
-        let agent = session_agent(c_pick.as_deref())?;
+        let agent = session_agent(c_pick.as_deref(), o_pick.as_deref())?;
         Profile::pick(&agent, arg_str_opt(a, "bia").or(default.as_deref())).map_err(|e| format!("{e:#}"))
     };
     let (p1, p2, p3, p4, p6) = (pick.clone(), pick.clone(), pick.clone(), pick.clone(), pick);
@@ -664,7 +697,7 @@ fn mcp(default: Option<String>, configured: Option<String>) {
                 "name": {"type": "string", "description": "optional name for this bia (default: the host)"}
             }), &["url"]),
             move |_, a| {
-                let agent = session_agent(c_connect.as_deref())?;
+                let agent = session_agent(c_connect.as_deref(), o_connect.as_deref())?;
                 let identity = arg_str_opt(&a, "identity").unwrap_or(&agent);
                 same_agent(&agent, identity).map_err(|e| format!("{e:#}"))?;
                 connect(
@@ -692,7 +725,7 @@ fn mcp(default: Option<String>, configured: Option<String>) {
                 "name": {"type": "string", "description": "optional name for this bia"}
             }), &["url"]),
             move |_, a| {
-                let agent = session_agent(c_import.as_deref())?;
+                let agent = session_agent(c_import.as_deref(), o_import.as_deref())?;
                 let src = match (arg_str_opt(&a, "p12"), arg_str_opt(&a, "cert"), arg_str_opt(&a, "key")) {
                     (Some(f), _, _) => Creds::P12(f.to_string(), arg_str_opt(&a, "password").unwrap_or("12345678").to_string()),
                     (None, Some(c), Some(k)) => Creds::Pem(c.to_string(), k.to_string()),
@@ -795,6 +828,21 @@ fn mcp(default: Option<String>, configured: Option<String>) {
             },
         )
         .run();
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+
+    #[test]
+    fn owner_makes_its_own_identity() {
+        assert_eq!(with_owner("claude-code", None).unwrap(), "claude-code");
+        assert_eq!(with_owner("claude-code", Some("ann")).unwrap(), "claude-code@ann");
+        assert_eq!(with_owner("claude-code@ann", Some("ann")).unwrap(), "claude-code@ann");
+        assert!(with_owner("claude-code@bob", Some("ann")).is_err());
+        assert!(valid_owner("ann.smith-2") && !valid_owner("a@b") && !valid_owner("") && !valid_owner(&"x".repeat(33)));
+        assert!(profile::valid_name(&with_owner("claude-code", Some("ann")).unwrap()));
+    }
 }
 
 #[cfg(test)]

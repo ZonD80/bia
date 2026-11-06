@@ -1184,6 +1184,11 @@ impl Tools {
                 "identity": {"type": "string", "description": "chat owner identity; defaults to last human inbound"},
                 "limit": {"type": "integer", "description": "default 30, max 100"}
             }), &[]));
+        t.add_grouped("machine", "self_set", "Your name and gender (male, female or neutral), kept in the first line of your system prompt. Only on root's word; no arguments shows them.",
+            obj(json!({
+                "name": {"type": "string", "description": "what you are called, as root wrote it"},
+                "gender": {"type": "string", "description": "male, female or neutral"}
+            }), &[]));
         t.add_grouped("machine", "set_model_config", "Show or change how your brain runs: context tokens, tool rounds before a pause, local model sampling (temperature, top_p…). Only the fields you pass change; none shows the current settings. Changes are kept across restarts.",
             obj(json!({
                 "context": {"type": "integer", "description": "context window in tokens, 512–2000000: reloads the brain (local GGUF: new KV cache, clamped to the model's trained length; FMM: budget in fmm.json); on failure the previous window is restored"},
@@ -3306,6 +3311,8 @@ impl Tools {
             "set_model_config" => bail!("set_model_config is run by the agent loop"),
             // the agent runs it (it holds the live history): Repl::cut_call
             "memory_cut" => bail!("memory_cut is run by the agent loop"),
+            // the agent runs it (it holds the system prompt): Repl::self_call
+            "self_set" => bail!("self_set is run by the agent loop"),
             "mcp_update" => self.mcp_update(s("name").as_deref(), s("version").as_deref()),
             "memory_list" => crate::memory::tool_list(&self.files_dir.join("state"), args),
             "memory_get" => crate::memory::tool_get(&self.files_dir.join("state"), args),

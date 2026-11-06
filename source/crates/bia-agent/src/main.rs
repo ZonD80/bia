@@ -17,6 +17,7 @@ mod llama_srv;
 mod llm;
 mod mcp;
 mod mcp_update;
+mod me;
 mod memory;
 mod outbox;
 mod release;
@@ -226,7 +227,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     if let Some(msg) = remote::FmmConfig::seed_from_esp(&paths.boot, &fmm_path) {
         boot.note(&msg);
     }
-    if let Some(msg) = seed_language(&paths.boot) {
+    for msg in seed_language(&paths.boot, &paths.files) {
         boot.note(&msg);
     }
     if system_mode {
@@ -572,7 +573,9 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
             .join("sessions")
             .join(format!("session-{}.md", clock::stamp_now())),
     );
-    let system = with_home_language(cfg.agent.system_prompt.clone());
+    let system_base = with_home_language(cfg.agent.system_prompt.clone());
+    let me = me::Me::load(&paths.files);
+    let system = me::with_self(&system_base, &me);
     let mut repl = repl::Repl {
         con: con.clone(),
         llm,
@@ -581,6 +584,9 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         format,
         think,
         system,
+        system_base,
+        asker_root: false,
+        asker_system: false,
         history,
         max_tool_rounds: config::AgentRuntime::load(&config::AgentRuntime::path(&paths.files))
             .max_tool_rounds
@@ -783,7 +789,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
                 } else if release_notes.is_some() {
                     release::instruction(release_steps).to_string()
                 } else if first_launch {
-                    welcome(cfg.web.enabled.then(|| weblink::info_line(&paths.files)), repl.remote.is_some())
+                    welcome(cfg.web.enabled.then(|| weblink::info_line(&paths.files)), repl.remote.is_some(), &me::Me::load(&paths.files))
                 } else {
                     READY_PLAIN.into()
                 },
@@ -877,32 +883,37 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     Ok(exit)
 }
 
-/// Where the flasher leaves the owner's language: `{"lang": "ru"}`.
-const ESP_LANG_REL: &str = "EFI/bia/lang.json";
+/// Where bia deploy leaves the owner's language and bia's name and gender:
+/// `{"lang": "ru", "name": "Fred", "gender": "male"}` (each optional).
+const ESP_SELF_REL: &str = "EFI/bia/self.json";
 
-/// Adopt the language chosen in the flasher once, then delete the ESP file so a later
-/// lang_default is not undone on reboot.
-fn seed_language(boot: &std::path::Path) -> Option<String> {
-    let esp = boot.join(ESP_LANG_REL);
-    let text = std::fs::read_to_string(&esp).ok()?;
-    let lang = serde_json::from_str::<serde_json::Value>(&text)
-        .ok()
-        .and_then(|v| v["lang"].as_str().map(str::to_string));
-    let msg = match lang {
-        Some(l) => match bia_speech::learn::adopt_home(&l) {
-            Ok(m) => format!("ESP {ESP_LANG_REL}: {m}"),
-            Err(e) => format!("ESP {ESP_LANG_REL}: {e}"),
-        },
-        None => format!("ESP {ESP_LANG_REL}: no \"lang\"; ignored"),
+/// Adopt the language, name and gender chosen in bia deploy once, then delete the ESP file so
+/// a later lang_default or self_set is not undone on reboot.
+fn seed_language(boot: &std::path::Path, files: &std::path::Path) -> Vec<String> {
+    let esp = boot.join(ESP_SELF_REL);
+    let Ok(text) = std::fs::read_to_string(&esp) else {
+        return vec![];
     };
+    let v = serde_json::from_str::<serde_json::Value>(&text).unwrap_or_default();
+    let mut out = vec![];
+    if let Some(l) = v["lang"].as_str() {
+        out.push(match bia_speech::learn::adopt_home(l) {
+            Ok(m) => format!("ESP {ESP_SELF_REL}: {m}"),
+            Err(e) => format!("ESP {ESP_SELF_REL}: {e}"),
+        });
+    }
+    out.extend(me::seed(files, &v));
+    if out.is_empty() {
+        out.push(format!("ESP {ESP_SELF_REL}: nothing to take; ignored"));
+    }
     let _ = std::fs::remove_file(&esp);
     unsafe { libc::sync() };
-    Some(msg)
+    out
 }
 
 /// What the model says the very first time this machine starts: a short tour that ends with
 /// questions, in the owner's language (the system prompt names it).
-fn welcome(web: Option<String>, cloud: bool) -> String {
+fn welcome(web: Option<String>, cloud: bool, me: &me::Me) -> String {
     let code = bia_speech::registry::current().default_lang.clone();
     let lang = if code.is_empty() || code == "en" {
         "English".to_string()
@@ -918,14 +929,28 @@ fn welcome(web: Option<String>, cloud: bool) -> String {
     } else {
         "\n- you think with a small local model now; for a stronger one they can give you an API key (OpenRouter, OpenAI, Anthropic, Gemini, …) or sign in with their ChatGPT plan.".into()
     };
+    // named in bia deploy: introduce yourself by it; else the greeting asks
+    let (who, ask_line, end) = match (me.name.is_empty(), me.gender.is_empty()) {
+        (false, false) => (format!("{}, a bia: an assistant that lives on this computer", me.name), String::new(), "End by asking what they would like to start with."),
+        (false, true) => (
+            format!("{}, a bia: an assistant that lives on this computer", me.name),
+            "- ask whether you are male, female or neutral; when they answer, call self_set(gender=…).\n".to_string(),
+            "End by asking whether you are male, female or neutral and what they would like to start with.",
+        ),
+        _ => (
+            "bia, an assistant that lives on this computer".to_string(),
+            "- ask them what your name should be and whether you are male, female or neutral; when they answer, call self_set(name=…, gender=…).\n".to_string(),
+            "End by asking what your name should be, whether you are male, female or neutral, and what they would like to start with.",
+        ),
+    };
     format!(
-        "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: bia, an assistant that lives on this computer. Then tell them, briefly, one line each:\n\
-- ask them what your name should be; remember it and use it from then on.\n\
+        "This is the very first start of this machine, and the user is meeting you now. Write in {lang}. Greet them warmly and say who you are: {who}. Then tell them, briefly, one line each:\n\
+{ask_line}\
 - {web}.\n\
 - you can have your own Telegram, WhatsApp and MAX accounts, so they can write and call you there, and your own Messenger and Instagram. Each needs a separate account with its own phone number, not theirs: they create it in the app on a phone with that number and scan a QR code to log you in; ask whether they want that.\n\
 - you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
 - you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
-End by asking what your name should be and what they would like to start with. Do not call tools for this greeting."
+{end} Do not call tools for this greeting."
     )
 }
 
@@ -1081,6 +1106,7 @@ mod welcome_tests {
         let w = super::welcome(
             Some("web: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca".into()),
             false,
+            &crate::me::Me::default(),
         );
         for want in [
             "very first start",
@@ -1093,11 +1119,19 @@ mod welcome_tests {
             "own accounts",
             "ChatGPT plan",
             "what your name should be",
+            "male, female or neutral",
+            "self_set(name=…, gender=…)",
             "Do not call tools for this greeting",
         ] {
             assert!(w.contains(want), "missing {want:?} in {w}");
         }
-        let w = super::welcome(Some("web: (no network yet)  CA at /v1/pki/ca".into()), true);
+        let w = super::welcome(Some("web: (no network yet)  CA at /v1/pki/ca".into()), true, &crate::me::Me::default());
         assert!(w.contains("once you are on a network") && !w.contains("ChatGPT plan"));
+        // named in bia deploy: it introduces itself and does not ask
+        let fred = crate::me::Me { name: "Fred".into(), gender: "male".into() };
+        let w = super::welcome(None, true, &fred);
+        assert!(w.contains("say who you are: Fred, a bia") && !w.contains("what your name should be") && !w.contains("self_set"), "{w}");
+        let w = super::welcome(None, true, &crate::me::Me { name: "Fred".into(), gender: String::new() });
+        assert!(w.contains("self_set(gender=…)") && !w.contains("what your name should be"), "{w}");
     }
 }

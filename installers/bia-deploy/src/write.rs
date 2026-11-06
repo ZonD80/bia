@@ -37,8 +37,10 @@ pub struct FlashOptions {
     pub model: Option<HfModel>,
     /// Hugging Face token for gated/private repos (never written to the stick).
     pub hf_token: Option<String>,
-    /// The owner's language (catalog code), written to `EFI/bia/lang.json`.
+    /// The owner's language (catalog code), written to `EFI/bia/self.json`.
     pub lang: Option<String>,
+    /// bia's name and gender, written with the language.
+    pub persona: crate::lang::Persona,
 }
 
 /// Bytes the model takes at the end of BIAROOT (each file starts on a 1 MiB boundary).
@@ -164,9 +166,9 @@ pub fn write_stick(opts: FlashOptions, mut progress: ProgressFn) -> Result<()> {
         ));
     }
 
-    if let Some(code) = &opts.lang {
-        add_esp_file(&mut esp, crate::lang::ESP_LANG_REL, &crate::lang::lang_json(code))?;
-        progress(&format!("wrote ESP {} ({code})", crate::lang::ESP_LANG_REL));
+    if let Some(j) = crate::lang::self_json(opts.lang.as_deref(), &opts.persona) {
+        add_esp_file(&mut esp, crate::lang::ESP_SELF_REL, &j)?;
+        progress(&format!("wrote ESP {} ({})", crate::lang::ESP_SELF_REL, String::from_utf8_lossy(&j).trim()));
     }
 
     progress("writing ESP");
@@ -625,6 +627,7 @@ pub(crate) mod image_tests {
             model: None,
             hf_token: None,
             lang: Some("ru".into()),
+            persona: crate::lang::Persona { name: "Fred".into(), gender: "male".into() },
         };
         write_stick(opts(&img_xz, Some(sha(&img))), Box::new(|_| {})).unwrap();
         let d = fs::read(&stick).unwrap();
@@ -644,8 +647,9 @@ pub(crate) mod image_tests {
         let keys: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/fmm.json").unwrap()).unwrap();
         assert_eq!(keys["api_key"], "sk-or-v1-test");
         assert_eq!(keys["enabled"], true);
-        let lang: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/lang.json").unwrap()).unwrap();
-        assert_eq!(lang["lang"], "ru");
+        let me: serde_json::Value = serde_json::from_slice(&esp_file(&d, &sl, "EFI/bia/self.json").unwrap()).unwrap();
+        assert_eq!(me, serde_json::json!({"lang": "ru", "name": "Fred", "gender": "male"}));
+        assert!(esp_file(&d, &sl, "EFI/bia/lang.json").is_none());
         assert_eq!(esp_file(&d, &sl, "EFI/BOOT/BOOTX64.EFI").unwrap(), b"EFI/BOOT/BOOTX64.EFI");
 
         // A raw .img works the same; a wrong checksum leaves the stick unbootable (no ESP).

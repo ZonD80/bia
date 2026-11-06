@@ -252,6 +252,34 @@ n = web.inbound("from claude too")
 check(n is not None and n["identity"] == "claude", f"claude still speaks as claude, both linked: {n}")
 txt = br("profiles", agent=None)[1]
 check("agent grok" in txt and "agent claude" in txt, f"profiles name the agent: {txt}")
+# --owner: the same agent run for another person is its own identity, certificate and chat
+oenv = dict(benv, BIA_BRIDGE_AGENT="claude", BIA_BRIDGE_OWNER="ann")
+def bro(*args):
+    r = subprocess.run([bridge, *args], env=oenv, capture_output=True, text=True, timeout=120)
+    return r.returncode, (r.stdout + r.stderr).strip()
+rc, out = bro("status")
+check(rc != 0 and "claude@ann has no bia" in out, f"claude for ann is not claude: {out[:120]}")
+rc, out = bro("connect", URL, "--identity", "claude", "--as", "home")
+check(rc == 0, f"connect with an owner asks as claude@ann: {out[:120]}")
+req4 = json.load(open(f"{home}/claude@ann/home/profile.json"))["request"]
+web.tool("pki_approve", id=req4, message="welcome, ann's claude")
+for _ in range(60):
+    if json.loads(bro("status", "--json")[1]).get("online"):
+        break
+    time.sleep(1)
+bro("send", "from ann's claude")
+n = web.inbound("from ann's claude")
+check(n is not None and n["identity"] == "claude@ann", f"it speaks as claude@ann: {n}")
+br("send", "from plain claude")
+n = web.inbound("from plain claude")
+check(n is not None and n["identity"] == "claude", f"claude without an owner is still claude: {n}")
+rc, out = subprocess.run([bridge, "status", "--agent", "claude@bob", "--owner", "ann"], env=benv, capture_output=True, text=True).returncode, ""
+check(rc != 0, "an agent naming another owner is refused")
+m = Mcp([bridge, "mcp", "--owner", "ann"], benv)
+m.rpc("initialize", {"clientInfo": {"name": "Some Client"}})
+txt, err = m.tool("status")
+check(err and "Some-Client@ann has no bia" in txt, f"MCP: the client's name with the owner: {txt[:100]}")
+m.p.terminate()
 m = Mcp([bridge, "mcp"], benv)
 txt, err = m.tool("status")
 check(err and "which agent is this" in txt, f"MCP with no name at all: {txt[:100]}")

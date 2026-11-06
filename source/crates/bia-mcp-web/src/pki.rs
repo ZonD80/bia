@@ -173,7 +173,8 @@ pub fn make_biaconfig(pki: &Pki, port: u16, args: &Value) -> Result<MadeConfig, 
     }
     let (p12, meta) = pki.issue_from(&identity, role, trust, &from).map_err(|e| format!("issue: {e:#}"))?;
     let config = BiaConfig {
-        name: text("name").unwrap_or("").to_string(),
+        // the app lists it under this bia's own name unless told otherwise
+        name: text("name").map(str::to_string).or_else(|| pki.chosen_name()).unwrap_or_default(),
         addresses: addresses.clone(),
         ca: pki.ca_pem().map_err(|e| format!("{e:#}"))?,
         p12,

@@ -206,6 +206,15 @@ pub struct Repl {
     /// Chat template opens the assistant turn with `<think>`.
     pub think: bool,
     pub system: String,
+    /// The system prompt without its first line (who this bia is, crate::me), so self_set
+    /// can put a new one in front.
+    pub system_base: String,
+    /// The last person who wrote is root (identity root or a contact with root trust): only
+    /// then may self_set rename this bia.
+    pub asker_root: bool,
+    /// The last message was a system notice (boot, update): self_set may then fill a name or
+    /// gender that is still empty (the update to 2.1.0 has bias save the ones they use).
+    pub asker_system: bool,
     pub history: Vec<Msg>,
     pub max_tool_rounds: usize,
     /// messages from people so far: a new one gives the turn a fresh round budget
@@ -233,6 +242,10 @@ pub enum Exit {
     Reboot,
     Poweroff,
     Quit,
+}
+
+fn or_dash(s: &str) -> &str {
+    if s.is_empty() { "-" } else { s }
 }
 
 impl Repl {
@@ -1637,6 +1650,31 @@ impl Repl {
 
     /// set_model_config: show or change context, round limit and local sampling. Changes that
     /// touch the brain are followed by a short test request and undone when it fails.
+    /// self_set: this bia's name and gender (crate::me). Only for root; the new first line
+    /// of the system prompt costs one rebuild of the prompt cache.
+    fn self_call(&mut self, args: &Value, by_root: bool, by_system: bool) -> (String, bool) {
+        let files = self.files_dir();
+        let mut me = crate::me::Me::load(&files);
+        let asks = args.get("name").is_some() || args.get("gender").is_some();
+        if !asks {
+            return (format!("name: {}, gender: {}", or_dash(&me.name), or_dash(&me.gender)), false);
+        }
+        if let Some(why) = crate::me::refuse(&me, args, by_root, by_system) {
+            return (format!("error: {why}"), true);
+        }
+        match me.apply(args) {
+            Err(e) => (format!("error: {e}"), true),
+            Ok(done) if done.is_empty() => ("nothing changed".into(), false),
+            Ok(done) => match me.save(&files) {
+                Err(e) => (format!("error: not saved: {e}"), true),
+                Ok(()) => {
+                    self.system = crate::me::with_self(&self.system_base, &me);
+                    (format!("{done}. Kept, and the first line of your system prompt now says it. The web app and new certificates use the name."), false)
+                }
+            },
+        }
+    }
+
     fn model_config_call(&mut self, args: &Value) -> (String, bool) {
         let ch = match crate::tools::parse_model_change(args) {
             Ok(ch) => ch,
@@ -1891,6 +1929,9 @@ now: {now}", done.join("\n")), failed)
                 self.model_config_call(&args)
             } else if name == "memory_cut" {
                 self.cut_call(&args)
+            } else if name == "self_set" {
+                let (root, system) = (self.asker_root, self.asker_system);
+                self.self_call(&args, root, system)
             } else {
                 self.tools.call(&name, &args, &mut |line| {
                     con.writeln(&con.c(GRAY, &format!("     {line}")))
@@ -2092,6 +2133,9 @@ now: {now}", done.join("\n")), failed)
                     self.model_config_call(&args)
                 } else if name == "memory_cut" {
                     self.cut_call(&args)
+                } else if name == "self_set" {
+                    // root typed it on the console
+                    self.self_call(&args, true, false)
                 } else {
                     self.tools.call(name, &args, &mut |l| {
                         con.writeln(&con.c(GRAY, &format!("     {l}")))
@@ -2484,11 +2528,18 @@ now: {now}", done.join("\n")), failed)
 
     fn record_inbound(&mut self, ib: &Inbound) {
         self.con.journal_done(&ib.id);
+        if ib.identity == ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) && ib.channel != crate::tools::CH_SCHEDULE {
+            self.asker_system = true;
+            self.asker_root = false;
+        } else if ib.identity != ID_SYSTEM {
+            self.asker_system = false;
+        }
         if ib.identity != ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) {
             // a person wrote: a new task gets a fresh round budget
             self.human_seq += 1;
             let root = ib.identity == crate::tools::ID_ROOT
                 || self.tools.addressbook.find_for(&ib.identity, &ib.channel).is_some_and(|c| c.trust == "root");
+            self.asker_root = root;
             self.tools.dream.note_human(root);
         }
         if ib.channel.starts_with(crate::jobs::PREFIX) {

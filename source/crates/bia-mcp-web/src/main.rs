@@ -146,7 +146,7 @@ fn main() {
                 "identity": {"type": "string"},
                 "address": {"type": "string", "description": "host or IP, with :port if not this bia's port"},
                 "addresses": {"type": "array", "items": {"type": "string"}, "description": "more addresses"},
-                "name": {"type": "string", "description": "what to call this bia in the app"},
+                "name": {"type": "string", "description": "what to call this bia in the app (default: its own name)"},
                 "password": {"type": "string", "description": "at least 10 characters; leave out to have a strong one generated"},
                 "role": {"type": "string", "description": "user or agent (default user)"},
                 "trust": {"type": "string", "description": "root or normal"},

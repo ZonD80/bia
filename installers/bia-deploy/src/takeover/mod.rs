@@ -164,6 +164,7 @@ fn mib(b: u64) -> String {
 struct AgentPlan {
     fmm: FmmInput,
     lang: String,
+    persona: crate::lang::Persona,
     setup: String,
     root: bia_pki::RootSeed,
     root_from: Vec<bia_pki::Cidr>,
@@ -452,6 +453,34 @@ fn takeover(a: Args) -> Result<()> {
         let lang = crate::lang::find(&lang_in).with_context(|| format!("unknown language {lang_in:?} (see bia-deploy langs)"))?;
         rows.push(Row("lang".into(), format!("{} ({})", lang.name, lang.code), src("lang", if ask.interactive() { "asked" } else { "default: this system's locale" })));
 
+        let sc = cfg.persona.clone().unwrap_or_default();
+        let name_in = match &sc.name {
+            Some(n) => n.clone(),
+            None => ask.line("bia's name (empty: bia asks on its first start)", "")?,
+        };
+        let gender_in = match &sc.gender {
+            Some(g) => g.clone(),
+            None if ask.interactive() => loop {
+                let g = ask.line("bia's gender: male, female or neutral (empty: bia asks)", "")?;
+                if g.is_empty() || crate::lang::GENDERS.contains(&g.trim().to_lowercase().as_str()) {
+                    break g;
+                }
+                say!("  male, female or neutral");
+            },
+            None => String::new(),
+        };
+        let persona = crate::lang::Persona::new(&name_in, &gender_in)?;
+        rows.push(Row(
+            "self".into(),
+            match (persona.name.as_str(), persona.gender.as_str()) {
+                ("", "") => "no name or gender yet: bia asks on its first start".to_string(),
+                (n, "") => format!("{n}; gender: bia asks"),
+                ("", g) => format!("{g}; name: bia asks"),
+                (n, g) => format!("{n}, {g}"),
+            },
+            src("self", if ask.interactive() { "asked" } else { "default: bia asks" }),
+        ));
+
         let setup = match &cfg.setup {
             Some(s) => s.trim().to_string(),
             None => ask
@@ -483,7 +512,7 @@ fn takeover(a: Args) -> Result<()> {
             } + &if root_from.is_empty() { String::new() } else { format!("; only from {}", root_from.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", ")) },
             src("pki", "default"),
         ));
-        Some(AgentPlan { fmm, lang: lang.code, setup, root, root_from })
+        Some(AgentPlan { fmm, lang: lang.code, persona, setup, root, root_from })
     } else {
         for k in ["fmm", "setup", "pki"] {
             if m.source_of(k).is_some() {
@@ -640,6 +669,7 @@ fn takeover(a: Args) -> Result<()> {
         if let Some(ag) = &agent {
             config::merge(&mut v, json!({
                 "lang": ag.lang, "setup": ag.setup,
+                "self": {"name": ag.persona.name, "gender": ag.persona.gender},
                 "fmm": {"provider": ag.fmm.provider, "api_key": ag.fmm.api_key, "model": ag.fmm.model},
                 "pki": {"names": names, "ips": ips.iter().map(|i| i.to_string()).collect::<Vec<_>>()},
             }));
@@ -717,10 +747,18 @@ fn takeover(a: Args) -> Result<()> {
     let mut seeded = None;
     let mut land_code = None;
     if let Some(ag) = agent {
+        if !ag.persona.name.is_empty() {
+            // root's and the server's first certificates carry the name (bia_pki display_name)
+            let st = files.join("state");
+            std::fs::create_dir_all(&st)?;
+            std::fs::write(st.join("self.json"), serde_json::to_vec(&json!({"name": ag.persona.name}))?)?;
+        }
         let sd = bia_pki::seed(&files, &bia_pki::SeedOptions { names: names.clone(), ips: ips.clone(), root: ag.root, root_from: ag.root_from, agent_name })?;
         copy_tree(&sd.dir, &seed.join("pki"))?;
         stage::write_file(&esp.join("EFI/bia/fmm.json"), &crate::fmm_config_json(&ag.fmm)?)?;
-        stage::write_file(&esp.join("EFI/bia/lang.json"), &crate::lang::lang_json(&ag.lang))?;
+        if let Some(j) = crate::lang::self_json(Some(&ag.lang), &ag.persona) {
+            stage::write_file(&esp.join(crate::lang::ESP_SELF_REL), &j)?;
+        }
         if !ag.setup.is_empty() {
             stage::write_file(&seed.join("setup.md"), format!("{}\n", ag.setup).as_bytes())?;
         }
