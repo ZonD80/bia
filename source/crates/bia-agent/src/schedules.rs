@@ -25,7 +25,7 @@ pub struct Item {
     pub title: String,
     #[serde(default)]
     pub body: String,
-    /// next due unix (UTC)
+    /// next due unix (shown and parsed in the machine timezone)
     pub at: u64,
     /// `none`, `hourly`, `daily`, `weekly`, `monthly`, `yearly`, `weekdays`, `weekends`, or `30m` / `2h`
     #[serde(default)]
@@ -134,52 +134,63 @@ impl Repeat {
         }
     }
 
+    /// Calendar repeats keep the wall-clock time in the machine timezone (across DST).
     fn next(&self, at: u64) -> u64 {
-        match self {
-            Repeat::None => at,
+        self.next_in(at, &clock::offset_east_at)
+    }
+
+    fn next_in(&self, at: u64, off: &dyn Fn(u64) -> i32) -> u64 {
+        let local = |t: u64| (t as i64 + off(t) as i64).max(0) as u64;
+        let back = |l: u64| clock::local_to_unix_in(l as i64, off);
+        let days = |n: u64| back(local(at).saturating_add(86400 * n));
+        let t = match self {
+            Repeat::None => return at,
             Repeat::Hourly => at.saturating_add(3600),
-            Repeat::Daily => at.saturating_add(86400),
-            Repeat::Weekly => at.saturating_add(86400 * 7),
-            Repeat::Monthly => clock::add_months(at, 1),
-            Repeat::Yearly => clock::add_years(at, 1),
-            Repeat::Weekdays => next_matching(at, true),
-            Repeat::Weekends => next_matching(at, false),
+            Repeat::Daily => days(1),
+            Repeat::Weekly => days(7),
+            Repeat::Monthly => back(clock::add_months(local(at), 1)),
+            Repeat::Yearly => back(clock::add_years(local(at), 1)),
+            Repeat::Weekdays | Repeat::Weekends => {
+                let want_weekend = matches!(self, Repeat::Weekends);
+                let mut n = 1;
+                while n < 8 && is_weekend_local(local(at) + 86400 * n) != want_weekend {
+                    n += 1;
+                }
+                days(n)
+            }
             Repeat::Every(s) => at.saturating_add(*s),
+        };
+        // a wall-clock time that maps back onto itself (DST edge) must still move forward
+        if t <= at {
+            at.saturating_add(3600)
+        } else {
+            t
         }
     }
 
-    fn snap(&self, mut at: u64) -> u64 {
-        match self {
-            Repeat::Weekdays => {
-                while is_weekend(at) {
-                    at = at.saturating_add(86400);
-                }
-                at
-            }
-            Repeat::Weekends => {
-                while !is_weekend(at) {
-                    at = at.saturating_add(86400);
-                }
-                at
-            }
-            _ => at,
+    fn snap(&self, at: u64) -> u64 {
+        let off = clock::offset_east_at;
+        let want_weekend = match self {
+            Repeat::Weekdays => false,
+            Repeat::Weekends => true,
+            _ => return at,
+        };
+        let local = (at as i64 + off(at) as i64).max(0) as u64;
+        let mut n = 0;
+        while n < 8 && is_weekend_local(local + 86400 * n) != want_weekend {
+            n += 1;
+        }
+        if n == 0 {
+            at
+        } else {
+            clock::local_to_unix_in((local + 86400 * n) as i64, &off)
         }
     }
 }
 
-fn is_weekend(at: u64) -> bool {
-    matches!(clock::weekday(at), 0 | 6)
-}
-
-fn next_matching(from: u64, weekdays: bool) -> u64 {
-    let mut t = from.saturating_add(86400);
-    for _ in 0..8 {
-        if is_weekend(t) != weekdays {
-            return t;
-        }
-        t = t.saturating_add(86400);
-    }
-    t
+/// `local` is wall-clock seconds (unix as if UTC).
+fn is_weekend_local(local: u64) -> bool {
+    matches!(clock::weekday(local), 0 | 6)
 }
 
 fn parse_every(s: &str) -> Result<u64> {
@@ -277,7 +288,9 @@ impl Store {
         }
         let mut rows: Vec<&Item> = self.items.iter().collect();
         rows.sort_by_key(|i| i.at);
-        rows.iter()
+        let head = format!("times in the machine timezone {}\n", clock::timezone_name());
+        head + &rows
+            .iter()
             .map(|i| {
                 let pause = if i.enabled { "" } else { "  paused" };
                 let body = if i.body.trim().is_empty() {
@@ -291,7 +304,7 @@ impl Store {
                     i.id,
                     i.kind,
                     schedule_label(i),
-                    clock::rfc3339_unix(i.at),
+                    clock::rfc3339_local(i.at),
                     pause,
                     i.title,
                     extra = action_note(i),
@@ -314,13 +327,13 @@ impl Store {
         let (when, repeat, cron_stored) = if !cron.is_empty() {
             let expr = Cron::parse(cron)?;
             (
-                expr.next_after(now, clock::offset_east_now())?,
+                expr.next_after(now, &clock::offset_east_at)?,
                 String::new(),
                 expr.source,
             )
         } else {
             let mut when = clock::parse_when(spec.at, now).ok_or_else(|| {
-                anyhow::anyhow!("cannot parse at={}; use RFC 3339, YYYY-MM-DD HH:MM, monday 09:00, in 10m, or cron", spec.at)
+                anyhow::anyhow!("cannot parse at={}; use local time like 21:00, tomorrow 09:00, monday 09:00, YYYY-MM-DD HH:MM, in 10m, or cron", spec.at)
             })?;
             let rep = Repeat::parse(spec.repeat)?;
             when = rep.snap(when);
@@ -397,7 +410,7 @@ impl Store {
                 item.cron.clear();
             } else {
                 let expr = Cron::parse(c)?;
-                item.at = expr.next_after(now, clock::offset_east_now())?;
+                item.at = expr.next_after(now, &clock::offset_east_at)?;
                 item.cron = expr.source;
                 item.repeat.clear();
             }
@@ -450,7 +463,6 @@ impl Store {
         let mut due = Vec::new();
         let mut keep = Vec::new();
         let mut changed = false;
-        let east = clock::offset_east_now();
         for mut item in std::mem::take(&mut self.items) {
             if !item.enabled || item.at > now {
                 keep.push(item);
@@ -482,7 +494,7 @@ impl Store {
                 }
                 item.at = if !item.cron.is_empty() {
                     Cron::parse(&item.cron)
-                        .and_then(|c| c.next_after(now, east))
+                        .and_then(|c| c.next_after(now, &clock::offset_east_at))
                         .unwrap_or(now.saturating_add(3600))
                 } else {
                     next_future(item.at, now, &rep)
@@ -536,7 +548,7 @@ impl Store {
                         skipped,
                         item.repeat,
                         item.title,
-                        clock::rfc3339_unix(occ)
+                        clock::rfc3339_local(occ)
                     ),
                 }));
             }
@@ -563,8 +575,6 @@ impl Store {
 fn jump_future(mut occ: u64, now: u64, rep: &Repeat) -> (u64, u64) {
     let step = match rep {
         Repeat::Hourly => 3600,
-        Repeat::Daily => 86400,
-        Repeat::Weekly => 86400 * 7,
         Repeat::Every(s) => *s,
         _ => {
             let mut extra = 0u64;
@@ -598,10 +608,10 @@ fn fire_msg(item: &Item, at: u64, missed: bool) -> Fired {
     let when = if missed {
         format!(
             "{} (missed; due while the system was off or busy)",
-            clock::rfc3339_unix(at)
+            clock::rfc3339_local(at)
         )
     } else {
-        clock::rfc3339_unix(at)
+        clock::rfc3339_local(at)
     };
     let mut text = format!("{label}: {}\nWhen: {when}", item.title);
     if !item.body.trim().is_empty() {
@@ -675,10 +685,12 @@ fn dispatch(store: &Arc<Mutex<Store>>, con: &Arc<Console>, busy: &Arc<Mutex<Hash
 
 pub fn describe(item: &Item) -> String {
     format!(
-        "ok: {}  {}  {}  next {}  {}{}",
+        "ok: {}  {}  {}  next {} {} = {} UTC  {}{}",
         item.id,
         item.kind,
         schedule_label(item),
+        clock::rfc3339_local(item.at),
+        clock::timezone_name(),
         clock::rfc3339_unix(item.at),
         item.title,
         action_note(item),
@@ -1019,7 +1031,8 @@ impl Cron {
         })
     }
 
-    fn matches(&self, unix: u64, east: i32) -> bool {
+    fn matches(&self, unix: u64, off: &dyn Fn(u64) -> i32) -> bool {
+        let east = off(unix);
         let (minute, hour, day, month, dow) = clock::shifted_fields(unix, east);
         if !self.minute.hit(minute) || !self.hour.hit(hour) || !self.month.hit(month) {
             return false;
@@ -1033,15 +1046,16 @@ impl Cron {
         }
     }
 
-    fn next_after(&self, after: u64, east: i32) -> Result<u64> {
-        let local = (after as i64 + east as i64).max(0) as u64;
-        let mut utc = ((local / 60 + 1) * 60) as i64 - east as i64;
-        if utc < 0 {
-            utc = 0;
+    /// Fields are wall-clock time in the zone `off` gives (east-of-UTC seconds at a unix time).
+    fn next_after(&self, after: u64, off: &dyn Fn(u64) -> i32) -> Result<u64> {
+        // offsets are whole minutes, so stepping UTC minutes visits every local minute
+        let mut utc = (after / 60 + 1) * 60;
+        let east = off(after);
+        if east % 60 != 0 {
+            utc = utc.saturating_add((60 - east.rem_euclid(60)) as u64);
         }
-        let mut utc = utc as u64;
         for _ in 0..(366 * 24 * 60) {
-            if self.matches(utc, east) {
+            if self.matches(utc, off) {
                 return Ok(utc);
             }
             utc = utc.saturating_add(60);
@@ -1145,13 +1159,13 @@ mod tests {
     #[test]
     fn cron_next_matches() {
         let daily = Cron::parse("0 0 * * *").unwrap();
-        assert_eq!(daily.next_after(0, 0).unwrap(), 86400);
+        assert_eq!(daily.next_after(0, &|_| 0).unwrap(), 86400);
         let quarter = Cron::parse("*/15 * * * *").unwrap();
-        assert_eq!(quarter.next_after(0, 0).unwrap(), 900);
+        assert_eq!(quarter.next_after(0, &|_| 0).unwrap(), 900);
         let monday = Cron::parse("0 9 * * 1").unwrap();
-        assert_eq!(monday.next_after(0, 0).unwrap(), 4 * 86400 + 9 * 3600);
+        assert_eq!(monday.next_after(0, &|_| 0).unwrap(), 4 * 86400 + 9 * 3600);
         let either = Cron::parse("0 0 1 * 1").unwrap();
-        assert_eq!(either.next_after(0, 0).unwrap(), 4 * 86400);
+        assert_eq!(either.next_after(0, &|_| 0).unwrap(), 4 * 86400);
         assert!(Cron::parse("* * *").is_err());
         assert!(Cron::parse("60 * * * *").is_err());
     }
@@ -1190,5 +1204,38 @@ mod tests {
         assert!(listed.contains("silent unless /new mail/"));
         assert!(listed.contains("as root"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn madrid(t: u64) -> i32 {
+        crate::tz::offset_east(&crate::tz::from_posix("CET-1CEST,M3.5.0,M10.5.0/3"), t)
+    }
+
+    #[test]
+    fn daily_keeps_local_time_across_dst() {
+        // 2026-10-24 21:00 CEST (19:00Z); clocks go back on 2026-10-25
+        let at = clock::parse_rfc3339("2026-10-24T19:00:00Z").unwrap();
+        let next = Repeat::Daily.next_in(at, &madrid);
+        assert_eq!(clock::rfc3339_in(next, madrid(next)), "2026-10-25T21:00:00+01:00");
+        let week = Repeat::Weekly.next_in(at, &madrid);
+        assert_eq!(clock::rfc3339_in(week, madrid(week)), "2026-10-31T21:00:00+01:00");
+        // saturday → weekdays → monday 21:00 local
+        let wd = Repeat::Weekdays.next_in(at, &madrid);
+        assert_eq!(clock::rfc3339_in(wd, madrid(wd)), "2026-10-26T21:00:00+01:00");
+        assert_eq!(Repeat::Hourly.next_in(at, &madrid), at + 3600);
+    }
+
+    #[test]
+    fn cron_in_local_zone() {
+        let c = Cron::parse("0 21 * * *").unwrap();
+        let after = clock::parse_rfc3339("2026-11-06T12:00:00Z").unwrap();
+        assert_eq!(
+            c.next_after(after, &madrid).unwrap(),
+            clock::parse_rfc3339("2026-11-06T20:00:00Z").unwrap()
+        );
+        let after = clock::parse_rfc3339("2026-07-01T12:00:00Z").unwrap();
+        assert_eq!(
+            c.next_after(after, &madrid).unwrap(),
+            clock::parse_rfc3339("2026-07-01T19:00:00Z").unwrap()
+        );
     }
 }

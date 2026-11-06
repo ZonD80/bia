@@ -1,6 +1,6 @@
 {
   "name": "max",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "MAX messages: bia's own MAX account (the Russian messenger, max.ru), a real user, not a bot. Before the first login, tell root that bia needs its own account with its own phone number, separate from root's: chats, messages, files, voice messages, reactions, edits, groups, channels to join, bans and blocks. Login by QR (max_login), scanned in the MAX app of that account. One-to-one voice calls after a QR login (max_call_start, max_call_accept, max_call_say, max_call_hangup): what is said arrives as [speech <lang>]; no group or video calls. Unofficial client: MAX may restrict an account for it. Received files are saved in /home/bia/files/inbox/max/; voice messages arrive transcribed as [speech <lang>]; edits, deletions, reactions, contacts and locations arrive as [edited <id>], [deleted], [reaction], [contact] and [location] lines. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-max",

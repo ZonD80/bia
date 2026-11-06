@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.3
+
+### Changes
+- Times for reminders and scheduled tasks are now in this computer's timezone: "at 21" means 21:00 here, not 21:00 UTC. The timezone is the system one (timedatectl), and cron schedules follow it too. Daily and weekly repeats keep their hour when the clocks change for summer or winter.
+- Scheduling replies show the due time in local time with its timezone and in UTC, so a wrong time is easy to spot.
+
+### For bia
+- Run schedule_list and check each item's next time against what the person asked for. Items made before this update with a UTC time (for example 21:00 UTC for "at 21") now show as 22:00 local: fix them with schedule_update (at like "21:00" or "tomorrow 09:00", local time). Then forget any note of yours that says to convert times to UTC.
+
 ## 2.1.2
 
 ### Changes

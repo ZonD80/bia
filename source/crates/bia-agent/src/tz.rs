@@ -46,6 +46,14 @@ pub fn resolve(name: &str) -> Result<Zone, String> {
     ))
 }
 
+/// A zone from a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3` or `<+03>-3`.
+pub fn from_posix(posix: &str) -> Zone {
+    Zone {
+        posix: posix.trim().to_string(),
+        fixed_east: 0,
+    }
+}
+
 pub fn offset_east(zone: &Zone, unix: u64) -> i32 {
     if zone.posix.is_empty() {
         return zone.fixed_east;

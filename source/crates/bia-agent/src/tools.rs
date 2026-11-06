@@ -1000,7 +1000,7 @@ const BRANCHES: &[Branch] = &[
     Branch {
         id: "calendar",
         blurb: "Tasks and reminders.",
-        guide: "schedule_create(title, body markdown, at or cron, kind=task|reminder, repeat, command, user, match). at is RFC 3339 UTC, YYYY-MM-DD HH:MM, a weekday like monday 09:00, or relative in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5, and replaces at and repeat. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command runs as user when due (default bia; root and other accounts can be named). If you write a script or program for command, run it first with real or sample data and confirm it works before you schedule it. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches, and the message then includes the task text and the log path. Due text items arrive as system|schedule (issued is the scheduled time), including ones missed while the machine was off. schedule_list, schedule_update (enabled=false pauses), schedule_delete.",
+        guide: "schedule_create(title, body markdown, at or cron, kind=task|reminder, repeat, command, user, match). at without a zone is machine local time: 21:00 (the next one), today 21:00, tomorrow 09:00, a weekday like monday 09:00, YYYY-MM-DD HH:MM, or relative in 10m; RFC 3339 with Z or +02:00 is taken as given. The result shows the due time in the machine timezone and in UTC; check it. cron is five crontab fields in the machine timezone too (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5, and replaces at and repeat. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command runs as user when due (default bia; root and other accounts can be named). If you write a script or program for command, run it first with real or sample data and confirm it works before you schedule it. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches, and the message then includes the task text and the log path. Due text items arrive as system|schedule (issued is the scheduled time), including ones missed while the machine was off. schedule_list, schedule_update (enabled=false pauses), schedule_delete.",
     },
     Branch {
         id: "memory",
@@ -1312,11 +1312,11 @@ impl Tools {
                 "chat": {"type": "string"},
                 "count": {"type": "integer", "description": "how many (default 50)"}
             }), &["chat"]));
-        t.add_grouped("calendar", "schedule_create", "Schedule a task or reminder. body is markdown. at is RFC 3339 UTC, YYYY-MM-DD HH:MM, monday 09:00, or in 10m. cron is five crontab fields in the machine timezone (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5; it replaces at and repeat. kind is task or reminder. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command is a program to run when the item is due, as user (default bia). If you write a script or program for command, run it first with real or sample data and confirm it works before you call schedule_create. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches. The message includes the task text and the path of that run's log. Without a command, the item arrives as a system|schedule message when due, including missed ones after boot.",
+        t.add_grouped("calendar", "schedule_create", "Schedule a task or reminder; at without a zone is machine local time (21:00, tomorrow 09:00, monday 09:00, YYYY-MM-DD HH:MM, in 10m). body is markdown. A bare 21:00 is the next time the clock shows it; RFC 3339 with Z or +02:00 is taken as given. The result shows the due time in the machine timezone and in UTC: check it; an unparsable at is an error. cron is five crontab fields in the machine timezone too (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5; it replaces at and repeat. kind is task or reminder. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command is a program to run when the item is due, as user (default bia). If you write a script or program for command, run it first with real or sample data and confirm it works before you call schedule_create. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches. The message includes the task text and the path of that run's log. Without a command, the item arrives as a system|schedule message when due, including missed ones after boot.",
             obj(json!({
                 "title": {"type": "string"},
                 "body": {"type": "string", "description": "markdown task text"},
-                "at": {"type": "string", "description": "when it is due; omit when cron is set"},
+                "at": {"type": "string", "description": "when it is due; without a zone it is machine local time; omit when cron is set"},
                 "cron": {"type": "string", "description": "minute hour day-of-month month day-of-week, local time"},
                 "kind": {"type": "string", "description": "task or reminder"},
                 "repeat": {"type": "string", "description": "none, daily, weekly, …"},
@@ -1338,7 +1338,7 @@ impl Tools {
                     "id": {"type": "string"},
                     "title": {"type": "string"},
                     "body": {"type": "string"},
-                    "at": {"type": "string"},
+                    "at": {"type": "string", "description": "as in schedule_create; without a zone it is machine local time"},
                     "cron": {"type": "string"},
                     "kind": {"type": "string"},
                     "repeat": {"type": "string"},

@@ -206,7 +206,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         boot.note(&format!(
             "clock: {}  tz {}  ntp {}",
             clock::hms_now(),
-            c.timezone,
+            clock::timezone_name(),
             if c.ntp { "on" } else { "off" }
         ));
     }

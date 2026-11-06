@@ -1,4 +1,6 @@
 //! Wall-clock helpers without a time crate: RFC 3339 in UTC, plus timezone / NTP / RTC.
+//! The machine timezone is the system one (/etc/localtime, set with timedatectl); the
+//! `timezone` in clock.json is only a fallback when /etc/localtime cannot be read.
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -55,10 +57,80 @@ pub fn offset_east_at(unix: u64) -> i32 {
     cfg_lock().offset_east(unix)
 }
 
-/// The machine timezone's name (IANA or UTC+N), as configured.
+/// The machine timezone's name (IANA or UTC+N).
 pub fn timezone_name() -> String {
-    cfg_lock().timezone.clone()
+    system_zone()
+        .map(|(n, _)| n)
+        .unwrap_or_else(|| cfg_lock().timezone.clone())
 }
+
+/// `/etc/localtime` (TZif v2+ POSIX footer) and its name, cached until the file changes.
+fn system_zone() -> Option<(String, crate::tz::Zone)> {
+    type Key = (Option<PathBuf>, u64, Option<SystemTime>);
+    static CACHE: OnceLock<Mutex<Option<(Key, Option<(String, crate::tz::Zone)>)>>> = OnceLock::new();
+    let path = Path::new("/etc/localtime");
+    let meta = std::fs::metadata(path).ok()?;
+    let key: Key = (std::fs::read_link(path).ok(), meta.len(), meta.modified().ok());
+    let mut c = CACHE.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((k, v)) = c.as_ref() {
+        if *k == key {
+            return v.clone();
+        }
+    }
+    let v = std::fs::read(path).ok().and_then(|b| {
+        let posix = tzif_footer(&b)?;
+        let zone = crate::tz::from_posix(&posix);
+        let name = key
+            .0
+            .as_ref()
+            .and_then(|l| l.to_str().and_then(|s| s.split_once("zoneinfo/")).map(|(_, n)| n.to_string()))
+            .or_else(|| {
+                std::fs::read_to_string("/etc/timezone")
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            })
+            .unwrap_or(posix);
+        Some((name, zone))
+    });
+    *c = Some((key, v.clone()));
+    v
+}
+
+/// The POSIX TZ string at the end of a TZif v2+ file (`\n<TZ>\n`).
+fn tzif_footer(b: &[u8]) -> Option<String> {
+    if b.len() < 5 || &b[..4] != b"TZif" || b[4] < b'2' || *b.last()? != b'\n' {
+        return None;
+    }
+    let body = &b[..b.len() - 1];
+    let start = body.iter().rposition(|&c| c == b'\n')? + 1;
+    let s = std::str::from_utf8(&body[start..]).ok()?.trim();
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// `2026-09-03T21:00:00+02:00` in the machine timezone (`Z` when it is UTC).
+pub fn rfc3339_local(secs: u64) -> String {
+    rfc3339_in(secs, offset_east_at(secs))
+}
+
+pub fn rfc3339_in(secs: u64, east: i32) -> String {
+    let local = (secs as i64 + east as i64).max(0) as u64;
+    let s = rfc3339_unix(local);
+    if east == 0 {
+        return s;
+    }
+    let sign = if east >= 0 { '+' } else { '-' };
+    let a = east.unsigned_abs();
+    format!("{}{sign}{:02}:{:02}", s.trim_end_matches('Z'), a / 3600, (a % 3600) / 60)
+}
+
+/// Unix time of a wall-clock time (seconds since the epoch as if it were UTC) in the zone
+/// given by `off` (east-of-UTC seconds at a unix time).
+pub fn local_to_unix_in(local: i64, off: &dyn Fn(u64) -> i32) -> u64 {
+    let guess = (local - off(local.max(0) as u64) as i64).max(0);
+    (local - off(guess as u64) as i64).max(0) as u64
+}
+
 
 pub fn format_hms(unix_secs: u64, east: i32) -> String {
     let local = (unix_secs as i64 + east as i64).max(0) as u64;
@@ -159,17 +231,32 @@ pub fn add_years(unix: u64, years: i32) -> u64 {
     add_months(unix, years * 12)
 }
 
-/// RFC 3339, `YYYY-MM-DD HH:MM[:SS]`, `YYYY-MM-DD`, weekday (`monday 09:00`), or relative `in 10m`.
+/// `YYYY-MM-DD HH:MM[:SS]`, `YYYY-MM-DD`, weekday (`monday 09:00`), relative `in 10m`, or
+/// RFC 3339. A time without `Z` or an offset is wall-clock time in the machine timezone.
 pub fn parse_when(s: &str, now: u64) -> Option<u64> {
+    parse_when_in(s, now, &offset_east_at)
+}
+
+pub fn parse_when_in(s: &str, now: u64, off: &dyn Fn(u64) -> i32) -> Option<u64> {
     let s = s.trim();
     if let Some(t) = parse_relative(s, now) {
         return Some(t);
     }
-    if let Some(t) = parse_weekday_when(s, now) {
+    if let Some(t) = parse_weekday_when(s, now, off) {
         return Some(t);
     }
-    let s = s.trim_end_matches('Z').trim_end_matches("+00:00");
-    parse_rfc3339(&s.replace(' ', "T"))
+    if let Some(t) = parse_day_when(s, now, off) {
+        return Some(t);
+    }
+    let s = s.replace(' ', "T");
+    let zoned = s.split_once('T').is_some_and(|(_, t)| {
+        t.ends_with(['Z', 'z']) || t.contains(['+', '-'])
+    });
+    if zoned {
+        return parse_rfc3339(&s.replace('z', "Z"));
+    }
+    let naive = parse_rfc3339(&s)?;
+    Some(local_to_unix_in(naive as i64, off))
 }
 
 fn parse_hms(s: &str) -> Option<u64> {
@@ -185,7 +272,7 @@ fn parse_hms(s: &str) -> Option<u64> {
     }
 }
 
-fn parse_weekday_when(s: &str, now: u64) -> Option<u64> {
+fn parse_weekday_when(s: &str, now: u64, off: &dyn Fn(u64) -> i32) -> Option<u64> {
     let s = s.trim().to_ascii_lowercase();
     let (name, rest) = match s.split_once(char::is_whitespace) {
         Some((n, r)) => (n, r.trim()),
@@ -202,13 +289,34 @@ fn parse_weekday_when(s: &str, now: u64) -> Option<u64> {
         _ => return None,
     };
     let tod = if rest.is_empty() { 0 } else { parse_hms(rest)? };
-    let today = now / 86400 * 86400;
-    let add = (want + 7 - weekday(now)) % 7;
-    let mut t = today + add as u64 * 86400 + tod;
+    let local_now = (now as i64 + off(now) as i64).max(0) as u64;
+    let today = local_now / 86400 * 86400;
+    let add = (want + 7 - weekday(local_now)) % 7;
+    let mut t = local_to_unix_in((today + add as u64 * 86400 + tod) as i64, off);
     if t <= now {
-        t += 7 * 86400;
+        t = local_to_unix_in((today + (add as u64 + 7) * 86400 + tod) as i64, off);
     }
     Some(t)
+}
+
+/// `21:00` (next time the clock shows it), `today 21:00`, `tomorrow 09:00`.
+fn parse_day_when(s: &str, now: u64, off: &dyn Fn(u64) -> i32) -> Option<u64> {
+    let s = s.trim().to_ascii_lowercase();
+    let (day, rest) = match s.split_once(char::is_whitespace) {
+        Some((d @ ("today" | "tomorrow"), r)) => (Some(d), r.trim()),
+        _ if s.contains(':') && !s.contains('-') => (None, s.as_str()),
+        _ => return None,
+    };
+    let tod = parse_hms(rest)?;
+    let local_now = (now as i64 + off(now) as i64).max(0) as u64;
+    let today = local_now / 86400 * 86400;
+    let at = |d: u64| local_to_unix_in((today + d * 86400 + tod) as i64, off);
+    Some(match day {
+        Some("today") => at(0),
+        Some(_) => at(1),
+        None if at(0) > now => at(0),
+        None => at(1),
+    })
 }
 
 fn parse_relative(s: &str, now: u64) -> Option<u64> {
@@ -354,6 +462,9 @@ impl Default for ClockCfg {
 
 impl ClockCfg {
     fn offset_east(&self, unix: u64) -> i32 {
+        if let Some((_, z)) = system_zone() {
+            return crate::tz::offset_east(&z, unix);
+        }
         crate::tz::resolve(&self.timezone)
             .map(|z| crate::tz::offset_east(&z, unix))
             .unwrap_or(0)
@@ -534,4 +645,66 @@ fn sntp(host: &str) -> Result<(i64, i64)> {
     let t1 = unix(now()) as i64;
     let offset_ms = (unix_sec - t0) * 1000 + ms - (t1 - t0) * 500;
     Ok((unix_sec, offset_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn madrid(t: u64) -> i32 {
+        crate::tz::offset_east(&crate::tz::from_posix("CET-1CEST,M3.5.0,M10.5.0/3"), t)
+    }
+
+    #[test]
+    fn bare_times_are_local() {
+        // 2026-11-06 12:00 UTC = 13:00 in Madrid (CET)
+        let now = parse_rfc3339("2026-11-06T12:00:00Z").unwrap();
+        let want = parse_rfc3339("2026-11-06T20:00:00Z").unwrap();
+        assert_eq!(parse_when_in("2026-11-06 21:00", now, &madrid), Some(want));
+        assert_eq!(parse_when_in("21:00", now, &madrid), Some(want));
+        assert_eq!(parse_when_in("today 21:00", now, &madrid), Some(want));
+        assert_eq!(parse_when_in("tomorrow 21:00", now, &madrid), Some(want + 86400));
+        // 09:00 already passed today → tomorrow
+        assert_eq!(
+            parse_when_in("09:00", now, &madrid),
+            parse_rfc3339("2026-11-07T08:00:00Z")
+        );
+        // friday 2026-11-06 → next friday is today at 21:00 local
+        assert_eq!(parse_when_in("friday 21:00", now, &madrid), Some(want));
+        // explicit zones are honored
+        assert_eq!(parse_when_in("2026-11-06T21:00:00Z", now, &madrid), Some(want + 3600));
+        assert_eq!(parse_when_in("2026-11-06 22:00+02:00", now, &madrid), Some(want));
+        assert_eq!(parse_when_in("in 10m", now, &madrid), Some(now + 600));
+        // summer: CEST
+        assert_eq!(
+            parse_when_in("2026-07-01 21:00", now, &madrid),
+            parse_rfc3339("2026-07-01T19:00:00Z")
+        );
+    }
+
+    #[test]
+    fn local_rfc3339() {
+        let t = parse_rfc3339("2026-11-06T20:00:00Z").unwrap();
+        assert_eq!(rfc3339_in(t, madrid(t)), "2026-11-06T21:00:00+01:00");
+        assert_eq!(rfc3339_in(t, 0), "2026-11-06T20:00:00Z");
+        assert_eq!(rfc3339_in(t, -5 * 3600 - 1800), "2026-11-06T14:30:00-05:30");
+    }
+
+    #[test]
+    fn tzif_footer_reads_posix() {
+        let mut b = b"TZif2".to_vec();
+        b.extend_from_slice(&[0; 40]);
+        b.extend_from_slice(b"\nCET-1CEST,M3.5.0,M10.5.0/3\n");
+        assert_eq!(tzif_footer(&b).as_deref(), Some("CET-1CEST,M3.5.0,M10.5.0/3"));
+        assert_eq!(tzif_footer(b"TZif\0\0\n"), None);
+    }
+
+    #[test]
+    fn real_tzdata_footer() {
+        let Ok(b) = std::fs::read("/usr/share/zoneinfo/Europe/Madrid") else { return };
+        let z = crate::tz::from_posix(&tzif_footer(&b).unwrap());
+        let t = parse_rfc3339("2026-11-06T20:00:00Z").unwrap();
+        assert_eq!(crate::tz::offset_east(&z, t), 3600);
+        assert_eq!(crate::tz::offset_east(&z, t - 120 * 86400), 7200);
+    }
 }
