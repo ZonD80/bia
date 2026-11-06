@@ -622,10 +622,12 @@ net_stage() {
 # ---- start: update this system from the other bia root (or the internet) --------
 start_main() {
   local force=0 from= bin root here src src_ver here_arch src_arch line best best_ver
-  local esp_dev esp_mnt srcesp net=0 newest staged
+  local esp_dev esp_mnt srcesp net=0 newest staged backups=0 asker=tool msg
   for a in "$@"; do
     case $a in
       --force) force=1 ;;
+      --include-backups) backups=1 ;;
+      --asker=*) asker=${a#--asker=} ;;
       --from=internet|--from=net|--net) net=1 ;;
       --from=*) from=${a#--from=} ;;
       *) refuse "arguments" "unknown argument $a" ;;
@@ -635,6 +637,11 @@ start_main() {
   [ -x "$bin" ] || refuse "update" "no carry binary at $bin"
   [ ! -f "$UPDATE/pending" ] || refuse "update" "an unfold is pending; reboot to finish it first"
   start_log "start $*"
+  # earlier backups in /home/bia/files would be folded and copied too: the owner decides first
+  if [ "$backups" != 1 ] && ! msg=$("$bin" --check-backups "$asker" 2>/dev/null); then
+    [ -n "$msg" ] || msg="the check for earlier backups in /home/bia/files failed"
+    refuse "earlier backups" "$msg"
+  fi
   root=$(live_root)
   [ -n "$(rel_of /)" ] || refuse "update" "this system has no $RELEASE"
   here=$(ver_of /)

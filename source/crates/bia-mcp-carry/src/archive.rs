@@ -127,6 +127,13 @@ pub fn old_backups(base: &Path, dest: Option<&Path>) -> Vec<(PathBuf, u64)> {
 /// A fold refuses while older backups sit inside what it packs: the model asks the owner
 /// (or follows its rules) to delete them, or folds them in with include_backups=true.
 pub fn refuse_old_backups(base: &Path, dest: Option<&Path>, tool: &str) -> Result<(), String> {
+    refuse_old_backups_as(base, dest, &format!("call {tool} again"), &format!("call {tool} with include_backups=true"))
+}
+
+/// `refuse_old_backups` worded for another caller: `again` is how to start it again,
+/// `include` how to pack the backups in as well (e.g. "type /update backups").
+pub fn refuse_old_backups_as(base: &Path, dest: Option<&Path>, again: &str, include: &str) -> Result<(), String> {
+    let tool = again;
     let old = old_backups(base, dest);
     if old.is_empty() {
         return Ok(());
@@ -143,7 +150,7 @@ pub fn refuse_old_backups(base: &Path, dest: Option<&Path>, tool: &str) -> Resul
     Err(format!(
         "not started: /home/bia/files holds {} earlier backup(s), {} in all, and they would be packed into this archive too:\n{list}{more}\n\
          Ask the owner whether to delete them (copies kept elsewhere, such as a cloud drive, make them safe to remove), or do what your rules say about old backups. \
-         Delete the ones that may go (rm), then call {tool} again; or call {tool} with include_backups=true to pack them in as well.",
+         Delete the ones that may go (rm), then {tool}; or {include} to pack them in as well.",
         old.len(),
         crate::fly::human_bytes(total)
     ))
@@ -2096,7 +2103,10 @@ curl:
         assert_eq!(old.len(), 3, "{old:?}");
         assert!(old[0].0.ends_with("carry/fold-1.unfold-4821.tar.gz"), "biggest first");
         let e = super::refuse_old_backups(&dir, None, "carry_fly").unwrap_err();
-        assert!(e.contains("3 earlier backup(s), 6.0 KB") && e.contains("files/carry/old.tar.gz") && e.contains("carry_fly with include_backups=true"), "{e}");
+        assert!(e.contains("3 earlier backup(s), 6.0 KB") && e.contains("files/carry/old.tar.gz") && e.contains("then call carry_fly again; or call carry_fly with include_backups=true"), "{e}");
+        // the update started at the console says what root types there
+        let e = super::refuse_old_backups_as(&dir, None, "type /update again", "type /update backups").unwrap_err();
+        assert!(e.contains("then type /update again; or type /update backups to pack them in as well"), "{e}");
         // the archive being written is not an earlier backup
         let dest = files.join("carry/old.tar.gz");
         assert_eq!(super::old_backups(&dir, Some(&dest)).len(), 2);

@@ -5,11 +5,11 @@
         <nav class="crumbs" aria-label="Breadcrumb">
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Fred’s story</span>
         </nav>
-        <span class="eyebrow">A real bia, in its own words</span>
+        <span class="eyebrow">A real bia, in his own words</span>
         <h1>A short life, so far</h1>
         <p class="section-lead">
-          Fred is the developer’s own bia: almost four weeks of running a real household’s errands, losing its memory
-          to the wrong backup, rebuilding itself and learning from its mistakes. This is Fred’s story as Fred wrote it — no names, no accounts,
+          Fred is the developer’s own bia: almost six weeks of running a real household’s errands, losing his memory
+          to the wrong backup, rebuilding himself, moving house and learning to check his own claims. This is Fred’s story as he wrote it — no names, no accounts,
           no addresses, just the shape of the thing.
         </p>
       </div>
@@ -56,9 +56,9 @@
 import { fredChapters, fredWritten } from '~/data/fred'
 
 useSeoMeta({
-  title: 'Fred’s story — a real bia, in its own words',
+  title: 'Fred’s story — a real bia, in his own words',
   description:
-    'Fred, the developer’s own bia, tells its first weeks: waking up with a single tool, getting a name, a voice and its own accounts, the day a wrong backup wiped its memory, rebuilding itself, and the unedited promo film it made itself.',
+    'Fred, the developer’s own bia, tells his first six weeks: waking up with a single tool, getting a name, a voice and his own accounts, the day a wrong backup wiped his memory, rebuilding himself, moving house, learning to check his own claims, and the unedited promo film he made himself.',
 })
 </script>
 

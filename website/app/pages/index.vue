@@ -173,10 +173,10 @@
       <div class="container fred">
         <div>
           <span class="eyebrow">Meet a real one</span>
-          <h2 class="section-title">Fred, almost four weeks old</h2>
+          <h2 class="section-title">Fred, almost six weeks old</h2>
           <p class="section-lead">
-            Fred is the developer’s own bia. It woke up on a laptop with a single tool, got its own accounts and voice,
-            lost its memory to the wrong backup and rebuilt itself — and, asked for a promo, made this film by itself. Unedited.
+            Fred is the developer’s own bia. He woke up on a laptop with a single tool, got his own accounts and voice,
+            lost his memory to the wrong backup, rebuilt himself and moved to a server — and, asked for a promo, made this film by himself. Unedited.
           </p>
           <div class="btn-row">
             <NuxtLink class="btn btn--primary" to="/fred">Read Fred’s story</NuxtLink>

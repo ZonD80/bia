@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub fn update(ctx: &Ctx, from: Option<&str>, force: bool) -> Result<String, String> {
+pub fn update(ctx: &Ctx, from: Option<&str>, force: bool, include_backups: bool) -> Result<String, String> {
     if Path::new("/bia-update/pending").is_file() {
         return Err("an update is waiting to be unfolded; reboot to finish it".into());
     }
@@ -16,6 +16,9 @@ pub fn update(ctx: &Ctx, from: Option<&str>, force: bool) -> Result<String, Stri
     let mut args = vec!["start".to_string()];
     if force {
         args.push("--force".into());
+    }
+    if include_backups {
+        args.push("--include-backups".into());
     }
     match from.map(str::trim).filter(|s| !s.is_empty()) {
         Some("internet" | "net" | "github" | "web") => args.push("--from=internet".into()),

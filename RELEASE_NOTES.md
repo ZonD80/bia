@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.2
+
+### Changes
+- An update no longer carries old backups along unasked. When /home/bia/files holds earlier backups (carry/*.tar.gz, *.unfold-*.tar.gz), the update stops before it starts, lists them, and bia asks the owner whether to delete them or take them along, as a backup already does. On the console, /update backups takes them along.
+
+### For bia
+- Nothing to do. If carry_update refuses because of earlier backups, ask root whether to delete them (rm) or keep them, then call it again, with include_backups=true to keep them.
+
 ## 2.1.1
 
 ### Changes

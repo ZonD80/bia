@@ -97,6 +97,19 @@ fn main() {
         }
         return;
     }
+    // bia-update start: earlier backups in /home/bia/files would ride along in the update's
+    // fold; it refuses with this list unless asked to include them. $2: who starts it again.
+    if args.first().map(String::as_str) == Some("--check-backups") {
+        let (again, include) = match args.get(1).map(String::as_str) {
+            Some("console") => ("type /update again".to_string(), "type /update backups".to_string()),
+            _ => ("call carry_update again".to_string(), "call carry_update with include_backups=true".to_string()),
+        };
+        if let Err(e) = archive::refuse_old_backups_as(std::path::Path::new("/"), None, &again, &include) {
+            println!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args.first().map(String::as_str) == Some("--finish-update") {
         let ctx = bia_mcp::Ctx::console();
         let tar = args.get(1).map(String::as_str).unwrap_or("");
@@ -213,12 +226,13 @@ fn main() {
         )
         .tool(
             "update",
-            "Update this computer's OS. Source: the other bia system attached to it (the flash stick when running from the internal disk, or the internal disk when running from the flash) — preferred; when none is attached, the newest bia release from GitHub over the internet (downloaded, checked and unpacked first; needs about twice the image size free). Folds this agent into /bia-update, reboots into the rescue image, which copies the new system onto this one while it does not run, then this computer boots and unfolds the agent (settings, chats, files, packages). The source must have a higher version unless force=true. Not automatic; call only when the user asks to update. The computer reboots several times; tell the user before calling. Progress (download, fold, rescue copy, unfold) is appended to /bia-update/update.log: read it with tail -n 20 /bia-update/update.log instead of probing processes or mounts; it is kept after the update finishes.",
+            "Update this computer's OS. Source: the other bia system attached to it (the flash stick when running from the internal disk, or the internal disk when running from the flash) — preferred; when none is attached, the newest bia release from GitHub over the internet (downloaded, checked and unpacked first; needs about twice the image size free). Folds this agent into /bia-update, reboots into the rescue image, which copies the new system onto this one while it does not run, then this computer boots and unfolds the agent (settings, chats, files, packages). The source must have a higher version unless force=true. Refuses before anything starts while earlier backups lie in /home/bia/files (the update would fold and copy them too): ask the owner whether to delete them, or pass include_backups=true. Not automatic; call only when the user asks to update. The computer reboots several times; tell the user before calling. Progress (download, fold, rescue copy, unfold) is appended to /bia-update/update.log: read it with tail -n 20 /bia-update/update.log instead of probing processes or mounts; it is kept after the update finishes.",
             json!({"type": "object", "properties": {
                 "from": {"type": "string", "description": "optional: a partition to update from, e.g. /dev/sdb3 (lsblk -f), or internet for the newest GitHub release even when a flash stick is attached. Omit to use the attached bia system, else the internet."},
-                "force": {"type": "boolean", "description": "true installs the source even when its release is not newer. Ask the user first. Default false."}
+                "force": {"type": "boolean", "description": "true installs the source even when its release is not newer. Ask the user first. Default false."},
+                "include_backups": {"type": "boolean", "description": "true carries earlier backups in /home/bia/files through the update too (carry/*.tar.gz, *.unfold-*.tar.gz). Without it the update refuses before anything starts while any are there and lists them. Default false."}
             }}),
-            |ctx, a| update::update(ctx, arg_str_opt(&a, "from"), arg_bool(&a, "force", false)),
+            |ctx, a| update::update(ctx, arg_str_opt(&a, "from"), arg_bool(&a, "force", false), arg_bool(&a, "include_backups", false)),
         )
         .tool(
             "rescue",
