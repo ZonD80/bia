@@ -56,12 +56,13 @@ import java.security.cert.X509Certificate
 import uniffi.bia_deploy_mobile.p12Password
 
 /** One bia this phone holds the key of. `host` is what is dialled, a port included. */
-data class ChatTarget(val host: String, val folder: String) {
+data class ChatTarget(val host: String, val folder: String, val path: String = "/") {
     private val bracketed get() = host.startsWith("[")
     private val ipv6 get() = !bracketed && host.count { it == ':' } > 1
     /** The address without a port, as requests report it. */
     val name get() = if (bracketed) host.substringAfter('[').substringBefore(']') else if (ipv6) host else host.substringBefore(':')
-    val url get() = if (ipv6) "https://[$host]/" else "https://$host/"
+    /** The page of bia's web app to open: / is the chat, a link from bia names another. */
+    val url get() = (if (ipv6) "https://[$host]" else "https://$host") + (if (path.startsWith("/")) path else "/")
     fun isHere(h: String?) = h?.trim('[', ']') == name
 }
 

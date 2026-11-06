@@ -271,7 +271,10 @@ final class DeployModel: ObservableObject {
         }
         closeConfig()
         let incoming = IncomingConfig(path: dest.path)
-        if chat != nil {
+        if noKey != nil {
+            noKey = nil // waitingLink stays: the link opens once this key is in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.configFile = incoming }
+        } else if chat != nil {
             // a sheet cannot open while the chat's cover is closing
             chat = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.configFile = incoming }
@@ -279,6 +282,74 @@ final class DeployModel: ObservableObject {
             configFile = incoming
         }
     }
+
+    // MARK: links from bia (ownbia.com/open#…, biadeploy://open?…)
+    /// A link whose bia has no key on this phone: the person is asked to get a .biaconfig.
+    @Published var noKey: AppLink?
+    /// That link, opened by itself once a .biaconfig for its bia is imported.
+    private var waitingLink: String?
+
+    /// A link from a bia opens its page in the chat; without that bia's key it brings one, or
+    /// the person is asked for a .biaconfig. False if it is not a link from a bia.
+    @discardableResult
+    func openLink(_ url: URL, fetched: Bool = false) -> Bool {
+        guard let link = appLink(url: url.absoluteString) else { return false }
+        error = nil
+        keyProblem = nil
+        saved = savedBias()
+        let show: () -> Void
+        if let b = link.bia {
+            waitingLink = nil
+            noKey = nil
+            let target = ChatTarget(host: b.host, folder: b.folder, path: link.path)
+            show = { self.chat = target }
+        } else if link.canFetch && !fetched {
+            let w = url.absoluteString
+            show = { self.bringKey(w, link: link) }
+        } else {
+            waitingLink = url.absoluteString
+            show = { self.noKey = link }
+        }
+        if chat != nil || configFile != nil {
+            // a cover or sheet cannot open while another one is closing
+            chat = nil
+            if configFile != nil { closeConfig() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: show)
+        } else {
+            show()
+        }
+        return true
+    }
+
+    func closeNoKey() {
+        noKey = nil
+        waitingLink = nil
+        keyProblem = nil
+    }
+
+    /// Why the key a link brings could not be kept (shown on the no-key sheet).
+    @Published var keyProblem: String?
+
+    /// The link brings a key: kept here, then the link opens. On failure the no-key sheet says why.
+    private func bringKey(_ w: String, link: AppLink) {
+        guard let u = URL(string: w), !gettingKey else { return }
+        gettingKey = true
+        Task {
+            defer { gettingKey = false }
+            do {
+                _ = try await Task.detached { try fetchKey(url: w) }.value
+                saved = savedBias()
+                openLink(u, fetched: true)
+            } catch {
+                keyProblem = message(error)
+                waitingLink = w
+                noKey = link
+            }
+        }
+    }
+
+    /// A link's key is being fetched (shown over everything).
+    @Published var gettingKey = false
 
     func closeConfig() {
         if let f = configFile { try? FileManager.default.removeItem(atPath: f.path) }
@@ -297,6 +368,10 @@ final class DeployModel: ObservableObject {
                 _ = try await Task.detached { try biaconfigImport(path: file.path, password: password, replace: replace) }.value
                 closeConfig()
                 openKeys()
+                // the link that asked for this key opens now, if the key is its bia's
+                if let w = waitingLink, let u = URL(string: w), appLink(url: w)?.bia != nil {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.openLink(u) }
+                }
             } catch DeployError.OtherKeyHere(let host) {
                 configOtherKey = host
             } catch {

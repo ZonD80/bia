@@ -72,6 +72,13 @@ fun BiaTheme(content: @Composable () -> Unit) {
 @Composable
 fun App(m: DeployModel) {
     m.configFile?.let { ImportDialog(m) }
+    m.noKey?.let { NoKeyDialog(m, it) }
+    if (m.gettingKey) AlertDialog(
+        onDismissRequest = {},
+        title = { Text("Getting bia's key…") },
+        text = { LinearProgressIndicator(Modifier.fillMaxWidth()) },
+        confirmButton = {},
+    )
     m.chat?.let { target ->
         ChatScreen(target) { m.chat = null }
         return
@@ -604,6 +611,33 @@ private fun ImportDialog(m: DeployModel) {
         },
         confirmButton = { TextButton({ m.importConfig(password) }, enabled = !m.configBusy && password.isNotEmpty()) { Text(if (m.configBusy) "Opening…" else "Import") } },
         dismissButton = { TextButton({ m.closeConfig() }, enabled = !m.configBusy) { Text("Cancel") } },
+    )
+}
+
+/** A link from a bia whose key this phone does not hold: bia makes a .biaconfig for it. */
+@Composable
+private fun NoKeyDialog(m: DeployModel, link: uniffi.bia_deploy_mobile.AppLink) {
+    val context = LocalContext.current
+    val pick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        m.offerConfig(context.cacheDir) { dest -> context.contentResolver.openInputStream(uri)?.use { it.copyLimited(dest) } }
+    }
+    AlertDialog(
+        onDismissRequest = { m.closeNoKey() },
+        title = { Text("No key for this bia") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(if (link.at.isEmpty()) "This link is from a bia whose key is not on this phone." else "This link is from the bia at ${link.at.joinToString(", ")}, and its key is not on this phone.")
+                m.keyProblem?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                    Text("Ask bia in the chat for a new link: its key lasts 10 minutes and works once.")
+                }
+                Text("Or ask bia in any chat: “send me a .biaconfig for my phone”. It sends a file and tells the password another way.")
+                Weak("Open the file with bia deploy (tap it in the chat) and enter the password. Then this link opens by itself.")
+            }
+        },
+        confirmButton = { TextButton({ pick.launch(arrayOf("*/*")) }) { Text("Open a .biaconfig…") } },
+        dismissButton = { TextButton({ m.closeNoKey() }) { Text("Close") } },
     )
 }
 

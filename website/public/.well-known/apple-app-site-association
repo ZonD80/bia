@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["A59M2YXS84.biadeploy.ios"],
+        "components": [
+          { "/": "/open", "comment": "links from a bia: ownbia.com/open#ca=…&at=…&go=…" },
+          { "/": "/open/", "comment": "the same with a trailing slash" }
+        ]
+      }
+    ]
+  }
+}

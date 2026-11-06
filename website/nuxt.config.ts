@@ -98,7 +98,8 @@ export default defineNuxtConfig({
     preset: 'static',
     prerender: {
       crawlLinks: true,
-      routes: [...prerenderRoutes, ...Object.keys(redirects)],
+      // /open is the fallback page of bia's app links: built, but not in the sitemap
+      routes: [...prerenderRoutes, '/open', ...Object.keys(redirects)],
       failOnError: true,
     },
   },

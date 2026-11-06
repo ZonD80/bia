@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.1
+
+### Changes
+- bia can send links that open its pages in the bia deploy app on Android and iPhone, in any chat (Telegram, WhatsApp and others): a task it needs a person for (ask_human, Login with ChatGPT), a file it shares, or its chat. They look like https://ownbia.com/open#…; the part after # never reaches ownbia.com.
+- Each link brings a key for the person it was sent to: root, or a contact with the trust the addressbook gives them. A phone without bia's key gets a new certificate from the link the first time it is opened. That key works once and for 10 minutes, enough to install the app; bia makes a new link on request. With a key already on the phone, the link just opens.
+- Without the app, the link's page offers Google Play and the App Store, plus the direct web console link for a computer. bia knows the store links and sends them to someone who has no app yet.
+
+### For bia
+- Nothing to do. When you send a person a task or file link, also send the phone link from the tool's reply, only in that person's own chat; system_app_link makes one for the chat or any page, for root or a contact (identity).
+
 ## 2.1.0
 
 ### Changes

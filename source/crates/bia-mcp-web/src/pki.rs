@@ -213,12 +213,13 @@ pub fn biaconfig(ctx: &Ctx, args: Value) -> Result<String, String> {
     ctx.log(format!("issued {} cert for {} in a .biaconfig (role={} trust={})", m.serial, m.identity, m.role, m.trust));
     let password_line = if m.generated { format!("password {}", m.password) } else { "the password you were given".to_string() };
     Ok(format!(
-        "{}, serial {}, for {}: {} Encrypted with {password_line}. Send the file with say(files=[…]) and tell the password another way, never in the same chat: whoever has both is {} on this machine. web_pki_revoke(serial) ends it at any time. Delete the file once it has arrived.",
+        "{}, serial {}, for {}: {} Encrypted with {password_line}. Send the file with say(files=[…]) and tell the password another way, never in the same chat: whoever has both is {} on this machine. web_pki_revoke(serial) ends it at any time. Delete the file once it has arrived. On a phone it opens in the bia deploy app ({}).",
         path.display(),
         m.serial,
         m.addresses.join(", "),
         if m.added { "The server certificate names these addresses within seconds." } else { "" },
         m.identity,
+        bia_mcp::apps::stores(),
     ))
 }
 

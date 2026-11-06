@@ -220,6 +220,8 @@ fn is_public(method: &str, path: &str) -> bool {
         {
             true
         }
+        // a bia deploy app redeeming the one-time key grant of a link bia sent (bia_mcp::apps)
+        ("GET", p) if p.strip_prefix("/v1/pki/link/").is_some_and(bia_mcp::apps::valid_token) => true,
         // Certificate requests from peers without a cert: file one, then poll / collect by UUID.
         ("POST", "/v1/pki/requests") => true,
         ("GET", p) => request_route(p).is_some_and(|(_, action)| matches!(action, "" | "cert")),
@@ -746,6 +748,7 @@ impl Web {
                 Some((id, _)) => self.request_status(stream, id),
                 None => respond(stream, 404, "text/plain", b"not found", None),
             },
+            ("GET", p) if p.starts_with("/v1/pki/link/") => self.serve_link_key(stream, p.trim_start_matches("/v1/pki/link/"), peer),
             ("GET", p) => {
                 let token = p.trim_start_matches("/v1/pki/pickup/");
                 self.serve_pickup(stream, token);
@@ -1433,6 +1436,26 @@ impl Web {
 
     pub fn list_requests(&self) -> Vec<bia_pki::CertRequest> {
         self.pki.list_requests()
+    }
+
+    /// The key a link bia sent brings: a new certificate (key made here, a .p12) for the
+    /// identity and trust the link was minted for, once. The phone pinned this bia's CA first.
+    fn serve_link_key(&self, stream: &mut dyn Write, token: &str, peer: &str) {
+        let Some(g) = bia_mcp::apps::take_token(&self.files, token) else {
+            respond(stream, 404, "text/plain; charset=utf-8", b"this link's key was already used or has lapsed: ask bia for a new link", None);
+            return;
+        };
+        match self.pki.issue(&g.identity, "user", &g.trust) {
+            Ok((bytes, meta)) => {
+                self.con.log(&format!(
+                    "  web: a phone at {peer} took the key of a link: {} (trust {}, serial {})",
+                    meta.identity, g.trust, meta.serial
+                ));
+                let extra = format!("Content-Disposition: attachment; filename=\"{}.p12\"", meta.identity);
+                respond(stream, 200, "application/x-pkcs12", &bytes, Some(&extra));
+            }
+            Err(e) => respond(stream, 500, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+        }
     }
 
     fn serve_pickup(&self, stream: &mut dyn Write, token: &str) {

@@ -39,8 +39,14 @@ struct ContentView: View {
         }
         .background(Color(.systemGroupedBackground))
         .scrollDismissesKeyboard(.interactively)
+        .overlay {
+            if model.gettingKey {
+                ProgressView("Getting bia's key…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+        }
         .fullScreenCover(item: $model.chat) { ChatPage(target: $0) }
         .sheet(item: $model.configFile, onDismiss: { model.closeConfig() }) { _ in ImportSheet(model: model) }
+        .sheet(item: $model.noKey) { NoKeySheet(model: model, link: $0) }
         #if DEBUG
         .task {
             // for testing: `-importConfig <path> -importPassword <password> [-importReplace YES]`
@@ -55,6 +61,8 @@ struct ContentView: View {
                let pw = UserDefaults.standard.string(forKey: "exportPassword"), let to = UserDefaults.standard.string(forKey: "exportTo") {
                 NSLog("bia export: %@", (try? biaconfigExport(folder: b.folder, host: b.host, name: b.name, password: pw, outDir: to)) ?? "failed")
             }
+            // a link from bia, for testing: `-link <url>`
+            if let l = UserDefaults.standard.string(forKey: "link"), let u = URL(string: l) { model.openLink(u) }
             // store screenshots: `-demo <scene>` (made-up data, no network)
             // a saved bia's chat at once, for testing: `-chat <host>`
             if let host = UserDefaults.standard.string(forKey: "chat"), let b = model.saved.first(where: { $0.host == host }) {
@@ -575,6 +583,42 @@ struct ImportSheet: View {
             .navigationTitle("Open .biaconfig")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.closeConfig() }.disabled(model.configBusy) } }
+        }
+    }
+}
+
+extension AppLink: Identifiable { public var id: String { ca + path } }
+
+/// A link from a bia whose key this phone does not hold: bia makes a .biaconfig for it.
+struct NoKeySheet: View {
+    @ObservedObject var model: DeployModel
+    let link: AppLink
+    @State private var picking = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(link.at.isEmpty ? "This link is from a bia whose key is not on this phone." : "This link is from the bia at \(link.at.joined(separator: ", ")), and its key is not on this phone.")
+                }
+                if let p = model.keyProblem {
+                    Section("The key this link brought") {
+                        Text(p).foregroundStyle(.red)
+                        Text("Ask bia in the chat for a new link: its key lasts 10 minutes and works once.")
+                    }
+                }
+                Section("Or with a .biaconfig") {
+                    Text("Ask bia in any chat: “send me a .biaconfig for my phone”. It sends a file and tells the password another way.")
+                    Text("Open the file with bia deploy (tap it in the chat) and enter the password. Then this link opens by itself.")
+                        .foregroundStyle(.secondary)
+                    Button("Open a .biaconfig…") { picking = true }
+                        .fileImporter(isPresented: $picking, allowedContentTypes: [UTType(exportedAs: "biadeploy.config")]) { result in
+                            if case .success(let url) = result { model.offerConfig(url) }
+                        }
+                }
+            }
+            .navigationTitle("No key for this bia")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { model.closeNoKey() } } }
         }
     }
 }

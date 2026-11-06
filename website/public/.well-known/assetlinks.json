@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "biadeploy.android",
+      "sha256_cert_fingerprints": [
+        "7C:E3:6F:1D:86:64:C1:9E:56:73:5C:7D:D0:A4:80:0C:15:98:E5:58:D4:96:71:10:BA:DE:28:55:F2:07:DE:1F",
+        "1C:16:DE:80:C2:96:9A:BC:C6:89:DB:1A:F9:AC:B2:4D:70:B2:AE:69:88:6E:FF:CE:EB:88:DE:F5:5D:7E:2D:99"
+      ]
+    }
+  }
+]

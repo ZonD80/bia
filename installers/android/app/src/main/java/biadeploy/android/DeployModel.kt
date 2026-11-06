@@ -24,6 +24,9 @@ import uniffi.bia_deploy_mobile.Target
 import uniffi.bia_deploy_mobile.WaitListener
 import uniffi.bia_deploy_mobile.biaconfigImport
 import uniffi.bia_deploy_mobile.isBiaconfig
+import uniffi.bia_deploy_mobile.AppLink
+import uniffi.bia_deploy_mobile.appLink
+import uniffi.bia_deploy_mobile.fetchKey
 import uniffi.bia_deploy_mobile.chatgptSignIn
 import uniffi.bia_deploy_mobile.identifyKey
 import uniffi.bia_deploy_mobile.landSecret
@@ -288,8 +291,71 @@ class DeployModel : ViewModel() {
     var configOtherKey by mutableStateOf<String?>(null)
     var configBusy by mutableStateOf(false)
 
+    // ---- links from bia (ownbia.com/open#…, biadeploy://open?…) ----
+    /** A link whose bia has no key on this phone: the person is asked to get a .biaconfig. */
+    var noKey by mutableStateOf<AppLink?>(null)
+    /** That link, opened by itself once a .biaconfig for its bia is imported. */
+    private var waitingLink: String? = null
+
+    /** Why the key a link brings could not be kept (shown on the no-key dialog). */
+    var keyProblem by mutableStateOf<String?>(null)
+    /** A link's key is being fetched. */
+    var gettingKey by mutableStateOf(false)
+
+    /**
+     * A link from a bia opens its page in the chat; without that bia's key it brings one, or the
+     * person is asked for a .biaconfig. False if it is not a link from a bia.
+     */
+    fun openLink(url: String, fetched: Boolean = false): Boolean {
+        val link = appLink(url) ?: return false
+        error = null
+        keyProblem = null
+        saved.clear(); saved.addAll(savedBias())
+        val b = link.bia
+        when {
+            b != null -> {
+                waitingLink = null
+                noKey = null
+                chat = ChatTarget(b.host, b.folder, link.path)
+            }
+            link.canFetch && !fetched -> bringKey(url, link)
+            else -> {
+                waitingLink = url
+                chat = null
+                noKey = link
+            }
+        }
+        return true
+    }
+
+    /** The link brings a key: kept here, then the link opens. On failure the dialog says why. */
+    private fun bringKey(url: String, link: AppLink) {
+        if (gettingKey) return
+        gettingKey = true
+        chat = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { fetchKey(url) }
+                openLink(url, fetched = true)
+            } catch (e: Exception) {
+                keyProblem = (e as? DeployException.Failed)?.reason ?: e.message ?: e.toString()
+                waitingLink = url
+                noKey = link
+            } finally {
+                gettingKey = false
+            }
+        }
+    }
+
+    fun closeNoKey() {
+        noKey = null
+        waitingLink = null
+        keyProblem = null
+    }
+
     fun offerConfig(cache: File, copy: (File) -> Unit) {
         chat = null
+        noKey = null // waitingLink stays: the link opens once this key is in
         error = null
         closeConfig()
         val dest = File(File(cache, "biaconfig").apply { mkdirs() }, "incoming.biaconfig")
@@ -325,6 +391,8 @@ class DeployModel : ViewModel() {
                 withContext(Dispatchers.IO) { biaconfigImport(file.path, password, replace) }
                 closeConfig()
                 openKeys()
+                // the link that asked for this key opens now, if the key is its bia's
+                waitingLink?.let { w -> if (appLink(w)?.bia != null) openLink(w) }
             } catch (e: DeployException.OtherKeyHere) {
                 configOtherKey = e.host
             } catch (e: DeployException.Failed) {

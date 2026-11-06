@@ -21,6 +21,8 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG && savedInstanceState == null) intent.getStringExtra("chat")?.let { host ->
             model.saved.firstOrNull { it.host == host }?.let { model.chat = ChatTarget(it.host, it.folder) }
         }
+        // a link from bia, for testing (debug builds only): --es link <url>
+        if (BuildConfig.DEBUG && savedInstanceState == null) intent.getStringExtra("link")?.let { model.openLink(it) }
         if (savedInstanceState == null) openedFile(intent)
         setContent {
             // the takeover and the wait for bia take minutes: keep the screen (and this app) on
@@ -39,10 +41,14 @@ class MainActivity : ComponentActivity() {
         openedFile(intent)
     }
 
-    /** A .biaconfig opened from elsewhere: a private copy, then its password is asked for. */
+    /** A link from bia, or a .biaconfig opened from elsewhere: a private copy, then its password is asked for. */
     private fun openedFile(intent: Intent?) {
         if (intent?.action != Intent.ACTION_VIEW) return
         val uri = intent.data ?: return
+        if (uri.scheme == "https" || uri.scheme == "biadeploy") {
+            model.openLink(uri.toString())
+            return
+        }
         model.offerConfig(cacheDir) { dest -> contentResolver.openInputStream(uri)?.use { it.copyLimited(dest) } }
     }
 }

@@ -1,4 +1,4 @@
-//! "system" MCP: FMM (with Login with ChatGPT), HITL tasks and file links. Disks, network, curl and ss are Debian via bash.
+//! "system" MCP: FMM (with Login with ChatGPT), HITL tasks, file links and phone app links. Disks, network, curl and ss are Debian via bash.
 //! The web server, its certificates and chats are the web MCP.
 mod chatgpt;
 mod fmm;
@@ -39,13 +39,23 @@ fn main() {
             "share_file",
             "Make a download link for a file under /home/bia/files. path example: out/report.pdf. Send the returned link with say. Do not change the link.",
             json!({"type": "object", "required": ["path"], "properties": {
-                "path": {"type": "string", "description": "file under /home/bia/files, for example out/report.pdf"}
+                "path": {"type": "string", "description": "file under /home/bia/files, for example out/report.pdf"},
+                "identity": {"type": "string", "description": "optional: who you send it to, root (default) or an addressbook contact id. The phone link carries a one-time key for them."}
             }}),
             hitl::share,
         )
         .tool(
+            "app_link",
+            "Make a link that opens bia's web app in the bia deploy phone app: the chat, or another page path, for root or a contact (identity). It carries a one-time key for them. Send it with say in their own chat; the reply names the app's store links.",
+            json!({"type": "object", "properties": {
+                "path": {"type": "string", "description": "optional: page of bia's web app, for example /hitl/<id>. Default / (the chat)."},
+                "identity": {"type": "string", "description": "optional: who you send it to, root (default) or an addressbook contact id. The link carries a one-time key for them."}
+            }}),
+            hitl::app_link_tool,
+        )
+        .tool(
             "ask_human",
-            "Ask the person to finish a step you cannot do, such as a captcha. You get a job id now. The result arrives later as system|job:<id>. Send the link from the log to the user with say.",
+            "Ask the person to finish a step you cannot do, such as a captcha. You get a job id now. The result arrives later as system|job:<id>. Send the links from the log with say: the web console link for a computer and the phone link, which opens the task in the bia deploy app.",
             json!({"type": "object", "required": ["title"], "properties": {
                 "title": {"type": "string", "description": "short name the person will see"},
                 "message": {"type": "string", "description": "what the person should do"},

@@ -149,9 +149,92 @@ pub fn share(ctx: &Ctx, args: Value) -> Result<String, String> {
             out.push(u.clone());
         }
     }
+    let phone = app_link(&format!("/dl/{id}"), &recipient(&args)?)
+        .map(|l| {
+            format!(
+                "\n[{name} on a phone]({l})\n(the phone link opens the file in the bia deploy app. {}. {}.)",
+                bia_mcp::apps::stores(),
+                bia_mcp::apps::NO_KEY
+            )
+        })
+        .unwrap_or_default();
     Ok(format!(
-        "send these download links to the user with say, unchanged (recipient needs a client cert):\n{}",
+        "send these download links to the user with say, unchanged (recipient needs a client cert):\n{}{phone}",
         out.join("\n")
+    ))
+}
+
+/// This bia's CA id as the phone apps compute it (sha256 of the CA certificate's DER).
+fn ca_id() -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let pem = fs::read_to_string(files_dir().join("state").join("pki").join("ca.crt")).ok()?;
+    let body: String = pem
+        .lines()
+        .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("-----END"))
+        .collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()?;
+    Some(bia_mcp::apps::ca_id(&Sha256::digest(&der)))
+}
+
+/// The bia deploy app link to `path` on this bia for `to` (identity, trust), if its CA exists.
+/// It carries a single-use key grant for them: a phone without the key gets one from it.
+pub(crate) fn app_link(path: &str, to: &(String, String)) -> Option<String> {
+    let ca = ca_id()?;
+    let token = bia_mcp::apps::mint_token(&files_dir(), &to.0, &to.1);
+    bia_mcp::apps::open_link(&ca, &console_urls(), path, token.as_deref())
+}
+
+pub(crate) fn root() -> (String, String) {
+    ("root".into(), "root".into())
+}
+
+/// `identity` argument: who the link goes to, root by default, else an addressbook contact
+/// (its trust is the key's). Nobody else gets a link with a key.
+fn recipient(args: &Value) -> Result<(String, String), String> {
+    let id = bia_mcp::arg_str_opt(args, "identity").unwrap_or("root").trim();
+    if id.is_empty() || id == "root" {
+        return Ok(root());
+    }
+    let book: Value = fs::read(files_dir().join("state").join("addressbook.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or(json!({}));
+    let c = book
+        .get("contacts")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.iter().find(|c| c.get("id").and_then(|x| x.as_str()) == Some(id)))
+        .ok_or_else(|| format!("{id} is not in the addressbook: links carry a key for the person, so add them first (addressbook_upsert) or send the web console link"))?;
+    let trust = if c.get("trust").and_then(|x| x.as_str()) == Some("root") { "root" } else { "normal" };
+    Ok((id.to_string(), trust.to_string()))
+}
+
+/// One line for the model: the phone link to `path`, where to get the app, what to do without a key.
+pub(crate) fn app_line(path: &str) -> Option<String> {
+    let link = app_link(path, &root())?;
+    Some(format!(
+        "on a phone: {link} (opens it in the bia deploy app with bia's key; without the app the page offers it. {}. {}.)",
+        bia_mcp::apps::stores(),
+        bia_mcp::apps::NO_KEY
+    ))
+}
+
+/// `app_link`: a phone link to a page of bia's web app, the chat by default.
+pub fn app_link_tool(_: &Ctx, args: Value) -> Result<String, String> {
+    let path = bia_mcp::arg_str_opt(&args, "path").unwrap_or("/").trim();
+    let path = if path.is_empty() { "/" } else { path };
+    if !path.starts_with('/') || path.contains("://") {
+        return Err("path is a page of bia's web app such as / or /hitl/<id>".into());
+    }
+    let link = app_link(path, &recipient(&args)?).ok_or("bia's web certificate authority is not made yet: enable mcp/web first")?;
+    let web: Vec<String> = console_urls().into_iter().map(|u| with_path(&u, path)).collect();
+    Ok(format!(
+        "send with say, unchanged: {link}\nIt opens in the bia deploy app on a phone that holds bia's key; without the app the page offers it. {}. {}.{}",
+        bia_mcp::apps::stores(),
+        bia_mcp::apps::NO_KEY,
+        if web.is_empty() { String::new() } else { format!("\nOn a computer with bia's certificate: {}", web.join(" ")) }
     ))
 }
 
@@ -199,6 +282,9 @@ pub fn ask(ctx: &Ctx, args: Value) -> Result<String, String> {
         ctx.log(format!(
             "open {u} — the page shows the machine display; do the work there, then Done"
         ));
+    }
+    if let Some(l) = app_line(&format!("/hitl/{id}")) {
+        ctx.log(l);
     }
     ctx.log("display: the task page embeds /gui (VNC 127.0.0.1:5900 of display :0)");
     let result_path = dir.join(format!("{id}.result"));

@@ -6,7 +6,9 @@ import WebKit
 struct ChatTarget: Identifiable {
     let host: String
     let folder: String
-    var id: String { host }
+    /// The page of bia's web app to open: / is the chat, a link from bia names another.
+    var path = "/"
+    var id: String { host + path }
     private var bracketed: Bool { host.hasPrefix("[") }
     private var ipv6: Bool { !bracketed && host.filter { $0 == ":" }.count > 1 }
     /// The address without a port, as requests report it.
@@ -14,7 +16,7 @@ struct ChatTarget: Identifiable {
         if bracketed { return String(host.dropFirst().prefix { $0 != "]" }) }
         return ipv6 ? host : String(host.split(separator: ":").first ?? "")
     }
-    var url: URL? { URL(string: ipv6 ? "https://[\(host)]/" : "https://\(host)/") }
+    var url: URL? { URL(string: (ipv6 ? "https://[\(host)]" : "https://\(host)") + (path.hasPrefix("/") ? path : "/")) }
     func isHere(_ h: String?) -> Bool { h?.trimmingCharacters(in: CharacterSet(charactersIn: "[]")) == name }
 }
 

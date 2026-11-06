@@ -18,7 +18,11 @@ struct BiaDeployApp: App {
         WindowGroup {
             ContentView(model: model)
                 .tint(accent)
-                .onOpenURL { model.offerConfig($0) }
+                // a link from bia, or a .biaconfig file
+                .onOpenURL { url in if !model.openLink(url) { model.offerConfig(url) } }
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    if let url = activity.webpageURL { model.openLink(url) }
+                }
         }
     }
 }

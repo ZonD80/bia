@@ -23,9 +23,19 @@ targets:
       # the Rust core (installers/bia-deploy-mobile), made by build-core.sh
       - framework: BiaDeployCore.xcframework
         embed: false
+    # links from a bia (https://ownbia.com/open#…) open in this app; the site serves
+    # .well-known/apple-app-site-association for this app id
+    entitlements:
+      path: BiaDeploy/BiaDeploy.entitlements
+      properties:
+        com.apple.developer.associated-domains: ["applinks:ownbia.com"]
     info:
       path: BiaDeploy/Info.plist
       properties:
+        # biadeploy://open?ca=…&go=… : the fallback page's button when the universal link did not open the app
+        CFBundleURLTypes:
+          - CFBundleURLName: biadeploy.link
+            CFBundleURLSchemes: [biadeploy]
         # .biaconfig files open here (merged with the generated keys below)
         # bia is dialled by bare IP with its own CA: ATS refuses that (-9880) and has no per-address
         # exception. Web views only; ChatView checks this bia's CA itself on every connection.

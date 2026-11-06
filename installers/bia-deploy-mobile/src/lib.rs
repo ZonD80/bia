@@ -451,7 +451,7 @@ pub fn land_secret() -> String {
 // ---- bia's key on this phone ----
 
 /// A bia this phone deployed, whose key (bia-root.p12) and CA (ca.crt) are kept here.
-#[derive(uniffi::Record)]
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct SavedBia {
     /// What is dialled: a host or IP, with a port if it is not 443.
     pub host: String,
@@ -660,6 +660,232 @@ fn uuid_like(seed: &str) -> String {
 #[uniffi::export]
 pub fn server_folder(host: String) -> R<String> {
     Ok(remote::server_folder(&host)?.display().to_string())
+}
+
+// ---- app links: https://ownbia.com/open#ca=<id>&at=<host>,…&go=<path> (bia_mcp::apps) ----
+
+/// A link from a bia, read: which bia (its CA) and which of its pages. `bia` is the one this
+/// phone holds the key of, or none: then the person asks bia for a .biaconfig.
+#[derive(uniffi::Record, Debug)]
+pub struct AppLink {
+    pub ca: String,
+    /// Where bia said it is (it may not be reachable from here; the saved address is dialled).
+    pub at: Vec<String>,
+    /// The page on bia, such as /hitl/ab12cd34; / is the chat.
+    pub path: String,
+    pub bia: Option<SavedBia>,
+    /// Without a key, the link brings one (`fetch_key`).
+    pub can_fetch: bool,
+}
+
+fn unpercent(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' => {
+                let h = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+                out.push(u8::from_str_radix(h, 16).ok()?);
+                i += 3;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// The CA id the bia puts in its links: the first 16 hex digits of sha256 of its DER.
+fn ca_id_of(pem: &str) -> Option<String> {
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let body: String = pem
+        .lines()
+        .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("-----END"))
+        .collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()?;
+    Some(Sha256::digest(&der).iter().take(16).map(|b| format!("{b:02x}")).collect())
+}
+
+struct Link {
+    ca: String,
+    at: Vec<String>,
+    go: String,
+    token: String,
+}
+
+fn read_link(url: &str) -> Option<Link> {
+    let url = url.trim();
+    let rest = if let Some(r) = url.strip_prefix("https://ownbia.com/open").or_else(|| url.strip_prefix("https://www.ownbia.com/open")) {
+        r.strip_prefix('/').unwrap_or(r)
+    } else {
+        url.strip_prefix("biadeploy://open")?.trim_start_matches('/')
+    };
+    let params = rest.strip_prefix('#').or_else(|| rest.strip_prefix('?'))?;
+    let (mut ca, mut at, mut go, mut token) = (String::new(), vec![], "/".to_string(), String::new());
+    for kv in params.split('&') {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        let v = unpercent(v)?;
+        match k {
+            "ca" => ca = v.to_ascii_lowercase(),
+            "at" => at = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+            "go" => go = v,
+            "t" => token = v,
+            _ => {}
+        }
+    }
+    let ca_ok = ca.len() == 32 && ca.bytes().all(|c| c.is_ascii_hexdigit());
+    if !(token.len() == 32 && token.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))) {
+        token.clear();
+    }
+    // addresses only: a host or IP with a port, nothing that changes the request
+    at.retain(|a| a.len() <= 100 && a.chars().all(|c| c.is_ascii_alphanumeric() || ".:-[]".contains(c)));
+    // a page of this bia only: no other host, scheme or control characters
+    let go_ok = go.starts_with('/') && !go.starts_with("//") && !go.contains('\\') && !go.contains("://") && !go.chars().any(char::is_control);
+    (ca_ok && go_ok).then_some(Link { ca, at, go, token })
+}
+
+fn same_host(saved: &str, at: &str) -> bool {
+    let norm = |h: &str| h.trim().trim_end_matches(":443").to_ascii_lowercase();
+    norm(saved) == norm(at)
+}
+
+/// A link from a bia (ownbia.com/open or biadeploy://open), or none if it is not one. The bia
+/// is found by its CA among the saved ones; one whose address the link names comes first.
+#[uniffi::export]
+pub fn app_link(url: String) -> Option<AppLink> {
+    let Link { ca, at, go, token } = read_link(&url)?;
+    let mut matches: Vec<SavedBia> = saved_bias()
+        .into_iter()
+        .filter(|b| std::fs::read_to_string(Path::new(&b.folder).join("ca.crt")).ok().and_then(|p| ca_id_of(&p)).as_deref() == Some(ca.as_str()))
+        .collect();
+    matches.sort_by_key(|b| !at.iter().any(|a| same_host(&b.host, a)));
+    let can_fetch = !token.is_empty() && !at.is_empty();
+    Some(AppLink { ca, at, path: go, bia: matches.into_iter().next(), can_fetch })
+}
+
+fn https(host: &str) -> String {
+    format!("https://{host}")
+}
+
+/// Keep the key a link brings: bia's CA is pinned by the link (`ca`) before the link's
+/// one-time grant goes out, then bia's new certificate for this phone is kept like an
+/// imported .biaconfig. Returns that bia, ready for `app_link` to find.
+#[uniffi::export]
+pub fn fetch_key(url: String) -> R<SavedBia> {
+    use bia_pki::client::{self, ServerTrust};
+    bia_pki::install_crypto_provider();
+    let link = read_link(&url).ok_or_else(|| failed("this is not a link from a bia"))?;
+    if link.token.is_empty() || link.at.is_empty() {
+        return Err(failed("this link brings no key"));
+    }
+    let mut last = String::from("bia did not answer");
+    for host in &link.at {
+        let base = https(host);
+        let ca = match client::request(&base, "GET", "/v1/pki/ca", None, ServerTrust::Any, None) {
+            Ok(r) if r.status == 200 => r.text(),
+            Ok(r) => {
+                last = format!("{host}: HTTP {}", r.status);
+                continue;
+            }
+            Err(e) => {
+                last = format!("{host}: {e:#}");
+                continue;
+            }
+        };
+        if ca_id_of(&ca).as_deref() != Some(link.ca.as_str()) {
+            last = format!("{host} is another bia (its certificate authority is not the link's)");
+            continue;
+        }
+        let folder = remote::server_folder(host)?;
+        if std::fs::read(folder.join("bia-root.p12")).is_ok() {
+            return Err(failed(format!("this phone already keeps another bia's key for {host}: remove it under Your bias, then open the link again")));
+        }
+        let r = client::request_raw(&base, "GET", &format!("/v1/pki/link/{}", link.token), None, ServerTrust::Ca(&ca), None)
+            .map_err(|e| failed(format!("{host}: {e:#}")))?;
+        if r.status != 200 {
+            return Err(failed(String::from_utf8_lossy(&r.body).trim().to_string()));
+        }
+        // it must be a key this app can use, under the password every bia .p12 has
+        bia_pki::read_p12(&r.body, bia_pki::P12_PASSWORD).map_err(|e| failed(format!("bia's key: {e:#}")))?;
+        std::fs::create_dir_all(&folder).map_err(failed)?;
+        std::fs::write(folder.join("bia-root.p12"), &r.body).map_err(failed)?;
+        std::fs::write(folder.join("ca.crt"), &ca).map_err(failed)?;
+        std::fs::write(folder.join(ADDRESS_FILE), host).map_err(failed)?;
+        return saved_bias().into_iter().find(|b| Path::new(&b.folder) == folder).ok_or_else(|| failed("the key was not kept"));
+    }
+    Err(failed(last))
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    const CA: &str = "0123456789abcdef0123456789abcdef";
+    const CA_UP: &str = "0123456789ABCDEF0123456789abcdef";
+
+    #[test]
+    fn reads_both_forms() {
+        let t = "ab".repeat(16);
+        let l = read_link(&format!("https://ownbia.com/open#ca={CA_UP}&at=203.0.113.5:8443,%5B2001:db8::1%5D:8443,evil/x&go=/hitl/ab12&t={t}")).unwrap();
+        assert_eq!(l.ca, CA);
+        assert_eq!(l.at, vec!["203.0.113.5:8443", "[2001:db8::1]:8443"]);
+        assert_eq!(l.go, "/hitl/ab12");
+        assert_eq!(l.token, t);
+        let l = read_link(&format!("biadeploy://open?ca={CA}&go=/dl/a%20b&t=short")).unwrap();
+        assert!(l.at.is_empty() && l.token.is_empty());
+        assert_eq!(l.go, "/dl/a b");
+        assert_eq!(read_link(&format!("https://ownbia.com/open/#ca={CA}")).unwrap().go, "/");
+    }
+
+    #[test]
+    fn refuses_other_hosts_and_junk() {
+        for bad in [
+            format!("https://ownbia.com/open#ca={CA}&go=//evil.example/x"),
+            format!("https://ownbia.com/open#ca={CA}&go=https://evil.example/"),
+            format!("https://ownbia.com/open#ca={CA}&go=x"),
+            format!("https://ownbia.com/open#ca={CA}&go=/a%0Ab"),
+            "https://ownbia.com/open#ca=0123456789abcdef&go=/".to_string(),
+            format!("https://ownbia.com/open#ca={CA}&go=/%zz"),
+            format!("https://evil.example/open#ca={CA}"),
+            "https://ownbia.com/download".to_string(),
+        ] {
+            assert!(read_link(&bad).is_none(), "{bad}");
+        }
+    }
+
+    /// Against a real bia-mcp-web (tests/manual/applink-e2e.py): BIA_TEST_LINK is a link it made,
+    /// BIA_DEPLOY_HOME an empty folder. The key comes once, opens the link, and only once.
+    #[test]
+    #[ignore]
+    fn fetch_key_from_a_real_bia() {
+        let link = std::env::var("BIA_TEST_LINK").expect("BIA_TEST_LINK");
+        let l = app_link(link.clone()).expect("a link");
+        assert!(l.bia.is_none() && l.can_fetch, "{l:?}");
+        let b = fetch_key(link.clone()).unwrap_or_else(|e| panic!("{e:?}"));
+        println!("KEPT {} {}", b.host, b.folder);
+        let l = app_link(link.clone()).unwrap();
+        assert_eq!(l.bia.map(|x| x.folder), Some(b.folder.clone()), "the link now finds the key");
+        std::fs::remove_dir_all(&b.folder).unwrap();
+        let again = fetch_key(link).unwrap_err();
+        println!("AGAIN {again:?}");
+        assert!(format!("{again:?}").contains("already used"), "single use");
+    }
+
+    #[test]
+    fn port_443_is_the_bare_host() {
+        assert!(same_host("203.0.113.5", "203.0.113.5:443"));
+        assert!(!same_host("203.0.113.5", "203.0.113.5:8443"));
+    }
 }
 
 #[cfg(test)]
