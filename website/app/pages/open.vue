@@ -44,7 +44,7 @@
           </p>
 
           <template v-if="direct.length">
-            <h2 class="h2">On a computer</h2>
+            <h2 class="h2">On a computer or a phone with bia's certificate</h2>
             <p>The same page in a browser that has bia's certificate:</p>
             <ul class="direct">
               <li v-for="u in direct" :key="u"><a :href="u" rel="noopener">{{ u }}</a></li>

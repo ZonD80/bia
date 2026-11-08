@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.4
+
+### Changes
+- The reminder about unanswered messages now ends each chat with the exact say calls to post a status or to answer and close the messages, so bia links the reminder to the reply more reliably.
+
+### For bia
+- Nothing to do. On an unanswered: notice, copy its → still working or → done call for that chat and fill in the message.
+
 ## 2.1.3
 
 ### Changes

@@ -326,32 +326,57 @@ pub fn ago(secs: u64) -> String {
 /// Body of the `unanswered:` system notice.
 pub fn notice(due: &Due, jobs: &str, now: u64) -> String {
     let mut s = String::from("unanswered:\n");
+    // One block per chat (channel + identity), in order of its oldest message,
+    // ending with the exact call that closes it: models did not link the
+    // listed ids to say(answered=…) on their own.
+    let mut chats: Vec<(&str, &str)> = Vec::new();
     for e in &due.nudge {
-        let last = due
-            .last_reply
+        if !chats.contains(&(e.channel.as_str(), e.identity.as_str())) {
+            chats.push((e.channel.as_str(), e.identity.as_str()));
+        }
+    }
+    for (channel, identity) in chats {
+        let mine: Vec<&Entry> = due
+            .nudge
             .iter()
-            .find(|(ch, _)| *ch == e.channel)
-            .map(|(_, t)| *t)
-            .unwrap_or(0);
-        let status = if last == 0 || last < e.received {
-            "no reply yet".to_string()
-        } else {
-            format!("last status {} ago", ago(now.saturating_sub(last)))
-        };
+            .filter(|e| e.channel == channel && e.identity == identity)
+            .collect();
+        for e in &mine {
+            notice_line(&mut s, due, e, now);
+        }
+        let ids: Vec<String> = mine.iter().map(|e| format!("{:?}", e.id)).collect();
         s.push_str(&format!(
-            "  channel={} id={} from {}, open {}, {status}\n",
-            e.channel,
-            e.id,
-            e.identity,
-            ago(now.saturating_sub(e.received))
+            "  → still working: say(identity={identity:?}, channel={channel:?}, message=\"<short status>\")\n  → done: say(identity={identity:?}, channel={channel:?}, message=\"<answer>\", answered=[{}])\n",
+            ids.join(", ")
         ));
     }
     s.push_str(&format!(
         "running jobs: {}\n",
         if jobs.is_empty() { "none" } else { jobs }
     ));
-    s.push_str("Use each channel exactly as listed. Not answered yet: reply with say. Still working: post a short status. Already answered and done: close it with say(channel, answered=[id]) and no message, which sends nothing. Do not repeat an answer.");
+    s.push_str("Use each channel exactly as listed. Task still running: send the → still working call (it keeps the messages open). Task done: send the → done call. Already answered and done: the → done call without message closes them and sends nothing. Do not repeat an answer.");
     s
+}
+
+fn notice_line(s: &mut String, due: &Due, e: &Entry, now: u64) {
+    let last = due
+        .last_reply
+        .iter()
+        .find(|(ch, _)| *ch == e.channel)
+        .map(|(_, t)| *t)
+        .unwrap_or(0);
+    let status = if last == 0 || last < e.received {
+        "no reply yet".to_string()
+    } else {
+        format!("last status {} ago", ago(now.saturating_sub(last)))
+    };
+    s.push_str(&format!(
+        "  channel={} id={} from {}, open {}, {status}\n",
+        e.channel,
+        e.id,
+        e.identity,
+        ago(now.saturating_sub(e.received))
+    ));
 }
 
 #[cfg(test)]
@@ -469,6 +494,14 @@ mod tests {
         assert!(n.starts_with("unanswered:\n"));
         assert!(n.contains("channel=telegram:1 id=b from alice, open 17s, no reply yet"));
         assert!(n.contains("running jobs: job:7 bash 10s"));
+        // web's two messages are grouped under one close call, before telegram's
+        assert!(n.contains(
+            "  → still working: say(identity=\"root\", channel=\"web\", message=\"<short status>\")\n  → done: say(identity=\"root\", channel=\"web\", message=\"<answer>\", answered=[\"a\", \"c\"])\n"
+        ));
+        assert!(n.contains(
+            "  → done: say(identity=\"alice\", channel=\"telegram:1\", message=\"<answer>\", answered=[\"b\"])\n"
+        ));
+        assert!(n.find("channel=web id=c").unwrap() < n.find("channel=telegram:1 id=b").unwrap());
     }
 
     #[test]
