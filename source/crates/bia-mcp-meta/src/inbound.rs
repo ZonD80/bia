@@ -317,6 +317,15 @@ fn deliver(ev: &Value, live: bool) {
             let from = if b(r, "me") { "you".to_string() } else { label(s(r, "sender"), s(r, "sender_name")) };
             parts.push(bia_mcp::share::reply_text(s(r, "id"), &from, s(r, "text"), ""));
         }
+        // a forward: what the sender wrote with it (MAX), then who wrote the text first
+        if let Some(f) = ev.get("forward").filter(|f| f.is_object()) {
+            let comment = s(&ev, "comment").trim().to_string();
+            if !comment.is_empty() {
+                parts.push(comment);
+            }
+            let from = if b(f, "me") { "you".to_string() } else { s(f, "from").to_string() };
+            parts.push(bia_mcp::share::forward_text(&from, i(f, "ts"), b(f, "many")));
+        }
         let text = s(&ev, "text").trim().to_string();
         if !text.is_empty() {
             parts.push(text);

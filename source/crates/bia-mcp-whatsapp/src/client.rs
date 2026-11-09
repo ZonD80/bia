@@ -313,6 +313,22 @@ fn context_info(base: &wa::Message) -> Option<&wa::ContextInfo> {
     )
 }
 
+/// `[forwarded …]` for a forwarded message. WhatsApp does not say who wrote it first,
+/// except for channel (newsletter) posts; a high forwarding score is "forwarded many times".
+fn forward_note(base: &wa::Message) -> Option<String> {
+    let ctx = context_info(base)?;
+    let news = ctx.forwarded_newsletter_message_info.as_option();
+    if !ctx.is_forwarded.unwrap_or(false) && news.is_none() {
+        return None;
+    }
+    let from = news
+        .and_then(|n| n.newsletter_name.as_deref())
+        .filter(|n| !n.trim().is_empty())
+        .map(|n| format!("channel \"{}\"", n.trim()))
+        .unwrap_or_default();
+    Some(bia_mcp::share::forward_text(&from, 0, ctx.forwarding_score.unwrap_or(0) >= 5))
+}
+
 /// Live locations per chat (`files/state/whatsapp-live.json`).
 fn live() -> &'static bia_mcp::share::LiveTracker {
     static T: OnceLock<bia_mcp::share::LiveTracker> = OnceLock::new();
@@ -388,6 +404,14 @@ fn hist_text(text: &str, kind: Option<&str>) -> String {
     match kind {
         Some(k) => format!("[{k}] {text}").trim().to_string(),
         None => text.to_string(),
+    }
+}
+
+/// History text of a message, after its `[forwarded …]` line when it is a forward.
+fn with_forward(base: &wa::Message, text: String) -> String {
+    match forward_note(base) {
+        Some(f) => format!("{f} {text}").trim().to_string(),
+        None => text,
     }
 }
 
@@ -784,7 +808,7 @@ fn parse_history(h: &LazyHistorySync) -> Vec<ParsedConv> {
                 me,
                 from,
                 from_jid,
-                text: hist_text(&text, kind),
+                text: with_forward(base, hist_text(&text, kind)),
             });
         }
         lines.sort_by_key(|l| l.ts);
@@ -2546,7 +2570,7 @@ impl Wa {
                 me: from_me,
                 from: if from_me { "me".into() } else { label.clone() },
                 from_jid: sender.to_string(),
-                text: hist_text(&text, kind),
+                text: with_forward(base, hist_text(&text, kind)),
             },
         );
         // Sent from the phone or another linked device: cache only.
@@ -2595,6 +2619,9 @@ impl Wa {
             }
         }
         let mut deliver = text.clone();
+        if let Some(f) = forward_note(base) {
+            deliver = if deliver.is_empty() { f } else { format!("{f}\n{deliver}") };
+        }
         if let Some(r) = self.reply_note(&client, &key, base).await {
             deliver = if deliver.is_empty() { r } else { format!("{r}\n{deliver}") };
         }

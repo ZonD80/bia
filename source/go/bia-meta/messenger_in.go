@@ -333,6 +333,9 @@ func (m *messenger) classicMessage(ctx context.Context, tt *tableThreads, wm *ta
 	if len(atts) > 0 {
 		ev["attachments"] = atts
 	}
+	if wm.IsForwarded {
+		ev["forward"] = map[string]any{"many": wm.ForwardScore >= 5}
+	}
 	if wm.ReplySourceId != "" {
 		reply := map[string]any{"id": wm.ReplySourceId, "text": orStr(wm.ReplyMessageText, wm.ReplySnippet)}
 		if wm.ReplyToUserId != 0 {
@@ -575,6 +578,9 @@ func (m *messenger) emitMessage(ctx context.Context, evt *events.FBMessage, base
 	ev["text"] = text
 	if len(atts) > 0 {
 		ev["attachments"] = atts
+	}
+	if md := evt.FBApplication.GetMetadata(); md.GetIsForwarded() {
+		ev["forward"] = map[string]any{"many": md.GetForwardingScore() >= 5}
 	}
 	if qm := evt.FBApplication.GetMetadata().GetQuotedMessage(); qm != nil && qm.GetStanzaID() != "" {
 		reply := map[string]any{"id": qm.GetStanzaID()}

@@ -419,6 +419,31 @@ fn civil(days: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
+/// The line put before a forwarded message, so the model knows the text is someone
+/// else's, passed on by the sender: `[forwarded from Mikhail (@mikh), sent
+/// 2026-11-08T10:00:00Z]`. `from` is the original author ("you" for bia's own; empty
+/// when the platform hides it, as WhatsApp and Messenger do), `at` when they wrote it
+/// (unix seconds, 0 = unknown), `many` the platform's "forwarded many times" flag.
+pub fn forward_text(from: &str, at: i64, many: bool) -> String {
+    let mut s = String::from("[forwarded");
+    if many {
+        s.push_str(" many times");
+    }
+    let from = from.split_whitespace().collect::<Vec<_>>().join(" ");
+    if from.is_empty() {
+        s.push_str(" (original author not shown)");
+    } else {
+        s.push_str(" from ");
+        s.push_str(&from);
+    }
+    if at > 0 {
+        s.push_str(", sent ");
+        s.push_str(&rfc3339(at));
+    }
+    s.push(']');
+    s
+}
+
 /// The line put before a message that answers another one, as web chats do:
 /// `[reply to 4405 from you: "Starting the update…"]`. `from` is who wrote the quoted
 /// message ("you" for bia's own), `text` its text (or what it carried), `quote` the part
@@ -529,6 +554,14 @@ impl TextMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn forwards_name_the_author() {
+        assert_eq!(forward_text("Mikhail  (@mikh)", 1_762_596_000, false), "[forwarded from Mikhail (@mikh), sent 2025-11-08T10:00:00Z]");
+        assert_eq!(forward_text("you", 0, false), "[forwarded from you]");
+        assert_eq!(forward_text("", 0, false), "[forwarded (original author not shown)]");
+        assert_eq!(forward_text("", 0, true), "[forwarded many times (original author not shown)]");
+    }
 
     #[test]
     fn replies_name_the_quoted_message() {

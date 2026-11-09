@@ -658,6 +658,9 @@ impl Tg {
             };
             text = if text.is_empty() { note } else { format!("{text}\n{note}") };
         }
+        if let Some(f) = forward_note(client, &msg.raw).await {
+            text = format!("{f}\n{text}");
+        }
         if let Some(r) = reply_note(client, &msg, chat_id).await {
             text = format!("{r}\n{text}");
         }
@@ -1455,6 +1458,10 @@ impl Tg {
                     (None, None) => "(media)".into(),
                 }
                 .replace('\n', " ");
+                let body = match forward_note(&client, &m.raw).await {
+                    Some(f) => format!("{f} {body}"),
+                    None => body,
+                };
                 let who = if m.outgoing() {
                     "me".into()
                 } else {
@@ -2083,6 +2090,70 @@ async fn reply_note(client: &Client, msg: &ferogram::update::IncomingMessage, ch
         _ => (String::new(), texts().get(&format!("{chat_id}:{id}")).map(|(_, t)| t).unwrap_or_default()),
     };
     Some(bia_mcp::share::reply_text(&id.to_string(), &from, &text, &quote))
+}
+
+/// `[forwarded from <who>, sent <time>]` for a forwarded message: the original author
+/// (a user, a channel or group and its signature, or the name a hidden account shows),
+/// and when they wrote it.
+async fn forward_note(client: &Client, raw: &tl::enums::Message) -> Option<String> {
+    let tl::enums::Message::Message(m) = raw else { return None };
+    let tl::enums::MessageFwdHeader::MessageFwdHeader(h) = m.fwd_from.as_ref()?;
+    let mut from = match &h.from_id {
+        Some(p) => fwd_peer_label(client, p).await,
+        None => h.from_name.clone().unwrap_or_default(),
+    };
+    if let Some(a) = h.post_author.as_deref().filter(|a| !a.trim().is_empty()) {
+        from = if from.is_empty() { a.to_string() } else { format!("{from} ({a})") };
+    }
+    Some(bia_mcp::share::forward_text(&from, h.date as i64, false))
+}
+
+/// Who a forward came from: "you" for bia's own, a user's name, a channel or group title.
+async fn fwd_peer_label(client: &Client, peer: &tl::enums::Peer) -> String {
+    match peer {
+        tl::enums::Peer::User(u) => {
+            if my_user_id(client).await == Some(u.user_id) {
+                "you".into()
+            } else {
+                user_label(client, u.user_id).await
+            }
+        }
+        tl::enums::Peer::Channel(c) => {
+            let access_hash = match client.resolve_to_input_peer(peer).await {
+                Ok(tl::enums::InputPeer::Channel(ch)) => ch.access_hash,
+                _ => 0,
+            };
+            let req = tl::functions::channels::GetChannels {
+                id: vec![tl::enums::InputChannel::InputChannel(tl::types::InputChannel { channel_id: c.channel_id, access_hash })],
+            };
+            let chats = match client.invoke(&req).await {
+                Ok(tl::enums::messages::Chats::Chats(x)) => x.chats,
+                Ok(tl::enums::messages::Chats::Slice(x)) => x.chats,
+                Err(_) => vec![],
+            };
+            chats
+                .into_iter()
+                .find_map(|ch| match ch {
+                    tl::enums::Chat::Channel(x) if x.id == c.channel_id => Some(match x.username.as_deref().filter(|u| !u.is_empty()) {
+                        Some(un) => format!("channel \"{}\" (@{un})", x.title),
+                        None => format!("channel \"{}\"", x.title),
+                    }),
+                    _ => None,
+                })
+                .unwrap_or_else(|| format!("channel:{}", c.channel_id))
+        }
+        tl::enums::Peer::Chat(c) => format!("chat:{}", c.chat_id),
+    }
+}
+
+/// This account's user id (cached after the first lookup).
+async fn my_user_id(client: &Client) -> Option<i64> {
+    static ME: OnceLock<i64> = OnceLock::new();
+    if let Some(id) = ME.get() {
+        return Some(*id);
+    }
+    let id = client.get_me().await.ok()?.id;
+    Some(*ME.get_or_init(|| id))
 }
 
 /// Inbound messages to the model, in order per chat (see [`bia_mcp::lanes`]).

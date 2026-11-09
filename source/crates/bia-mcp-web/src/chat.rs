@@ -733,11 +733,8 @@ fn agent_text(u: &User, m: &Msg) -> String {
         }
     }
     if let Some(f) = &m.fwd {
-        parts.push(format!(
-            "[forwarded from {} {}]",
-            f.from,
-            crate::bus::rfc3339_unix(f.ts / 1000)
-        ));
+        let from = if f.from == BIA { "you" } else { f.from.as_str() };
+        parts.push(bia_mcp::share::forward_text(from, (f.ts / 1000) as i64, false));
     }
     if !m.text.trim().is_empty() {
         parts.push(m.text.clone());

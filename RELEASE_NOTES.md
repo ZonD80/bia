@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.5
+
+### Changes
+- Forwarded messages are marked on Telegram, WhatsApp, Messenger, Instagram, MAX and the web chat, so bia no longer takes someone else's forwarded words for the sender's. Telegram and MAX name who wrote the message first and when; WhatsApp, Messenger and Instagram hide the author, so bia only knows it was forwarded (and on WhatsApp, when it was forwarded many times).
+- bia's built-in tool guides are shorter, leaving more room in its context for the conversation.
+
+### For bia
+- Nothing to do. A message starting with [forwarded from <who>, sent <time>] or [forwarded (original author not shown)] was written by someone else; the sender only passed it on. If you noted plans or words from forwards as the sender's, correct them.
+
 ## 2.1.4
 
 ### Changes

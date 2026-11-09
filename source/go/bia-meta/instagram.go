@@ -748,6 +748,9 @@ func (ig *instagram) message(ctx context.Context, chat string, group bool, title
 	if len(atts) > 0 {
 		ev["attachments"] = atts
 	}
+	if msg.IGDIsForwarded {
+		ev["forward"] = map[string]any{}
+	}
 	if msg.RepliedToMessageID != "" {
 		reply := map[string]any{"id": msg.RepliedToMessageID}
 		if rm := msg.RepliedToMessage; rm != nil {

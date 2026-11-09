@@ -711,11 +711,15 @@ class Bridge:
                 row["reply"] = {"id": str(quoted.id), "sender": str(quoted.sender or ""), "sender_name": await self.name_of(quoted.sender),
                                 "me": bool(quoted.sender) and quoted.sender == self.me_id(), "text": quoted.text or ""}
             else:
+                # a forward: "comment" is what the sender wrote with it, "text" the forwarded text
                 origin = getattr(link, "chat_name", None) or await self.name_of(quoted.sender)
                 sub, sub_notes, _ = self.attachment_rows(quoted, link.chat_id or chat_id)
-                row["notes"] = notes + sub_notes + [f"[forwarded from {origin or 'someone'}]"]
+                row["notes"] = notes + sub_notes
                 row["attachments"] = attachments + sub
-                row["text"] = (text + "\n" if text else "") + (quoted.text or "")
+                row["comment"] = text
+                row["text"] = quoted.text or ""
+                row["forward"] = {"from": origin or "", "me": bool(quoted.sender) and quoted.sender == self.me_id(),
+                                  "ts": secs(quoted.time) if getattr(quoted, "time", None) else 0}
         self.texts.put(row["id"], (row["text"], row["ts"]))
         return row
 
