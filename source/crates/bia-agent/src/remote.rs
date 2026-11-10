@@ -212,6 +212,11 @@ pub fn fmm_ctx(n: u32) -> u32 {
 /// Flasher / host-editable provisioning file on the FAT32 ESP.
 pub const ESP_FMM_REL: &str = "EFI/bia/fmm.json";
 
+/// fmm.vendored.json beside fmm.json: the first FMM settings, the last-resort brain.
+pub fn vendored_path(state_path: &Path) -> std::path::PathBuf {
+    state_path.with_file_name("fmm.vendored.json")
+}
+
 /// QEMU fw_cfg item (`-fw_cfg name=opt/bia/fmm.json,file=...` in tools/run-qemu.sh).
 /// User items must start with `opt/`. The flash image is not modified.
 pub const QEMU_FMM_ITEM: &str = "opt/bia/fmm.json";
@@ -260,6 +265,31 @@ impl FmmConfig {
 
     /// If `state_path` is missing and the ESP has `EFI/bia/fmm.json`, copy it into state and
     /// delete the ESP file so a later local `/fmm` change is not overwritten on reboot.
+    /// The first FMM settings this machine ever had, kept unchanged as fmm.vendored.json next
+    /// to `state_path`: the last resort when the current and previous brains both fail.
+    /// Written once, the first time fmm.json is seen (the ESP/deploy seed, or the first
+    /// fmm_configure); never overwritten afterwards.
+    pub fn keep_vendored(state_path: &Path) {
+        let v = vendored_path(state_path);
+        if v.exists() {
+            return;
+        }
+        let Ok(b) = std::fs::read(state_path) else { return };
+        if serde_json::from_slice::<FmmConfig>(&b).is_err() {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::write(&v, &b).is_ok() {
+            let _ = std::fs::set_permissions(&v, std::fs::Permissions::from_mode(0o600));
+            // same owner as fmm.json (root-written files miss bia-run backups)
+            if let Ok(m) = std::fs::metadata(state_path) {
+                use std::os::unix::fs::MetadataExt;
+                let _ = std::os::unix::fs::chown(&v, Some(m.uid()), Some(m.gid()));
+            }
+            unsafe { libc::sync() };
+        }
+    }
+
     pub fn seed_from_esp(boot: &Path, state_path: &Path) -> Option<String> {
         Self::seed_from(
             &boot.join(ESP_FMM_REL),
@@ -411,6 +441,27 @@ mod seed_tests {
         let loaded = FmmConfig::load(&state).unwrap();
         assert_eq!(loaded.api_key, "sk-test-abcdefgh");
         assert!(FmmConfig::seed_from_esp(&boot, &state).is_none());
+        // the seeded settings become the vendored copy, kept unchanged by later switches
+        let vendored = vendored_path(&state);
+        FmmConfig::keep_vendored(&state);
+        let first = fs::read(&state).unwrap();
+        assert_eq!(fs::read(&vendored).unwrap(), first);
+        fs::write(&state, br#"{"provider":"anthropic","api_key":"sk-ant-2","model":"m","enabled":true}"#).unwrap();
+        FmmConfig::keep_vendored(&state);
+        assert_eq!(fs::read(&vendored).unwrap(), first);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn no_vendored_copy_without_valid_settings() {
+        let tmp = std::env::temp_dir().join(format!("bia-fmm-vend-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        let state = tmp.join("fmm.json");
+        FmmConfig::keep_vendored(&state);
+        fs::write(&state, b"not json").unwrap();
+        FmmConfig::keep_vendored(&state);
+        assert!(!vendored_path(&state).exists());
         let _ = fs::remove_dir_all(&tmp);
     }
 

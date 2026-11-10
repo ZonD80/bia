@@ -227,6 +227,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     if let Some(msg) = remote::FmmConfig::seed_from_esp(&paths.boot, &fmm_path) {
         boot.note(&msg);
     }
+    remote::FmmConfig::keep_vendored(&fmm_path);
     for msg in seed_language(&paths.boot, &paths.files) {
         boot.note(&msg);
     }

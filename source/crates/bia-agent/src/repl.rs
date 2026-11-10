@@ -65,6 +65,26 @@ fn is_fmm_tool(name: &str) -> bool {
     )
 }
 
+/// Pause before the failing cloud brain gets its one more try (repl `fall_back`).
+const FALLBACK_PAUSE_SECS: u64 = 10;
+
+/// System notice after the cloud brain failed and earlier settings (`kind`: previous or
+/// original (vendored)) took over; `tried` are earlier candidates that failed too.
+fn fallback_notice(kind: &str, main: &str, err: &str, tried: &[String], now: &str) -> String {
+    let flat = |s: &str| trunc_bytes(&s.split_whitespace().collect::<Vec<_>>().join(" "), 600).to_string();
+    let also = if tried.is_empty() {
+        String::new()
+    } else {
+        format!(" Also failed: {}.", tried.iter().map(|t| flat(t)).collect::<Vec<_>>().join("; "))
+    };
+    format!(
+        "Brain switched to the {kind} configuration: the main brain {main} stopped working with error: {}.{also} Now answering: {now}. \
+Tell root right away on the channel where root last wrote to you (web if unsure), in their language: which brain failed, the error in plain words, and which brain answers now. \
+fmm_back (mcp/system) switches back to {main} once it works again (a new key, credit or plan); fmm_configure sets another one. Then carry on with the conversation.",
+        flat(err)
+    )
+}
+
 /// Argument names whose values are never echoed or written to the conversation.
 fn secret_arg(name: &str) -> bool {
     let n = name.to_lowercase();
@@ -429,6 +449,84 @@ impl Repl {
         self.reload_fmm(true)
     }
 
+    /// The cloud brain failed a reply (`err`). Candidates, in order: the settings from before
+    /// the last switch (fmm.prev.json), then the first settings this machine ever had
+    /// (fmm.vendored.json, the last resort); ones equal to the current settings are skipped.
+    /// With any candidate, the failing brain first gets one more try after a pause (a dropped
+    /// connection, a busy server); then each candidate is loaded and must answer with this
+    /// conversation. On success the failed settings become the previous ones (so fmm_back
+    /// returns to them), the model gets a system notice naming the error and is told to tell
+    /// root, and the caller runs the turn again. When every candidate fails, the main
+    /// settings stay as they were.
+    fn fall_back(&mut self, err: &str) -> bool {
+        let Some(main) = self.remote.as_ref().map(|r| r.label()) else {
+            return false;
+        };
+        let Ok(cur) = std::fs::read(&self.fmm_path) else {
+            return false;
+        };
+        let mut candidates: Vec<(&str, Vec<u8>)> = vec![];
+        for (kind, path) in [
+            ("previous", self.fmm_prev_path()),
+            ("original (vendored)", crate::remote::vendored_path(&self.fmm_path)),
+        ] {
+            if let Ok(b) = std::fs::read(&path) {
+                if b != cur && !candidates.iter().any(|(_, c)| *c == b) {
+                    candidates.push((kind, b));
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return false;
+        }
+        self.con.writeln(&self.con.c(GRAY, &format!("  FMM: {main} failed; one more try in {FALLBACK_PAUSE_SECS}s before switching brains")));
+        std::thread::sleep(std::time::Duration::from_secs(FALLBACK_PAUSE_SECS));
+        if self.probe_remote().is_ok() {
+            self.con.writeln(&self.con.c(GRAY, &format!("  FMM: {main} answers again")));
+            return true;
+        }
+        let mut tried = vec![];
+        for (kind, b) in candidates {
+            let restored = self.restore_fmm(&b);
+            let local_intended = !matches!(FmmConfig::load(&self.fmm_path), Some(c) if c.enabled);
+            let works = match &self.remote {
+                Some(_) => match self.probe_remote() {
+                    Ok(()) => true,
+                    Err(e) => {
+                        tried.push(format!("{kind}: fails with this conversation ({e:#})"));
+                        false
+                    }
+                },
+                None if local_intended && self.llm.is_some() => true,
+                None => {
+                    tried.push(format!("{kind}: {restored}"));
+                    false
+                }
+            };
+            if !works {
+                self.con.writeln(&self.con.c(GRAY, &format!("  FMM: {}", tried.last().map(String::as_str).unwrap_or(kind))));
+                continue;
+            }
+            self.save_prev_fmm(&cur);
+            self.fmm_probation = None;
+            let now = match &self.remote {
+                Some(r) => format!("cloud brain {}", r.label()),
+                None => format!(
+                    "local model {}",
+                    self.llm.as_ref().map(|l| l.info.name.clone()).unwrap_or_default()
+                ),
+            };
+            self.con.writeln(&self.con.c(GRAY, &format!("  FMM: {main} failed ({err}); switched to the {kind} brain: {now}")));
+            self.system_message(&fallback_notice(kind, &main, err, &tried, &now));
+            return true;
+        }
+        let _ = std::fs::write(&self.fmm_path, &cur);
+        unsafe { libc::sync() };
+        let back = self.reload_fmm(false);
+        self.con.writeln(&self.con.c(GRAY, &format!("  FMM: no earlier settings work either; kept {main} ({back})")));
+        false
+    }
+
     /// Send the new remote what the next turn would send (the conversation's tail that fits
     /// half its window, from a user message on) plus a check message.
     fn probe_remote(&self) -> anyhow::Result<()> {
@@ -458,6 +556,7 @@ impl Repl {
     /// Read files/state/fmm.json and switch brains accordingly. Returns a status line.
     pub fn reload_fmm(&mut self, test: bool) -> String {
         let was_remote = self.remote.is_some();
+        FmmConfig::keep_vendored(&self.fmm_path);
         let cfg = FmmConfig::load(&self.fmm_path);
         let line = match cfg {
             None => {
@@ -2701,6 +2800,8 @@ now: {now}", done.join("\n")), failed)
         let mut status_pending = false;
         // replies cut for repeating themselves (runaway.rs) this turn
         let mut loops = 0u32;
+        // the cloud brain failed and the previous settings took over (once per turn)
+        let mut fell_back = false;
         loop {
             if self.pending.iter().any(|ib| console_command(ib).is_some()) {
                 break;
@@ -2734,6 +2835,10 @@ now: {now}", done.join("\n")), failed)
                             if self.remote.is_some() || self.llm.is_some() {
                                 continue;
                             }
+                        } else if !fell_back && self.fall_back(&format!("{e:#}")) {
+                            // the brain that worked before answers now; this turn runs again on it
+                            fell_back = true;
+                            continue;
                         }
                         self.save_state(false);
                         self.set_state("idle");
@@ -3449,6 +3554,12 @@ mod channel_tests {
             masked_args(&serde_json::json!({"provider": "openrouter", "api_key": "sk-or-secret"}));
         assert!(m.contains("openrouter") && !m.contains("secret"), "{m}");
         assert!(is_fmm_tool("system_fmm_back") && !is_fmm_tool("system_share_file"));
+        let n = fallback_notice("previous", "anthropic claude-opus-5-5", "HTTP 401\n  invalid x-api-key", &[], "cloud brain openrouter z-ai/glm-5");
+        assert!(n.starts_with("Brain switched to the previous configuration: the main brain anthropic claude-opus-5-5 stopped working with error: HTTP 401 invalid x-api-key. Now answering"), "{n}");
+        assert!(n.contains("Now answering: cloud brain openrouter z-ai/glm-5.") && n.contains("Tell root") && n.contains("fmm_back"), "{n}");
+        let n = fallback_notice("original (vendored)", "a", "e", &["previous: fails\n with this conversation (429)".into()], "local model q");
+        assert!(n.contains("to the original (vendored) configuration") && n.contains("Also failed: previous: fails with this conversation (429)."), "{n}");
+        assert!(fallback_notice("previous", "a", &"x".repeat(5000), &[], "b").len() < 1200);
     }
 
     #[test]

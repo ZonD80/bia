@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.6
+
+### Changes
+- When the cloud brain stops working (a revoked key, no credit, the provider down), bia tries it once more, then switches on its own to the brain it used before; if that fails too, to the very first brain set up on this computer. It then tells the owner which brain failed, the error, and which one answers now. Earlier, a failing cloud brain left bia silent until someone fixed it.
+- The first cloud brain settings this computer ever had are kept unchanged as the last resort (files/state/fmm.vendored.json). On a computer updated to this version, that is the brain set up at the time of the update.
+
+### For bia
+- Nothing to do now. After a "Brain switched to the … configuration" notice, tell root which brain failed and why, on the channel root last wrote on; once root fixes it, fmm_back switches back to that brain.
+
 ## 2.1.5
 
 ### Changes
