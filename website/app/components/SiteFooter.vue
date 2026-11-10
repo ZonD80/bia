@@ -33,6 +33,7 @@
         <NuxtLink to="/faq">FAQ</NuxtLink>
         <NuxtLink to="/download">Get bia</NuxtLink>
         <NuxtLink to="/servers">Servers and VMs</NuxtLink>
+        <NuxtLink to="/cloud">bia cloud — we run it for you</NuxtLink>
         <NuxtLink to="/privacy">Privacy</NuxtLink>
         <a :href="REPO_URL" target="_blank" rel="noopener">Source code on GitHub</a>
       </nav>

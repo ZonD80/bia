@@ -1,6 +1,6 @@
 {
   "name": "chrome",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. Websites that ask for a client certificate: chrome_cert_import, chrome_cert_select, chrome_restart; without a rule a [certificate dialog opened] line arrives on system|chrome: answer it with chrome_choose_certificate(cert=<name>) or cancel=true; a private CA: chrome_cert_trust. A site asking for a passkey (sign-in, confirmation or a new one) waits until answered: a [passkey request] line arrives on system|chrome, answer it with chrome_passkey_answer(request=<id>, answer=\"approve\" or \"deny\"); approve only what bia itself is doing on that site or what root asked for, otherwise ask root first. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",

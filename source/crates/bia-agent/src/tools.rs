@@ -3323,11 +3323,13 @@ impl Tools {
                 self.pending_reflect.set(true);
                 Ok("ok: reflecting the current live window after this turn".into())
             }
-            "say" => unreachable!("handled in call()"),
+            // run as messages / jobs by the agent loop; a wrapped call that slips through gets an
+            // error, never a panic (a discover(call="bash") once stopped a running bia here)
+            "say" => bail!("say is handled by the agent loop; call say(...) directly"),
             "react" | "delete_messages" | "pin_message" | "close_poll" | "chat_history" => {
                 self.chat_action(name, args)
             }
-            "bash" => unreachable!("handled as a job"),
+            "bash" => bail!("bash runs as a job; call bash(...) directly and its result arrives as system|job"),
             "channels" => {
                 let rows: Vec<String> = self
                     .buses
@@ -4349,6 +4351,21 @@ done
         assert_eq!(args, json!({"note": "week done"}));
         let (name, _) = Tools::expand_call("discover", &json!({"path": "memory", "arguments": {"x": 1}}));
         assert_eq!(name, "discover");
+    }
+
+    #[test]
+    fn a_wrapped_bash_never_panics() {
+        // a discover(call="bash") that reached Tools::call once stopped a running bia
+        let dir = std::env::temp_dir().join(format!("bia-wrapped-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        let wrapped = json!({"arguments": {"command": "echo wait", "timeout_secs": 5}, "call": "bash"});
+        let (out, err) = t.call("discover", &wrapped, &mut |_| {});
+        assert!(err && out.contains("runs as a job"), "{out}");
+        let (out, err) = t.call("bash", &json!({"command": "true"}), &mut |_| {});
+        assert!(err && out.contains("runs as a job"), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

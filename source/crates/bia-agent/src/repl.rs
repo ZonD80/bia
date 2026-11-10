@@ -1943,7 +1943,12 @@ now: {now}", done.join("\n")), failed)
         for c in calls {
             let (raw_name, raw_args) = crate::tools::Tools::expand_call(&c.name, &c.args);
             let (name, args, note) = match self.tools.guide_call(&raw_name, &raw_args) {
-                Ok(v) => v,
+                // unwrap once more after guide_call aligned the arguments, the way Tools::call
+                // will: a discover(call="bash") must reach the job path below, not the tools
+                Ok((n, a, note)) => {
+                    let (n, a) = crate::tools::Tools::expand_call(&n, &a);
+                    (n, a, note)
+                }
                 Err(e) => {
                     let result = format!("error: {e}");
                     self.con.writeln(

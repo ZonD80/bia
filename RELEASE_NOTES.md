@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.1.7
+
+### Changes
+- When the agent crashes, it now restarts by itself within seconds instead of waiting at the recovery prompt. On the next start bia tells the owner what crashed (the error, where, and bia's part of the stack trace); the full trace is kept in files/state/crash.log. After three crashes within ten minutes it stops at the recovery prompt as before, so a broken setup doesn't restart forever.
+- Fixed a crash when the model asked for a shell command through discover (discover(call="bash", …)): it now always runs as a shell job. A call that still slips through returns an error to the model instead of stopping the agent.
+
+### For bia
+- Nothing to do now. After a "the agent crashed … and restarted by itself" notice, tell root on the channel root last wrote on what crashed (the panic line), then go on with your task; if a tool call caused it, do it another way. Call tools by their own names, for example bash(...), not through discover.
+
 ## 2.1.6
 
 ### Changes

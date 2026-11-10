@@ -143,7 +143,7 @@
     <section id="other-ways" class="section section--tint other-ways">
       <div class="container">
         <h2 class="h2">Other ways</h2>
-        <div class="grid grid--3">
+        <div class="grid grid--2x2">
           <div class="card">
             <h3>Try it on your Mac</h3>
             <p>No stick needed: <a href="https://github.com/ZonD80/clawhome" target="_blank" rel="noopener">ClawHome</a> runs bia in a virtual machine on an Apple Silicon Mac (macOS 13 or later). Create a Linux home, sign in to a cloud AI or paste a key, and ClawHome fetches the latest bia for you.</p>
@@ -153,6 +153,11 @@
             <h3>Servers and virtual machines</h3>
             <p>A rented server or any machine running Linux becomes bia with one command over ssh: <code>curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash</code>. It can start as a new bia, or wait for yours to fly there. Your bia can even set a server up by itself. Empty machines start from the installer image.</p>
             <p><NuxtLink to="/servers">Read the server guide</NuxtLink></p>
+          </div>
+          <div class="card">
+            <h3>Let us run it: bia cloud</h3>
+            <p>No stick, no server of your own: bia cloud gives a bia its own server, kept running and backed up, and you pay as you go. Only you hold its key; take it home any time.</p>
+            <p><NuxtLink to="/cloud">About bia cloud</NuxtLink></p>
           </div>
           <div class="card">
             <h3>For developers</h3>
@@ -223,4 +228,5 @@ function buttonText(host: Host): string {
 .kinds li + li { margin-top: 0.4rem; }
 .other-ways { scroll-margin-top: 4.5rem; }
 .other-ways code { overflow-wrap: anywhere; font-size: 0.85em; }
+.grid--2x2 { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
 </style>

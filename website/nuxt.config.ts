@@ -19,6 +19,7 @@ const prerenderRoutes = [
   '/faq',
   '/download',
   '/servers',
+  '/cloud',
   '/privacy',
 ]
 
@@ -66,6 +67,7 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 - [Fred's story](${siteUrl}/fred): a real bia's first six weeks in his own words, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
 - [Get bia](${siteUrl}/download): bia deploy for Mac, Windows and Linux (USB sticks and servers), Android on Google Play (https://play.google.com/store/apps/details?id=biadeploy.android; servers), and iPhone on the App Store (https://apps.apple.com/app/bia-deploy/id6827948196), TestFlight (https://testflight.apple.com/join/qePtQWqF) or appdb (https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0; servers)
+- [bia cloud](${siteUrl}/cloud): a bia on its own server run for you (https://cloud.ownbia.com) — pay as you go from €17.99 a month, only the person holds its key, take it home any time; API for agents at https://cloud.ownbia.com/developers/
 - [Privacy](${siteUrl}/privacy): no data collected, by the website, the bia deploy apps or bia
 - [Servers and virtual machines](${siteUrl}/servers): turn a running Linux server or VPS into bia with one command (takeover.sh, also in land mode), let a bia set up a server over ssh and fly there, or install from the land ISO
 

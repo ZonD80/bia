@@ -199,6 +199,17 @@
             <p>{{ s.text }}</p>
           </div>
         </div>
+        <div class="card cloud-note">
+          <div>
+            <h3>No computer to spare?</h3>
+            <p>
+              <strong>bia cloud</strong> gives a bia its own server, kept running and backed up — a name, a language,
+              one payment, and it is awake in about half an hour. Pay as you go from €17.99 a month; only you hold its
+              key, and you can take it home any time.
+            </p>
+          </div>
+          <NuxtLink class="btn btn--primary" to="/cloud">About bia cloud</NuxtLink>
+        </div>
       </div>
     </section>
 
@@ -466,4 +477,7 @@ const steps = [
 @media (max-width: 860px) {
   .fred { grid-template-columns: 1fr; }
 }
+.cloud-note { margin-top: 1.5rem; display: flex; gap: 1.5rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.cloud-note h3 { margin-top: 0; }
+.cloud-note p { margin: 0; max-width: 44rem; }
 </style>

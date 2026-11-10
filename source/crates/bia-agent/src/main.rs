@@ -7,6 +7,7 @@ mod buses;
 mod clock;
 mod config;
 mod console;
+mod crash;
 mod cut;
 mod dream;
 mod gguf;
@@ -52,6 +53,7 @@ fn main() {
     bia_pki::install_crypto_provider();
     let system = sys::is_system();
     let con = Console::open(system);
+    crash::install_hook(); // keeps where a panic happened and its stack trace
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(con.clone(), system)));
     let exit = match result {
@@ -67,6 +69,29 @@ fn main() {
                 .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
                 .unwrap_or_default();
             con.writeln(&format!("\n!! panic: {msg}"));
+            if !system {
+                return;
+            }
+            // keep what happened, then let systemd start the agent again; the next start tells
+            // the model (crash::notice). A crash loop stops at the recovery prompt instead.
+            let state = std::path::Path::new("/home/bia/files/state");
+            let (c, full) = crash::take(msg, VERSION, clock::unix(clock::now()));
+            if !c.location.is_empty() {
+                con.writeln(&format!("   at {}", c.location));
+            }
+            for l in c.trace.lines() {
+                con.writeln(&format!("   {l}"));
+            }
+            if crash::record(state, &c, &full) {
+                con.writeln("restarting the agent by itself (the full trace is in files/state/crash.log)");
+                std::thread::sleep(Duration::from_secs(3));
+                return; // the service exits; systemd starts it again
+            }
+            con.writeln(&format!(
+                "the agent crashed {} times within {} minutes: not restarting by itself (files/state/crash.log)",
+                crash::CRASH_LIMIT,
+                crash::CRASH_WINDOW_SECS / 60
+            ));
             recovery(&con, system)
         }
     };
@@ -702,7 +727,17 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         })
     };
     let report = (!talkers.is_empty()).then(|| report_back(&talkers, was_update));
-    let how = if let Some(msg) = migrated {
+    // the previous run crashed and restarted by itself (crash.rs): say what crashed
+    let crashed = crash::take_last(&paths.files.join("state"));
+    let how = if let Some(c) = &crashed {
+        boot.note(&format!("restarted after a crash: {}", c.message));
+        let n = crash::notice(c, clock::unix(clock::now()));
+        if resumed {
+            format!("{n}\nConversation resumed with {nmsg} messages ({n_tools} tools)")
+        } else {
+            format!("{n}\nNew conversation ({n_tools} tools)")
+        }
+    } else if let Some(msg) = migrated {
         if resumed {
             format!(
                 "{msg} (bia {VERSION}, {n_tools} tools); conversation resumed with {nmsg} messages"
@@ -789,6 +824,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
                     }
                 } else if release_notes.is_some() {
                     release::instruction(release_steps).to_string()
+                } else if crashed.is_some() {
+                    String::new() // the crash notice says what to do
                 } else if first_launch {
                     welcome(cfg.web.enabled.then(|| weblink::info_line(&paths.files)), repl.remote.is_some(), &me::Me::load(&paths.files))
                 } else {

@@ -12,6 +12,10 @@
           A rented server, a machine in a rack or a virtual machine can become bia too. It answers on the internet
           day and night, and you reach it from anywhere through its private web app. Pick the way that fits:
         </p>
+        <p class="cloud-hint">
+          Rather not rent and set up a server yourself? <NuxtLink to="/cloud">bia cloud</NuxtLink> does it for you —
+          its own server, kept running and backed up, pay as you go.
+        </p>
         <div class="grid grid--3 ways">
           <a v-for="w in ways" :key="w.id" class="card way" :href="`#${w.id}`">
             <span class="way__tag">{{ w.tag }}</span>
@@ -585,4 +589,5 @@ code { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .flow__item { grid-template-columns: 1fr; }
 }
+.cloud-hint { margin-top: 0.5rem; color: var(--ink-soft); }
 </style>
