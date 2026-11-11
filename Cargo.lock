@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "bia-agent"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "bia-bridge"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "bia-deploy"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "bia-deploy-mobile"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "bia-disk"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "gpt",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "regex",
  "serde",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-carry"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "bia-mcp",
  "libc",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-chrome"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-lang"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "bia-mcp",
  "bia-speech",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-meta"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-screen"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "bia-mcp",
  "bia-ocr",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-secrets"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-system"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-telegram"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-web"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-whatsapp"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "bia-mcp",
@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mkimage"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "bia-disk",
@@ -1005,7 +1005,7 @@ dependencies = [
 
 [[package]]
 name = "bia-ocr"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "libc",
  "ort",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "bia-pki"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "bia-speech"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "libc",
  "serde",

@@ -1,6 +1,7 @@
 //! On-device speech shared by the telegram, whatsapp and lang MCPs.
 //!
-//! sherpa-onnx (dlopen'ed C API) runs everything in-process with models kept loaded:
+//! sherpa-onnx (dlopen'ed C API) runs everything in-process; models stay loaded while
+//! in use and are unloaded after a few idle minutes (`idle`):
 //! Silero VAD, GTCRN noise suppression, Whisper language identification and
 //! transcription, Piper/Kokoro voices. Languages, voices and settings come from the
 //! registry that bia-mcp-lang manages.
@@ -11,6 +12,7 @@ pub mod catalog;
 pub mod contacts;
 pub mod diag;
 pub mod filter;
+pub mod idle;
 pub mod input;
 pub mod langs;
 pub mod learn;

@@ -1,5 +1,5 @@
-//! Loaded sherpa models, kept for the life of the process (one copy each, behind a
-//! mutex): Whisper recognizers (per model id), Whisper language identification,
+//! Loaded sherpa models, kept while in use and unloaded after a while without use
+//! (see `idle`; one copy each, behind a mutex): Whisper recognizers (per model id), Whisper language identification,
 //! Silero VAD instances (per stream), GTCRN denoiser and the speaker embedder.
 
 use crate::registry::{self, Asr, Registry};
@@ -446,6 +446,7 @@ pub fn recognizer(reg: &Registry, id: &str) -> Result<Shared<Recognizer>, String
         None => (registry::BUNDLED_ASR, reg.asr.get(registry::BUNDLED_ASR).ok_or("no speech model")?),
     };
     let key = format!("{id}|{}", asr.encoder);
+    crate::idle::touch();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(i) = c.recognizers.iter().position(|(k, _)| *k == key) {
         let hit = c.recognizers.remove(i);
@@ -486,6 +487,7 @@ pub fn slid_for(reg: &Registry, id: &str) -> Result<Shared<Slid>, String> {
         .filter(|a| a.kind == "whisper")
         .or_else(|| reg.asr.get(registry::BUNDLED_ASR))
         .ok_or("no whisper model")?;
+    crate::idle::touch();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, s)) = c.slid.iter().find(|(k, _)| *k == asr.encoder) {
         return Ok(s.clone());
@@ -500,6 +502,7 @@ pub fn slid_for(reg: &Registry, id: &str) -> Result<Shared<Slid>, String> {
 
 pub fn denoiser(reg: &Registry) -> Option<Shared<Denoiser>> {
     let path = reg.extra("gtcrn")?.to_string();
+    crate::idle::touch();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some((k, d)) = &c.denoiser {
         if *k == path {
@@ -516,6 +519,7 @@ pub fn speaker(reg: &Registry) -> Result<Shared<Speaker>, String> {
         .extra("speaker-campplus")
         .ok_or("speaker model not installed (lang_settings(speaker_check=true) installs it)")?
         .to_string();
+    crate::idle::touch();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if let Some((k, s)) = &c.speaker {
         if *k == path {
@@ -525,6 +529,22 @@ pub fn speaker(reg: &Registry) -> Result<Shared<Speaker>, String> {
     let s = Arc::new(Mutex::new(Speaker::load(&path)?));
     c.speaker = Some((path, s.clone()));
     Ok(s)
+}
+
+/// Drop every cached model that nothing is using right now; returns how many.
+pub(crate) fn unload_unused() -> usize {
+    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let before = c.recognizers.len() + c.slid.len() + usize::from(c.denoiser.is_some()) + usize::from(c.speaker.is_some());
+    // a model still held outside the cache is mid-transcription: keep it
+    c.recognizers.retain(|(_, r)| Arc::strong_count(r) > 1);
+    c.slid.retain(|(_, s)| Arc::strong_count(s) > 1);
+    if c.denoiser.as_ref().is_some_and(|(_, d)| Arc::strong_count(d) == 1) {
+        c.denoiser = None;
+    }
+    if c.speaker.as_ref().is_some_and(|(_, s)| Arc::strong_count(s) == 1) {
+        c.speaker = None;
+    }
+    before - (c.recognizers.len() + c.slid.len() + usize::from(c.denoiser.is_some()) + usize::from(c.speaker.is_some()))
 }
 
 /// Load the call-path models in the background so the first utterance is fast.

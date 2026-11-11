@@ -1,6 +1,7 @@
 //! Text to speech with a voice per language. `lang` is required: the text is split
 //! into `<lang=xx>…</lang>` spans, every span's voice is checked before anything is
-//! spoken, and each span is synthesized with its voice (loaded once, up to three kept).
+//! spoken, and each span is synthesized with its voice (loaded once, up to three kept
+//! while in use; see `idle`).
 
 use crate::langs::{self, Span};
 use crate::registry::{self, Registry, Voice};
@@ -139,6 +140,7 @@ fn engines() -> &'static Mutex<Vec<(String, Shared)>> {
 
 /// Loaded engine for a voice (LRU, three kept).
 pub fn engine(id: &str, v: &Voice) -> Result<Shared, String> {
+    crate::idle::touch();
     let key = format!("{id}|{}", v.model);
     let mut e = engines().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(i) = e.iter().position(|(k, _)| *k == key) {
@@ -153,6 +155,14 @@ pub fn engine(id: &str, v: &Voice) -> Result<Shared, String> {
         e.remove(0);
     }
     Ok(eng)
+}
+
+/// Drop every loaded voice that is not speaking right now; returns how many.
+pub(crate) fn unload_unused() -> usize {
+    let mut e = engines().lock().unwrap_or_else(|e| e.into_inner());
+    let before = e.len();
+    e.retain(|(_, eng)| Arc::strong_count(eng) > 1);
+    before - e.len()
 }
 
 pub fn missing_voice(code: &str) -> String {

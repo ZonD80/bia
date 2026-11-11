@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.2
+
+### Changes
+- Fixed a crash of bia's Telegram after a private voice call that the other person ended: about a minute later Telegram stopped and restarted by itself. bia now stops the call's audio before it closes the call, whoever hangs up.
+- Speech models no longer stay in memory when nothing uses them. Five minutes after the last transcription, call or spoken message they are unloaded, and loaded again when needed (the first speech task after a pause takes a few seconds longer). On one bia a single speech process had kept 3 GB for hours after transcribing a meeting, leaving the machine short of memory.
+
+### For bia
+- Nothing to do now.
+
 ## 2.2.1
 
 ### Changes

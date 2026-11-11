@@ -63,6 +63,8 @@ impl Listener {
 
     /// Feed call audio; returns an utterance once the speaker paused.
     pub fn push(&mut self, pcm: &[i16]) -> Option<Utterance> {
+        // a live call keeps its models loaded through long silences
+        crate::idle::touch();
         let x = self.to_16k(pcm);
         self.fed += x.len();
         self.pieces.extend(self.vad.accept(&x));

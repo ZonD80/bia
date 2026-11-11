@@ -71,6 +71,11 @@ pub struct P2PCall {
     state: P2PCallState,
     call_id: Option<i64>,
     call_access_hash: Option<i64>,
+    /// ntgcalls holds a call that still needs `stop` (bia patch). Kept apart
+    /// from `state`: a remote discard sets `Ended` while the native call is
+    /// still running, and destroying the instance under a running call
+    /// crashes its media thread.
+    ntg_live: bool,
 }
 
 impl P2PCall {
@@ -82,6 +87,7 @@ impl P2PCall {
             state: P2PCallState::Idle,
             call_id: None,
             call_access_hash: None,
+            ntg_live: false,
         }
     }
 
@@ -104,6 +110,7 @@ impl P2PCall {
         };
 
         self.ntg.create_p2p_call(self.user_id).await?;
+        self.ntg_live = true;
         // CAPTURE must be set immediately after create_p2p_call, BEFORE
         // init_exchange — otherwise on_frames never delivers inbound audio
         // (verified: TxPKev p2p-offline-ai-telegram-bridge / ntgcalls#44).
@@ -219,6 +226,7 @@ impl P2PCall {
         };
 
         self.ntg.create_p2p_call(self.user_id).await?;
+        self.ntg_live = true;
         // CAPTURE must be set immediately after create_p2p_call, BEFORE
         // init_exchange — otherwise on_frames never delivers inbound audio
         // (verified: TxPKev p2p-offline-ai-telegram-bridge / ntgcalls#44).
@@ -557,11 +565,16 @@ impl P2PCall {
 
     /// Hang up and discard the call.
     pub async fn end(&mut self) {
+        // Always stop the native call first, also when the other side already
+        // discarded it (state is `Ended` then, but ntgcalls is still running).
+        if self.ntg_live {
+            self.ntg_live = false;
+            if let Err(e) = self.ntg.stop(self.user_id).await {
+                warn!("p2p: stop error (ignored): {}", e);
+            }
+        }
         if self.state == P2PCallState::Ended || self.state == P2PCallState::Idle {
             return;
-        }
-        if let Err(e) = self.ntg.stop(self.user_id).await {
-            warn!("p2p: stop error (ignored): {}", e);
         }
         if let (Some(id), Some(hash)) = (self.call_id, self.call_access_hash) {
             if let Err(e) = signaling::discard_call(
@@ -800,7 +813,7 @@ impl P2PCall {
 
 impl Drop for P2PCall {
     fn drop(&mut self) {
-        if self.state != P2PCallState::Idle && self.state != P2PCallState::Ended {
+        if self.ntg_live {
             warn!("p2p: P2PCall dropped without calling end()");
             let ntg = std::mem::take(&mut self.ntg);
             let user_id = self.user_id;
