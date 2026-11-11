@@ -7,6 +7,7 @@ import Foundation
 extension DeployModel {
     func demo(_ scene: String, appDir: URL) {
         let host = "203.0.113.10"
+        page = .brain
         provider = "openrouter"
         apiKey = "sk-or-v1-" + String(repeating: "0", count: 64)
         model = "deepseek/deepseek-v4.1-flash"

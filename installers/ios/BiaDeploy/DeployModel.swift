@@ -8,10 +8,11 @@ struct IncomingConfig: Identifiable {
 enum Step { case login, connecting, hostKey, checking, confirm, running, installed }
 enum How: String, CaseIterable { case password = "Password", key = "Key", newKey = "New key" }
 
-/// The wizard: bia's brain, then the server. Every core call runs off the main thread.
+/// The saved bias first; "Start new bia" opens the wizard: bia's brain, then the server. Every
+/// core call runs off the main thread.
 @MainActor
 final class DeployModel: ObservableObject {
-    @Published var page = Page.brain
+    @Published var page = Page.keys
     /// The bia whose chat is open, over everything else.
     @Published var chat: ChatTarget?
 
@@ -365,12 +366,18 @@ final class DeployModel: ObservableObject {
         Task {
             defer { configBusy = false }
             do {
-                _ = try await Task.detached { try biaconfigImport(path: file.path, password: password, replace: replace) }.value
+                let b = try await Task.detached { try biaconfigImport(path: file.path, password: password, replace: replace) }.value
                 closeConfig()
                 openKeys()
-                // the link that asked for this key opens now, if the key is its bia's
+                // the link that asked for this key opens now, if the key is its bia's; otherwise
+                // this bia's chat does (after the sheet has closed: a cover cannot open before)
                 if let w = waitingLink, let u = URL(string: w), appLink(url: w)?.bia != nil {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { self.openLink(u) }
+                } else {
+                    let target = ChatTarget(host: b.host, folder: b.folder)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                        if self.configFile == nil && self.noKey == nil { self.chat = target }
+                    }
                 }
             } catch DeployError.OtherKeyHere(let host) {
                 configOtherKey = host

@@ -17,9 +17,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
                     Text("bia").font(.system(size: 34, weight: .bold)).foregroundStyle(accent)
-                    Text(" deploy").font(.system(size: 34)).foregroundStyle(.secondary)
                     Spacer()
-                    if model.page == .brain { Button("Your bias") { model.openKeys() }.buttonStyle(.bordered).tint(accent) }
+                    if model.page == .keys && !model.saved.isEmpty { Button("Start new bia") { model.page = .brain }.buttonStyle(.bordered).tint(accent) }
                 }
                 switch model.page {
                 case .brain: BrainPage(model: model)
@@ -142,6 +141,7 @@ struct BrainPage: View {
     @State private var query = ""
 
     var body: some View {
+        Button("‹  Back") { model.openKeys() }
         Card {
             Text("First, bia's brain").font(.title2.weight(.semibold))
             Text("bia thinks with a cloud AI model. Use your ChatGPT plan, or an API key from a model provider.").foregroundStyle(.secondary)
@@ -445,6 +445,7 @@ struct InstalledStep: View {
         if let folder = model.done?.folder { KeyCard(model: model, folder: folder, host: host) }
         if model.land { LandSecretCard(model: model) }
         Button("Set up another server") { model.again() }
+        Button("Your bias") { model.openKeys() }
     }
 }
 
@@ -507,7 +508,7 @@ struct KeyCard: View {
             Text("Share sends it to a computer or another phone (AirDrop, Mail, Files); it asks for the password above when it is installed.")
                 .font(.footnote).foregroundStyle(.secondary)
             Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
-            Text("A .biaconfig also carries bia's address and is locked with its own password: another bia deploy app opens it and gets the chat.")
+            Text("A .biaconfig also carries bia's address and is locked with its own password: another bia app opens it and gets the chat.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -527,12 +528,12 @@ func shareCopies(folder: String, host: String) -> [URL] {
     }
 }
 
-/// Every bia this phone deployed: its key, to install or share again later.
+/// The first page: every bia whose key this phone keeps (deployed here or imported), with its
+/// chat, and its key to install or share again later.
 struct KeysPage: View {
     @ObservedObject var model: DeployModel
     @State private var picking = false
     var body: some View {
-        Button("‹  Back") { model.page = .brain }
         Card {
             Text("Your bias").font(.title3.weight(.semibold))
             Button("Import a .biaconfig…") { picking = true }.buttonStyle(.bordered)
@@ -541,6 +542,7 @@ struct KeysPage: View {
                 }
             if model.saved.isEmpty {
                 Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
+                PrimaryButton(title: "Start new bia") { model.page = .brain }
             } else {
                 Text("Each is a certificate for one bia, the way into it (password \(p12Password())). Install offers it to this device as a profile; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -608,7 +610,7 @@ struct NoKeySheet: View {
                 }
                 Section("Or with a .biaconfig") {
                     Text("Ask bia in any chat: “send me a .biaconfig for my phone”. It sends a file and tells the password another way.")
-                    Text("Open the file with bia deploy (tap it in the chat) and enter the password. Then this link opens by itself.")
+                    Text("Open the file with the bia app (tap it in the chat) and enter the password. Then this link opens by itself.")
                         .foregroundStyle(.secondary)
                     Button("Open a .biaconfig…") { picking = true }
                         .fileImporter(isPresented: $picking, allowedContentTypes: [UTType(exportedAs: "biadeploy.config")]) { result in

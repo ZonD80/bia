@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # App Store screenshots of bia deploy, into installers/dist/appstore/<device>/: a simulator of
-# each size boots (made fresh, deleted after), the debug build opens every wizard step with
+# each size boots (made fresh, deleted after), the debug build opens the saved bias and every wizard step with
 # made-up data (Demo.swift, debug builds only: launched with -demo <scene>).
 #
 #   iphone-6.3   iPhone 17 Pro (1206×2622; App Store's 6.1"/6.3" slot)
@@ -16,7 +16,7 @@ REPO="$(cd "$ROOT_DIR/../.." && pwd)"
 OUT="$REPO/installers/dist/appstore"
 APP_ID=biadeploy.ios
 APP="$ROOT_DIR/build/derivedData/Build/Products/Debug-iphonesimulator/BiaDeploy.app"
-SCENES=(brain login newkey confirm running installed keys)
+SCENES=(keys brain login newkey confirm running installed)
 DEVICES=(
     "iphone-6.3|com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
     "iphone-duo|com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"

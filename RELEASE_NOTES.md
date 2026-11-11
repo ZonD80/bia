@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.1
+
+### Changes
+- bia's first greeting no longer stays on the screen only. When its owner first opens the web app or writes to it in a messenger, bia greets them there too: who it is, what it can do, and, while it has no name or gender yet, the question what its name should be and whether it is male, female or neutral.
+
+### For bia
+- If your name or gender is still not set, ask root for what is missing on the channel root last wrote on (once), then self_set from the answer. Otherwise nothing to do now.
+
 ## 2.2.0
 
 ### Changes

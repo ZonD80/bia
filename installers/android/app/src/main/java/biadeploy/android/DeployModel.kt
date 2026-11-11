@@ -43,9 +43,9 @@ enum class Page { Brain, Server, Keys }
 enum class Step { Login, Connecting, HostKey, Checking, Confirm, Running, Installed }
 enum class How { Password, Key, NewKey }
 
-/** The wizard: bia's brain, then the server. Every core call runs off the main thread. */
+/** The saved bias first; "Start new bia" opens the wizard: bia's brain, then the server. Every core call runs off the main thread. */
 class DeployModel : ViewModel() {
-    var page by mutableStateOf(Page.Brain)
+    var page by mutableStateOf(Page.Keys)
     /** The bia whose chat is open, over everything else. */
     var chat by mutableStateOf<ChatTarget?>(null)
 
@@ -388,11 +388,13 @@ class DeployModel : ViewModel() {
         configProblem = null
         viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { biaconfigImport(file.path, password, replace) }
+                val b = withContext(Dispatchers.IO) { biaconfigImport(file.path, password, replace) }
                 closeConfig()
                 openKeys()
-                // the link that asked for this key opens now, if the key is its bia's
-                waitingLink?.let { w -> if (appLink(w)?.bia != null) openLink(w) }
+                // the link that asked for this key opens now, if the key is its bia's; otherwise
+                // this bia's chat does
+                val w = waitingLink
+                if (w != null && appLink(w)?.bia != null) openLink(w) else chat = ChatTarget(b.host, b.folder)
             } catch (e: DeployException.OtherKeyHere) {
                 configOtherKey = e.host
             } catch (e: DeployException.Failed) {

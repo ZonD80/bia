@@ -989,7 +989,7 @@ fn welcome(web: Option<String>, cloud: bool, me: &me::Me) -> String {
 - you can have your own Telegram, WhatsApp and MAX accounts, so they can write and call you there, and your own Messenger and Instagram. Each needs a separate account with its own phone number, not theirs: they create it in the app on a phone with that number and scan a QR code to log you in; ask whether they want that.\n\
 - you can create your own accounts on websites and services (e-mail and others) in your own browser, keep the passwords and one-time codes in your password store, and ask them for help when a captcha or a phone check comes up.\n\
 - you can schedule jobs, run commands, learn languages and talk by voice.{brain}\n\
-{end} Do not call tools for this greeting."
+{end} Do not call tools for this greeting. It shows only on the screen: the first time root connects on web or writes in a chat after it, give this greeting again there with say, once per channel."
     )
 }
 
@@ -1161,6 +1161,7 @@ mod welcome_tests {
             "male, female or neutral",
             "self_set(name=…, gender=…)",
             "Do not call tools for this greeting",
+            "give this greeting again there with say",
         ] {
             assert!(w.contains(want), "missing {want:?} in {w}");
         }

@@ -231,7 +231,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 2.2.0;
+				MARKETING_VERSION = 2.2.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -292,7 +292,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 2.2.0;
+				MARKETING_VERSION = 2.2.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -318,10 +318,10 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BiaDeploy/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "bia deploy";
+				INFOPLIST_KEY_CFBundleDisplayName = bia;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "bia deploy connects to the server you name, which can be on your local network.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "bia connects to the server you name, which can be on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voice messages and calls in bia's chat.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -353,10 +353,10 @@
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = BiaDeploy/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "bia deploy";
+				INFOPLIST_KEY_CFBundleDisplayName = bia;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "bia deploy connects to the server you name, which can be on your local network.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "bia connects to the server you name, which can be on your local network.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Voice messages and calls in bia's chat.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

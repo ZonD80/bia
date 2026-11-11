@@ -1,6 +1,6 @@
 {
   "name": "screen",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "The real desktop, not a web page. Desktop apps as elements: screen_apps or screen_launch, screen_snapshot (each element with a ref), screen_act on a ref, screen_wait; windows with screen_windows and screen_window, the clipboard with screen_clipboard. Prefer that to pixels. For anything else, screen_ocr (words with their x,y) or screen_shot (the picture), then click, type and press keys at pixel x,y from the top-left. Web pages go through the chrome MCP.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-screen",

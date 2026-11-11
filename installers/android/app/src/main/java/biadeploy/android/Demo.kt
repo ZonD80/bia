@@ -14,6 +14,7 @@ import java.io.File
  */
 fun DeployModel.demo(scene: String, filesDir: File) {
     val host = "203.0.113.10"
+    page = Page.Brain
     provider = "openrouter"
     apiKey = "sk-or-v1-" + "0".repeat(64)
     model = "deepseek/deepseek-v4.1-flash"

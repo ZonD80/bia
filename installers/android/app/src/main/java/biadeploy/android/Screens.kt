@@ -83,7 +83,10 @@ fun App(m: DeployModel) {
         ChatScreen(target) { m.chat = null }
         return
     }
-    BackHandler(enabled = (m.page == Page.Server && m.step == Step.Login) || m.page == Page.Keys) { m.page = Page.Brain }
+    // back: the server's first step → the brain → the saved bias (the first page)
+    BackHandler(enabled = (m.page == Page.Server && m.step == Step.Login) || m.page == Page.Brain) {
+        if (m.page == Page.Server) m.page = Page.Brain else m.openKeys()
+    }
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         // on a tablet the wizard stays a readable column in the middle; the scrolling stops at the
         // status bar, so the page never runs under its clock and icons
@@ -106,9 +109,8 @@ fun App(m: DeployModel) {
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text("bia", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                Text(" deploy", fontSize = 34.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f))
                 Spacer(Modifier.weight(1f))
-                if (m.page == Page.Brain) OutlinedButton({ m.openKeys() }) { Text("Your bias") }
+                if (m.page == Page.Keys && m.saved.isNotEmpty()) OutlinedButton({ m.page = Page.Brain }) { Text("Start new bia") }
             }
             when (m.page) {
                 Page.Brain -> BrainPage(m)
@@ -176,6 +178,7 @@ private fun Check(done: Boolean, text: String) = Row(verticalAlignment = Alignme
 @Composable
 private fun BrainPage(m: DeployModel) {
     val context = LocalContext.current
+    TextButton({ m.openKeys() }) { Text("‹  Back") }
     Card {
         Title("First, bia's brain")
         Weak("bia thinks with a cloud AI model. Use your ChatGPT plan, or an API key from a model provider.")
@@ -466,6 +469,7 @@ private fun InstalledStep(m: DeployModel) {
     d.folder?.let { folder -> KeyCard(m, folder, host) }
     if (m.land) LandSecretCard(m)
     TextButton({ m.again() }) { Text("Set up another server") }
+    TextButton({ m.openKeys() }) { Text("Your bias") }
 }
 
 @Composable
@@ -528,7 +532,7 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
         }
         Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); it asks for the password above when it is installed.")
         OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
-        Weak("A .biaconfig also carries bia's address and is locked with its own password: another bia deploy app opens it and gets the chat.")
+        Weak("A .biaconfig also carries bia's address and is locked with its own password: another bia app opens it and gets the chat.")
     }
 }
 
@@ -559,7 +563,7 @@ private fun share(context: android.content.Context, folder: String, host: String
     }
 }
 
-/** Every bia this phone deployed: its key, to install or share again later. */
+/** The first page: every bia whose key this phone keeps (deployed here or imported), with its chat, and its key to install or share again later. */
 @Composable
 private fun KeysPage(m: DeployModel) {
     val context = LocalContext.current
@@ -567,12 +571,13 @@ private fun KeysPage(m: DeployModel) {
         uri ?: return@rememberLauncherForActivityResult
         m.offerConfig(context.cacheDir) { dest -> context.contentResolver.openInputStream(uri)?.use { it.copyLimited(dest) } }
     }
-    TextButton({ m.page = Page.Brain }) { Text("‹  Back") }
     Card {
         Title("Your bias")
         OutlinedButton({ pick.launch(arrayOf("*/*")) }) { Text("Import a .biaconfig…") }
-        if (m.saved.isEmpty()) Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
-        else Weak("Each is a certificate for one bia, the way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
+        if (m.saved.isEmpty()) {
+            Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
+            Primary("Start new bia") { m.page = Page.Brain }
+        } else Weak("Each is a certificate for one bia, the way into it (password ${p12Password()}). Install puts it on this phone for the browser; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
     }
     m.saved.forEach { b -> KeyCard(m, b.folder, b.host, b.savedAt, b.name) }
 }
@@ -633,7 +638,7 @@ private fun NoKeyDialog(m: DeployModel, link: uniffi.bia_deploy_mobile.AppLink) 
                     Text("Ask bia in the chat for a new link: its key lasts 10 minutes and works once.")
                 }
                 Text("Or ask bia in any chat: “send me a .biaconfig for my phone”. It sends a file and tells the password another way.")
-                Weak("Open the file with bia deploy (tap it in the chat) and enter the password. Then this link opens by itself.")
+                Weak("Open the file with the bia app (tap it in the chat) and enter the password. Then this link opens by itself.")
             }
         },
         confirmButton = { TextButton({ pick.launch(arrayOf("*/*")) }) { Text("Open a .biaconfig…") } },

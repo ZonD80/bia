@@ -18,7 +18,7 @@ ADB="$SDK/platform-tools/adb"
 EMU="$SDK/emulator/emulator"
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 APP=biadeploy.android
-SCENES=(brain name login newkey confirm running installed keys)
+SCENES=(keys brain name login newkey confirm running installed)
 
 die() {
     echo "error: $*" >&2
