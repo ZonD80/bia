@@ -8,6 +8,8 @@ struct ChatTarget: Identifiable {
     let folder: String
     /// The page of bia's web app to open: / is the chat, a link from bia names another.
     var path = "/"
+    /// The address the title shows, when not `host` (store screenshots: the demo chat runs on localhost).
+    var shown: String? = nil
     var id: String { host + path }
     private var bracketed: Bool { host.hasPrefix("[") }
     private var ipv6: Bool { !bracketed && host.filter { $0 == ":" }.count > 1 }
@@ -70,7 +72,7 @@ struct ChatPage: View {
             .overlay(alignment: .top) {
                 if let problem { Text(problem).padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12)).padding() }
             }
-            .navigationTitle("bia at \(target.host)")
+            .navigationTitle("bia at \(target.shown ?? target.host)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }

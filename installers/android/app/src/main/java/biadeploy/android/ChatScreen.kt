@@ -55,8 +55,11 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import uniffi.bia_deploy_mobile.p12Password
 
-/** One bia this phone holds the key of. `host` is what is dialled, a port included. */
-data class ChatTarget(val host: String, val folder: String, val path: String = "/") {
+/**
+ * One bia this phone holds the key of. `host` is what is dialled, a port included; `shown` is the
+ * address the title shows, when not `host` (store screenshots: the demo chat runs on localhost).
+ */
+data class ChatTarget(val host: String, val folder: String, val path: String = "/", val shown: String? = null) {
     private val bracketed get() = host.startsWith("[")
     private val ipv6 get() = !bracketed && host.count { it == ':' } > 1
     /** The address without a port, as requests report it. */
@@ -150,7 +153,7 @@ fun ChatScreen(target: ChatTarget, onClose: () -> Unit) {
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClose) { Text("‹  Close") }
-            Text("bia at ${target.host}", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("bia at ${target.shown ?: target.host}", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             TextButton({ problem = null; web?.reload() }) { Text("Reload") }
         }
         problem?.let { Text(it, Modifier.fillMaxWidth().padding(16.dp)) }

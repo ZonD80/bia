@@ -24,6 +24,35 @@ confs() { # the per-MAC stanza files (not resolv.conf)
   done
 }
 
+render() { # a stanza file with the interface name ($2) put in. IPv6 commands must never fail ifup:
+  # a failed post-up makes ifupdown take the whole interface down again, DHCP client included, and the
+  # IPv4 address then goes with its lease. A gateway outside the address's prefix (OVH: a /128) needs a
+  # route to itself first; older takeovers wrote neither, so it is added here.
+  local line g
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line//@IF@/$2}
+    case $line in
+      *"post-up ip -6 "*"|| true") ;;
+      *"post-up ip -6 route replace default via "*)
+        g=${line#*default via }
+        g=${g%% *}
+        case $g in
+          [fF][eE]80:*) line="$line || true" ;;
+          *)
+            echo "    post-up ip -6 route replace $g dev $2 || true"
+            case $line in
+              *" onlink"*) line="$line || true" ;;
+              *) line="$line onlink || true" ;;
+            esac
+            ;;
+        esac
+        ;;
+      *"post-up ip -6 "*) line="$line || true" ;;
+    esac
+    printf '%s\n' "$line"
+  done < "$1"
+}
+
 wired() { # names of wired (Ethernet, not wireless, not virtual) interfaces
   local d n
   for d in "$SYS"/*; do
@@ -95,7 +124,7 @@ tmp=$OUT.tmp
     matched+="$name "
     echo
     echo "# $mac"
-    sed "s/@IF@/$name/g" "$f"
+    render "$f" "$name"
   done
   for n in $(wired); do
     case $matched in *" $n "*) continue ;; esac

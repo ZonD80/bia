@@ -11,9 +11,16 @@ import java.io.File
  * Debug builds only (store screenshots, play-assets.sh): `am start … --es demo <scene>` fills
  * the wizard with made-up data and no network. Scenes: brain, login, newkey, confirm,
  * running, installed, keys; name is the brain page scrolled to its end (name and gender). Addresses are from the documentation ranges (203.0.113.0/24).
+ * chat, call and attach open bia's chat with a made-up conversation: installers/demo-chat/server.py on
+ * localhost:18443 (adb reverse), its keys copied to servers/localhost:18443/ by the screenshot script.
  */
 fun DeployModel.demo(scene: String, filesDir: File) {
     val host = "203.0.113.10"
+    if (scene in listOf("chat", "call", "attach")) {
+        val demo = "localhost:18443"
+        chat = ChatTarget(demo, File(filesDir, "servers/$demo").absolutePath, "/?demo=$scene", shown = host)
+        return
+    }
     page = Page.Brain
     provider = "openrouter"
     apiKey = "sk-or-v1-" + "0".repeat(64)

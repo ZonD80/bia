@@ -110,11 +110,19 @@ pub fn stanza(i: &Iface) -> String {
     }
     if let Some(first) = v6.first() {
         s.push_str(&format!("iface @IF@ inet6 static\n    address {first}\n"));
+        // IPv6 commands never fail ifup (`|| true`): a failed post-up makes ifupdown take the interface
+        // down again, the DHCP client with it, and the IPv4 address is then lost when its lease ends.
         for a in v6.iter().skip(1) {
-            s.push_str(&format!("    post-up ip -6 addr add {a} dev @IF@\n"));
+            s.push_str(&format!("    post-up ip -6 addr add {a} dev @IF@ || true\n"));
         }
         if let Some(g) = &i.gateway6 {
-            s.push_str(&format!("    post-up ip -6 route replace default via {g} dev @IF@\n"));
+            if g.to_ascii_lowercase().starts_with("fe80:") {
+                s.push_str(&format!("    post-up ip -6 route replace default via {g} dev @IF@ || true\n"));
+            } else {
+                // the gateway may lie outside the address's prefix (OVH Public Cloud: a /128): a route to it first
+                s.push_str(&format!("    post-up ip -6 route replace {g} dev @IF@ || true\n"));
+                s.push_str(&format!("    post-up ip -6 route replace default via {g} dev @IF@ onlink || true\n"));
+            }
         }
     } else if i.auto6 {
         s.push_str("iface @IF@ inet6 auto\n");
@@ -287,6 +295,25 @@ mod tests {
     }
 
     /// A typical cloud VM: DHCP v4 + SLAAC v6, names from DHCP.
+    /// OVH Public Cloud: IPv4 by DHCP, a static IPv6 /128 whose gateway is outside it. The IPv6 route
+    /// must not be able to fail ifup (it took the DHCP client down; the address went with its lease).
+    #[test]
+    fn dhcp_with_static_ipv6_and_gateway_outside_the_prefix() {
+        let link = json!([{"ifname": "ens3"}]);
+        let addr = json!([{"ifname": "ens3", "link_type": "ether", "address": "fa:16:3e:ef:1d:85", "mtu": 1500, "addr_info": [
+            {"family": "inet", "local": "162.19.105.50", "prefixlen": 32, "scope": "global", "dynamic": true},
+            {"family": "inet6", "local": "2001:41d0:304:400::1a2b", "prefixlen": 128, "scope": "global"}]}]);
+        let r4 = json!([{"dst": "default", "gateway": "162.19.104.1", "dev": "ens3", "protocol": "dhcp"}]);
+        let r6 = json!([{"dst": "default", "gateway": "2001:41d0:304:400::1", "dev": "ens3", "protocol": "static"}]);
+        let (ifs, _) = capture(&link, &addr, &r4, &r6, &[]).unwrap();
+        assert_eq!(
+            stanza(&ifs[0]),
+            "auto @IF@\niface @IF@ inet dhcp\niface @IF@ inet6 static\n    address 2001:41d0:304:400::1a2b/128\n\
+             \x20   post-up ip -6 route replace 2001:41d0:304:400::1 dev @IF@ || true\n\
+             \x20   post-up ip -6 route replace default via 2001:41d0:304:400::1 dev @IF@ onlink || true\n"
+        );
+    }
+
     #[test]
     fn cloud_dhcp() {
         let link = json!([{"ifname": "ens3", "link_type": "ether"}]);

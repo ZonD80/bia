@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # App Store screenshots of bia deploy, into installers/dist/appstore/<device>/: a simulator of
 # each size boots (made fresh, deleted after), the debug build opens the saved bias and every wizard step with
-# made-up data (Demo.swift, debug builds only: launched with -demo <scene>).
+# made-up data (Demo.swift, debug builds only: launched with -demo <scene>). The chat scenes (chat, call,
+# attach) show bia's real web app with a made-up conversation from installers/demo-chat/server.py.
 #
 #   iphone-6.3   iPhone 17 Pro (1206×2622; App Store's 6.1"/6.3" slot)
 #   iphone-duo   iPhone Duo
 #   ipad-13      iPad Pro 13-inch (M5) (2064×2752)
 #
 # RUNTIME=<simctl runtime id> picks the iOS version (default: the newest installed); a device
-# that needs a newer one is skipped with a note. ONLY="ipad-13 …" makes only those.
+# that needs a newer one is skipped with a note. ONLY="ipad-13 …" makes only those devices,
+# PICK="chat call …" only those scenes (the others' screenshots stay).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,7 +18,9 @@ REPO="$(cd "$ROOT_DIR/../.." && pwd)"
 OUT="$REPO/installers/dist/appstore"
 APP_ID=biadeploy.ios
 APP="$ROOT_DIR/build/derivedData/Build/Products/Debug-iphonesimulator/BiaDeploy.app"
-SCENES=(keys brain login newkey confirm running installed)
+SCENES=(keys brain login newkey confirm running installed chat call attach)
+CHAT_SCENES=" chat call attach "
+DEMO_PORT=18443
 DEVICES=(
     "iphone-6.3|com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro"
     "iphone-duo|com.apple.CoreSimulator.SimDeviceType.iPhone-Duo"
@@ -40,6 +44,15 @@ echo "== debug build (demo scenes)"
 xcodebuild -project "$ROOT_DIR/BiaDeploy.xcodeproj" -scheme BiaDeploy -sdk iphonesimulator -configuration Debug \
     -derivedDataPath "$ROOT_DIR/build/derivedData" CODE_SIGNING_ALLOWED=NO -quiet build
 [[ -d "$APP" ]] || die "no app at $APP"
+
+echo "== demo chat (localhost:$DEMO_PORT)"
+DEMO_KEYS=$(mktemp -d)
+python3 "$REPO/installers/demo-chat/server.py" "$DEMO_KEYS" "$DEMO_PORT" >"$DEMO_KEYS/log" 2>&1 &
+DEMO_PID=$!
+for _ in $(seq 1 50); do grep -q READY "$DEMO_KEYS/log" 2>/dev/null && break; sleep 0.2; done
+grep -q READY "$DEMO_KEYS/log" || { cat "$DEMO_KEYS/log" >&2; kill "$DEMO_PID" 2>/dev/null; die "the demo chat did not start"; }
+stop_demo() { kill "$DEMO_PID" 2>/dev/null || true; rm -rf "$DEMO_KEYS"; }
+trap stop_demo EXIT
 
 for entry in "${DEVICES[@]}"; do
     name=${entry%%|*}
@@ -69,7 +82,7 @@ sys.exit(0 if any(t["identifier"] == sys.argv[2] for t in r.get("supportedDevice
     fi
     echo "== $name ($type, $RUNTIME)"
     udid=$(xcrun simctl create "bia-shots-$name" "$type" "$RUNTIME")
-    trap 'xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true; xcrun simctl delete "$udid" >/dev/null 2>&1 || true' EXIT
+    trap 'xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true; xcrun simctl delete "$udid" >/dev/null 2>&1 || true; stop_demo' EXIT
     xcrun simctl boot "$udid"
     xcrun simctl bootstatus "$udid" -b >/dev/null
     xcrun simctl ui "$udid" appearance light
@@ -78,19 +91,30 @@ sys.exit(0 if any(t["identifier"] == sys.argv[2] for t in r.get("supportedDevice
         --cellularMode active --cellularBars 4 --operatorName "" --batteryState charged --batteryLevel 100
     xcrun simctl install "$udid" "$APP"
     dir="$OUT/$name"
-    rm -rf "$dir"
+    [[ -n "${PICK:-}" ]] || rm -rf "$dir"
     mkdir -p "$dir"
-    i=1
+    i=0
+    warm=
     for scene in "${SCENES[@]}"; do
-        xcrun simctl terminate "$udid" "$APP_ID" >/dev/null 2>&1 || true
-        xcrun simctl launch "$udid" "$APP_ID" -demo "$scene" >/dev/null
-        sleep 4
-        xcrun simctl io "$udid" screenshot --type=png "$dir/$i-$scene.png" >/dev/null 2>&1
         i=$((i + 1))
+        [[ -z "${PICK:-}" || " $PICK " == *" $scene "* ]] || continue
+        xcrun simctl terminate "$udid" "$APP_ID" >/dev/null 2>&1 || true
+        wait=4
+        if [[ "$CHAT_SCENES" == *" $scene "* ]]; then
+            # the demo chat's keys, where the app keeps a bia's (after the wizard scenes: keys lists them)
+            keys="$(xcrun simctl get_app_container "$udid" "$APP_ID" data)/Library/Application Support/bia-deploy/servers/localhost:$DEMO_PORT"
+            mkdir -p "$keys"
+            cp "$DEMO_KEYS/ca.crt" "$DEMO_KEYS/bia-root.p12" "$keys/"
+            # the first page load of a fresh device is slow
+            if [[ -z "${warm:-}" ]]; then wait=25; warm=1; else wait=12; fi
+        fi
+        xcrun simctl launch "$udid" "$APP_ID" -demo "$scene" >/dev/null
+        sleep "$wait"
+        xcrun simctl io "$udid" screenshot --type=png "$dir/$i-$scene.png" >/dev/null 2>&1
     done
     xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
     xcrun simctl delete "$udid" >/dev/null 2>&1 || true
-    trap - EXIT
+    trap stop_demo EXIT
 done
 
 echo

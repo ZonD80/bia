@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.3
+
+### Changes
+- Fixed bia losing its network a day after it was set up on some servers (seen at OVH Public Cloud: an address from DHCP together with a fixed IPv6 address). A failed IPv6 route at boot stopped the program that renews the address, so the address disappeared when its 24 hours ended, until a reboot. IPv6 problems can no longer take the IPv4 address down, and the IPv6 route now works there too.
+
+### For bia
+- Run `pgrep dhcpcd` and `grep -c 'inet dhcp' /etc/network/interfaces`: if an interface uses DHCP and no dhcpcd runs, tell root that the machine needs one reboot (the fix takes effect at boot) and reboot when root agrees. Otherwise nothing to do now.
+
 ## 2.2.2
 
 ### Changes

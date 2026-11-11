@@ -3,11 +3,15 @@
 #   icon-512.png          app icon (from the iOS 1024 px icon)
 #   feature-1024x500.png  feature graphic (rendered with headless Chrome, like tools/make-og.sh)
 #   phone/, tablet7/, tablet10/  screenshots: each AVD boots headless, the debug build opens
-#                         every wizard step with made-up data (Demo.kt, debug builds only)
+#                         every wizard step with made-up data (Demo.kt, debug builds only); the chat
+#                         scenes (chat, call, attach) show bia's real web app with a made-up
+#                         conversation from installers/demo-chat/server.py (adb reverse)
 #
 # AVDs (PHONE_AVD, TABLET7_AVD, TABLET10_AVD; 9:16 portrait): losdias-play-phone (1080×1920),
 # losdias-play-tablet7 (1080×1920), losdias-play-tablet10 (1440×2560). ONLY=graphics or
-# ONLY=screenshots does one half.
+# ONLY=screenshots does one half; PICK="chat call …" takes only those scenes (the others stay),
+# DEVICES="phone …" only those of phone, tablet7, tablet10.
+# EMU_GPU=host when swiftshader draws a WebView wrong (it repeats a tablet's sidebar below a tile line).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +22,9 @@ ADB="$SDK/platform-tools/adb"
 EMU="$SDK/emulator/emulator"
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 APP=biadeploy.android
-SCENES=(keys brain name login newkey confirm running installed)
+SCENES=(keys brain name login newkey confirm running installed chat call attach)
+CHAT_SCENES=" chat call attach "
+DEMO_PORT=18443
 
 die() {
     echo "error: $*" >&2
@@ -82,23 +88,35 @@ clean_bar() { # serial
 }
 
 shots() { # avd dir port
-    local avd=$1 dir="$OUT/$2" port=$3 s="emulator-$3" scene i=1
+    local avd=$1 dir="$OUT/$2" port=$3 s="emulator-$3" scene i=0
+    [[ -z "${DEVICES:-}" || " $DEVICES " == *" $2 "* ]] || return 0
     echo "== $2 ($avd)"
-    "$EMU" -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >/dev/null 2>&1 &
+    "$EMU" -avd "$avd" -port "$port" -no-window -no-audio -no-boot-anim -no-snapshot -gpu "${EMU_GPU:-swiftshader_indirect}" >/dev/null 2>&1 &
     local pid=$!
     wait_boot "$s"
     "$ADB" -s "$s" uninstall "$APP" >/dev/null 2>&1 || true
     "$ADB" -s "$s" install -r "$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk" >/dev/null
     "$ADB" -s "$s" shell cmd uimode night no >/dev/null
     "$ADB" -s "$s" shell settings put global sysui_demo_allowed 1
-    rm -rf "$dir"
+    [[ -n "${PICK:-}" ]] || rm -rf "$dir"
     mkdir -p "$dir"
+    "$ADB" -s "$s" reverse "tcp:$DEMO_PORT" "tcp:$DEMO_PORT" >/dev/null
+    local warm=
     for scene in "${SCENES[@]}"; do
+        i=$((i + 1))
+        [[ -z "${PICK:-}" || " $PICK " == *" $scene "* ]] || continue
+        local wait=4
+        if [[ "$CHAT_SCENES" == *" $scene "* ]]; then
+            # the demo chat's keys, where the app keeps a bia's (after the wizard scenes: keys lists them)
+            "$ADB" -s "$s" push "$DEMO_KEYS/ca.crt" "$DEMO_KEYS/bia-root.p12" /data/local/tmp/ >/dev/null
+            "$ADB" -s "$s" shell "run-as $APP mkdir -p files/servers/localhost:$DEMO_PORT && run-as $APP cp /data/local/tmp/ca.crt /data/local/tmp/bia-root.p12 files/servers/localhost:$DEMO_PORT/" </dev/null
+            # the first page load of a fresh device is slow
+            if [[ -z "${warm:-}" ]]; then wait=25; warm=1; else wait=12; fi
+        fi
         "$ADB" -s "$s" shell am start -S -W -n "$APP/.MainActivity" --es demo "$scene" >/dev/null
         clean_bar "$s"
-        sleep 4
+        sleep "$wait"
         "$ADB" -s "$s" exec-out screencap -p >"$dir/$i-$scene.png"
-        i=$((i + 1))
     done
     "$ADB" -s "$s" emu kill >/dev/null 2>&1 || true
     wait "$pid" 2>/dev/null || true
@@ -109,6 +127,14 @@ screenshots() {
     pgrep -f qemu-system >/dev/null && die "an emulator or QEMU is already running; stop it first"
     echo "== debug build (demo scenes)"
     (cd "$ROOT_DIR" && . ./build-common.sh && setup_java && setup_sdk && ./gradlew -q assembleDebug)
+    echo "== demo chat (localhost:$DEMO_PORT)"
+    DEMO_KEYS=$(mktemp -d)
+    python3 "$REPO/installers/demo-chat/server.py" "$DEMO_KEYS" "$DEMO_PORT" >"$DEMO_KEYS/log" 2>&1 &
+    DEMO_PID=$!
+    trap 'kill "$DEMO_PID" 2>/dev/null || true; rm -rf "$DEMO_KEYS"' EXIT
+    local i
+    for i in $(seq 1 50); do grep -q READY "$DEMO_KEYS/log" 2>/dev/null && break; sleep 0.2; done
+    grep -q READY "$DEMO_KEYS/log" || { cat "$DEMO_KEYS/log" >&2; die "the demo chat did not start"; }
     shots "${PHONE_AVD:-losdias-play-phone}" phone 5560
     shots "${TABLET7_AVD:-losdias-play-tablet7}" tablet7 5562
     shots "${TABLET10_AVD:-losdias-play-tablet10}" tablet10 5564

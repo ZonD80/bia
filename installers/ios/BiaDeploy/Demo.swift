@@ -4,9 +4,16 @@ import Foundation
 /// Debug builds only (App Store screenshots, appstore-assets.sh): launched with `-demo <scene>`,
 /// the wizard shows made-up data and no network. Scenes: brain, login, newkey, confirm,
 /// running, installed, keys. Addresses are from the documentation ranges (203.0.113.0/24).
+/// chat, call and attach open bia's chat with a made-up conversation: installers/demo-chat/server.py
+/// on localhost:18443, its keys copied to servers/localhost:18443/ by the screenshot script.
 extension DeployModel {
     func demo(_ scene: String, appDir: URL) {
         let host = "203.0.113.10"
+        if ["chat", "call", "attach"].contains(scene) {
+            let demo = "localhost:18443"
+            chat = ChatTarget(host: demo, folder: appDir.appendingPathComponent("servers/\(demo)").path, path: "/?demo=\(scene)", shown: host)
+            return
+        }
         page = .brain
         provider = "openrouter"
         apiKey = "sk-or-v1-" + String(repeating: "0", count: 64)
