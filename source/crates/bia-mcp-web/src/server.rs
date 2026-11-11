@@ -1067,6 +1067,28 @@ impl Web {
                     Err(e) => respond(stream, 503, "text/plain; charset=utf-8", e.as_bytes(), None),
                 }
             }
+            ("POST", "/v1/push/permission") => {
+                // the person decided about notifications in this browser: bia acknowledges it
+                let v = json_body();
+                match crate::push::permission_note(
+                    &id.identity,
+                    v["state"].as_str().unwrap_or(""),
+                    v["push"].as_bool().unwrap_or(false),
+                    v["error"].as_str().unwrap_or(""),
+                    req.header("user-agent").unwrap_or(""),
+                ) {
+                    Some(text) => {
+                        self.con.push_inbound(crate::bus::Inbound {
+                            identity: crate::bus::ID_SYSTEM.into(),
+                            channel: crate::bus::CH_WEB.into(),
+                            id: crate::bus::mint_msg_id(),
+                            text,
+                        });
+                        respond_json(stream, json!({"ok": true}))
+                    }
+                    None => respond(stream, 400, "text/plain; charset=utf-8", b"state: granted, denied, dismissed, off, stopped or removed", None),
+                }
+            }
             ("POST", "/v1/push/test") => match crate::push::test(&id.identity) {
                 Ok(n) => respond_json(stream, json!({"ok": true, "sent": n})),
                 Err(e) => respond(stream, 502, "text/plain; charset=utf-8", e.as_bytes(), None),

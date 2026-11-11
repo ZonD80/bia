@@ -26,6 +26,10 @@ function connect() {
   const opened = Date.now();
   port.onMessage.addListener((msg) => {
     retryMs = 1000;
+    if (msg && msg.method) {
+      fromHost(msg);
+      return;
+    }
     const wait = pending.get(msg && msg.id);
     if (!wait) return;
     pending.delete(msg.id);
@@ -80,13 +84,114 @@ chrome.alarms.onAlarm.addListener(() => {
 // answer is not cut off; the alarm tries again.
 let updateReady = false;
 function applyUpdate() {
-  if (updateReady && pending.size === 0 && running.size === 0) chrome.runtime.reload();
+  if (updateReady && pending.size === 0 && running.size === 0 && callTabs.size === 0) chrome.runtime.reload();
 }
 chrome.runtime.onUpdateAvailable.addListener(() => {
   updateReady = true;
   applyUpdate();
 });
 connect();
+
+// ---- calls ---------------------------------------------------------------------------------
+
+// Tabs opened with chrome_call_open: their pages send what they hear and take bia's voice as
+// the microphone (page.js). The host keeps the list too, for when this worker was restarted.
+const callTabs = new Set();
+const callPorts = new Map();
+
+function toTab(tab, msg) {
+  for (const p of callPorts.get(tab) || []) {
+    try {
+      p.postMessage(msg);
+    } catch (e) {}
+  }
+}
+
+async function hostCall(method, p) {
+  if (method === "voice_open") {
+    // armed before the meeting page loads, so its first microphone request already gets bia's voice
+    const tab = await chrome.tabs.create({ url: "about:blank", active: true });
+    callTabs.add(tab.id);
+    await chrome.tabs.update(tab.id, { url: p.url });
+    return { tab: tab.id };
+  }
+  if (method === "voice_close") {
+    callTabs.delete(p.tab);
+    callPorts.delete(p.tab);
+    try {
+      await chrome.tabs.remove(p.tab);
+    } catch (e) {}
+    return { closed: true };
+  }
+  if (method === "voice_tabs") {
+    callTabs.clear();
+    for (const t of p.tabs || []) callTabs.add(t);
+    return { ok: true };
+  }
+  if (method === "voice_to_tab") {
+    toTab(p.tab, p.msg);
+    return undefined;
+  }
+  throw new Error("unknown method " + method);
+}
+
+function fromHost(msg) {
+  hostCall(msg.method, msg.params || {}).then(
+    (result) => {
+      if (msg.id !== undefined && msg.id !== null) post({ reply: msg.id, result: result === undefined ? null : result });
+    },
+    (e) => {
+      if (msg.id !== undefined && msg.id !== null) post({ reply: msg.id, error: String(e && e.message ? e.message : e) });
+    },
+  );
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+  if (!msg || msg.type !== "bia-voice-hello") return;
+  const tab = sender.tab && sender.tab.id;
+  if (tab === undefined) {
+    respond({ armed: false });
+    return;
+  }
+  if (callTabs.has(tab)) {
+    respond({ armed: true });
+    return;
+  }
+  // this worker may have been restarted during a call: the host knows
+  rpc("v" + nextId++, "voice_armed", { tab }).then(
+    (r) => {
+      if (r && r.armed) callTabs.add(tab);
+      respond({ armed: !!(r && r.armed) });
+    },
+    () => respond({ armed: false }),
+  );
+  return true;
+});
+
+chrome.runtime.onConnect.addListener((p) => {
+  if (p.name !== "bia-voice") return;
+  const tab = p.sender && p.sender.tab && p.sender.tab.id;
+  if (tab === undefined || !callTabs.has(tab)) {
+    p.disconnect();
+    return;
+  }
+  const frame = (p.sender && p.sender.frameId) || 0;
+  if (!callPorts.has(tab)) callPorts.set(tab, new Set());
+  callPorts.get(tab).add(p);
+  p.onMessage.addListener((text) => {
+    if (typeof text === "string") post({ method: "voice", params: { tab, frame, d: text } });
+  });
+  p.onDisconnect.addListener(() => {
+    const set = callPorts.get(tab);
+    if (set) set.delete(p);
+  });
+});
+
+chrome.tabs.onRemoved.addListener((tab) => {
+  if (!callTabs.delete(tab)) return;
+  callPorts.delete(tab);
+  post({ method: "voice_closed", params: { tab } });
+});
 
 // ---- WebAuthn proxy ----------------------------------------------------------------------
 

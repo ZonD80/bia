@@ -494,18 +494,14 @@ impl Links {
     }
 
     fn load_state(&self, name: &str) -> Option<LinkState> {
-        fs::read(self.state_path(name))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+        bia_mcp::statefile::read(&self.state_path(name))
     }
 
     fn save_state(&self, name: &str, st: &LinkState) {
         let p = self.state_path(name);
-        let _ = fs::create_dir_all(p.parent().unwrap());
-        let tmp = p.with_extension("json.tmp");
-        if fs::write(&tmp, serde_json::to_vec_pretty(st).unwrap_or_default()).is_ok() {
-            let _ = fs::rename(&tmp, &p);
+        if bia_mcp::statefile::write_json(&p, st).is_ok() {
             self.own(&p);
+            self.own(&bia_mcp::statefile::backup_path(&p));
         }
     }
 

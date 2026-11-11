@@ -525,14 +525,6 @@ impl McpServer {
         self.spec.dir = dir;
         self.respawn()
     }
-
-    pub fn ensure_alive(&mut self) -> Result<()> {
-        if self.alive() {
-            Ok(())
-        } else {
-            self.respawn()
-        }
-    }
 }
 
 impl Drop for McpServer {

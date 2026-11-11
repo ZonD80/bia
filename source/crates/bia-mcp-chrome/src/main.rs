@@ -11,6 +11,7 @@ mod install;
 mod pack;
 mod passkey;
 mod proc;
+mod voice;
 mod watch;
 
 use bia_mcp::{Ctx, Server};
@@ -45,6 +46,8 @@ fn main() {
     let bridge = bridge::Bridge::start(&dir);
     let bridge = Arc::new(bridge);
     let log_bridge = bridge.clone();
+    let calls = voice::Calls::start(bridge.clone());
+    bridge.set_calls(calls.clone());
 
     let dt = match devtools::DevTools::start(&dir) {
         Ok(d) => d,
@@ -244,6 +247,63 @@ fn main() {
             |_, a| certs::remove(&a),
         );
 
+    server = server
+        .tool(
+            "call_open",
+            "Open a web call (Google Meet or another meeting page) for bia to hear and speak in: url=<the meeting's link>, lang=<language people will speak, when known>. It opens in a new tab made for the call: select that tab and join through the page as usual. What each person says then arrives on chrome:call as voice:s1, voice:s2 … with [speech <lang>], and chrome_call_say speaks as bia's microphone; there is no camera. Only a call opened this way has bia's voice. One call at a time.",
+            json!({"type": "object", "required": ["url"], "properties": {
+                "url": {"type": "string", "description": "the meeting's link, https://…"},
+                "lang": {"type": "string", "description": "language code most people there speak (ru, en …): speech is taken as that language from the first word; other languages are still noticed"}
+            }}),
+            {
+                let c = calls.clone();
+                move |_, a| c.open(&a)
+            },
+        )
+        .tool(
+            "call_say",
+            "Speak in the open web call with bia's own voice: text, lang=<language of the text> (required). Keep it short. Mark other-language parts inline: <lang=fr>Le Petit Bistro</lang>. A language without a voice fails at once: lang_install it (lang MCP). Wait for [you finished speaking] before speaking again: a new call_say cancels the one still playing ([voice cancelled]); [interrupted] means someone talked over bia. In a meeting, speak when bia is addressed or has something to add, not after every phrase.",
+            json!({"type": "object", "required": ["text", "lang"], "properties": {
+                "text": {"type": "string"},
+                "lang": {"type": "string", "description": "language code of the text, for example en"}
+            }}),
+            {
+                let c = calls.clone();
+                move |_, a| c.say(&a)
+            },
+        )
+        .tool(
+            "call_name",
+            "Name a voice of the open web call: voice=<s1, s2 …>, name=<who it is>, lang=<their language, when known>. Their speech then arrives as voice:<name>. Used after people introduced themselves ([several voices] or [new voice] notice): match each to a person in the addressbook first and pass their preferred language. One person can have two voices (they left and came back): give both the same name. When a transcript comes in the wrong language, call this again with the right lang.",
+            json!({"type": "object", "required": ["voice", "name"], "properties": {
+                "voice": {"type": "string", "description": "s1, s2 … as in voice:s2, or its current name"},
+                "name": {"type": "string"},
+                "lang": {"type": "string", "description": "language code this person speaks (ru, en …)"}
+            }}),
+            {
+                let c = calls.clone();
+                move |_, a| c.name(&a)
+            },
+        )
+        .tool(
+            "call_status",
+            "The open web call: its voices (who is named, how much each said), whether the page took bia's microphone, whether bia is speaking, and what the page itself reports (audio tracks, audio running).",
+            json!({"type": "object", "properties": {}}),
+            {
+                let c = calls.clone();
+                move |_, _| c.status()
+            },
+        )
+        .tool(
+            "call_close",
+            "Leave the open web call and close its tab. While bia is still speaking it waits until that has played, so say goodbye first, then call this. Everything said is saved to a file named in [call ended].",
+            json!({"type": "object", "properties": {}}),
+            {
+                let c = calls.clone();
+                move |_, _| c.close()
+            },
+        );
+
     let google_tools = dt.list_tools().unwrap_or_else(|e| {
         eprintln!("chrome-devtools-mcp tools/list: {e}");
         Vec::new()
@@ -270,6 +330,10 @@ fn main() {
     let watcher = watch::Watcher::start();
     server.run_with(move |ctx: Ctx| {
         log_bridge.set_log(ctx.clone());
+        let say = ctx.clone();
+        calls.set_say(Arc::new(move |who: &str, text: &str| {
+            say.inbound(who, voice::CHANNEL, "", text);
+        }));
         watcher.set_ctx(ctx);
     });
 }

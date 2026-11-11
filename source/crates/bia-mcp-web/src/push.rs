@@ -94,10 +94,7 @@ pub fn init(files: &Path, con: Arc<Bus>) -> Result<(), String> {
     };
     let key = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &pk8, &rng)
         .map_err(|e| format!("{}: {e}", kp.display()))?;
-    let subs: Vec<Sub> = std::fs::read(dir.join("subs.json"))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
+    let subs: Vec<Sub> = bia_mcp::statefile::read_or_default(&dir.join("subs.json"));
     // also fixes what 1.2.0 left owned by root (and subs.json readable by everyone)
     for p in [
         dir.parent().unwrap_or(&dir).to_path_buf(),
@@ -167,7 +164,9 @@ impl Push {
                 // the subscriptions' auth secrets: private, like the key
                 let _ = set_private(&tmp);
                 own(&tmp, self.owner);
-                let _ = std::fs::rename(&tmp, &p);
+                if std::fs::rename(&tmp, &p).is_ok() {
+                    let _ = bia_mcp::statefile::backup(&p); // private and owned like subs.json
+                }
             }
         }
     }
@@ -211,7 +210,7 @@ impl Push {
 }
 
 /// "Chrome on macOS" from a User-Agent header (Edge, Opera and Chrome on iOS say so first).
-fn device_of(ua: &str) -> String {
+pub(crate) fn device_of(ua: &str) -> String {
     let has = |k: &str| ua.contains(k);
     let browser = if has("Edg") {
         "Edge"
@@ -284,6 +283,41 @@ fn endpoint_ok(endpoint: &str) -> bool {
         && !name.ends_with(".internal")
         && name != "localhost"
         && endpoint.len() <= 2048
+}
+
+/// What the person decided about notifications in this browser (`POST /v1/push/permission`):
+/// granted (push works, or only while the tab is open), denied (the browser's prompt was
+/// rejected), dismissed (the web app's "Not now"), off (turned off in Settings).
+/// → the system message for the model, so it can acknowledge it. None: unknown state.
+pub fn permission_note(identity: &str, state: &str, push: bool, error: &str, user_agent: &str) -> Option<String> {
+    let device = device_of(user_agent);
+    let who = if identity.is_empty() { "the web user".to_string() } else { identity.to_string() };
+    let body = match state {
+        "granted" if push => format!(
+            "{who} turned on notifications for the web app on {device}: your messages now reach them as push notifications, also when no bia tab is open."
+        ),
+        "granted" => format!(
+            "{who} allowed notifications on {device}, but push could not be set up{}: they get notifications only while a bia tab is open.",
+            if error.trim().is_empty() { String::new() } else { format!(" ({})", error.trim()) }
+        ),
+        "denied" => format!(
+            "{who} blocked notifications for the web app in the browser on {device} (they rejected the browser's permission prompt). Your messages won't pop up there; they can allow them later in the browser's site settings."
+        ),
+        "dismissed" => format!(
+            "{who} chose \"Not now\" when the web app offered notifications on {device}. They can turn them on any time in Settings → Notifications."
+        ),
+        "off" => format!("{who} turned off notifications for the web app on {device} (Settings → Notifications)."),
+        "stopped" => format!(
+            "{who} stopped notifications in this browser ({device}) from Settings: your messages no longer pop up there."
+        ),
+        "removed" => format!(
+            "{who} removed another of their browsers from push notifications (Settings, from {device}): your messages no longer pop up on that one."
+        ),
+        _ => return None,
+    };
+    Some(format!(
+        "[notifications] {body} Acknowledge it in one short message on the web chat; don't ask them to change it."
+    ))
 }
 
 /// `POST /v1/push/subscribe` with the browser's `PushSubscription.toJSON()` → its id.
@@ -678,6 +712,27 @@ fn watch_tasks(files: &Path) {
         }
         let live: HashSet<&String> = now.iter().map(|(id, _)| id).collect();
         seen.retain(|id| live.contains(id));
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::permission_note;
+
+    const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+
+    #[test]
+    fn each_decision_becomes_a_note() {
+        let on = permission_note("root", "granted", true, "", UA).unwrap();
+        assert!(on.starts_with("[notifications] root turned on notifications") && on.contains("Acknowledge"), "{on}");
+        let tab = permission_note("root", "granted", false, "no Web Push", UA).unwrap();
+        assert!(tab.contains("only while a bia tab is open") && tab.contains("(no Web Push)"), "{tab}");
+        assert!(permission_note("root", "denied", false, "", UA).unwrap().contains("blocked notifications"));
+        assert!(permission_note("root", "dismissed", false, "", UA).unwrap().contains("Not now"));
+        assert!(permission_note("root", "off", false, "", UA).unwrap().contains("turned off"));
+        assert!(permission_note("root", "stopped", false, "", UA).unwrap().contains("stopped notifications in this browser"));
+        assert!(permission_note("root", "removed", false, "", UA).unwrap().contains("removed another of their browsers"));
+        assert!(permission_note("root", "maybe", false, "", UA).is_none());
     }
 }
 

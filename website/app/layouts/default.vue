@@ -1,7 +1,10 @@
 <template>
   <div class="layout">
     <a class="skip" href="#content">Skip to content</a>
-    <SiteHeader />
+    <div class="stick">
+      <CloudStrip v-if="route.path.replace(/\/$/, '') !== '/cloud'" />
+      <SiteHeader />
+    </div>
     <div id="content">
       <slot />
     </div>
@@ -9,7 +12,20 @@
   </div>
 </template>
 
+<script setup lang="ts">
+const route = useRoute()
+</script>
+
 <style scoped>
+/* the cloud strip and the header stick together */
+.stick {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+}
+.stick :deep(.top) {
+  position: relative;
+}
 .skip {
   position: absolute;
   left: -999px;

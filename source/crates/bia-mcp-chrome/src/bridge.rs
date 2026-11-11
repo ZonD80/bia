@@ -5,8 +5,11 @@ use serde_json::{json, Value};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::frame;
 use crate::host;
@@ -24,9 +27,31 @@ struct Shared {
     table: Mutex<Table>,
     /// Puts a line in front of the model; None: nobody can approve anything.
     announce: Mutex<Option<Announce>>,
+    /// Requests this side sent to the add-on that wait for its `reply`.
+    asked: Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>,
+    next_ask: AtomicU64,
+    /// Web calls (voice.rs): the add-on's call methods go there.
+    calls: Mutex<Option<crate::voice::Calls>>,
 }
 
 type Announce = Arc<dyn Fn(&str) + Send + Sync>;
+
+impl Shared {
+    fn new() -> Self {
+        Shared {
+            writer: Mutex::new(None),
+            connected: Mutex::new(0),
+            generation: AtomicU64::new(0),
+            log: Mutex::new(None),
+            inode: AtomicU64::new(0),
+            table: Mutex::new(Table::new()),
+            announce: Mutex::new(None),
+            asked: Mutex::new(HashMap::new()),
+            next_ask: AtomicU64::new(1),
+            calls: Mutex::new(None),
+        }
+    }
+}
 
 /// A native host that stops reading must not block the bridge (writes hold the writer lock).
 const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -40,15 +65,7 @@ pub struct Bridge {
 
 impl Bridge {
     pub fn start(dir: &Path) -> Self {
-        let shared = Arc::new(Shared {
-            writer: Mutex::new(None),
-            connected: Mutex::new(0),
-            generation: AtomicU64::new(0),
-            log: Mutex::new(None),
-            inode: AtomicU64::new(0),
-            table: Mutex::new(Table::new()),
-            announce: Mutex::new(None),
-        });
+        let shared = Arc::new(Shared::new());
         let sock = host::sock_path();
         if let Err(e) = listen(&shared, dir, &sock) {
             panic!("bind {}: {e}", sock.display());
@@ -73,6 +90,11 @@ impl Bridge {
             })
             .ok();
         Bridge { shared }
+    }
+
+    /// Web calls take the add-on's call methods from here on.
+    pub fn set_calls(&self, calls: crate::voice::Calls) {
+        *self.shared.calls.lock().unwrap() = Some(calls);
     }
 
     pub fn set_log(&self, ctx: Ctx) {
@@ -149,6 +171,30 @@ impl Bridge {
     }
 }
 
+impl crate::voice::Link for Bridge {
+    /// Ask the add-on to do something and wait for its answer.
+    fn request(&self, method: &str, params: Value, wait: Duration) -> Result<Value, String> {
+        let id = format!("h{}", self.shared.next_ask.fetch_add(1, Ordering::Relaxed));
+        let (tx, rx) = mpsc::channel();
+        self.shared.asked.lock().unwrap().insert(id.clone(), tx);
+        let sent = write_msg(&self.shared, &json!({"id": id, "method": method, "params": params}));
+        let r = match sent {
+            Ok(()) => rx.recv_timeout(wait).unwrap_or_else(|_| Err("the add-on did not answer".into())),
+            Err(e) => Err(e),
+        };
+        self.shared.asked.lock().unwrap().remove(&id);
+        r
+    }
+
+    fn notify(&self, method: &str, params: Value) -> Result<(), String> {
+        write_msg(&self.shared, &json!({"method": method, "params": params}))
+    }
+
+    fn connected(&self) -> bool {
+        Bridge::connected(self)
+    }
+}
+
 /// Bind the socket (replacing a stale file) and accept native hosts on it.
 fn listen(shared: &Arc<Shared>, dir: &Path, sock: &Path) -> std::io::Result<()> {
     open_parent(sock);
@@ -186,6 +232,10 @@ fn listen(shared: &Arc<Shared>, dir: &Path, sock: &Path) -> std::io::Result<()> 
                 }
                 let shared = accept.clone();
                 std::thread::spawn(move || reader(shared, read, gen));
+                let calls = accept.calls.lock().unwrap().clone();
+                if let Some(calls) = calls {
+                    calls.addon_connected();
+                }
             }
         })
         .map(|_| ())
@@ -246,6 +296,16 @@ fn reader(shared: Arc<Shared>, mut stream: UnixStream, gen: u64) {
                 break;
             }
         };
+        // the add-on's answer to something this side asked
+        if let Some(asked) = msg.get("reply").and_then(|r| r.as_str()) {
+            if let Some(tx) = shared.asked.lock().unwrap().remove(asked) {
+                let _ = tx.send(match msg.get("error").and_then(|e| e.as_str()) {
+                    Some(e) => Err(e.to_string()),
+                    None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
+                });
+            }
+            continue;
+        }
         let Some(method) = msg.get("method").and_then(|m| m.as_str()) else {
             continue;
         };
@@ -263,6 +323,16 @@ fn reader(shared: Arc<Shared>, mut stream: UnixStream, gen: u64) {
             continue;
         }
         if method != "passkey_create" && method != "passkey_get" {
+            let calls = shared.calls.lock().unwrap().clone();
+            if let Some(r) = calls.and_then(|c| c.from_addon(method, &params)) {
+                if !id.is_null() {
+                    let _ = write_msg(&shared, &match r {
+                        Ok(v) => json!({"id": id, "result": v}),
+                        Err(e) => json!({"id": id, "error": e}),
+                    });
+                }
+                continue;
+            }
             if !id.is_null() {
                 let _ = write_msg(&shared, &json!({"id": id, "error": format!("unknown method {method}")}));
             }
@@ -357,15 +427,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("BIA_FILES", &dir);
-        let shared = Arc::new(Shared {
-            writer: Mutex::new(None),
-            connected: Mutex::new(0),
-            generation: AtomicU64::new(0),
-            log: Mutex::new(None),
-            inode: AtomicU64::new(0),
-            table: Mutex::new(Table::new()),
-            announce: Mutex::new(None),
-        });
+        let shared = Arc::new(Shared::new());
         let sock = dir.join("pk.sock");
         listen(&shared, &dir, &sock).unwrap();
         let b = Bridge { shared: shared.clone() };

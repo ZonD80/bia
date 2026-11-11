@@ -503,21 +503,12 @@ impl ChatBook {
     }
 
     fn load() -> Self {
-        let chats = std::fs::read(Self::path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let chats = bia_mcp::statefile::read_or_default(&Self::path());
         Self { chats }
     }
 
     fn save(&self) {
-        let p = Self::path();
-        if let Some(d) = p.parent() {
-            let _ = std::fs::create_dir_all(d);
-        }
-        if let Ok(b) = serde_json::to_vec(&self.chats) {
-            let _ = std::fs::write(p, b);
-        }
+        let _ = bia_mcp::statefile::write_json(&Self::path(), &self.chats);
     }
 
     /// Returns true when something worth persisting changed.
@@ -899,21 +890,11 @@ impl Wa {
     }
 
     pub fn load_cfg() -> Cfg {
-        std::fs::read(Self::cfg_path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        bia_mcp::statefile::read_or_default(&Self::cfg_path())
     }
 
     pub fn save_cfg(c: &Cfg) -> Result<(), String> {
-        if let Some(p) = Self::cfg_path().parent() {
-            std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(
-            Self::cfg_path(),
-            serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?,
-        )
-        .map_err(|e| e.to_string())?;
+        bia_mcp::statefile::write_json(&Self::cfg_path(), c).map_err(|e| e.to_string())?;
         unsafe { libc::sync() };
         Ok(())
     }
@@ -2764,10 +2745,9 @@ fn bans_path() -> PathBuf {
 }
 
 fn read_bans() -> HashSet<String> {
-    let Ok(b) = std::fs::read(bans_path()) else {
+    let Some(v) = bia_mcp::statefile::read::<serde_json::Value>(&bans_path()) else {
         return HashSet::new();
     };
-    let v: serde_json::Value = serde_json::from_slice(&b).unwrap_or(serde_json::json!({}));
     v.get("chats")
         .and_then(|c| c.as_array())
         .map(|a| {
@@ -2779,11 +2759,8 @@ fn read_bans() -> HashSet<String> {
 }
 
 fn write_bans(ids: &[String]) -> Result<(), String> {
-    if let Some(p) = bans_path().parent() {
-        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
-    }
     let v = serde_json::json!({ "chats": ids });
-    std::fs::write(bans_path(), serde_json::to_vec_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
+    bia_mcp::statefile::write_json(&bans_path(), &v).map_err(|e| e.to_string())?;
     unsafe { libc::sync() };
     Ok(())
 }

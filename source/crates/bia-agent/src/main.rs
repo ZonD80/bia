@@ -23,6 +23,7 @@ mod memory;
 mod outbox;
 mod release;
 mod remote;
+mod repairs;
 mod repl;
 mod runaway;
 mod schedules;

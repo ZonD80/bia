@@ -1066,6 +1066,7 @@ impl Tools {
             &state.join("schedules.json"),
         )));
         crate::schedules::start(schedules.clone(), con.clone());
+        crate::repairs::start(state.clone(), con.clone());
         let dream = crate::dream::Dream::open(files_dir);
         crate::dream::start(dream.clone(), con.clone());
         let (outbox, outbox_lost) = crate::outbox::Outbox::load(&state, con.clone());
@@ -1991,6 +1992,19 @@ impl Tools {
                     let call = rest.remove("call").unwrap_or_default();
                     json!({"call": call, "arguments": Value::Object(rest)})
                 }
+                // discover(arguments={path: "mcp/x", restart: true}): discover's own arguments came
+                // wrapped (read as a plain discover() it listed the tree and restarted nothing)
+                Some(Value::Object(inner)) if args.get("call").is_none() => {
+                    let mut flat = inner.clone();
+                    if let Some(top) = args.as_object() {
+                        for (k, v) in top {
+                            if k != "arguments" {
+                                flat.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    Value::Object(flat)
+                }
                 _ => args.clone(),
             };
             let call = args
@@ -2619,7 +2633,28 @@ impl Tools {
     fn prepare_mcp(&mut self, server: usize) -> Result<()> {
         let name = self.servers[server].name.clone();
         self.refresh_named(&name)?;
-        self.servers[server].ensure_alive()
+        self.revive_if_dead(server)
+    }
+
+    /// Start an MCP's process again and read its functions again: the files may have been
+    /// replaced since it started (an update, then its process was stopped), and a list kept
+    /// from the old process would drop the new arguments as unknown.
+    fn revive(&mut self, idx: usize) -> Result<()> {
+        self.servers[idx].respawn()?;
+        let name = self.servers[idx].name.clone();
+        if let Some((_, m)) = self.find_on_disk(&name) {
+            if let Some(block) = self.reload_server(idx, &m)? {
+                self.reload_notes.push(block);
+            }
+        }
+        Ok(())
+    }
+
+    fn revive_if_dead(&mut self, idx: usize) -> Result<()> {
+        if self.servers[idx].alive() {
+            return Ok(());
+        }
+        self.revive(idx)
     }
 
     fn mcp_invoke(
@@ -2629,11 +2664,10 @@ impl Tools {
         args: Value,
         on_log: &mut dyn FnMut(&str),
     ) -> (String, bool) {
-        let s = &mut self.servers[server];
-        match s.call(tool, args.clone(), on_log) {
+        match self.servers[server].call(tool, args.clone(), on_log) {
             Ok(r) => r,
-            Err(e) if crate::mcp::McpServer::transport_error(&e) => match s.respawn() {
-                Ok(()) => match s.call(tool, args, on_log) {
+            Err(e) if crate::mcp::McpServer::transport_error(&e) => match self.revive(server) {
+                Ok(()) => match self.servers[server].call(tool, args, on_log) {
                     Ok(r) => r,
                     Err(e2) => (format!("error: {e2:#}"), true),
                 },
@@ -3276,15 +3310,8 @@ impl Tools {
             let name = self.servers[i].name.clone();
             let r = match self.refresh_named(&name) {
                 Ok(s) if !s.is_empty() => Ok(()),
-                Ok(_) => self.servers[i].respawn().and_then(|()| {
-                    // the new process may bring other functions (it was updated, then it died)
-                    if let Some((_, m)) = self.find_on_disk(&name) {
-                        if let Some(block) = self.reload_server(i, &m)? {
-                            self.reload_notes.push(block);
-                        }
-                    }
-                    Ok(())
-                }),
+                // the new process may bring other functions (it was updated, then it died)
+                Ok(_) => self.revive(i),
                 Err(e) => Err(e),
             };
             match r {
@@ -3872,7 +3899,7 @@ impl Tools {
             .server_index(mcp)
             .ok_or_else(|| anyhow::anyhow!("{mcp} MCP is not running"))?;
         self.loaded.insert(idx);
-        self.servers[idx].ensure_alive()?;
+        self.revive_if_dead(idx)?;
         let link = self.servers[idx].link();
         Ok(self
             .outbox
@@ -4551,6 +4578,22 @@ done
         assert!(!err && r.contains("mcp/tun changed") && !r.contains("tun_route") && r.ends_with("done"), "{r}");
         let (r, err) = t.call("tun_route", &json!({}), &mut log);
         assert!(err && r.contains("unknown tool"), "{r}");
+
+        // updated, then its process is stopped, and the next thing is a call to it (nothing looked
+        // for dead processes in between): the call brings it back with its new functions
+        edit_script(&mcp.join("server.sh"), &script_mcp(two), 17);
+        t.servers[0].kill();
+        let (r, err) = t.call("tun_status", &json!({}), &mut log);
+        assert!(!err && r.contains("mcp/tun changed") && r.contains("tun_route") && r.ends_with("done"), "{r}");
+        let (r, err) = t.call("tun_route", &json!({}), &mut log);
+        assert!(!err && r == "done", "{r}");
+
+        // the restart asked with discover's arguments wrapped still restarts
+        edit_script(&mcp.join("server.sh"), &script_mcp(one), 18);
+        let (r, err) = t.call("discover", &json!({"arguments": {"path": "mcp/tun", "restart": true}}), &mut log);
+        assert!(!err && r.contains("restarted mcp/tun") && r.contains("mcp/tun changed"), "{r}");
+        assert_eq!(Tools::expand_call("discover", &json!({"arguments": {"path": "mcp/tun"}, "enable": true})).1, json!({"path": "mcp/tun", "enable": true}));
+        assert_eq!(Tools::expand_call("discover", &json!({"arguments": {"command": "ls"}, "call": "bash"})), ("bash".to_string(), json!({"command": "ls"})));
         for s in &mut t.servers {
             s.kill();
         }

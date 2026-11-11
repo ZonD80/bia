@@ -10,6 +10,7 @@ pub mod ignore;
 pub mod lanes;
 pub mod md;
 pub mod share;
+pub mod statefile;
 
 /// What the model says before bia's first login to a messenger: the account is bia's own.
 pub fn own_account(app: &str) -> String {

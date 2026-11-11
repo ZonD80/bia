@@ -107,12 +107,7 @@ impl Inner {
             next: self.next,
             entries: self.entries.clone(),
         };
-        if let Ok(b) = serde_json::to_vec_pretty(&f) {
-            let tmp = self.path.with_extension("json.tmp");
-            if std::fs::write(&tmp, b).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
-            }
-        }
+        let _ = bia_mcp::statefile::write_json(&self.path, &f);
     }
     fn entry(&mut self, id: &str) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|e| e.id == id)
@@ -190,10 +185,7 @@ impl Outbox {
     /// marked lost and returned as notices for the model.
     pub fn load(state_dir: &Path, con: Arc<Console>) -> (Outbox, Vec<Inbound>) {
         let path = state_dir.join("outbox.json");
-        let f: File = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let f: File = bia_mcp::statefile::read_or_default(&path);
         let mut inner = Inner {
             path,
             next: f.next.max(1),

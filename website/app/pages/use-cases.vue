@@ -74,7 +74,7 @@ const name = (slug: string) => features.find((f) => f.slug === slug)?.name ?? sl
   gap: 0.45rem;
   margin-top: 1.5rem;
 }
-.ucg { padding-block: clamp(2.5rem, 6vw, 4rem); scroll-margin-top: 4.5rem; }
+.ucg { padding-block: clamp(2.5rem, 6vw, 4rem); scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
 .ucg__head {
   display: flex;
   gap: 1.1rem;

@@ -436,10 +436,7 @@ fn strip_stamp(name: &str) -> &str {
 // ---- persistence ----
 
 fn read_msgs(p: &Path) -> Vec<Msg> {
-    std::fs::read(p)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    bia_mcp::statefile::read_or_default(p)
 }
 
 impl User {
@@ -476,10 +473,7 @@ impl User {
             changed = true;
         }
         let meta_path = dir.join("meta.json");
-        let meta = match std::fs::read(&meta_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Meta>(&b).ok())
-        {
+        let meta = match bia_mcp::statefile::read::<Meta>(&meta_path) {
             Some(m) if !changed => m,
             old => {
                 // the first start with revisions: number what is there, oldest first
@@ -594,10 +588,7 @@ impl User {
 }
 
 fn atomic_write(p: &Path, b: &[u8]) {
-    let tmp = p.with_extension("tmp");
-    if std::fs::write(&tmp, b).is_ok() {
-        let _ = std::fs::rename(&tmp, p);
-    }
+    let _ = bia_mcp::statefile::write(p, b);
 }
 
 impl Hub {

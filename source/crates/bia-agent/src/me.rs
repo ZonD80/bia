@@ -23,20 +23,11 @@ impl Me {
     }
 
     pub fn load(files: &Path) -> Me {
-        std::fs::read(Self::path(files))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Me>(&b).ok())
-            .unwrap_or_default()
+        bia_mcp::statefile::read_or_default(&Self::path(files))
     }
 
     pub fn save(&self, files: &Path) -> std::io::Result<()> {
-        let p = Self::path(files);
-        if let Some(d) = p.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?)?;
-        std::fs::rename(&tmp, &p)
+        bia_mcp::statefile::write_json(&Self::path(files), self)
     }
 
     /// The first line of the system prompt.

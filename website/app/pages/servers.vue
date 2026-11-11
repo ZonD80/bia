@@ -512,7 +512,7 @@ function mib(bytes: number): string {
 }
 .h2:first-child, .h2--top { margin-top: 0.3rem; }
 .h3 { font-size: 1.25rem; margin: 2rem 0 0.75rem; }
-.anchor { scroll-margin-top: 4.5rem; }
+.anchor { scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
 .ways { margin-top: 1.5rem; }
 .way { display: block; color: inherit; text-decoration: none; transition: transform 0.15s ease, border-color 0.15s ease; }
 .way:hover { transform: translateY(-2px); border-color: var(--accent); }

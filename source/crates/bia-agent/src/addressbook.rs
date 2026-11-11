@@ -53,11 +53,7 @@ pub struct AddressBook {
 
 impl AddressBook {
     pub fn load(path: &Path) -> AddressBook {
-        let contacts = std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<File>(&b).ok())
-            .map(|f| f.contacts)
-            .unwrap_or_default();
+        let contacts = bia_mcp::statefile::read::<File>(path).map(|f| f.contacts).unwrap_or_default();
         AddressBook {
             path: path.to_path_buf(),
             contacts,
@@ -65,21 +61,7 @@ impl AddressBook {
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(p) = self.path.parent() {
-            std::fs::create_dir_all(p)?;
-        }
-        let tmp = self.path.with_extension("json.tmp");
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&serde_json::to_vec_pretty(&File {
-                contacts: self.contacts.clone(),
-            })?)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, &self.path)
-            .or_else(|_| std::fs::copy(&tmp, &self.path).map(|_| ()))?;
-        let _ = std::fs::remove_file(&tmp);
+        bia_mcp::statefile::write_json(&self.path, &File { contacts: self.contacts.clone() })?;
         self.export_langs();
         unsafe { libc::sync() };
         Ok(())

@@ -137,26 +137,11 @@ impl AgentRuntime {
 }
 
 fn load_json<T: serde::de::DeserializeOwned + Default>(path: &Path) -> T {
-    std::fs::read(path)
-        .ok()
-        .and_then(|d| serde_json::from_slice(&d).ok())
-        .unwrap_or_default()
+    bia_mcp::statefile::read_or_default(path)
 }
 
 fn save_json<T: Serialize>(v: &T, path: &Path) -> std::io::Result<()> {
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    {
-        use std::io::Write;
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(&serde_json::to_vec_pretty(v).map_err(std::io::Error::other)?)?;
-        f.sync_all()?;
-    }
-    std::fs::rename(&tmp, path).or_else(|_| std::fs::copy(&tmp, path).map(|_| ()))?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(())
+    bia_mcp::statefile::write_json(path, v)
 }
 
 impl Config {

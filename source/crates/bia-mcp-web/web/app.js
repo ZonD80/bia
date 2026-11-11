@@ -779,12 +779,20 @@ async function pushOff() {
   try { await POST('/v1/push/unsubscribe', { endpoint: sub.endpoint }); } catch {}
   try { await sub.unsubscribe(); } catch {}
 }
+// tell bia what the person decided about notifications, so it can acknowledge it (a system message)
+function notifDecided(state) {
+  POST('/v1/push/permission', { state, push: !!NOTIF.sub, error: NOTIF.err || '' }).catch(() => {});
+}
 // from a click: browsers only ask for permission on a user gesture
 async function enableNotifications() {
   S.prefs.notify = true; S.prefs.notifAsked = true; savePrefs();
+  const before = canNotify() ? Notification.permission : '';
   if (canNotify() && Notification.permission === 'default') await Notification.requestPermission();
   if (canNotify() && Notification.permission === 'granted') {
     if (await pushOn()) toast('Notifications are on'); else toast('Notifications are on while this tab is open (' + NOTIF.err + ')', true);
+    notifDecided('granted');
+  } else if (canNotify() && Notification.permission === 'denied' && before !== 'denied') {
+    notifDecided('denied'); // the browser's prompt was rejected
   }
   renderNotifAsk(); renderSettings();
 }
@@ -811,7 +819,8 @@ async function loadPushSubs() {
   const remove = async (ids, self) => {
     try { await POST('/v1/push/remove', { ids }); } catch (e) { toast(e.message, true); return; }
     // our own entry gone: stop this browser's subscription too
-    if (self) { S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings(); } else loadPushSubs();
+    if (self) { S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings(); notifDecided('stopped'); }
+    else { loadPushSubs(); notifDecided('removed'); }
   };
   const bad = subs.filter(x => x.expired || x.failing);
   set(el, ...subs.map(x => {
@@ -838,7 +847,7 @@ function renderNotifAsk() {
   if (!ask) { set(el); return; }
   set(el, ic('bell'), h('div', { class: 'grow' }, 'Get notified when bia writes'),
     h('button', { class: 'btn small', onclick: enableNotifications }, 'Turn on'),
-    iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); }));
+    iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); notifDecided('dismissed'); }));
 }
 // the server names the page after this bia ("Fred · bia")
 const BASE_TITLE = document.title || 'bia';
@@ -2716,7 +2725,7 @@ async function renderSettings() {
     h('div', { class: 'setrow' }, h('div', { class: 'grow' }, 'Browser notifications', h('div', { class: 'muted', style: 'font-size:13px' }, notifState)),
       canNotify() && perm !== 'denied' ? sw(notifOn, async v => {
         if (v) return enableNotifications();
-        S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings();
+        S.prefs.notify = false; savePrefs(); await pushOff(); renderSettings(); notifDecided('off');
       }) : null),
     NOTIF.sub ? h('div', { class: 'setrow' }, h('div', { class: 'grow muted', style: 'font-size:13px' }, 'Notifications go through your browser\'s push service, end-to-end encrypted.'),
       h('button', { class: 'btn ghost small', onclick: testPush }, 'Send a test')) : null,

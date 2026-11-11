@@ -55,9 +55,7 @@ impl Store {
             .join("logs")
             .join("jobs");
         let _ = std::fs::create_dir_all(&log_dir);
-        let (jobs, next) = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<File>(&b).ok())
+        let (jobs, next) = bia_mcp::statefile::read::<File>(&path)
             .map(|f| (f.jobs, f.next))
             .unwrap_or_default();
         let mut jobs = jobs;
@@ -99,21 +97,12 @@ impl Store {
     }
 
     fn save(&self) {
-        if let Some(p) = self.path.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
         let keep = self.compacted();
         let f = File {
             next: self.next,
             jobs: keep,
         };
-        let tmp = self.path.with_extension("json.tmp");
-        if let Ok(buf) = serde_json::to_vec_pretty(&f) {
-            let _ = std::fs::write(&tmp, buf);
-            let _ = std::fs::rename(&tmp, &self.path)
-                .or_else(|_| std::fs::copy(&tmp, &self.path).map(|_| ()));
-            let _ = std::fs::remove_file(&tmp);
-        }
+        let _ = bia_mcp::statefile::write_json(&self.path, &f);
     }
 
     fn compacted(&self) -> Vec<Job> {

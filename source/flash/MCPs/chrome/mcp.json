@@ -1,7 +1,7 @@
 {
   "name": "chrome",
-  "version": "2.1.7",
-  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. Websites that ask for a client certificate: chrome_cert_import, chrome_cert_select, chrome_restart; without a rule a [certificate dialog opened] line arrives on system|chrome: answer it with chrome_choose_certificate(cert=<name>) or cancel=true; a private CA: chrome_cert_trust. A site asking for a passkey (sign-in, confirmation or a new one) waits until answered: a [passkey request] line arrives on system|chrome, answer it with chrome_passkey_answer(request=<id>, answer=\"approve\" or \"deny\"); approve only what bia itself is doing on that site or what root asked for, otherwise ask root first. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
+  "version": "2.2.0",
+  "description": "Google Chrome on bia's own profile with remote debugging: chrome_install / start / restart / stop / status run it; page tools come from chrome-devtools-mcp (chrome_take_snapshot first, then click or fill by uid). Tabs opening and closing arrive as system|chrome lines, and so does a file dialog opening (an upload button or drop zone was clicked): answer it with chrome_choose_files(paths=[...]) or cancel=true (for a folder it also confirms Chrome's \"Upload N files to this site?\"). Downloads land in /home/bia/Downloads without asking, several at once too. Websites that ask for a client certificate: chrome_cert_import, chrome_cert_select, chrome_restart; without a rule a [certificate dialog opened] line arrives on system|chrome: answer it with chrome_choose_certificate(cert=<name>) or cancel=true; a private CA: chrome_cert_trust. A site asking for a passkey (sign-in, confirmation or a new one) waits until answered: a [passkey request] line arrives on system|chrome, answer it with chrome_passkey_answer(request=<id>, answer=\"approve\" or \"deny\"); approve only what bia itself is doing on that site or what root asked for, otherwise ask root first. Web calls (Google Meet or another meeting page): chrome_call_open(url=<meeting link>, lang=<language people will speak>) opens it in a tab made for the call; select that tab and join through the page. What each person says arrives on chrome:call as voice:s1, voice:s2 … with [speech <lang>]; chrome_call_say(text, lang) speaks with bia's voice as the page's microphone (no camera); after a [several voices] or [new voice] line ask people to introduce themselves one at a time and name each voice with chrome_call_name(voice, name, lang) from the addressbook (lang = that person's language); chrome_call_close leaves. In a meeting bia speaks when it is addressed or has something to add, not after every phrase. For clicks outside the page (some captchas) use mcp/screen. Messages on Facebook, Instagram, Telegram and WhatsApp go through mcp/messenger, mcp/instagram, mcp/telegram and mcp/whatsapp, not this browser; Chrome is only for logging in there and for security checks.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-chrome",
     "x86_64": "bin/x86_64/bia-mcp-chrome"
@@ -38,7 +38,16 @@
     "mtls",
     "ca",
     "trust",
-    "authentication"
+    "authentication",
+    "meeting",
+    "meet",
+    "call",
+    "conference",
+    "voice",
+    "speak",
+    "listen",
+    "microphone",
+    "webrtc"
   ],
   "examples": [
     "root|console|<issued>|<delivered>|open github in chrome -> discover(path='mcp/chrome', enable=true); chrome_navigate_page(url='https://github.com') or chrome_new_page(url='https://github.com')",
@@ -50,6 +59,9 @@
     "root|console|<issued>|<delivered>|there is a captcha on the page -> discover(path='mcp/screen', enable=true); screen_shot(); screen_cursor_move_human(x=…, y=…); screen_click(x=…, y=…)",
     "root|console|<issued>|<delivered>|bia should log in to portal.example.com with /home/bia/files/bia.p12, password in the secret portal-p12 -> discover(path='mcp/chrome', enable=true); chrome_cert_import(path='/home/bia/files/bia.p12', password_secret='portal-p12'); chrome_cert_select(site='portal.example.com'); chrome_restart()",
     "system|chrome|<issued>|<delivered>|[passkey request p1762300000] https://github.com wants a signature from a passkey for github.com, while bia is signing in to GitHub for root -> chrome_passkey_answer(request='p1762300000', answer='approve')",
-    "system|chrome|<issued>|<delivered>|[passkey request p1762300001] https://unknown.example wants to create a new passkey, and nobody asked for that -> ask root; if root says no: chrome_passkey_answer(request='p1762300001', answer='deny')"
+    "system|chrome|<issued>|<delivered>|[passkey request p1762300001] https://unknown.example wants to create a new passkey, and nobody asked for that -> ask root; if root says no: chrome_passkey_answer(request='p1762300001', answer='deny')",
+    "root|console|<issued>|<delivered>|join https://meet.google.com/abc-defg-hij and take notes -> discover(path='mcp/chrome', enable=true); chrome_call_open(url='https://meet.google.com/abc-defg-hij'); chrome_list_pages(); chrome_select_page(pageId=…); chrome_take_snapshot(); chrome_click(uid='…' of Join now / Ask to join)",
+    "system|chrome:call|<issued>|<delivered>|[several voices] 2 separate voices have spoken in this call; not named yet: s1, s2 … -> chrome_call_say(text='Could everyone say their name, one at a time?', lang='en'); then for each introduction: chrome_call_name(voice='s1', name='Anna Lee', lang='en')",
+    "voice:Anna Lee|chrome:call|<issued>|<delivered>|[speech en] Fred, can you send the notes after the meeting? -> chrome_call_say(text='Yes, I will send them right after.', lang='en')"
   ]
 }

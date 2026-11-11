@@ -100,9 +100,7 @@ impl Pki {
     }
 
     fn agent_json(&self) -> serde_json::Value {
-        fs::read(self.dir.join("agent.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        bia_mcp::statefile::read::<serde_json::Value>(&self.dir.join("agent.json"))
             .filter(|v| v.is_object())
             .unwrap_or_else(|| json!({}))
     }
@@ -110,7 +108,7 @@ impl Pki {
     pub(crate) fn write_agent_json(&self, f: impl FnOnce(&mut serde_json::Value)) -> Result<()> {
         let mut v = self.agent_json();
         f(&mut v);
-        fs::write(self.dir.join("agent.json"), serde_json::to_vec_pretty(&v)?)?;
+        bia_mcp::statefile::write_json(&self.dir.join("agent.json"), &v)?;
         Ok(())
     }
 
@@ -215,7 +213,7 @@ impl Pki {
 
     pub fn peer(&self, name: &str) -> Option<Peer> {
         let d = self.peer_dir(name).ok()?;
-        serde_json::from_slice(&fs::read(d.join("peer.json")).ok()?).ok()
+        bia_mcp::statefile::read(&d.join("peer.json"))
     }
 
     pub fn peers(&self) -> Vec<Peer> {
@@ -244,10 +242,12 @@ impl Pki {
         if let Some(c) = cert_pem {
             fs::write(d.join("cert.pem"), c)?;
         }
-        let tmp = d.join("peer.json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(p)?)?;
-        chmod600(&tmp);
-        fs::rename(&tmp, d.join("peer.json"))?;
+        let pj = d.join("peer.json");
+        if !pj.exists() {
+            fs::write(&pj, b"{}")?; // created private: statefile keeps the mode it finds
+            chmod600(&pj);
+        }
+        bia_mcp::statefile::write_json(&pj, p)?;
         Ok(())
     }
 

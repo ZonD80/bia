@@ -460,7 +460,7 @@ struct Rule {
 }
 
 fn load_rules() -> Vec<Rule> {
-    fs::read(rules_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    bia_mcp::statefile::read_or_default(&rules_path())
 }
 
 fn policy_of(rules: &[Rule]) -> Value {
@@ -485,8 +485,9 @@ fn write_policy(rules: &[Rule]) -> Result<(), String> {
 fn save_rules(rules: &[Rule]) -> Result<(), String> {
     fs::create_dir_all(state_dir()).map_err(|e| e.to_string())?;
     let path = rules_path();
-    fs::write(&path, serde_json::to_vec_pretty(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    bia_mcp::statefile::write_json(&path, &rules).map_err(|e| e.to_string())?;
     chown_bia(&path);
+    chown_bia(&bia_mcp::statefile::backup_path(&path));
     write_policy(rules)
 }
 

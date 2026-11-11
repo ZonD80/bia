@@ -226,7 +226,7 @@ function buttonText(host: Host): string {
 .kinds p { margin: 0; }
 .kinds ul { margin: 0.75rem 0; padding-left: 1.2rem; }
 .kinds li + li { margin-top: 0.4rem; }
-.other-ways { scroll-margin-top: 4.5rem; }
+.other-ways { scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
 .other-ways code { overflow-wrap: anywhere; font-size: 0.85em; }
 .grid--2x2 { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
 </style>

@@ -57,7 +57,7 @@ fn enabled_true() -> bool {
 
 #[derive(Serialize, Deserialize, Default)]
 struct File {
-    #[serde(default)]
+    /// required: a JSON object without it (another program's file) is not "no schedules"
     items: Vec<Item>,
 }
 
@@ -246,34 +246,15 @@ fn new_id() -> String {
 }
 
 impl Store {
+    /// A broken file is kept aside and the last good copy used (bia_mcp::statefile); the
+    /// agent tells bia from repairs.log. A missing schedules file comes back from its copy too.
     pub fn load(path: &Path) -> Store {
-        let items = std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<File>(&b).ok())
-            .map(|f| f.items)
-            .unwrap_or_default();
-        Store {
-            path: path.to_path_buf(),
-            items,
-        }
+        let items = bia_mcp::statefile::read_restoring::<File>(path).map(|f| f.items).unwrap_or_default();
+        Store { path: path.to_path_buf(), items }
     }
 
     fn save(&self) -> Result<()> {
-        if let Some(p) = self.path.parent() {
-            std::fs::create_dir_all(p)?;
-        }
-        let tmp = self.path.with_extension("json.tmp");
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&serde_json::to_vec_pretty(&File {
-                items: self.items.clone(),
-            })?)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, &self.path)
-            .or_else(|_| std::fs::copy(&tmp, &self.path).map(|_| ()))?;
-        let _ = std::fs::remove_file(&tmp);
+        bia_mcp::statefile::write_json(&self.path, &File { items: self.items.clone() })?;
         unsafe { libc::sync() };
         Ok(())
     }
@@ -1176,6 +1157,26 @@ mod tests {
         assert!(output_notifies("new mail", "2 new mail").unwrap());
         assert!(!output_notifies("new mail", "no new emails").unwrap());
         assert!(output_notifies("(?i)inbox", "Inbox: 1").unwrap());
+    }
+
+    #[test]
+    fn a_foreign_file_is_kept_and_the_good_copy_restored() {
+        let dir = std::env::temp_dir().join(format!("bia-sched-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("schedules.json");
+        let new = |title| NewItem { title, body: "", at: "in 10m", kind: "reminder", repeat: "daily", cron: "", command: "", user: "", pattern: "" };
+        let mut st = Store::load(&path);
+        st.create(&new("one")).unwrap();
+        st.create(&new("two")).unwrap();
+        // what happened on Fred (2026-11-11): Chrome Preferences, valid JSON, over the schedules
+        std::fs::write(&path, br#"{"NewTabPage":{"PrevNavigationTime":"1"},"profile":{"exit_type":"Normal"}}"#).unwrap();
+        assert_eq!(Store::load(&path).items.len(), 2);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(Store::load(&path).items.len(), 2);
+        let (lines, _) = bia_mcp::statefile::repairs_since(&dir, 0);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

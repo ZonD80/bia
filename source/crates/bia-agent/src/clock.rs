@@ -474,27 +474,12 @@ impl ClockCfg {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        let tmp = path.with_extension("json.tmp");
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp)?;
-            f.write_all(&serde_json::to_vec_pretty(self)?)?;
-            f.sync_all()?;
-        }
-        std::fs::rename(&tmp, path).or_else(|_| std::fs::copy(&tmp, path).map(|_| ()))?;
-        let _ = std::fs::remove_file(&tmp);
-        Ok(())
+        Ok(bia_mcp::statefile::write_json(path, self)?)
     }
 }
 
 pub fn restore(path: &Path) {
-    let loaded = std::fs::read(path)
-        .ok()
-        .and_then(|b| serde_json::from_slice::<ClockCfg>(&b).ok())
-        .unwrap_or_default();
+    let loaded: ClockCfg = bia_mcp::statefile::read_or_default(path);
     {
         let mut c = cfg_lock();
         *c = loaded;

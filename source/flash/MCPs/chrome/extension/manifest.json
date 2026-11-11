@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "bia chrome",
-  "version": "0.4.5",
-  "description": "Passkey proxy for bia: every request waits for approval (page automation is chrome-devtools-mcp)",
+  "version": "0.5.4",
+  "description": "bia's passkeys (every request waits for approval) and its voice in web calls (page automation is chrome-devtools-mcp)",
   "minimum_chrome_version": "111",
   "permissions": ["tabs", "nativeMessaging", "webAuthenticationProxy", "alarms"],
   "host_permissions": ["<all_urls>"],

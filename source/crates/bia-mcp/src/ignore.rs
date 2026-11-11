@@ -71,18 +71,12 @@ pub fn compile(pattern: &str) -> Result<Regex, String> {
 }
 
 pub fn load() -> Rules {
-    std::fs::read(path()).ok().and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default()
+    crate::statefile::read_or_default(&path())
 }
 
 /// Written by the agent; the MCPs see the change at their next message.
 pub fn save(r: &Rules) -> std::io::Result<()> {
-    let p = path();
-    if let Some(d) = p.parent() {
-        std::fs::create_dir_all(d)?;
-    }
-    let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(r)?)?;
-    std::fs::rename(&tmp, &p)
+    crate::statefile::write_json(&path(), r)
 }
 
 struct Cache {

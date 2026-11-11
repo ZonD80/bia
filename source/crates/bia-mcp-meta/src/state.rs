@@ -42,20 +42,11 @@ fn cfg_path(p: Platform) -> PathBuf {
 }
 
 pub fn load_cfg(p: Platform) -> Cfg {
-    std::fs::read(cfg_path(p))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    bia_mcp::statefile::read_or_default(&cfg_path(p))
 }
 
 pub fn save_cfg(p: Platform, c: &Cfg) -> Result<(), String> {
-    let path = cfg_path(p);
-    if let Some(d) = path.parent() {
-        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
-    }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(c).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    bia_mcp::statefile::write_json(&cfg_path(p), c).map_err(|e| e.to_string())
 }
 
 /// Update the config in place (read-modify-write).
@@ -76,9 +67,7 @@ struct BanFile {
 }
 
 pub fn bans(p: Platform) -> BTreeSet<String> {
-    std::fs::read(bans_path(p))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<BanFile>(&b).ok())
+    bia_mcp::statefile::read::<BanFile>(&bans_path(p))
         .map(|f| f.chats)
         .unwrap_or_default()
 }
@@ -88,12 +77,7 @@ pub fn set_ban(p: Platform, chat: &str, on: bool) -> Result<bool, String> {
     let mut chats = bans(p);
     let changed = if on { chats.insert(chat.to_string()) } else { chats.remove(chat) };
     if changed {
-        let path = bans_path(p);
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&path, serde_json::to_vec_pretty(&BanFile { chats }).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        bia_mcp::statefile::write_json(&bans_path(p), &BanFile { chats }).map_err(|e| e.to_string())?;
     }
     Ok(changed)
 }

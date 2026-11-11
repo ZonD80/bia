@@ -27,6 +27,14 @@ and update or move itself to another machine.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.
 
+> **New: [bia cloud](https://cloud.ownbia.com) — anyone can run a bia on demand now.**
+> No stick, no spare computer, no server to rent: pick a name and a language, pay once, and
+> a bia wakes up on its own server in about half an hour, kept running and backed up.
+> Pay as you go from €17.99 a month (its brain from the balance, or your own key); only you
+> hold its key, and you can take it home any time. It is the same free bia from this repo.
+> More on [ownbia.com/cloud](https://ownbia.com/cloud); agents can use its
+> [API](https://cloud.ownbia.com/developers/).
+
 ### Get bia
 
 - **Computer (Mac, Windows, Linux):** bia deploy writes a USB stick or puts bia on a
@@ -40,6 +48,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works inside.
   [TestFlight](https://testflight.apple.com/join/qePtQWqF), or
   [appdb](https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0).
 - **A Linux server over ssh:** `curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash`
+- **On demand, run for you:** [bia cloud](https://cloud.ownbia.com) gives a bia its own server
+  in a European data centre: a name, a language, one payment. Pay as you go; export it any time.
 
 ### Lineage
 
@@ -91,7 +101,7 @@ where it left off.
 │   │   ├── bia-mcp-system/    FMM config, human-in-the-loop, file links
 │   │   ├── bia-mcp-web/       the web bus: HTTPS + mTLS app (chats, calls, files, shell, display), PKI
 │   │   ├── bia-mcp-secrets/   passwords, TOTP/HOTP, WebAuthn passkeys, 1Password import
-│   │   ├── bia-mcp-chrome/    Google Chrome lifecycle, passkey extension, devtools MCP
+│   │   ├── bia-mcp-chrome/    Google Chrome lifecycle, passkey extension, devtools MCP, voice in web calls
 │   │   ├── bia-mcp-screen/    screenshot + mouse/keyboard on display :0
 │   │   ├── bia-mcp-telegram/  Telegram user account (ferogram) + voice calls (tgcalls)
 │   │   ├── bia-mcp-whatsapp/  WhatsApp linked device (whatsapp-rust) + voice calls
@@ -235,7 +245,8 @@ as `<name>_<tool>`. Rust MCPs can use the `bia-mcp` crate.
 
 Working: x86_64 and arm64 builds, UEFI + Secure Boot (shim), legacy BIOS on
 x86_64, local llama.cpp with GPU backends, FMM, web app (an MCP bus) with mTLS,
-Telegram and WhatsApp (text + voice), Messenger and Instagram DMs, Chrome + passkeys, screen control,
+Telegram and WhatsApp (text + voice), Messenger and Instagram DMs, Chrome + passkeys, voice in web
+meetings (Google Meet), screen control,
 secrets, memory, schedules, backup / fly / OS update through the rescue image
 (e2e-tested on arm64).
 

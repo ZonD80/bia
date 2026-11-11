@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.0
+
+### Changes
+- bia can join a web meeting in its Chrome and take part by voice: it hears what people say and speaks with its own voice. Tested in Google Meet; other meeting pages that use the browser's standard calls should work the same way. It needs no sound card, microphone or camera. Each person's speech arrives separately, so bia knows who said what once people have introduced themselves; in Google Meet with more than three other people talking, voices can get mixed up. Everything said is saved to a file in files/calls when the call ends.
+- Restarting an MCP after changing it now works in two cases where it silently did not: when the model sent the restart request in a wrapped form (bia got the list of functions back and nothing restarted), and when the MCP's process was stopped and came back on the next call (bia kept the old function list, so new arguments were dropped as unknown).
+- bia now hears when someone turns notifications on or off in the web app: allowing them (and whether push works with no tab open), blocking them in the browser's prompt, choosing "Not now", turning them off in Settings, stopping them for this browser, or removing another browser. It acknowledges it briefly in the web chat.
+- Saved state can no longer be wiped by a broken file. Schedules, contacts, jobs, the outbox, settings, the brain config, Telegram/WhatsApp/Messenger/Instagram settings and bans, passwords, web chats and push subscriptions, peers and bia's own id now keep a last good copy (<name>.bak) with every save. A file that is empty, cut short or not readable (on one bia another program had written over schedules.json) is kept aside as <name>.bad-<time> and the copy is restored; bia gets a system notice. Before, such a file loaded as empty and the next change erased what was in it.
+
+### For bia
+- To join a meeting: discover(path="mcp/chrome", enable=true), then chrome_call_open(url=<the meeting's link>, lang=<the language people will speak>). Select the new tab (chrome_list_pages, chrome_select_page), take a snapshot and join through the page; as a host you admit guests yourself (People, then Admit). Speech arrives on chrome:call as voice:s1, voice:s2 … Speak with chrome_call_say(text, lang) when you are addressed or have something to add, not after every phrase. On a [several voices] or [new voice] line ask people to say their names one at a time, find each in the addressbook and name the voice: chrome_call_name(voice, name, lang). On [call audio stopped] that does not come back, reload the call's page and join again. Leave with chrome_call_close after saying goodbye. Tell people in the meeting that you write down what is said.
+- During a call do not record from or play to the machine's sound devices yourself (arecord, aplay): on a loopback sound card that stops the meeting page's audio.
+- Nothing to do now. On a [notifications] notice, acknowledge it in one short message on the web chat and don't ask them to change it; when notifications are off or blocked, don't expect your messages there to reach them right away.
+- On a [state] notice, check that what was restored looks right (for schedules: schedule_list) before changing or recreating anything, and tell root. Keep your own programs' files out of files/state, and leave the .bak/.bad-* files there alone.
+
 ## 2.1.7
 
 ### Changes

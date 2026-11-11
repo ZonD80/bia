@@ -114,6 +114,16 @@ chrome_passkey() {
      python3 -I tests/integration/chrome-passkey-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome"
 }
 
+# voice in a web call: the real extension in Chromium on a page that behaves like a meeting; with the
+# speech models in the cache (arm64) bia also speaks and hears its own words come back
+chrome_call() {
+  builder 'cargo build -q -p bia-mcp-chrome' || return 1
+  docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 dbus-daemon xvfb openbox chromium libnss3-tools openssl ca-certificates curl wmctrl xdotool util-linux procps fonts-dejavu-core >/dev/null 2>&1 &&
+     S=/cache/speech-root/usr/local/lib/bia/speech; [ -d \$S/models ] && export BIA_SPEECH_DIR=\$S;
+     python3 -I tests/integration/chrome-call-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome"
+}
+
 # an installed add-on moves to a new version by itself (takes minutes: Chrome's own update check)
 chrome_update() {
   builder 'cargo build -q -p bia-mcp-chrome' || return 1
@@ -154,6 +164,7 @@ for stage in "$@"; do
       run screen-desktop screen_desktop
       run chrome-cert chrome_cert
       run chrome-passkey chrome_passkey
+      run chrome-call chrome_call
       run chrome-update chrome_update
       run venv venv_default
       run biaconfig biaconfig

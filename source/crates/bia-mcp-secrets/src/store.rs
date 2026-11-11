@@ -123,7 +123,11 @@ fn load() -> Result<Vec<Entry>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
         Err(e) => return Err(e.to_string()),
     };
-    let v: Value = serde_json::from_slice(&bytes).map_err(|e| format!("passwords.json: {e}"))?;
+    let v: Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        // kept aside as .bad-<time>; the last good copy comes back (bia_mcp::statefile)
+        Err(e) => bia_mcp::statefile::read::<Value>(&p).ok_or_else(|| format!("passwords.json: {e}"))?,
+    };
     let items = v.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
     let mut out = Vec::new();
     for item in items {
@@ -155,6 +159,7 @@ fn save(items: &[Entry]) -> Result<(), String> {
     }
     fs::rename(&tmp, &p).or_else(|_| fs::copy(&tmp, &p).map(|_| ())).map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&tmp);
+    let _ = bia_mcp::statefile::backup(&p);
     unsafe { libc::sync() };
     Ok(())
 }

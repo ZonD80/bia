@@ -11,22 +11,11 @@ pub fn state_file() -> PathBuf {
 }
 
 pub(crate) fn load() -> Option<Value> {
-    fs::read(state_file())
-        .ok()
-        .and_then(|d| serde_json::from_slice(&d).ok())
+    bia_mcp::statefile::read(&state_file())
 }
 
 pub(crate) fn save(v: &Value) -> Result<()> {
-    let p = state_file();
-    if let Some(d) = p.parent() {
-        fs::create_dir_all(d)?;
-    }
-    {
-        use std::io::Write;
-        let mut f = fs::File::create(&p)?;
-        f.write_all(&serde_json::to_vec_pretty(v)?)?;
-        f.sync_all()?;
-    }
+    bia_mcp::statefile::write_json(&state_file(), v)?;
     unsafe { libc::sync() };
     Ok(())
 }

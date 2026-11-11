@@ -66,10 +66,7 @@ fn interval(step: u32) -> u64 {
 impl Set {
     pub fn load(state_dir: &Path) -> Set {
         let path = state_dir.join("unanswered.json");
-        let f = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<File>(&b).ok())
-            .unwrap_or_default();
+        let f: File = bia_mcp::statefile::read_or_default(&path);
         // The physical console is not tracked (older state may still list it).
         let mut set = Set {
             path: Some(path),
@@ -92,19 +89,11 @@ impl Set {
 
     fn persist(&self) {
         let Some(path) = &self.path else { return };
-        if let Some(p) = path.parent() {
-            let _ = std::fs::create_dir_all(p);
-        }
         let f = File {
             open: self.open.clone(),
             chans: self.chans.clone(),
         };
-        let tmp = path.with_extension("json.tmp");
-        if let Ok(buf) = serde_json::to_vec_pretty(&f) {
-            if std::fs::write(&tmp, buf).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
-            }
-        }
+        let _ = bia_mcp::statefile::write_json(path, &f);
     }
 
     fn chan(&mut self, channel: &str) -> &mut Chan {

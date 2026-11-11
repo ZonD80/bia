@@ -3,7 +3,7 @@ name = "bia-mcp-chrome"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "MCP: Chrome lifecycle + passkeys; page tools via chrome-devtools-mcp"
+description = "MCP: Chrome lifecycle, passkeys, voice in web calls; page tools via chrome-devtools-mcp"
 
 [[bin]]
 name = "bia-mcp-chrome"
@@ -18,4 +18,6 @@ serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"
 bia-ocr = { path = "../bia-ocr" }
+bia-speech = { path = "../bia-speech" }
+base64 = "0.22"
 rsa = { version = "0.9", features = ["sha2"] }

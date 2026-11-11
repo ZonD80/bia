@@ -6,6 +6,7 @@ license.workspace = true
 description = "Agent-owned CA, server/client certs, one-time PKCS#12 pickup"
 
 [dependencies]
+bia-mcp = { path = "../bia-mcp" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

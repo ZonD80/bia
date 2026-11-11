@@ -108,7 +108,7 @@ useSeoMeta({
   text-decoration: underline;
 }
 .story__chapter {
-  scroll-margin-top: 5rem;
+  scroll-margin-top: calc(5rem + var(--strip-h, 0px));
   padding-top: 2.5rem;
   margin-top: 2.5rem;
   border-top: 1px solid var(--line);

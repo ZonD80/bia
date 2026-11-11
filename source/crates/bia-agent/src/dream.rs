@@ -277,7 +277,7 @@ struct Gen {
 impl Gen {
     fn open(root: &Path, id: u32) -> Option<Gen> {
         let dir = root.join(format!("gen-{id}"));
-        let meta: GenMeta = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).ok()?).ok()?;
+        let meta: GenMeta = bia_mcp::statefile::read(&dir.join("meta.json"))?;
         Some(Gen { dir, meta })
     }
 
@@ -302,7 +302,7 @@ impl Gen {
     }
 
     fn categories(&self) -> BTreeMap<String, Category> {
-        std::fs::read(self.dir.join("categories.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        bia_mcp::statefile::read_or_default(&self.dir.join("categories.json"))
     }
 
     fn save_categories(&self, c: &BTreeMap<String, Category>) -> Result<()> {
@@ -311,7 +311,7 @@ impl Gen {
 
     /// Periods with nothing to reflect (no messages): never asked again.
     fn empty(&self) -> BTreeSet<String> {
-        std::fs::read(self.dir.join("empty.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        bia_mcp::statefile::read_or_default(&self.dir.join("empty.json"))
     }
 
     fn mark_empty(&self, key: &str) -> Result<()> {
@@ -483,10 +483,7 @@ impl Dream {
         let state_dir = files_dir.join("state");
         let root = state_dir.join("memory");
         let _ = std::fs::create_dir_all(&root);
-        let mut st: State = std::fs::read(root.join("dream.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+        let mut st: State = bia_mcp::statefile::read_or_default(&root.join("dream.json"));
         migrate_facts(&root);
         if st.current_gen == 0 || Gen::open(&root, st.current_gen).is_none() {
             // the first generation starts today: days before it come with memory_rebuild
@@ -1818,10 +1815,7 @@ fn append_jsonl<T: Serialize>(p: &Path, v: &T) -> Result<()> {
 }
 
 fn write_atomic(p: &Path, b: &[u8]) -> Result<()> {
-    let tmp = p.with_extension("tmp");
-    std::fs::write(&tmp, b)?;
-    std::fs::rename(&tmp, p)?;
-    Ok(())
+    Ok(bia_mcp::statefile::write(p, b)?)
 }
 
 #[cfg(test)]

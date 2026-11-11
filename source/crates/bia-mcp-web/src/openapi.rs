@@ -255,6 +255,19 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "responses": {"200": {"description": "{ok, removed}"}}
                 }
             },
+            "/v1/push/permission": {
+                "post": {
+                    "tags": ["push"],
+                    "summary": "Tell bia what the caller decided about notifications in this browser; bia gets a system message and acknowledges it",
+                    "security": [{"mtls": []}],
+                    "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["state"], "properties": {
+                        "state": {"type": "string", "enum": ["granted", "denied", "dismissed", "off", "stopped", "removed"]},
+                        "push": {"type": "boolean", "description": "granted: push works also with no tab open"},
+                        "error": {"type": "string", "description": "granted without push: why"}
+                    }}}}},
+                    "responses": {"200": {"description": "{ok}"}, "400": {"description": "unknown state"}}
+                }
+            },
             "/v1/push/test": {
                 "post": {
                     "tags": ["push"],
