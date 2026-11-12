@@ -109,6 +109,7 @@ cp "$TMP/mark-256.png" installers/bia-deploy/assets/icon-256.png
 
 # ---- web console (bia-mcp-web) ----
 scale "$TMP/mark-1024.png" source/crates/bia-mcp-web/web/icon-192.png 192
+scale "$TMP/mark-1024.png" source/crates/bia-mcp-web/web/icon-512.png 512
 cp website/public/apple-touch-icon.png source/crates/bia-mcp-web/web/apple-touch-icon.png
 
 # ---- macOS .icns ----

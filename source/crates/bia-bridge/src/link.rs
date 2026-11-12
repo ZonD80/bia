@@ -36,7 +36,8 @@ pub fn request_cert(p: &mut Profile, ca: &str) -> Result<()> {
     std::fs::create_dir_all(p.dir())?;
     bia_pki::write_private(&p.path("key.pem"), key.as_bytes())?;
     std::fs::write(p.path("ca.pem"), ca)?;
-    let body = json!({"identity": p.identity, "role": "agent", "note": p.note, "csr": csr});
+    let role = if p.role == "user" { "user" } else { "agent" };
+    let body = json!({"identity": p.identity, "role": role, "note": p.note, "csr": csr});
     let r = client::request(&p.url, "POST", "/v1/pki/requests", Some(&body), ServerTrust::Ca(ca), None)?;
     if r.status != 202 && r.status != 200 {
         bail!("{} refused the request: HTTP {} {}", p.url, r.status, r.text().trim());

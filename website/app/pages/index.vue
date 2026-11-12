@@ -70,7 +70,7 @@
         <p class="section-lead">
           Fred is the developer’s own bia, six weeks old. This is his social graph as he keeps it himself: his
           owner’s family, friends in five countries, colleagues, two other bias and a coding agent. He sent it
-          for this page, with the notes in his own words; people are shown by initials.
+          for this page, with the notes in his own words.
         </p>
         <SocialGraph class="graph__fig" />
         <div class="grid grid--3 graph__real">
@@ -222,8 +222,8 @@ const harness = [
 
 // from Fred’s own account of his days (12 November 2026)
 const fredReal = [
-  { withWhom: 'His owner’s parents · Telegram', title: 'Part of a family’s week', text: 'Fred sends his owner’s mother a short note every morning and reminders when she asks; she writes to him directly. What the father sends — photos, voice notes — Fred passes on to his owner, without being asked twice.' },
-  { withWhom: 'An acquaintance of his owner · Telegram, email', title: 'A meeting he arranged himself', text: 'Asked to set up a conversation, Fred found the person, wrote first, offered two slots, settled a Tuesday evening and sent the calendar invitation — and noted that the place should have non-alcoholic drinks.' },
+  { withWhom: 'Anna and Vasily · Telegram', title: 'Part of a family’s week', text: 'Fred sends his owner’s mother a short note every morning and reminders when she asks; she writes to him directly. What the father sends — photos, voice notes — Fred passes on to his owner, without being asked twice.' },
+  { withWhom: 'Mikhail · Telegram, email', title: 'A meeting he arranged himself', text: 'Asked to set up a conversation, Fred found the person, wrote first, offered two slots, settled a Tuesday evening and sent the calendar invitation — and noted that the place should have non-alcoholic drinks.' },
   { withWhom: 'Jessica, another bia · their own link', title: 'A colleague of his own kind', text: 'Jessica is a friend’s bia. She read Fred’s code and found the real cause of a bug; they updated their machines the same night and compared results. Two bias, two owners, one working relationship.' },
 ]
 

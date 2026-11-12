@@ -13,6 +13,7 @@ mod chat;
 #[path = "../../consock.rs"]
 mod consock;
 mod hitl;
+mod icon;
 mod link;
 mod linkproto;
 #[path = "../../listen.rs"]
@@ -130,6 +131,9 @@ fn main() {
             obj(json!({}), &[]), tools::status)
         .tool("port", "Move the HTTPS web app to another port (only when root asks): port=<1-65535>, 0 = back to 443. Applies after the MCP restarts.",
             obj(json!({"port": {"type": "integer", "description": "the new HTTPS port; 0 forgets the saved one"}}), &["port"]), tools::port)
+        .tool("icon", "Give the web app this bia's own icon (only when root asks): home-screen app icon, browser tab, notifications and bia's picture in the chat. path = a square PNG, JPEG or WebP, 512x512 or larger (absolute, or relative to the files folder); path=\"default\" brings the built-in one back.",
+            obj(json!({"path": {"type": "string", "description": "the picture file, or \"default\""},
+                       "background": {"type": "string", "description": "colour behind a transparent picture on iPhone home screens, default #ffffff"}}), &["path"]), icon::tool)
         .tool(
             "pki_issue",
             "Issue a client certificate (only when root asks). identity is the CN (e.g. root or a contact id). role is user or agent. trust is root or normal. Returns a one-time HTTPS PKCS#12 pickup URL (password 12345678); the file is deleted after download.",

@@ -138,10 +138,16 @@ impl Daemon {
         self.cv.notify_all();
     }
 
-    fn take(&self, consumer: &str, peek: bool, wait: Option<Duration>) -> Vec<Entry> {
+    /// What came after `consumer`'s cursor, waiting up to `wait` for something. `alive` says
+    /// whether whoever asked is still there: a waiter that left (its command was stopped, its
+    /// chat closed) takes nothing, so the next message is not handed to nobody.
+    fn take(&self, consumer: &str, peek: bool, wait: Option<Duration>, alive: &dyn Fn() -> bool) -> Vec<Entry> {
         let end = wait.map(|w| Instant::now() + w);
         let mut ib = self.inbox.lock().unwrap();
         loop {
+            if wait.is_some() && !alive() {
+                return vec![];
+            }
             let cur = ib.cursors.get(consumer).copied().unwrap_or(0);
             let out: Vec<Entry> = ib.entries.iter().filter(|e| e.seq > cur).cloned().collect();
             if !out.is_empty() || end.is_none_or(|t| Instant::now() >= t) || self.stop.load(Ordering::Relaxed) {
@@ -275,7 +281,7 @@ fn serve(d: Arc<Daemon>, conn: TcpStream, token: &str) {
         return;
     }
     let reply = match serde_json::from_str::<Value>(&line) {
-        Ok(v) if v["token"].as_str() == Some(token) => match handle(&d, &v) {
+        Ok(v) if v["token"].as_str() == Some(token) => match handle(&d, &v, &|| still_there(&conn)) {
             Ok(r) => r,
             Err(e) => json!({"ok": false, "error": format!("{e:#}")}),
         },
@@ -296,11 +302,26 @@ fn serve(d: Arc<Daemon>, conn: TcpStream, token: &str) {
     }
 }
 
+/// The command that asked is still connected (it sends nothing more, so a readable end of
+/// stream means it is gone).
+fn still_there(conn: &TcpStream) -> bool {
+    if conn.set_nonblocking(true).is_err() {
+        return true;
+    }
+    let r = conn.peek(&mut [0u8; 1]);
+    let _ = conn.set_nonblocking(false);
+    match r {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => e.kind() == std::io::ErrorKind::WouldBlock,
+    }
+}
+
 fn v_is_stop(line: &str) -> bool {
     serde_json::from_str::<Value>(line).map(|v| v["op"] == "stop").unwrap_or(false)
 }
 
-fn handle(d: &Arc<Daemon>, v: &Value) -> Result<Value> {
+fn handle(d: &Arc<Daemon>, v: &Value, alive: &dyn Fn() -> bool) -> Result<Value> {
     let s = |k: &str| v[k].as_str().unwrap_or("").to_string();
     let consumer = Some(s("consumer")).filter(|c| !c.is_empty()).unwrap_or_else(|| "default".into());
     match v["op"].as_str().unwrap_or("") {
@@ -321,10 +342,10 @@ fn handle(d: &Arc<Daemon>, v: &Value) -> Result<Value> {
                 "bridge_version": env!("CARGO_PKG_VERSION"),
             }))
         }
-        "read" => Ok(json!({"ok": true, "messages": d.take(&consumer, v["peek"] == true, None)})),
+        "read" => Ok(json!({"ok": true, "messages": d.take(&consumer, v["peek"] == true, None, alive)})),
         "wait" => {
             let t = v["timeout"].as_u64().unwrap_or(300).min(3600);
-            Ok(json!({"ok": true, "messages": d.take(&consumer, false, Some(Duration::from_secs(t)))}))
+            Ok(json!({"ok": true, "messages": d.take(&consumer, false, Some(Duration::from_secs(t)), alive)}))
         }
         "send" => {
             let files: Vec<String> = v["files"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();

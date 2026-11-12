@@ -125,6 +125,9 @@ details.howto li { margin: 4px 0; }
 .notif-ask { display: flex; align-items: center; gap: 8px; margin: 4px 8px 6px; padding: 6px 4px 6px 12px; border-radius: 10px; background: var(--hover); font-size: 14px; }
 .notif-ask[hidden] { display: none; }
 .notif-ask .btn-icon { width: 32px; height: 32px; }
+.notif-ask .install-ico { width: 32px; height: 32px; border-radius: 8px; object-fit: cover; flex: none; }
+.install-steps ol, ol.install-steps { margin: 8px 0 12px; padding-left: 22px; }
+.install-steps li { margin: 6px 0; line-height: 1.4; }
 .citem { display: flex; gap: 10px; align-items: center; padding: 8px 9px; border-radius: 12px; cursor: pointer; user-select: none; }
 .citem:hover { background: var(--hover); }
 .citem.active { background: var(--active); color: #fff; }

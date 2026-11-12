@@ -47,6 +47,10 @@ pub struct Profile {
     pub state: String,
     #[serde(default)]
     pub note: String,
+    /// What the certificate is asked for: `user` for a person at the terminal chat, else an
+    /// agent ("" in older profiles).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub role: String,
     /// The owner's message with the approval or the reason of a denial.
     #[serde(default)]
     pub message: String,

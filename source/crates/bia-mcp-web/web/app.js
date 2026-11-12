@@ -194,6 +194,29 @@ async function copyText(s, what) {
     ta.remove();
   }
 }
+// bia's own icon (web_icon), when it chose one: the page comes with its rev in the icon link, and
+// hello / a `self` frame bring changes. '' = the built-in picture above.
+let ICON_REV = ((document.querySelector('link[rel="icon"]') || {}).href || '').split('?v=')[1] || '';
+const biaIconSrc = () => ICON_REV ? '/icon-192.png?v=' + ICON_REV : BIA_ICON;
+function biaImg(attrs) {
+  const img = h('img', Object.assign({ src: biaIconSrc(), alt: '' }, attrs || {}));
+  img.classList.add('bia-icon');
+  img.onerror = () => { if (img.src !== BIA_ICON) img.src = BIA_ICON; };
+  return img;
+}
+function setIcon(rev) {
+  if (typeof rev !== 'string' || rev === ICON_REV) return; // an older bia does not say
+  ICON_REV = rev;
+  document.querySelectorAll('img.bia-icon').forEach(i => { i.src = biaIconSrc(); });
+  const v = rev ? '?v=' + rev : '';
+  const tab = document.querySelector('link[rel="icon"]');
+  if (tab) { tab.type = rev ? 'image/png' : 'image/svg+xml'; tab.href = rev ? '/icon-192.png' + v : '/icon.svg'; }
+  const apple = document.querySelector('link[rel="apple-touch-icon"]');
+  if (apple) apple.href = '/apple-touch-icon.png' + v;
+  // the manifest is read again when the browser installs the app
+  const man = document.querySelector('link[rel="manifest"]');
+  if (man) man.href = '/manifest.webmanifest' + v;
+}
 function saveBlob(blob, name) {
   const a = h('a', { href: URL.createObjectURL(blob), download: name });
   document.body.appendChild(a); a.click(); a.remove();
@@ -466,7 +489,7 @@ async function showBoot() {
     h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => location.reload() }, ic('refresh'), 'Reload')));
 
   set(box, h('div', { class: 'wrap' },
-    h('img', { class: 'logo', src: BIA_ICON, alt: '' }),
+    biaImg({ class: 'logo' }),
     h('h1', null, 'bia'),
     h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Two steps to get in.'),
     problemStep, certStep, importStep, err,
@@ -575,6 +598,7 @@ async function hist(params) {
 function onHello(v) {
   S.wsOk = true;
   setCalled(v.called);
+  setIcon(v.icon);
   const main = S.chats.get('main');
   main.muted = !!v.muted;
   if (v.typing) S.typing.add('main'); else S.typing.delete('main');
@@ -599,7 +623,7 @@ function onEvent(v) {
   switch (v.t) {
     case 'm': upsertMsg(v.m); return;
     case 'gone': removeMsgs(v.ids); return;
-    case 'self': setCalled(v.called); return;
+    case 'self': setCalled(v.called); setIcon(v.icon); renderInstallAsk(); return;
     case 'ring': showRing(Object.assign({}, v, { chat: 'main' })); return;
     case 'ring_end': if (RING.chat) stopRing(); return;
     case 'call': return;
@@ -761,7 +785,7 @@ async function notifInit() {
     try { NOTIF.reg = await navigator.serviceWorker.register('/sw.js'); }
     catch (e) { NOTIF.err = 'service worker: ' + e.message; }
   }
-  renderNotifAsk();
+  renderNotifAsk(); renderInstallAsk();
   if (S.prefs.notify && canNotify() && Notification.permission === 'granted') await pushOn();
 }
 function b64uBytes(s) {
@@ -818,7 +842,7 @@ async function enableNotifications() {
 }
 async function showNote(title, body, tag, url, urgent) {
   if (!S.prefs.notify || !canNotify() || Notification.permission !== 'granted') return;
-  const opts = { body, tag, renotify: true, requireInteraction: !!urgent, icon: '/icon-192.png', badge: '/icon-192.png', data: { url } };
+  const opts = { body, tag, renotify: true, requireInteraction: !!urgent, icon: '/icon-192.png' + (ICON_REV ? '?v=' + ICON_REV : ''), badge: '/icon-192.png', data: { url } };
   if (NOTIF.reg) { try { await NOTIF.reg.showNotification(title, opts); return; } catch {} }
   try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); go(url); n.close(); }; } catch {}
 }
@@ -868,6 +892,89 @@ function renderNotifAsk() {
   set(el, ic('bell'), h('div', { class: 'grow' }, 'Get notified when bia writes'),
     h('button', { class: 'btn small', onclick: enableNotifications }, 'Turn on'),
     iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); notifDecided('dismissed'); }));
+}
+// ---- installing the web app on a phone's home screen ----
+// Only there does a phone deliver push notifications properly: iOS gives a web page none at all
+// until it is on the Home Screen, Android stops a browser tab's ones when the browser sleeps.
+// Not inside the bia deploy apps (their WebView is already an app) and not once installed.
+const isAndroid = () => /Android/i.test(navigator.userAgent);
+const inBiaApp = () => !!(window.BiaApp || (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.biaMoved));
+const calledName = () => BASE_TITLE.replace(/ · bia$/, '') || 'bia';
+// Chrome and its kin on Android (and desktop) hand over their own install dialog. The event is
+// left alone otherwise, so the browser may also show its own banner.
+const INSTALL = { ev: null, done: false };
+window.addEventListener('beforeinstallprompt', e => { INSTALL.ev = e; renderInstallAsk(); if (S.route === 'settings') renderSettings(); });
+window.addEventListener('appinstalled', () => { INSTALL.ev = null; INSTALL.done = true; renderInstallAsk(); if (S.route === 'settings') renderSettings(); toast(calledName() + ' is installed'); });
+// 'ios' | 'android' on a phone's browser where installing makes sense, 'prompt' elsewhere when the
+// browser offers its dialog (a desktop Chrome), '' when there is nothing to offer.
+function installKind() {
+  if (inBiaApp() || isStandalone() || INSTALL.done) return '';
+  if (isIOS()) return 'ios';
+  if (isAndroid()) return 'android';
+  return INSTALL.ev ? 'prompt' : '';
+}
+// the browser's own install dialog; false when it has none to show
+async function installNow() {
+  const ev = INSTALL.ev;
+  if (!ev) return false;
+  try {
+    ev.prompt();
+    const r = await ev.userChoice;
+    INSTALL.ev = null; // one prompt per event
+    if (r && r.outcome === 'accepted') INSTALL.done = true;
+  } catch { return false; }
+  renderInstallAsk(); if (S.route === 'settings') renderSettings();
+  return true;
+}
+function installSteps(kind) {
+  const name = calledName();
+  const ua = navigator.userAgent;
+  if (kind === 'ios') {
+    const safari = !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+    return [
+      safari ? 'Tap the Share button (the square with an arrow, in the bar at the bottom; on newer iOS it is behind the ••• button).'
+        : 'Tap the Share button of this browser (the square with an arrow; in Chrome it is at the top right).',
+      'Scroll down and tap “Add to Home Screen”, then “Add”.',
+      `Close this page and open ${name} from the Home Screen.`,
+      'There, open Settings and turn on “Browser notifications”. iPhone and iPad deliver them only to the app on the Home Screen, never to a browser tab.',
+    ];
+  }
+  if (kind === 'android') {
+    const menu = /SamsungBrowser/.test(ua) ? 'Tap the ☰ menu at the bottom, then “Add to” → “Home screen”.'
+      : /Firefox/.test(ua) ? 'Tap the ⋮ menu, then “Add app to Home screen”.'
+      : 'Tap the ⋮ menu at the top right, then “Add to Home screen” → “Install”.';
+    return [
+      INSTALL.ev ? `Tap “Install” below and confirm. (The same is in the browser’s menu: “Add to Home screen” → “Install”.)` : menu,
+      `Open ${name} from the home screen or the app list.`,
+      'There, open Settings and turn on “Browser notifications”: an installed app keeps getting them when the browser is closed.',
+    ];
+  }
+  return ['Click “Install” below and confirm in the browser’s own dialog.', `${name} then opens in its own window, with its own icon.`];
+}
+function installHelp() {
+  const kind = installKind();
+  if (!kind) return;
+  const body = h('div', { class: 'install-steps' },
+    h('p', { class: 'muted', style: 'margin-top:0' }, kind === 'prompt' ? `${calledName()} as an app of its own on this computer.`
+      : `On the home screen ${calledName()} opens like an app, full screen, and its notifications reach this phone properly.`),
+    h('ol', null, installSteps(kind).map(s => h('li', null, s))),
+    kind === 'android' && !INSTALL.ev ? h('p', { class: 'muted' }, 'If the browser only offers a shortcut, or nothing, this phone does not trust this bia’s CA yet: download it (Settings → Agent CA here), install it in Android’s Settings → Security → Encryption & credentials → Install a certificate → CA certificate, then reload this page.') : null);
+  modal({ title: `Install ${calledName()}`, body, buttons: [
+    INSTALL.ev ? { text: 'Install', primary: true, onClick: () => { installNow(); } } : null,
+    { text: INSTALL.ev ? 'Later' : 'Close', value: 0 }].filter(Boolean) });
+}
+// the banner over the chat list, on phones only: one tap to the browser's dialog or to the steps
+function renderInstallAsk() {
+  const el = $('#installAsk');
+  if (!el) return;
+  const kind = installKind();
+  const ask = (kind === 'ios' || kind === 'android') && !S.prefs.installAsked;
+  el.hidden = !ask;
+  if (!ask) { set(el); return; }
+  set(el, biaImg({ class: 'install-ico' }),
+    h('div', { class: 'grow' }, `Install ${calledName()} on this phone`, h('div', { class: 'muted', style: 'font-size:12px' }, 'for notifications that arrive')),
+    h('button', { class: 'btn small', id: 'installBtn', onclick: async () => { if (!(await installNow())) installHelp(); } }, INSTALL.ev ? 'Install' : 'How'),
+    iconBtn('close', 'Not now', () => { S.prefs.installAsked = true; savePrefs(); renderInstallAsk(); }));
 }
 // the server names the page after this bia ("Fred · bia")
 let BASE_TITLE = document.title || 'bia';
@@ -951,6 +1058,7 @@ function buildSide() {
       h('div', { class: 'search' }, ic('search'), search)),
     h('div', { id: 'connState', class: 'side-label', style: 'color:var(--warn)', hidden: true }, 'Connecting…'),
     h('div', { id: 'notifAsk', class: 'notif-ask', hidden: true }),
+    h('div', { id: 'installAsk', class: 'notif-ask', hidden: true }),
     h('div', { class: 'side-scroll', id: 'sideScroll' },
       h('div', { id: 'searchRes', class: 'search-res', hidden: true }),
       h('div', { id: 'chatList' }),
@@ -985,7 +1093,7 @@ function renderChatList() {
     else if (last) prev = h('span', { class: 'cprev' }, isMine(last) ? h('b', null, 'You: ') : null, last.service ? last.text : snippet(last));
     else prev = h('span', { class: 'cprev' }, id === 'main' ? 'Your conversation with bia' : 'No messages yet');
     const item = h('div', { class: 'citem' + (id === active ? ' active' : ''), onclick: () => go('chat/' + id) },
-      h('div', { class: 'avatar ' + (id === 'main' ? '' : colorOf(id)) }, id === 'main' ? h('img', { src: BIA_ICON, style: 'width:100%;height:100%;border-radius:50%' }) : initials(c.title)),
+      h('div', { class: 'avatar ' + (id === 'main' ? '' : colorOf(id)) }, id === 'main' ? biaImg({ style: 'width:100%;height:100%;border-radius:50%;object-fit:cover' }) : initials(c.title)),
       h('div', { class: 'cbody' },
         h('div', { class: 'ctop' }, h('span', { class: 'ctitle' }, c.title), c.muted ? ic('bellOff', 'mutei') : null,
           last && isMine(last) ? ic(last.read ? 'checks' : 'check', 'mutei') : null,
@@ -1131,7 +1239,7 @@ function renderChatHead() {
   else sub = S.root && S.status && S.status.model ? `online · ${S.status.model}` : 'online';
   set(head, 
     backBtn(),
-    h('div', { class: 'avatar xs ' + (S.cur === 'main' ? '' : colorOf(S.cur)) }, S.cur === 'main' ? h('img', { src: BIA_ICON, style: 'width:100%;height:100%;border-radius:50%' }) : initials(c.title)),
+    h('div', { class: 'avatar xs ' + (S.cur === 'main' ? '' : colorOf(S.cur)) }, S.cur === 'main' ? biaImg({ style: 'width:100%;height:100%;border-radius:50%;object-fit:cover' }) : initials(c.title)),
     h('div', { class: 'tbox' }, h('div', { class: 'title ellipsis' }, c.title), h('div', { class: 'subtitle' + (on ? ' on' : '') }, sub)),
     iconBtn('phone', 'Call bia', () => startCall(S.cur)),
     iconBtn('search', 'Search in chat', () => { S.chatSearch = S.chatSearch ? null : { q: '' }; renderChatSearch(); }),
@@ -2738,7 +2846,7 @@ async function renderSettings() {
   const perm = canNotify() ? Notification.permission : '';
   const notifOn = S.prefs.notify && perm === 'granted';
   const notifState = !canNotify()
-    ? (isIOS() && !isStandalone() ? 'On iPhone and iPad: Share → Add to Home Screen, open bia from the home screen, then turn this on.' : 'not supported by this browser')
+    ? (isIOS() && !isStandalone() && !inBiaApp() ? 'On iPhone and iPad notifications need the app on the Home Screen: see “Install” below, then turn this on there.' : 'not supported by this browser')
     : perm === 'denied' ? 'blocked for this site — allow notifications in the browser\'s site settings'
     : !notifOn ? 'off'
     : NOTIF.sub ? 'on — also when no bia tab is open'
@@ -2760,7 +2868,30 @@ async function renderSettings() {
     h('h3', { style: 'margin-top:18px' }, 'Browsers with push notifications'), h('div', { id: 'pushSubs' }, 'Loading…'));
   setTimeout(loadPushSubs, 0);
 
-  const kids = [profile, appearance, notif];
+  // The agent CA is public (/v1/pki/ca): whoever connects to this bia trusts it, so anyone signed in may take it.
+  const caFp = h('div', { class: 'copyline' }, h('code', null, 'Loading…'));
+  const caBox = [
+    h('p', { class: 'muted', style: 'margin-top:0' }, 'The certificate authority behind this bia\u2019s web address and every certificate it issues. Whoever connects trusts it to know they reached this bia; check the SHA-256 fingerprint after importing.'),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn', id: 'caPem', onclick: () => download('/v1/pki/ca', 'bia-ca.crt') }, ic('download'), 'Download bia-ca.crt'),
+      h('button', { class: 'btn ghost', id: 'caDer', title: 'The same certificate in binary (DER) form, for Windows and Android', onclick: () => download('/v1/pki/ca?format=der', 'bia-ca.cer') }, ic('download'), '.cer (DER)')),
+    caFp];
+  GET('/.well-known/bia.json').then(d => {
+    const hex = d.ca_sha256 || '';
+    const fp = (hex.toUpperCase().match(/.{1,2}/g) || []).join(':');
+    set(caFp, h('code', { id: 'caSha' }, fp || 'unknown'), fp ? iconBtn('copy', 'Copy the fingerprint', () => copyText(hex, 'Fingerprint')) : null);
+  }).catch(e => set(caFp, h('div', { class: 'err-line' }, e.message)));
+
+  const kind = installKind();
+  const install = !kind ? null : h('div', { class: 'card', id: 'installCard' }, h('h3', null, ic('download'), kind === 'prompt' ? `Install ${calledName()}` : `Install ${calledName()} on this phone`),
+    h('p', { class: 'muted', style: 'margin-top:0' }, kind === 'prompt' ? 'As an app of its own on this computer, with its own window and icon.'
+      : 'From the home screen it opens like an app, and notifications reach this phone properly. In a browser tab ' + (kind === 'ios' ? 'iPhone and iPad deliver none.' : 'they stop when the browser sleeps.')),
+    h('ol', { class: 'install-steps' }, installSteps(kind).map(s => h('li', null, s))),
+    INSTALL.ev ? h('button', { class: 'btn', onclick: installNow }, ic('download'), 'Install') : null,
+    kind === 'android' && !INSTALL.ev ? h('p', { class: 'muted', style: 'margin-bottom:0' }, 'If the browser only offers a shortcut, or nothing, this phone does not trust this bia’s CA yet: download it under Agent CA below, install it in Android’s Settings → Security → Encryption & credentials → Install a certificate → CA certificate, then reload this page.') : null);
+
+  const kids = [profile, appearance, notif, install].filter(Boolean);
+  if (!S.root) kids.push(h('div', { class: 'card' }, h('h3', null, ic('shield'), 'Agent CA'), ...caBox));
   if (S.root) {
     const issueId = h('input', { class: 'input', placeholder: 'identity, e.g. alice or my-laptop' });
     const role = h('select', { class: 'input' }, h('option', { value: 'user' }, 'user (a person)'), h('option', { value: 'agent' }, 'agent (a program)'));
@@ -2804,6 +2935,7 @@ async function renderSettings() {
       h('div', { class: 'field' }, h('label', null, 'Address'), confAddr),
       h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', null, 'Name'), confName), h('div', { class: 'field grow' }, h('label', null, 'Password'), confPass)),
       h('button', { class: 'btn', onclick: makeConfig }, ic('download'), 'Make .biaconfig'), confOut,
+      h('h3', { style: 'margin-top:18px' }, 'Agent CA'), ...caBox,
       h('h3', { style: 'margin-top:18px' }, 'Requests from other agents'), h('div', { id: 'reqList' }, 'Loading…'),
       h('h3', { style: 'margin-top:18px' }, 'Other bias'), h('div', { id: 'peerList' }, 'Loading…'),
       h('h3', { style: 'margin-top:18px' }, 'Issued'), certs));
@@ -3083,7 +3215,7 @@ function showCallUI(chat) {
   const hang = h('button', { class: 'call-btn hang', title: 'Hang up', onclick: () => endCall() }, ic('phoneOff'));
   CALL.el = h('div', { class: 'callbox' },
     h('div', { class: 'call-head' },
-      h('img', { class: 'call-ava', src: BIA_ICON }),
+      biaImg({ class: 'call-ava' }),
       h('div', { class: 'grow' }, h('div', { class: 'call-title ellipsis' }, 'bia · ' + c.title), h('div', { class: 'call-sub' }, h('span', { class: 'call-state' }, 'connecting…'), ' · ', time))),
     h('div', { class: 'call-caps' }),
     h('div', { class: 'call-ctl' }, muteBtn, hang));
@@ -3119,7 +3251,7 @@ function showRing(v) {
   RING.chat = v.chat;
   RING.el = h('div', { class: 'callbox ringing' },
     h('div', { class: 'call-head' },
-      h('img', { class: 'call-ava', src: BIA_ICON }),
+      biaImg({ class: 'call-ava' }),
       h('div', { class: 'grow' }, h('div', { class: 'call-title' }, 'bia is calling…'), h('div', { class: 'call-sub' }, c.title))),
     h('div', { class: 'call-ctl' },
       h('button', { class: 'call-btn hang', title: 'Decline', onclick: () => { stopRing(); act('call_decline', { chat: v.chat, id: v.id }).catch(() => {}); } }, ic('phoneOff')),

@@ -54,9 +54,21 @@ pub struct Out {
 /// for another bia whether to dial it and what came from it; for anyone a ban.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LinkState {
-    /// Keep a link up with this bia: dial it, redial after a loss.
+    /// Keep a link up with this bia: dial it, redial after a loss. True for a new peer and
+    /// from every link that came up (at both ends); false once either end closed it on
+    /// purpose (web_peer_disconnect, a ban, revoked trust). So after a restart or a network
+    /// loss only a link that was up, or still being set up, comes back by itself.
     #[serde(default)]
     pub want: bool,
+    /// web_peer_connect asked for the link and it has not come up yet: the next dial says so
+    /// (hello `redial: false`), and the other bia takes it even if it had disconnected.
+    #[serde(default)]
+    pub asked: bool,
+    /// web_peer_disconnect closed the link here and no link has come up since: the other bia
+    /// coming back by itself is told so. (Not simply `!want`: states written before 2.2.6 have
+    /// want=false at the end that was dialed even while the link was in use.)
+    #[serde(default)]
+    pub closed: bool,
     /// "", "root" or "model": this bia refuses the identity.
     #[serde(default)]
     pub banned_by: String,
@@ -887,11 +899,14 @@ impl Links {
         // the client says hello first; the server answers with hello once it took the
         // session (or bye when it refuses: banned, a second live session)
         if dialed {
-            let rx = {
+            let (rx, asked) = {
                 let mut inner = self.inner.lock().unwrap();
-                self.rt(&mut inner, &name).st.rx
+                let st = &self.rt(&mut inner, &name).st;
+                (st.rx, st.asked)
             };
-            w.json(&json!({"t": "hello", "proto": PROTO, "name": link.me_there, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance, "rx": rx}));
+            // redial: this bia comes back by itself (after a restart, a loss, as a new peer),
+            // nobody here asked for the link just now
+            w.json(&json!({"t": "hello", "proto": PROTO, "name": link.me_there, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance, "rx": rx, "redial": !asked}));
         }
         let registered = match crate::server::ws_recv_max(&mut reader, MAX_FRAME) {
             Ok((1, b)) => match serde_json::from_slice::<Value>(&b) {
@@ -983,10 +998,19 @@ impl Links {
             link.silent_close("shutdown");
             return Err(());
         }
+        let is_peer = inner.peers.contains_key(name);
         let rt = self.rt(&mut inner, name);
         if !rt.st.banned_by.is_empty() {
             drop(inner);
             link.close("banned");
+            return Err(());
+        }
+        if !link.dialed && is_peer && rt.st.closed && hello["redial"] == true {
+            // this bia closed the link on purpose while the other was away (it never heard):
+            // it comes back by itself, and learns now that the link is closed. Only its own
+            // web_peer_connect (or ours) opens it again.
+            drop(inner);
+            link.close("disconnect");
             return Err(());
         }
         if let Some(old) = rt.link.clone() {
@@ -1044,9 +1068,14 @@ impl Links {
         rt.st.banned_us = false;
         rt.st.cannot.clear();
         rt.st.last_up = now_secs();
-        if link.dialed {
-            // a link both ends took is wanted again, whoever closed the last one
+        rt.st.asked = false;
+        rt.st.closed = false;
+        if is_peer {
+            // a link both ends took is wanted again at both, whoever closed the last one:
+            // after a loss or a restart either may bring it back
             rt.st.want = true;
+        }
+        if link.dialed {
             let rev = hello["rev"].as_u64().unwrap_or(0);
             if rev < rt.st.rx {
                 // the other bia's copy is younger than what we saw (it was reinstalled)
@@ -1062,7 +1091,9 @@ impl Links {
             let mut h = json!({"t": "hello", "proto": PROTO, "name": me, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance,
                                "me": {"identity": name, "root": link.root},
                                // what root called this bia ("" while unnamed): the web app's title
-                               "called": self.pki().ok().and_then(|p| p.chosen_name()).unwrap_or_default()});
+                               "called": self.pki().ok().and_then(|p| p.chosen_name()).unwrap_or_default(),
+                               // its own web app icon ("" = the built-in one)
+                               "icon": crate::icon::rev()});
             if let Some(o) = crate::chat::hello_info(name).as_object() {
                 for (k, v) in o {
                     h[k] = v.clone();
@@ -1149,6 +1180,12 @@ impl Links {
             "busy" => {
                 rt.next_dial = Some(Instant::now() + backoff(rt.attempts.max(3), rnd01()));
                 None
+            }
+            "disconnect" => {
+                // it closed the link while this bia was away: do not come back by itself
+                rt.st.want = false;
+                rt.next_dial = None;
+                Some(format!("{name} closed the link while this bia was away, so it stays closed. What you send waits here; web_peer_connect asks {name} for the link again."))
             }
             _ => None,
         };
@@ -1711,6 +1748,8 @@ impl Links {
                 return Ok(format!("{name} is already connected"));
             }
             rt.st.want = true;
+            rt.st.asked = true;
+            rt.st.closed = false;
             rt.st.banned_us = false;
             rt.attempts = 0;
             rt.next_dial = Some(Instant::now());
@@ -1752,6 +1791,8 @@ impl Links {
             let mut inner = self.inner.lock().unwrap();
             let rt = self.rt(&mut inner, name);
             rt.st.want = false;
+            rt.st.asked = false;
+            rt.st.closed = true;
             rt.next_dial = None;
             self.save_state(name, &rt.st);
             rt.link.clone()
@@ -1759,9 +1800,9 @@ impl Links {
         Ok(match link {
             Some(l) => {
                 l.close("disconnect");
-                format!("disconnected from {name}. This bia does not dial it again by itself; {name} may connect again (web_peer_ban keeps it out). What you send meanwhile waits")
+                format!("disconnected from {name}. Neither bia brings the link back by itself, also after a restart; {name} can still ask for it again with its own web_peer_connect (web_peer_ban keeps it out). What you send meanwhile waits")
             }
-            None => format!("{name} was not connected; this bia stopped trying to reach it"),
+            None => format!("{name} was not connected; this bia stopped trying to reach it, and when {name} comes back by itself it is told the link is closed"),
         })
     }
 

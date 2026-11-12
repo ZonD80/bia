@@ -40,8 +40,8 @@
         <span class="eyebrow">His social graph</span>
         <h2 class="section-title">The people, bias and agents Fred knows</h2>
         <p class="section-lead">
-          Fred keeps this graph himself and checks it before he says anything about anyone. People are shown by
-          initials; the notes are his.
+          Fred keeps this graph himself and checks it before he says anything about anyone. First names only;
+          the notes are his.
         </p>
         <SocialGraph class="fred-graph" />
       </div>

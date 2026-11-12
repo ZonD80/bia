@@ -24,6 +24,7 @@ const MD_JS: &str = include_str!("../web/md.js");
 const LINK_JS: &str = include_str!("../web/link.js");
 const ICON: &str = include_str!("../web/icon.svg");
 const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
+const ICON_512: &[u8] = include_bytes!("../web/icon-512.png");
 const APPLE_ICON: &[u8] = include_bytes!("../web/apple-touch-icon.png");
 const SW_JS: &str = include_str!("../web/sw.js");
 const MANIFEST: &str = include_str!("../web/manifest.webmanifest");
@@ -37,12 +38,36 @@ fn titled(page: &str, name: Option<&str>) -> String {
     }
 }
 
-/// The web app manifest under this bia's name (the home-screen label).
-fn manifest_named(name: Option<&str>) -> String {
-    let Some(n) = name else { return MANIFEST.to_string() };
+/// A page with this bia's own icon (web_icon) in place of the built-in one; `rev` is "" for
+/// the built-in. app.js reads the rev back from the icon link.
+fn with_icon(page: String, rev: &str) -> String {
+    if rev.is_empty() {
+        return page;
+    }
+    page.replacen(
+        "<link rel=\"icon\" href=\"/icon.svg\" type=\"image/svg+xml\">",
+        &format!("<link rel=\"icon\" href=\"/icon-192.png?v={rev}\" type=\"image/png\">"),
+        1,
+    )
+    .replacen("href=\"/apple-touch-icon.png\"", &format!("href=\"/apple-touch-icon.png?v={rev}\""), 1)
+}
+
+/// The web app manifest under this bia's name (the home-screen label) and with its own icon.
+fn manifest_named(name: Option<&str>, icon_rev: &str) -> String {
+    if name.is_none() && icon_rev.is_empty() {
+        return MANIFEST.to_string();
+    }
     let mut m: Value = serde_json::from_str(MANIFEST).unwrap_or_else(|_| json!({}));
-    m["name"] = format!("{n} · bia").into();
-    m["short_name"] = n.into();
+    if let Some(n) = name {
+        m["name"] = format!("{n} · bia").into();
+        m["short_name"] = n.into();
+    }
+    if !icon_rev.is_empty() {
+        m["icons"] = json!([
+            {"src": format!("/icon-192.png?v={icon_rev}"), "sizes": "192x192", "type": "image/png"},
+            {"src": format!("/icon-512.png?v={icon_rev}"), "sizes": "512x512", "type": "image/png"},
+        ]);
+    }
     serde_json::to_string_pretty(&m).unwrap_or_else(|_| MANIFEST.to_string())
 }
 
@@ -80,7 +105,7 @@ pub struct Web {
     con: Arc<Bus>,
     pub port: u16,
     files: PathBuf,
-    pki: Pki,
+    pub(crate) pki: Pki,
     tls: Mutex<Arc<rustls::ServerConfig>>,
 }
 
@@ -198,6 +223,7 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/link.js"
             | "/icon.svg"
             | "/icon-192.png"
+            | "/icon-512.png"
             | "/apple-touch-icon.png"
             | "/sw.js"
             | "/manifest.webmanifest"
@@ -356,7 +382,7 @@ impl Web {
                     let now = w.pki.chosen_name();
                     if now != called {
                         called = now;
-                        crate::link::broadcast(&json!({"t": "self", "called": called.clone().unwrap_or_default()}));
+                        crate::link::broadcast(&crate::icon::self_frame(called.clone()));
                     }
                     let ips = lan_ips();
                     if w.pki.ensure_server_sans(&ips).unwrap_or(false) {
@@ -690,7 +716,7 @@ impl Web {
             respond(s, 200, ctype, body.as_bytes(), None)
         };
         match (req.method.as_str(), req.path.as_str()) {
-            ("GET", "/") => asset(stream, "text/html; charset=utf-8", &titled(INDEX, self.pki.chosen_name().as_deref())),
+            ("GET", "/") => asset(stream, "text/html; charset=utf-8", &with_icon(titled(INDEX, self.pki.chosen_name().as_deref()), &crate::icon::rev())),
             ("GET", "/app.js") => asset(stream, "text/javascript; charset=utf-8", APP_JS),
             ("GET", "/term.js") => asset(stream, "text/javascript; charset=utf-8", TERM_JS),
             ("GET", "/emoji.js") => asset(stream, "text/javascript; charset=utf-8", EMOJI_JS),
@@ -698,10 +724,23 @@ impl Web {
             ("GET", "/md.js") => asset(stream, "text/javascript; charset=utf-8", MD_JS),
             ("GET", "/link.js") => asset(stream, "text/javascript; charset=utf-8", LINK_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
-            ("GET", "/icon.svg" | "/favicon.ico") => asset(stream, "image/svg+xml", ICON),
-            ("GET", "/icon-192.png") => respond(stream, 200, "image/png", ICON_PNG, None),
-            ("GET", "/apple-touch-icon.png") => respond(stream, 200, "image/png", APPLE_ICON, None),
-            ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", &manifest_named(self.pki.chosen_name().as_deref())),
+            ("GET", "/icon.svg") => asset(stream, "image/svg+xml", ICON),
+            // browsers that ask for it unprompted: bia's own picture when it chose one
+            ("GET", "/favicon.ico") => match crate::icon::png("icon-192.png") {
+                Some(own) => respond(stream, 200, "image/png", &own, None),
+                None => asset(stream, "image/svg+xml", ICON),
+            },
+            ("GET", p @ ("/icon-192.png" | "/icon-512.png" | "/apple-touch-icon.png")) => {
+                let built_in = match p {
+                    "/icon-192.png" => ICON_PNG,
+                    "/icon-512.png" => ICON_512,
+                    _ => APPLE_ICON,
+                };
+                let own = crate::icon::png(&p[1..]);
+                // the address carries the icon's rev (?v=…) when it matters, so never a stale copy
+                respond(stream, 200, "image/png", own.as_deref().unwrap_or(built_in), Some("Cache-Control: no-cache"))
+            }
+            ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", &manifest_named(self.pki.chosen_name().as_deref(), &crate::icon::rev())),
             ("GET", "/sw.js") => asset(stream, "text/javascript; charset=utf-8", SW_JS),
             ("GET", "/v1/bridge") => respond_json(stream, crate::bridge::list()),
             ("GET", p) if p.starts_with("/bridge/") => match crate::bridge::file(&p["/bridge/".len()..]) {
@@ -770,7 +809,7 @@ impl Web {
         let json_body = || serde_json::from_slice::<Value>(body).unwrap_or(json!({}));
 
         if method == "GET" && (path == "/gui" || path == "/gui/") {
-            let page = titled(if novnc_root().is_some() { DISPLAY } else { GUI }, self.pki.chosen_name().as_deref());
+            let page = with_icon(titled(if novnc_root().is_some() { DISPLAY } else { GUI }, self.pki.chosen_name().as_deref()), &crate::icon::rev());
             respond(
                 stream,
                 200,
@@ -2844,9 +2883,19 @@ mod title_tests {
         assert!(titled(INDEX, Some("Fred")).contains("<title>Fred · bia</title>"));
         assert!(titled(DISPLAY, Some("<Ann>")).contains("<title>&lt;Ann&gt; · bia · display</title>"));
         assert_eq!(titled(INDEX, None), INDEX);
-        let m: Value = serde_json::from_str(&manifest_named(Some("Фред"))).unwrap();
+        let m: Value = serde_json::from_str(&manifest_named(Some("Фред"), "")).unwrap();
         assert_eq!((m["name"].as_str(), m["short_name"].as_str()), (Some("Фред · bia"), Some("Фред")));
         assert_eq!(m["start_url"], "/");
-        assert_eq!(manifest_named(None), MANIFEST);
+        assert_eq!(manifest_named(None, ""), MANIFEST);
+        // its own icon: both sizes at addresses that change with the picture, the name kept
+        let m: Value = serde_json::from_str(&manifest_named(None, "abc123")).unwrap();
+        assert_eq!(m["name"], "bia");
+        assert_eq!(m["icons"][0]["src"], "/icon-192.png?v=abc123");
+        assert_eq!(m["icons"][1]["src"], "/icon-512.png?v=abc123");
+        assert_eq!(m["icons"].as_array().unwrap().len(), 2);
+        let page = with_icon(INDEX.to_string(), "abc123");
+        assert!(page.contains(r#"<link rel="icon" href="/icon-192.png?v=abc123" type="image/png">"#) && !page.contains("/icon.svg"));
+        assert!(page.contains(r#"href="/apple-touch-icon.png?v=abc123""#));
+        assert_eq!(with_icon(INDEX.to_string(), ""), INDEX);
     }
 }

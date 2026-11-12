@@ -21,6 +21,23 @@ chmod +x bia-bridge
 signed with bia's Developer ID and notarized by Apple, so it runs however it was downloaded.
 The same builds are on GitHub releases too.
 
+## For a person: a chat in the terminal
+
+```
+bia-bridge                      # asks your name (once) and the bia's address, then chats
+bia-bridge bia.example.com:8443 # or give the address: host, host:port or https://…
+```
+
+Started in a terminal with nothing else, bia-bridge is a live conversation with a bia: it
+files the certificate request (as a person), waits until the bia's owner approves it, then
+shows what bia says as it comes while you type; Enter sends. `/file <path> [text]`,
+`/history`, `/status`, `/quit` (or Ctrl-C). The link stays up in the background, so the
+next start shows what bia said meanwhile. A bia on another port than 443 is given as
+`host:port`, and when it moves to another port the chat follows it there.
+
+Agents and scripts use the commands below: they never ask anything, and without a terminal
+plain `bia-bridge` only prints its help.
+
 ## Connect once
 
 ```

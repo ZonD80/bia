@@ -6,6 +6,7 @@
 //! says, sends what was written while offline and renews the certificate. Use it from a
 //! shell (`send`, `wait`, `read`) or as an MCP server (`mcp`) for Claude Code, Claude
 //! Desktop, Cursor and others. Chat only: no root features.
+mod chat;
 mod daemon;
 mod ipc;
 mod link;
@@ -15,7 +16,16 @@ use anyhow::{anyhow, bail, Result};
 use profile::Profile;
 use serde_json::{json, Value};
 
-const HELP: &str = "bia-bridge — talk to a bia from any agent or script
+const HELP: &str = "bia-bridge — talk to a bia from a terminal, any agent or script
+
+  bia-bridge [<address>]     for a person: a live chat with a bia, here in the terminal. It asks
+  bia-bridge chat [<address>]  for what is missing (your name once, the bia's address:
+                       host or host:port), files the certificate request, waits for the owner's
+                       approval and then shows what bia says as it comes; Enter sends a line.
+                       --identity <name>, --bia <name>, --as, --ca-sha256, --note as below.
+                       Started without a terminal, plain `bia-bridge` prints this help and
+                       `chat` reads lines from its input.
+  Agents and scripts use the commands below instead: they never ask anything.
 
   bia-bridge connect <https://address> --identity <your name> [--as <bia name>] [--note <text>]
                      [--ca-sha256 <hex>] [--wait]
@@ -156,6 +166,12 @@ fn main() {
     }
 }
 
+/// A person is at the keyboard and reads the answers: only then may anything be asked.
+fn interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
 fn out(a: &Args, v: &Value, text: String) {
     if a.flag("--json") {
         println!("{v}");
@@ -166,10 +182,15 @@ fn out(a: &Args, v: &Value, text: String) {
 
 fn run(a: &Args) -> Result<()> {
     let bia = a.opt("--bia");
-    if a.cmd != "help" && a.cmd != "version" && !a.cmd.is_empty() {
+    if a.cmd != "help" && a.cmd != "version" && !a.cmd.is_empty() && a.cmd != "chat" && !a.cmd.contains(['.', ':']) {
         profile::migrate();
     }
     match a.cmd.as_str() {
+        // a person at a terminal with nothing more to say: the chat, which asks
+        "" if interactive() => chat::run(a, None),
+        "chat" => chat::run(a, a.pos.first().map(String::as_str)),
+        // just an address (https://…, host.name, host:port): the chat with that bia
+        url if url.starts_with("https://") || ((url.contains('.') || url.contains(':')) && chat::address(url).is_ok()) => chat::run(a, Some(url)),
         "" | "help" => {
             print!("{HELP}");
             Ok(())
@@ -177,6 +198,10 @@ fn run(a: &Args) -> Result<()> {
         "version" => {
             println!("bia-bridge {}", env!("CARGO_PKG_VERSION"));
             Ok(())
+        }
+        // connect with no address or no name, typed by a person: ask, then chat
+        "connect" if interactive() && !a.flag("--json") && (a.pos.is_empty() || (a.opt("--identity").is_none() && a.given_agent()?.is_none())) => {
+            chat::run(a, a.pos.first().map(String::as_str))
         }
         "connect" => {
             let url = a.pos.first().ok_or_else(|| anyhow!("connect needs the bia's https:// address"))?;

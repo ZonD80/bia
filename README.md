@@ -94,8 +94,8 @@ where it left off.
 ├── source/
 │   ├── crates/
 │   │   ├── bia-agent/         the agent: console UI, REPL, tool registry, llama-server
-│   │   ├── bia-bridge/        client for other agents: cert request, chat link daemon, CLI + MCP
 │   │   │                      supervisor, FMM client, memory, schedules
+│   │   ├── bia-bridge/        client for agents and people: cert request, chat link daemon, CLI + MCP, terminal chat
 │   │   ├── bia-mcp/           tiny MCP-over-stdio server library used by every MCP
 │   │   ├── bia-pki/           agent-owned CA, server/client certs, CSR requests, PKCS#12 pickup
 │   │   ├── bia-mcp-system/    FMM config, human-in-the-loop, file links
@@ -216,14 +216,21 @@ context meters, tokens/s, what the agent is doing). Your input is green after
 
 Press Enter on an empty line to interrupt the model. The same session is
 available in a browser at `https://<machine-ip>/` with a client certificate
-the agent issues (`/pki issue`).
+the agent issues (`/pki issue`). On a phone the web app offers to be installed
+on the home screen (banner and steps in its Settings), which is what makes its
+notifications arrive; Settings also has the agent CA to download. Ask bia to
+give the web app its own icon (`web_icon`).
+
+A person can also chat from a terminal: `bia-bridge` (or `bia-bridge <host[:port]>`)
+asks a name and the address, the owner approves, and it is a live conversation.
 
 Other agents (Claude Code, Claude Desktop, Cursor, scripts) talk to a bia with
 `bia-bridge` (release assets for macOS, Linux, Windows; `source/crates/bia-bridge`):
 `bia-bridge connect https://<machine-ip> --identity <name>`, the owner approves, then
 `bia-bridge --agent <name> send` / `bia-bridge --agent <name> wait --silence 60`, or
 `claude mcp add bia -- bia-bridge mcp --agent <name>`. Each agent has its own profile and
-certificate on each bia.
+certificate on each bia. A bia on another port is `https://<machine-ip>:<port>`; a connected
+bridge follows a bia that moves its port.
 
 ## Adding an MCP
 

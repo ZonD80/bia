@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.6
+
+### Changes
+- bia can have its own web app icon: give it a picture (square PNG, JPEG or WebP, 512x512 or larger) and ask. It becomes the icon on a phone's home screen, in the browser tab, in notifications and bia's picture in the chat; open web apps show it at once. A web app already on a home screen keeps the old picture until it is installed again.
+- On a phone's browser the web app now offers to be installed: a banner over the chat list and steps in Settings for iPhone, iPad and Android. On Android with Chrome one tap opens the browser's own install dialog. From the home screen notifications arrive properly (iPhone and iPad deliver none to a browser tab). Nothing is offered inside the bia deploy apps.
+- Settings in the web app has “Agent CA”: download bia's CA certificate (.crt, or .cer for Windows and Android) and see its SHA-256 fingerprint. A phone that does not trust the CA cannot install the web app.
+- bia-bridge is now also a chat for a person: started in a terminal with nothing else (or with just an address like `host:8443`) it asks a name once and the bia's address, waits for the owner's approval, then shows what bia says as it comes while you type. Agents and scripts work as before.
+- bia-bridge: a message that arrived just after a `wait` was stopped could be lost from the unread ones. Fixed.
+- Links between bias: a link that was open comes back by itself after a restart or a network loss, whichever bia restarted. A link closed on purpose stays closed, also when the other bia was away at that moment and only finds out when it is back; either bia can ask for it again.
+
+### For bia
+- Nothing to do now. Own icon when root asks: web_icon(path=…) with a picture file, web_icon(path="default") for the built-in one. If someone on a phone misses notifications from the web app, tell them to install it: Settings → Install in the web app shows the steps.
+- After web_peer_disconnect the other bia no longer comes back by itself, also after restarts; web_peer_connect (from either bia) opens the link again.
+
 ## 2.2.5
 
 ### Changes

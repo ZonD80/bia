@@ -231,6 +231,64 @@ got = files_of(cl.msg(sv.name, "client file", 60))
 check(bool(got) and open(f"{cl.files}/{got[0]}", "rb").read() == blob, "a file from the client side is pulled by the server side")
 cl.tool("peer_connect", peer=sv.name)
 
+# ---- what comes back by itself: only a link that was up before the restart or the loss
+def online(a, b):
+    return "online since" in a.link(b.name)
+
+def settle(a, b, up, secs=40):
+    """Wait until the link is as expected at both ends; for `down`, that it stays so."""
+    end = time.time() + secs
+    while time.time() < end:
+        if up and online(a, b) and online(b, a):
+            return True
+        if not up:
+            time.sleep(1)
+            if online(a, b) or online(b, a):
+                return False
+            continue
+        time.sleep(0.5)
+    return not up
+
+def want(a, b):
+    return json.load(open(f"{a.files}/state/links/{b.name}.json")).get("want")
+
+check(settle(alex, fred, True), "the link is up")
+check(want(alex, fred) is True and want(fred, alex) is True, "an open link is wanted at both ends, whoever dialed")
+# a restart of either side, a kill (network loss as the other sees it): it comes back
+for who, other, sig in ((fred, alex, signal.SIGTERM), (alex, fred, signal.SIGTERM), (fred, alex, signal.SIGKILL)):
+    who.stop(sig)
+    time.sleep(1)
+    who.start()
+    check(settle(alex, fred, True, 90), f"up before {who.name}'s {'restart' if sig == signal.SIGTERM else 'crash'}: back by itself")
+# closed on purpose while the other is away: the one coming back is told, and it stays closed
+fred.stop(signal.SIGTERM)
+time.sleep(1)
+txt, err = alex.tool("peer_disconnect", peer="fred")
+check(not err and "stopped trying" in txt, f"alex disconnects while fred is down: {txt[:90]}")
+fred.start()
+check(fred.notice("alex closed the link while this bia was away", 60) is not None, "fred, back by itself, is told the link was closed meanwhile")
+check(settle(alex, fred, False, 12), "…and the link stays down")
+check(want(fred, alex) is False and want(alex, fred) is False, "neither end wants it now")
+# …through restarts of both
+for who in (alex, fred):
+    who.stop(signal.SIGTERM)
+    who.start()
+check(settle(alex, fred, False, 12), "a link that was down before the restarts stays down after them")
+# asked for again (by the one that was refused): open, wanted, and back after a loss
+txt, err = fred.tool("peer_connect", peer="alex")
+check(not err and "connected" in txt, f"fred asks for the link again and gets it: {txt}")
+check(settle(alex, fred, True) and want(alex, fred) is True and want(fred, alex) is True, "the link is up and wanted at both ends again")
+alex.stop(signal.SIGKILL)
+alex.start()
+check(settle(alex, fred, True, 90), "…and comes back after alex's crash")
+# a disconnect both ends heard: down through a restart; either may ask again
+fred.tool("peer_disconnect", peer="alex")
+time.sleep(1)
+alex.stop(signal.SIGTERM)
+alex.start()
+check(settle(alex, fred, False, 12), "a disconnect both heard keeps the link down through a restart")
+txt, err = alex.tool("peer_connect", peer="fred")
+check(not err and "connected" in txt and settle(alex, fred, True), f"the other end asks again and gets it: {txt}")
 # ---- bans: the model's, then root's outranks it
 txt, err = fred.tool("peer_ban", peer="alex")
 check(not err and "banned alex" in txt, f"fred bans alex: {txt}")

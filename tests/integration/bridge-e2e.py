@@ -386,6 +386,122 @@ web.tool("send", identity="claude", channel="web", text="hello from the new port
 rc, out = br("wait", "--timeout", "30")
 check("hello from the new port" in out and "moved its web app to" in out, f"told about the move, and the link is back there: {out[:200]}")
 
+# ---- a person at a terminal: plain `bia-bridge` asks, files the request, then is a live chat
+# (the bia is on its custom port by now: the address is given as host:port)
+if os.name == "posix":
+    import pty, termios
+
+    class Term:
+        """bia-bridge on a pseudo-terminal, like a person's shell would start it."""
+        def __init__(self, *args):
+            self.m, self.s = pty.openpty()
+            termios.tcsetwinsize(self.s, (24, 60)) if hasattr(termios, "tcsetwinsize") else None
+            self.before = termios.tcgetattr(self.s)
+            env = {k: v for k, v in benv.items() if k not in ("BIA_BRIDGE_AGENT", "NO_COLOR")}
+            self.p = subprocess.Popen([bridge, *args], stdin=self.s, stdout=self.s, stderr=self.s, env=env, start_new_session=True)
+            self.out = ""
+            threading.Thread(target=self._read, daemon=True).start()
+
+        def _read(self):
+            while True:
+                try:
+                    b = os.read(self.m, 4096)
+                except OSError:
+                    return
+                if not b:
+                    return
+                self.out += b.decode("utf-8", "replace")
+
+        def type(self, text):
+            os.write(self.m, text.encode())
+
+        def expect(self, needle, secs=30, after=0):
+            end = time.time() + secs
+            while time.time() < end:
+                i = self.out.find(needle, after)
+                if i >= 0:
+                    return i
+                time.sleep(0.05)
+            return -1
+
+    t = Term()
+    check(t.expect("Your name for bias") >= 0, "with nothing given it asks who is there")
+    t.type("dana\n")
+    check(t.expect("The bia's address") >= 0, "…and for the bia's address")
+    t.type(f"127.0.0.1:{new_port}\n")
+    check(t.expect("Waiting for that") >= 0 and "CA fingerprint" in t.out, f"it shows the CA and files the request: {t.out[-300:]!r}")
+    prof = json.load(open(f"{home}/dana/127.0.0.1/profile.json"))
+    check(prof["url"] == f"https://127.0.0.1:{new_port}" and prof.get("role") == "user", f"host:port became the address, asked as a person: {prof['url']} {prof.get('role')}")
+    check(prof["request"][:8] in t.out, "the request's short id is shown for the owner")
+    txt, err = web.tool("pki_approve", id=prof["request"])
+    check(not err, f"the owner approves: {txt[:100]}")
+    check(t.expect("Enter sends") >= 0 and "Approved." in t.out, "approved: the chat opens by itself")
+    time.sleep(1)
+    t.type("hi from dana\r")
+    n = web.inbound("hi from dana")
+    check(n is not None and n["identity"] == "dana", f"a typed line reaches bia as dana: {n}")
+    check(t.expect("you\x1b[0m  hi from dana") >= 0, "…and stays on the screen as yours")
+    t.type("half typed")
+    time.sleep(0.5)
+    mark = len(t.out)
+    web.tool("send", identity="dana", channel="web", text="hello dana\nsecond line \x1b[2Jevil\x07")
+    i = t.expect("hello dana", after=mark)
+    check(i >= 0 and t.expect("> half typed", 10, after=i) >= 0, f"bia's words appear live, above the line being typed: {t.out[mark:]!r}")
+    check("[2Jevil" in t.out[mark:] and "\x1b[2J" not in t.out[mark:] and "\x07" not in t.out[mark:], "escape sequences in what bia says are defused")
+    t.type("\x15/status\r")
+    check(t.expect("connected, ") >= 0, "/status works; Ctrl-U emptied the line first")
+    t.type("\x03")
+    try:
+        rc = t.p.wait(10)
+    except subprocess.TimeoutExpired:
+        rc = None
+    check(rc == 0 and "Left the chat" in t.out, f"Ctrl-C leaves cleanly: {rc}")
+    check(termios.tcgetattr(t.s) == t.before, "…with the terminal as it was")
+
+    # again, this time by the bare address (host:port): nothing is asked, the conversation so far is shown
+    t = Term(f"127.0.0.1:{new_port}")
+    check(t.expect("Enter sends") >= 0 and "Your name" not in t.out and "address" not in t.out, f"the next start goes straight to the chat: {t.out[:200]!r}")
+    check(t.expect("hi from dana") >= 0 and t.expect("hello dana") >= 0, "…showing the last of the conversation")
+    web.tool("send", identity="dana", channel="web", text="still here")
+    check(t.expect("still here") >= 0, "…and live again: a message right after leaving was not lost to the chat that left")
+    t.type("/quit\r")
+    try:
+        rc = t.p.wait(10)
+    except subprocess.TimeoutExpired:
+        rc = None
+    check(rc == 0, f"/quit leaves: {rc}")
+    t = Term()
+    check(t.expect("Enter sends") >= 0 and "Your name" not in t.out, "…and with nothing at all, straight to the only bia there is")
+    t.type("\x03")
+    t.p.wait(10)
+
+    # without a terminal plain bia-bridge asks nothing: the help, as before
+    rc, out = br(agent=None)
+    check(rc == 0 and "bia-bridge chat" in out and "Your name" not in out, "without a terminal it prints the help and asks nothing")
+    rc, out = br("connect", agent=None)
+    check(rc != 0 and "needs the bia's https:// address" in out, f"…and connect still says what it needs: {out[:80]}")
+    # `chat` through a pipe: lines in, messages out
+    env = {k: v for k, v in benv.items() if k != "BIA_BRIDGE_AGENT"}
+    c = subprocess.Popen([bridge, "chat", f"https://127.0.0.1:{new_port}", "--identity", "dana"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True, bufsize=1)
+    got = []
+    threading.Thread(target=lambda: [got.append(l) for l in c.stdout], daemon=True).start()
+    for _ in range(100):
+        if any("Enter sends" in l for l in got):
+            break
+        time.sleep(0.1)
+    c.stdin.write("a piped line\n"); c.stdin.flush()
+    n = web.inbound("a piped line")
+    check(n is not None and n["identity"] == "dana", f"chat through a pipe sends each line: {n}")
+    web.tool("send", identity="dana", channel="web", text="answer to the pipe")
+    for _ in range(100):
+        if any("answer to the pipe" in l for l in got):
+            break
+        time.sleep(0.1)
+    check(any("answer to the pipe" in l for l in got) and not any("\x1b" in l for l in got), "…and prints what bia says, without colours or cursor moves")
+    c.stdin.close()
+    check(c.wait(10) == 0, "the end of the input ends the chat")
+    br("stop", "--bia", "127.0.0.1", agent="dana")
+
 for who, prof in (("claude", "home"), ("eve", "other"), ("alice", "alice"), ("grok", "home")):
     br("stop", "--bia", prof, agent=who)
 web.p.terminate()

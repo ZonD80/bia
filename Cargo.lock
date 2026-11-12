@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "bia-agent"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "bia-bridge"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "bia-deploy"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "bia-deploy-mobile"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "bia-disk"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "gpt",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "regex",
  "serde",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-carry"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "bia-mcp",
  "libc",
@@ -859,7 +859,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-chrome"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -876,7 +876,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-lang"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "bia-mcp",
  "bia-speech",
@@ -889,7 +889,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-meta"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-screen"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "bia-mcp",
  "bia-ocr",
@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-secrets"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-system"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -941,7 +941,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-telegram"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -961,12 +961,13 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-web"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "base64 0.22.1",
  "bia-mcp",
  "bia-pki",
  "bia-speech",
+ "image",
  "libc",
  "ring",
  "rustls",
@@ -978,7 +979,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mcp-whatsapp"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "bia-mcp",
@@ -997,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "bia-mkimage"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "anyhow",
  "bia-disk",
@@ -1005,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "bia-ocr"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "libc",
  "ort",
@@ -1017,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "bia-pki"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -1037,7 +1038,7 @@ dependencies = [
 
 [[package]]
 name = "bia-speech"
-version = "2.2.5"
+version = "2.2.6"
 dependencies = [
  "libc",
  "serde",
@@ -3517,9 +3518,22 @@ checksum = "85ab80394333c02fe689eaf900ab500fbd0c2213da414687ebf995a65d5a6104"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
+ "image-webp",
  "moxcms",
  "num-traits",
  "png",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
+name = "image-webp"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
+dependencies = [
+ "byteorder-lite",
+ "quick-error",
 ]
 
 [[package]]
@@ -5142,6 +5156,12 @@ checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 dependencies = [
  "image",
 ]
+
+[[package]]
+name = "quick-error"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a993555f31e5a609f617c12db6250dedcac1b0a85076912c436e6fc9b2c8e6a3"
 
 [[package]]
 name = "quick-xml"
@@ -8633,6 +8653,21 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zune-core"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d56377fd46368984a170bc5aac5567e52ca5da874caa60bea39fcbca78fb658b"
+
+[[package]]
+name = "zune-jpeg"
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
 ]
 
 [[package]]

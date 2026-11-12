@@ -287,6 +287,110 @@ check(bool(src) and src.startswith("blob:"), f"the photo is shown from what the 
 pulled = t1.js("(async () => { const i = [...document.querySelectorAll('#msgsIn .media img')].pop(); return (await (await fetch(i.src)).arrayBuffer()).byteLength; })()")
 check(pulled == len(png), f"…intact ({pulled} bytes)")
 
+# ---- settings: the agent CA can be downloaded, in both forms, with its fingerprint shown
+t1.js("go('settings')")
+c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ssl._create_unverified_context())
+c.request("GET", "/.well-known/bia.json")
+ca_sha = json.loads(c.getresponse().read())["ca_sha256"]
+shown = t1.until("(() => { const e = document.querySelector('#caSha'); return e && e.textContent; })()", 15)
+check(bool(shown) and shown.replace(":", "").lower() == ca_sha, f"settings show the CA fingerprint: {shown}")
+check(t1.js("!!document.querySelector('#caPem') && !!document.querySelector('#caDer')") is True, "…with buttons for bia-ca.crt and the .cer")
+t1.js("window.__dl = []; window.__click = HTMLAnchorElement.prototype.click; HTMLAnchorElement.prototype.click = function () { window.__dl.push([this.getAttribute('href'), this.download]); }")
+t1.js("document.querySelector('#caPem').click(); document.querySelector('#caDer').click()")
+dl = json.loads(t1.js("JSON.stringify(window.__dl)"))
+t1.js("HTMLAnchorElement.prototype.click = window.__click")
+check(dl == [["/v1/pki/ca", "bia-ca.crt"], ["/v1/pki/ca?format=der", "bia-ca.cer"]], f"the buttons download both files: {dl}")
+got = t1.js("""(async () => {
+  const hex = async b => [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map(x => x.toString(16).padStart(2, '0')).join('');
+  const der = await (await fetch('/v1/pki/ca?format=der')).arrayBuffer();
+  const pem = await (await fetch('/v1/pki/ca')).text();
+  const b = Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g, '').replace(/\\s+/g, '')), c => c.charCodeAt(0));
+  return [await hex(der), await hex(b.buffer)];
+})()""")
+check(got == [ca_sha, ca_sha], "both downloads are the CA with that fingerprint")
+
+# ---- bia's own icon: web_icon changes tab, chat picture and manifest in the open page; default restores
+def solid_png(side, rgb):
+    import zlib
+    row = b"\x00" + bytes(rgb) * side
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(row * side)) + chunk(b"IEND", b"")
+PAGE_ICON = "JSON.stringify({rev: ICON_REV, tab: document.querySelector('link[rel=icon]').getAttribute('href'), man: document.querySelector('link[rel=manifest]').getAttribute('href'), imgs: [...document.querySelectorAll('img.bia-icon')].map(i => i.getAttribute('src').slice(0, 30))})"
+t1.js("go('chat/main')")
+check(json.loads(t1.js(PAGE_ICON))["rev"] == "", "the page starts with the built-in icon")
+open(f"{files}/face.png", "wb").write(solid_png(600, (20, 160, 90)))
+said = web.tool("icon", path="face.png")
+check("new icon" in said[0] and not said[1], f"web_icon takes a picture: {said[0][:80]}")
+rev = t1.until("ICON_REV", 10)
+st = json.loads(t1.js(PAGE_ICON))
+check(bool(rev) and st["tab"] == f"/icon-192.png?v={rev}" and st["man"].endswith(f"?v={rev}"), f"the open page follows at once: {st}")
+check(len(st["imgs"]) >= 1 and all(i == f"/icon-192.png?v={rev}" for i in st["imgs"]), "…bia's picture in the chat too")
+sizes = t1.js("""(async () => {
+  const m = await (await fetch('/manifest.webmanifest')).json();
+  const dim = async u => { const b = await createImageBitmap(await (await fetch(u)).blob()); return b.width + 'x' + b.height; };
+  const px = async u => { const b = await createImageBitmap(await (await fetch(u)).blob()); const c = new OffscreenCanvas(1, 1).getContext('2d'); c.drawImage(b, -5, -5); return [...c.getImageData(0, 0, 1, 1).data].join(','); };
+  return JSON.stringify({icons: m.icons.map(i => i.src + ' ' + i.sizes), d: [await dim(m.icons[0].src), await dim(m.icons[1].src), await dim('/apple-touch-icon.png')], px: await px('/icon-512.png'), fav: await px('/favicon.ico'), index: (await (await fetch('/')).text()).includes('/icon-192.png?v=')});
+})()""")
+sz = json.loads(sizes)
+check(sz["icons"] == [f"/icon-192.png?v={rev} 192x192", f"/icon-512.png?v={rev} 512x512"] and sz["d"] == ["192x192", "512x512", "180x180"], f"the manifest and the icon addresses serve it in every size: {sz}")
+check(sz["px"] == "20,160,90,255" and sz["fav"] == "20,160,90,255" and sz["index"], "…the very picture, and a freshly loaded page starts with it")
+bad = web.tool("icon", path="nothing-here.png")
+check(bad[1] and t1.js("ICON_REV") == rev, f"a missing file is refused and the icon stays: {bad[0][:60]}")
+check("built-in" in web.tool("icon", path="default")[0], "web_icon(default) goes back")
+check(t1.until("ICON_REV === ''", 10) is not None and json.loads(t1.js(PAGE_ICON))["tab"] == "/icon.svg", "…and the page follows")
+m = json.loads(t1.js("(async () => JSON.stringify((await (await fetch('/manifest.webmanifest')).json()).icons.map(i => i.sizes)))()"))
+check(m == ["192x192", "512x512", "any"], f"the built-in manifest has a 512 icon for installing: {m}")
+
+# ---- installing on a phone: a banner and steps in a phone's browser, the browser's own dialog when it has one
+UA_ANDROID = "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Mobile Safari/537.36"
+UA_IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"
+ua = lambda u: t1.js("Object.defineProperty(navigator, 'userAgent', {get: () => %s, configurable: true}); renderInstallAsk(); renderSettings(); 1" % json.dumps(u))
+def shot(name):
+    # SHOTS=<folder>: phone-size pictures of the install banner and steps, to look at
+    d = os.environ.get("SHOTS")
+    if not d:
+        return
+    cdp.call("Emulation.setDeviceMetricsOverride", {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True}, t1.sess)
+    time.sleep(0.7)
+    open(f"{d}/{name}.png", "wb").write(base64.b64decode(cdp.call("Page.captureScreenshot", {"format": "png"}, t1.sess)["data"]))
+    cdp.call("Emulation.clearDeviceMetricsOverride", {}, t1.sess)
+    time.sleep(0.3)
+ASK = "(() => { const e = document.querySelector('#installAsk'); return JSON.stringify({shown: !e.hidden, text: e.textContent}); })()"
+t1.js("go('settings')")
+# Chrome itself may already have offered its dialog here (the manifest is installable): then a
+# computer gets the Install card in Settings, but never the banner
+offered = t1.js("!!INSTALL.ev")
+print(f"     (this Chrome offered its own install dialog: {offered})")
+check(json.loads(t1.js(ASK))["shown"] is False and t1.js("!!document.querySelector('#installCard')") is offered, "a computer's browser gets no install banner")
+t1.js("INSTALL.ev = null; renderSettings(); 1")
+check(t1.js("!!document.querySelector('#installCard')") is False, "…and nothing in Settings without the browser's dialog")
+ua(UA_ANDROID)
+a = json.loads(t1.js(ASK))
+check(a["shown"] and "Install bia on this phone" in a["text"] and a["text"].endswith("How"), f"Android's browser gets the banner: {a}")
+shot("android-settings")
+t1.js("go('')"); shot("android-banner"); t1.js("go('settings')")
+card = t1.js("document.querySelector('#installCard').textContent")
+check("Add to Home screen" in card and "CA" in card, "…and Settings explain the menu way and the CA")
+t1.js("""window.__asked = 0; (() => { const e = new Event('beforeinstallprompt'); e.prompt = () => { window.__asked++; }; e.userChoice = Promise.resolve({outcome: 'accepted'}); window.dispatchEvent(e); })()""")
+check(json.loads(t1.js(ASK))["text"].endswith("Install") and t1.js("!!document.querySelector('#installCard button')") is True, "when the browser offers its dialog the banner says Install")
+t1.js("document.querySelector('#installBtn').click()")
+check(t1.until("window.__asked === 1 && document.querySelector('#installAsk').hidden && !document.querySelector('#installCard')", 10) is not None, "one tap opens the browser's own dialog; installed, the offer is gone")
+t1.js("INSTALL.done = false; 1")
+ua(UA_IOS)
+a = json.loads(t1.js(ASK))
+card = t1.js("document.querySelector('#installCard').textContent")
+check(a["shown"] and a["text"].endswith("How") and "Add to Home Screen" in card and "Share" in card, f"an iPhone's browser gets the Home Screen steps: {a}")
+t1.js("document.querySelector('#installBtn').click()")
+check(t1.until("(() => { const m = document.querySelector('.modal'); return m && m.textContent.includes('Add to Home Screen'); })()", 5) is not None, "…the banner's button shows them")
+shot("ios-steps")
+t1.js("document.querySelector('.modal').close(0); window.BiaApp = {}; renderInstallAsk(); renderSettings(); 1")
+check(json.loads(t1.js(ASK))["shown"] is False and t1.js("!!document.querySelector('#installCard')") is False, "inside the bia deploy app nothing is offered")
+t1.js("delete window.BiaApp; renderInstallAsk(); 1")
+t1.js("document.querySelector('#installAsk .btn-icon').click()")
+check(json.loads(t1.js(ASK))["shown"] is False and t1.js("S.prefs.installAsked") is True, "Not now hides the banner for good")
+ua("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+t1.js("go('chat/main')")
+
 # ---- one live session: a second tab waits while the first is open, then takes over
 t2 = Tab()
 if os.environ.get("DEBUG"):
