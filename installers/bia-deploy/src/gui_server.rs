@@ -739,7 +739,7 @@ impl FlashApp {
 
 /// bia's key in `dir` as a .biaconfig at `to`, private to whoever runs this.
 fn save_config(dir: &std::path::Path, host: &str, password: &str, to: &std::path::Path) -> Result<String, String> {
-    let sealed = bia_pki::biaconfig::seal_folder(dir, host, &crate::remote::saved_name(dir), password).map_err(|e| format!("{e:#}"))?;
+    let sealed = bia_pki::biaconfig::seal_folder(dir, host, &remote::saved_name(dir), password).map_err(|e| format!("{e:#}"))?;
     std::fs::write(to, sealed).map_err(|e| format!("{}: {e}", to.display()))?;
     #[cfg(unix)]
     {
