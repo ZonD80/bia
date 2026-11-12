@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.4
+
+### Changes
+- Notifications from bia's web app now carry its name: “Fred”, “Fred is calling”, “Fred needs you” instead of just “bia”, so the notifications of several bias can be told apart. A bia without a name still shows “bia”.
+- bia can move its web app to another HTTPS port when root asks (new tool web_port). The port is kept through updates. On a port other than 443 nothing answers on port 80 any more, so that port stays free; on 443 http:// still leads to https://. Whoever is connected when it moves is told: an open web app shows the new address, bia-bridge and other bias follow by themselves. A bia deploy app (from 2.2.4) with the chat open keeps the new address by itself. Whoever was not connected at that moment needs the new address (for an app: a new .biaconfig).
+- Taking over a server: the one-time page with root's certificate now also gives it as a .biaconfig file for the bia deploy apps, locked with a password you choose there (one is suggested), with the server's address and bia's name inside. From a shell: `curl -fk --data-urlencode 'password=…' -o bia.biaconfig <page address>root.biaconfig`. Either file lets the takeover continue.
+- The bia deploy apps (phones and computers) now keep the name given to a bia they set up: the list of saved keys shows it, and a .biaconfig shared from there carries it. Bias saved before stay without a name.
+
+### For bia
+- Nothing to do. If root asks for another web port: web_port(port=…), tell root the new address and that the firewall must let that port in, then discover(path="mcp/web", restart=true). Whoever was not connected during the move needs the new address afterwards: for a bia deploy app a new .biaconfig (web_pki_biaconfig).
+
 ## 2.2.3
 
 ### Changes

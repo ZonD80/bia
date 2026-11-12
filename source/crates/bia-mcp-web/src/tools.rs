@@ -203,6 +203,99 @@ pub fn status(_: &Ctx, _: Value) -> Result<String, String> {
     }
 }
 
+fn port_file(files: &std::path::Path) -> std::path::PathBuf {
+    files.join("state").join("web").join("port.json")
+}
+
+/// The HTTPS port root chose with web_port, if any: it wins over the one the agent passes.
+pub fn saved_port(files: &std::path::Path) -> Option<u16> {
+    let v: Value = bia_mcp::statefile::read(&port_file(files))?;
+    v["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0)
+}
+
+/// Keep another HTTPS port for the next start; `http` is the plain-HTTP redirect's port and
+/// `now` the port served at the moment (0: none).
+fn set_port(files: &std::path::Path, port: u64, http: u16, now: u16) -> Result<String, String> {
+    let path = port_file(files);
+    if port == 0 {
+        bia_mcp::statefile::remove(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        return Ok("The saved port is gone: the web app is back on its standard port (443) after discover(path=\"mcp/web\", restart=true).".into());
+    }
+    let port = u16::try_from(port).map_err(|_| "port: 1 to 65535".to_string())?;
+    if port == http {
+        return Err(format!("port {port} is the plain HTTP one that sends browsers on to HTTPS: pick another"));
+    }
+    if port != now {
+        // taken ports are refused now, not found out after the restart
+        if let Err(e) = std::net::TcpListener::bind(("0.0.0.0", port)) {
+            return Err(format!("port {port} cannot be used ({}; {e})", crate::listen::describe_port(files, port)));
+        }
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    bia_mcp::statefile::write_json(&path, &serde_json::json!({"port": port})).map_err(|e| format!("{}: {e}", path.display()))?;
+    if port == now {
+        return Ok(format!("The web app already answers on port {port}; it is saved and stays so."));
+    }
+    let at = if port == 443 { String::new() } else { format!(":{port}") };
+    Ok(format!(
+        "Saved: the web app answers on port {port} (https://<address>{at}/) once this MCP restarts. First tell root the new address and that a firewall in front of this machine must let TCP {port} in, then discover(path=\"mcp/web\", restart=true). Everyone connected is told the new port as the restart cuts them off: an open web app shows the new address, a bia deploy app with the chat open, bia-bridge and other bias follow by themselves. Off port 443 nothing answers on port 80 any more (no redirect from http://), so the address needs https:// and the port. Whoever is not connected at that moment keeps the old port: a bia deploy app needs a new .biaconfig (web_pki_biaconfig), an offline bia or bia-bridge the new URL."
+    ))
+}
+
+/// The port web_port chose while this process runs (0: it was not called).
+static NEXT_PORT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The HTTPS port the web app answers on after this process, when web_port just chose another
+/// one: what everyone connected is told as the links close.
+pub fn moving_to() -> Option<u16> {
+    let next = NEXT_PORT.load(std::sync::atomic::Ordering::SeqCst) as u16;
+    let now = crate::WEB.get().map_or(0, |w| w.port);
+    (next != 0 && now != 0 && next != now).then_some(next)
+}
+
+/// The tool: root moves the web app to another HTTPS port.
+pub fn port(_: &Ctx, args: Value) -> Result<String, String> {
+    let port = args.get("port").and_then(Value::as_u64).ok_or("port: a number, 1 to 65535 (0 = back to the standard port)")?;
+    let env = |k: &str, d: u16| std::env::var(k).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(d);
+    let said = set_port(&crate::files_dir(), port, env("BIA_WEB_HTTP_PORT", 80), crate::WEB.get().map_or(0, |w| w.port))?;
+    // 0 forgot the saved port: the next start is on the one the agent passes
+    let next = if port == 0 { env("BIA_WEB_PORT", 443) } else { port as u16 };
+    NEXT_PORT.store(next as u32, std::sync::atomic::Ordering::SeqCst);
+    Ok(said)
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_port_is_kept_checked_and_dropped() {
+        let files = std::env::temp_dir().join(format!("bia-web-port-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&files);
+        assert_eq!(saved_port(&files), None);
+        // a port somebody holds is refused, and nothing is saved
+        let held = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let busy = held.local_addr().unwrap().port();
+        assert!(set_port(&files, busy as u64, 80, 443).unwrap_err().contains("cannot be used"));
+        assert!(set_port(&files, 80, 80, 443).unwrap_err().contains("plain HTTP"));
+        assert!(set_port(&files, 70000, 80, 443).is_err());
+        assert_eq!(saved_port(&files), None);
+        // the one served now needs no free port
+        assert!(set_port(&files, busy as u64, 80, busy).unwrap().contains("already answers"));
+        assert_eq!(saved_port(&files), Some(busy));
+        drop(held);
+        let free = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap().local_addr().unwrap().port();
+        let said = set_port(&files, free as u64, 80, 443).unwrap();
+        assert!(said.contains(&format!(":{free}/")) && said.contains("restart=true"), "{said}");
+        assert_eq!(saved_port(&files), Some(free));
+        assert!(set_port(&files, 0, 80, free).is_ok());
+        assert_eq!(saved_port(&files), None);
+        let _ = std::fs::remove_dir_all(&files);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

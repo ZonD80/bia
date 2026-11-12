@@ -80,7 +80,8 @@ fun App(m: DeployModel) {
         confirmButton = {},
     )
     m.chat?.let { target ->
-        ChatScreen(target) { m.chat = null }
+        // a bia that moved to another port is another page: a new web view
+        key(target.host) { ChatScreen(target, onMoved = { m.chatMoved(target, it) }) { m.chat = null } }
         return
     }
     // back: the server's first step → the brain → the saved bias (the first page)
@@ -466,7 +467,7 @@ private fun InstalledStep(m: DeployModel) {
             }
         }
     }
-    d.folder?.let { folder -> KeyCard(m, folder, host) }
+    d.folder?.let { folder -> KeyCard(m, folder, host, name = m.saved.firstOrNull { it.folder == folder }?.name ?: "") }
     if (m.land) LandSecretCard(m)
     TextButton({ m.again() }) { Text("Set up another server") }
     TextButton({ m.openKeys() }) { Text("Your bias") }

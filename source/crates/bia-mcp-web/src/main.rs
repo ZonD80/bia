@@ -128,6 +128,8 @@ fn main() {
             obj(target(), &["identity"]), tools::call_hangup)
         .tool("status", "HTTPS addresses of this web server, the public CA download path and its fingerprint. Access needs a client certificate (web_pki_issue when root asks).",
             obj(json!({}), &[]), tools::status)
+        .tool("port", "Move the HTTPS web app to another port (only when root asks): port=<1-65535>, 0 = back to 443. Applies after the MCP restarts.",
+            obj(json!({"port": {"type": "integer", "description": "the new HTTPS port; 0 forgets the saved one"}}), &["port"]), tools::port)
         .tool(
             "pki_issue",
             "Issue a client certificate (only when root asks). identity is the CN (e.g. root or a contact id). role is user or agent. trust is root or normal. Returns a one-time HTTPS PKCS#12 pickup URL (password 12345678); the file is deleted after download.",
@@ -194,8 +196,10 @@ fn main() {
         .tool("restore", "Report whether the web server is listening (run at boot).", obj(json!({}), &[]), tools::status)
         .run_with(move |ctx| {
             b.attach(ctx);
-            let port = port_env("BIA_WEB_PORT", 443);
-            let http = port_env("BIA_WEB_HTTP_PORT", 80);
+            // root's own choice (web_port) wins over the port the agent passes
+            let port = tools::saved_port(&files).unwrap_or_else(|| port_env("BIA_WEB_PORT", 443));
+            // the plain-HTTP redirect belongs to the standard port only: elsewhere port 80 stays free
+            let http = if port == 443 { port_env("BIA_WEB_HTTP_PORT", 80) } else { 0 };
             match server::Web::start(b.clone(), port, http, files) {
                 Ok((w, warn)) => {
                     if let Some(w) = warn {
@@ -208,7 +212,7 @@ fn main() {
             }
         });
     // stdin closed: the agent stopped or restarts
-    link::shutdown_all(&link::shutdown_reason(&files_dir()));
+    link::shutdown_all(&link::shutdown_reason(&files_dir()), tools::moving_to());
 }
 
 static TERM_PIPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
@@ -240,7 +244,7 @@ fn on_terminate(files: PathBuf) {
         let mut b = 0u8;
         let n = unsafe { libc::read(rfd, &mut b as *mut u8 as *mut libc::c_void, 1) };
         if n == 1 {
-            link::shutdown_all(&link::shutdown_reason(&files));
+            link::shutdown_all(&link::shutdown_reason(&files), tools::moving_to());
             std::process::exit(0);
         }
     });

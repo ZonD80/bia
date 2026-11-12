@@ -93,6 +93,7 @@ class Session:
         self.frames, self.acks, self.offers, self.pulls = [], {}, {}, {}
         self.cv = threading.Condition()
         self.hello = self.bye = None
+        self.bye_port = None  # a bye that says where the web app answers next
         self.closed = False
         self.seen = 0
         self.instance = instance or os.urandom(6).hex()
@@ -130,6 +131,7 @@ class Session:
                         self.hello = v
                     elif t == "bye":
                         self.bye = v.get("reason")
+                        self.bye_port = v.get("port")
                     elif t == "ack" and v.get("cid") is not None:
                         self.acks[v["cid"]] = v
                     if t == "fget":

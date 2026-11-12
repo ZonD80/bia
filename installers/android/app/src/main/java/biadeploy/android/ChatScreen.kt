@@ -115,7 +115,7 @@ private const val SAVE_BLOBS = """
 /** bia's web app inside this app: root's key and bia's CA come from this phone, nothing to install. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun ChatScreen(target: ChatTarget, onClose: () -> Unit) {
+fun ChatScreen(target: ChatTarget, onMoved: (Int) -> Unit = {}, onClose: () -> Unit) {
     val context = LocalContext.current
     val keys = remember(target) { runCatching { ChatKeys(target.folder) } }
     val failed = keys.exceptionOrNull()
@@ -177,6 +177,12 @@ fun ChatScreen(target: ChatTarget, onClose: () -> Unit) {
                                 pending = Base64.decode(base64, Base64.DEFAULT)
                                 saveFile.launch(name)
                             }
+                        }
+
+                        /** bia's page says its web app answers on another port from now on. */
+                        @JavascriptInterface
+                        fun moved(port: Int) {
+                            post { onMoved(port) }
                         }
                     }, "BiaApp")
                     webViewClient = chatClient(target, k, ctx, onProblem = { problem = it })

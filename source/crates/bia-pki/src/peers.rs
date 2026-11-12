@@ -233,6 +233,16 @@ impl Pki {
         Ok((d.join("ca.pem"), d.join("cert.pem"), self.agent_key_path()))
     }
 
+    /// A peer said (on its own link) that its web app moves to another port: dial it there
+    /// from now on. Returns the new address, or None when nothing changed.
+    pub fn peer_moved(&self, name: &str, port: u16) -> Result<Option<String>> {
+        let Some(mut p) = self.peer(name) else { return Ok(None) };
+        let Some(url) = crate::client::with_port(&p.url, port)? else { return Ok(None) };
+        p.url = url.clone();
+        self.save_peer(&p, None, None)?;
+        Ok(Some(url))
+    }
+
     fn save_peer(&self, p: &Peer, ca_pem: Option<&str>, cert_pem: Option<&str>) -> Result<()> {
         let d = self.peer_dir(&p.name)?;
         fs::create_dir_all(&d)?;

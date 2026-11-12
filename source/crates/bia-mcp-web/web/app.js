@@ -537,6 +537,23 @@ function connect() {
     identity: S.me.identity,
     onHello, onFrame: onEvent, onReset, onUpload, onOutbox,
     onState: st => { S.linkState = st; S.wsOk = st === 'online'; setConn(); },
+    onMoved: (url, port) => {
+      S.movedTo = url;
+      // inside a bia deploy app: it keeps the new address and opens it by itself
+      try {
+        if (window.BiaApp && BiaApp.moved) { BiaApp.moved(port); toast('bia moved to port ' + port + '; opening it there…'); return; }
+        const ios = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.biaMoved;
+        if (ios) { ios.postMessage(port); toast('bia moved to port ' + port + '; opening it there…'); return; }
+      } catch {}
+      // on every page of the app (console and shell too): nothing here works any more
+      modal({
+        title: 'bia moved its web app',
+        body: h('div', {}, h('p', {}, 'It now answers on another port, so this address stopped working:'),
+          h('p', {}, h('a', { href: url }, url.replace(/^(https:\/\/[^/]+).*/, '$1'))),
+          h('p', { class: 'muted' }, 'It is ready there in a few seconds. The browser asks for your certificate again; a saved bookmark or home-screen app needs the new address.')),
+        buttons: [{ text: 'Later', value: false }, { text: 'Open it', primary: true, cls: 'primary', onClick: () => { location.href = url; } }],
+      });
+    },
   });
   S.link.start();
 }
@@ -692,6 +709,7 @@ function setConn() {
     const st = S.linkState;
     if (st === 'blocked') set(el, 'Another session of yours is still open. Waiting about 30 s, then this page connects by itself.');
     else if (st === 'replaced') set(el, 'This chat is now open in another tab or window. ', h('a', { href: '#', onclick: e => { e.preventDefault(); S.link.retry(); } }, 'Use it here'));
+    else if (st === 'moved') set(el, 'bia moved its web app to another address. Open ', h('a', { href: S.movedTo }, S.movedTo.replace(/^(https:\/\/[^/]+).*/, '$1')), ' (it answers there in a few seconds; your browser asks for your certificate again).');
     else if (st === 'banned') set(el, 'This identity is banned on this bia.');
     else set(el, 'Connecting…');
   }
@@ -1098,7 +1116,7 @@ function renderChatHead() {
   }
   const c = S.chats.get(S.cur) || { title: chatTitle(S.cur) };
   let sub, on = false;
-  if (!S.wsOk) sub = S.linkState === 'blocked' ? 'waiting for your other session…' : S.linkState === 'replaced' ? 'open in another tab' : 'connecting…';
+  if (!S.wsOk) sub = S.linkState === 'blocked' ? 'waiting for your other session…' : S.linkState === 'replaced' ? 'open in another tab' : S.linkState === 'moved' ? 'moved to another address' : 'connecting…';
   else if (S.typing.has(S.cur)) { sub = 'typing…'; on = true; }
   else if (S.root && S.status && /^(thinking|tool|talking|reflecting)/.test(S.status.state || '')) { sub = S.status.state.split(' ')[0] + '…'; on = true; }
   else sub = S.root && S.status && S.status.model ? `online · ${S.status.model}` : 'online';

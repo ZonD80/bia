@@ -234,6 +234,21 @@ final class DeployModel: ObservableObject {
         page = .keys
     }
 
+    /// bia said in its chat here that its web app moves to another port: its key is kept under the
+    /// new address, and the chat opens there once bia has restarted.
+    func chatMoved(_ target: ChatTarget, port: Int) {
+        guard (1...65535).contains(port) else { return }
+        let folder = target.folder
+        Task {
+            do {
+                let b = try await Task.detached { try biaMoved(folder: folder, port: UInt16(port)) }.value
+                saved = savedBias()
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if chat?.folder == folder { chat = ChatTarget(host: b.host, folder: b.folder) }
+            } catch { self.error = message(error) }
+        }
+    }
+
     /// This phone's key and address for a bia. bia itself keeps running.
     func forget(folder: String) {
         do { try forgetBia(folder: folder) } catch { self.error = message(error) }

@@ -258,6 +258,21 @@ time.sleep(2)
 alex.say("fred", "after the reboot")
 check(fred.msg("alex", "after the reboot", 40) is not None, "the link is back after fred's restart")
 
+# ---- fred moves its web app to another port: alex, connected, follows it there (and back)
+for port, want in ((8446, ":8446"), (0, ":8444")):
+    txt, err = fred.tool("port", port=port)
+    check(not err, f"fred's web_port({port}): {txt[:70]}")
+    fred.stop(signal.SIGTERM)
+    fred.start()
+    for _ in range(40):
+        url = json.load(open(f"{alex.files}/state/pki/peers/fred/peer.json"))["url"]
+        if url.endswith(want):
+            break
+        time.sleep(0.25)
+    check(url.endswith(want), f"alex dials fred at its new address: {url}")
+    alex.say("fred", f"after the move to {want}")
+    check(fred.msg("alex", f"after the move to {want}", 60) is not None, f"the link is back on {want}")
+
 # ---- a copy of fred (same key) is refused while fred is connected
 clone = Bia("fred-copy", 8445, files=os.path.join(root, "fred-copy"))
 clone.stop()

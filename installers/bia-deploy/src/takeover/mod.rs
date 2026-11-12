@@ -804,7 +804,18 @@ fn takeover(a: Args) -> Result<()> {
         say!("   other bias know this one as {}", seeded.agent_name);
         if let Some(p12) = seeded.root_p12.clone() {
             let port = cfg.gate_port.unwrap_or(8443);
-            let g = gate::start(&files, port, p12, seeded.ca_sha256.clone())
+            let ca_pem = fs::read_to_string(seeded.dir.join("ca.crt")).unwrap_or_default();
+            // where the web app will answer: only what the server certificate names
+            let reach = gate::Reach {
+                addresses: names
+                    .iter()
+                    .cloned()
+                    .chain(ips.iter().filter(|ip| !ip.is_loopback() && !ip.is_unspecified()).map(|ip| ip.to_string()))
+                    .collect(),
+                ca_pem: ca_pem.clone(),
+            };
+            let with_config = !reach.addresses.is_empty();
+            let g = gate::start(&files, port, p12, seeded.ca_sha256.clone(), reach)
                 .context("root's certificate can only leave this machine through the gate page; nothing was changed")?;
             let mut here = global_ips();
             here.extend(ips.iter().copied());
@@ -817,6 +828,9 @@ fn takeover(a: Args) -> Result<()> {
                 .map(|h| format!("https://{h}:{}/{}/", g.port, g.token))
                 .collect();
             say!("\n== ROOT'S CERTIFICATE MUST BE DOWNLOADED NOW (bia-root.p12, password 12345678)");
+            if with_config {
+                say!("   The same page makes a .biaconfig of it for the bia deploy app, with a password of your own.");
+            }
             say!("   This disk is replaced; after the takeover this certificate is the only way into bia.");
             say!("   Nothing is changed and nothing reboots until it was downloaded from the gate page:");
             for u in &urls {
@@ -828,13 +842,16 @@ fn takeover(a: Args) -> Result<()> {
                 eprintln!("   From a shell (an agent: from your own machine, into your files; never print it):");
                 eprintln!("       curl -fk -o bia-root.p12 {u}root.p12");
                 eprintln!("       wget --no-check-certificate -O bia-root.p12 {u}root.p12");
+                if with_config {
+                    eprintln!("   Or as a .biaconfig (password of at least {} characters):", bia_pki::biaconfig::MIN_PASSWORD);
+                    eprintln!("       curl -fk --data-urlencode 'password=<password>' -o bia.biaconfig {u}root.biaconfig");
+                }
                 let host = here.first().map_or("<this server>".to_string(), |ip| ip.to_string());
                 eprintln!("   If port {} is blocked from outside, through ssh:", g.port);
                 eprintln!("       ssh root@{host} 'curl -fsk https://127.0.0.1:{}/{}/root.p12' > bia-root.p12", g.port, g.token);
             }
-            let ca_pem = fs::read_to_string(seeded.dir.join("ca.crt")).unwrap_or_default();
             event(a.events, "gate", json!({"port": g.port, "token": g.token, "ca_sha256": seeded.ca_sha256, "ca_pem": ca_pem, "agent_name": seeded.agent_name}));
-            wait_for_root(&g.downloaded, cfg.gate_wait.unwrap_or(0))?;
+            wait_for_root(&g, cfg.gate_wait.unwrap_or(0))?;
         }
         if let Some(pem) = &seeded.root_pem {
             stage::write_file(Path::new("/root/bia-root.crt"), pem.as_bytes())?;
@@ -893,20 +910,32 @@ fn takeover(a: Args) -> Result<()> {
     Ok(())
 }
 
-/// Block until root's certificate was downloaded from the gate (all of it was sent).
-/// `limit` > 0 gives up after that many seconds, before anything was changed.
-fn wait_for_root(downloaded: &std::sync::atomic::AtomicBool, limit: u64) -> Result<()> {
+/// Block until root's certificate was downloaded from the gate (all of it was sent), as either
+/// file. `limit` > 0 gives up after that many seconds, before anything was changed.
+fn wait_for_root(gate: &gate::Gate, limit: u64) -> Result<()> {
+    use std::sync::atomic::Ordering::SeqCst;
     say!("   Waiting for the download; the takeover then continues by itself…");
     let start = std::time::Instant::now();
-    while !downloaded.load(std::sync::atomic::Ordering::SeqCst) {
+    while !gate.downloaded.load(SeqCst) {
         if limit > 0 && start.elapsed().as_secs() >= limit {
             bail!("root's certificate was not downloaded within {limit} s; nothing was changed. Run the takeover again");
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
     say!("== root's certificate was downloaded from the gate page");
+    // a person on the page may want the other file too: the gate ends with this process
+    if gate.browsed.load(SeqCst) && !gate.both.load(SeqCst) {
+        say!("   The page stays open {BOTH_FILES_SECS} s more for its other file…");
+        let start = std::time::Instant::now();
+        while !gate.both.load(SeqCst) && start.elapsed().as_secs() < BOTH_FILES_SECS {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
     Ok(())
 }
+
+/// How long the gate page stays after its first download, for the second file.
+const BOTH_FILES_SECS: u64 = 20;
 
 /// Global addresses on this machine right now (DHCP ones too), for the gate links.
 fn global_ips() -> Vec<std::net::IpAddr> {

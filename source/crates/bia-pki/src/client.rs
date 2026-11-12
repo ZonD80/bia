@@ -43,6 +43,17 @@ fn first(s: &str, n: usize) -> String {
 }
 
 /// `https://host[:port]` → (host, port).
+/// The same `https://host` address on another port (443 is left out). None when it already
+/// says that port.
+pub fn with_port(url: &str, port: u16) -> Result<Option<String>> {
+    let (host, old) = split_url(url)?;
+    if old == port || port == 0 {
+        return Ok(None);
+    }
+    let host = if host.contains(':') { format!("[{host}]") } else { host };
+    Ok(Some(if port == 443 { format!("https://{host}") } else { format!("https://{host}:{port}") }))
+}
+
 pub fn split_url(url: &str) -> Result<(String, u16)> {
     let rest = url
         .trim()
@@ -317,6 +328,16 @@ impl ServerCertVerifier for CaNoName {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_address_on_another_port() {
+        assert_eq!(with_port("https://bia.example", 8444).unwrap().as_deref(), Some("https://bia.example:8444"));
+        assert_eq!(with_port("https://bia.example:8444/", 443).unwrap().as_deref(), Some("https://bia.example"));
+        assert_eq!(with_port("https://[2001:db8::1]:8443", 9000).unwrap().as_deref(), Some("https://[2001:db8::1]:9000"));
+        assert_eq!(with_port("https://10.0.0.5:8444", 8444).unwrap(), None);
+        assert_eq!(with_port("https://10.0.0.5", 443).unwrap(), None);
+        assert!(with_port("http://10.0.0.5", 8444).is_err());
+    }
 
     #[test]
     fn urls() {

@@ -344,7 +344,7 @@ const takeoverSteps = [
   },
   {
     title: 'Download your personal certificate',
-    text: 'The command makes bia’s certificates right there and opens a one-time page on port 8443 with your personal certificate (root’s, password 12345678). Download it and add it to your browser. Without it you cannot open bia’s web app later. You can also copy /root/bia-root.p12 over ssh.',
+    text: 'The command makes bia’s certificates right there and opens a one-time page on port 8443 with your personal certificate (root’s, password 12345678). Download it and add it to your browser, or download it as a .biaconfig file with a password of your own for the bia deploy app on your phone. Without it you cannot open bia’s web app later.',
   },
   {
     title: 'The server restarts into bia',

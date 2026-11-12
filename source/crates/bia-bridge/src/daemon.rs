@@ -471,6 +471,22 @@ fn link_loop(d: Arc<Daemon>) {
     }
 }
 
+/// The bia's `bye` names another port: its web app answers there after its restart. The
+/// profile follows (same host, same pinned CA), and the agent is told.
+fn moved(d: &Daemon, bye: &Value) {
+    let Some(port) = bye["port"].as_u64().and_then(|p| u16::try_from(p).ok()) else { return };
+    let mut p = d.profile();
+    let Ok(Some(url)) = bia_pki::client::with_port(&p.url, port) else { return };
+    p.url = url.clone();
+    if let Err(e) = p.save() {
+        set_err(d, &format!("{} moved to {url}, but the profile was not saved: {e:#}", p.name));
+    }
+    let text = format!("[bridge] {} moved its web app to {url}; this client follows it there.", p.name);
+    d.add(Entry { seq: 0, id: format!("moved-{port}-{}", now_secs()), ts: now_secs(), kind: "note".into(), text, files: vec![], reply_to: None });
+    d.log(&format!("the bia moved to {url}"));
+    *d.p.lock().unwrap() = p;
+}
+
 fn sleep_unless_stopped(d: &Daemon, t: Duration) {
     let end = Instant::now() + t;
     while Instant::now() < end && !d.stop.load(Ordering::Relaxed) {
@@ -489,6 +505,7 @@ fn run_link(d: &Arc<Daemon>, p: &Profile) -> Result<Option<String>> {
     let (op, b) = ws.recv()?;
     let hello: Value = if op == 1 { serde_json::from_slice(&b)? } else { bail!("no hello") };
     if hello["t"] == "bye" {
+        moved(d, &hello);
         return Ok(hello["reason"].as_str().map(str::to_string));
     }
     if hello["t"] != "hello" || hello["proto"] != 2 {
@@ -580,7 +597,10 @@ fn run_link(d: &Arc<Daemon>, p: &Profile) -> Result<Option<String>> {
                                 settle(d, &fid, None);
                             }
                         }
-                        "bye" => bye = v["reason"].as_str().map(str::to_string),
+                        "bye" => {
+                            bye = v["reason"].as_str().map(str::to_string);
+                            moved(d, &v);
+                        }
                         _ => {}
                     }
                 }

@@ -363,6 +363,29 @@ check(s.get("state") == "denied" and "not today" in s.get("message", ""), f"deni
 rc, out = br("profiles", agent=None)
 check("home" in out and "other" in out, f"profiles: {out}")
 
+# ---- the bia moves its web app to another port: the connected bridge follows it there
+import socket
+with socket.socket() as sk:
+    sk.bind(("0.0.0.0", 0)); new_port = sk.getsockname()[1]
+for _ in range(40):
+    if json.loads(br("status", "--json")[1]).get("online"):
+        break
+    time.sleep(0.5)
+txt = web.tool("port", port=new_port)
+check(f":{new_port}/" in str(txt), f"web_port: {str(txt)[:80]}")
+web.p.terminate()
+web.p.wait(10)
+web = start_web()
+for _ in range(120):
+    if json.loads(br("status", "--json")[1]).get("online"):
+        break
+    time.sleep(0.5)
+url = json.load(open(f"{home}/claude/home/profile.json"))["url"]
+check(url.endswith(f":{new_port}"), f"the profile follows the bia to its new port: {url}")
+web.tool("send", identity="claude", channel="web", text="hello from the new port")
+rc, out = br("wait", "--timeout", "30")
+check("hello from the new port" in out and "moved its web app to" in out, f"told about the move, and the link is back there: {out[:200]}")
+
 for who, prof in (("claude", "home"), ("eve", "other"), ("alice", "alice"), ("grok", "home")):
     br("stop", "--bia", prof, agent=who)
 web.p.terminate()

@@ -222,6 +222,16 @@ pub struct Done {
     pub agent_name: String,
 }
 
+/// In a server's folder: the address its key is for, as it is dialled.
+pub const ADDRESS_FILE: &str = "address";
+/// In a server's folder: what a person calls that bia; may be missing.
+pub const NAME_FILE: &str = "name";
+
+/// What a person calls the bia whose key is in `folder`, or "".
+pub fn saved_name(folder: &std::path::Path) -> String {
+    std::fs::read_to_string(folder.join(NAME_FILE)).map(|t| t.trim().to_string()).unwrap_or_default()
+}
+
 /// This computer's copy of a server's root certificate and CA.
 pub fn server_folder(host: &str) -> Result<PathBuf> {
     let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
@@ -236,6 +246,10 @@ pub fn run(s: &Ssh, d: &Deploy, disk: &str, on: &(dyn Fn(Progress) + Sync)) -> R
     let mut done = Done::default();
     let mut ready = false;
     let host = d.host.clone();
+    let name = match &d.agent {
+        Agent::New { persona, .. } => persona.name.trim().to_string(),
+        _ => String::new(),
+    };
     std::thread::scope(|sc| -> Result<()> {
         // root's certificate: fetched from the gate on the server's own loopback, as soon as
         // the takeover opens it; the takeover waits for this before it changes anything
@@ -263,6 +277,9 @@ pub fn run(s: &Ssh, d: &Deploy, disk: &str, on: &(dyn Fn(Progress) + Sync)) -> R
                     std::fs::write(&p12, &o.stdout)?;
                     let ca = g["ca_pem"].as_str().unwrap_or("").to_string();
                     std::fs::write(dir.join("ca.crt"), &ca)?;
+                    // the apps list it and pass it on (.biaconfig) under its name and address
+                    std::fs::write(dir.join(ADDRESS_FILE), &host)?;
+                    std::fs::write(dir.join(NAME_FILE), &name)?;
                     on(Progress::Certificate(p12));
                     return Ok(Some(Done {
                         folder: Some(dir),

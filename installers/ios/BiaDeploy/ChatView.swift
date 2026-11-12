@@ -54,6 +54,8 @@ private enum ChatError: LocalizedError {
 /// bia's web app inside this app: root's key and bia's CA come from this phone, nothing to install.
 struct ChatPage: View {
     let target: ChatTarget
+    /// bia's page says its web app answers on another port from now on.
+    var moved: (Int) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var problem: String?
     @State private var reload = 0
@@ -63,7 +65,7 @@ struct ChatPage: View {
         NavigationStack {
             Group {
                 if let keys = try? ChatKeys(folder: target.folder) {
-                    ChatWeb(target: target, keys: keys, reload: reload, problem: $problem, saved: $saved)
+                    ChatWeb(target: target, keys: keys, reload: reload, moved: moved, problem: $problem, saved: $saved)
                         .ignoresSafeArea(.container, edges: .bottom)
                 } else {
                     Text("This phone cannot read bia's key.").padding()
@@ -95,6 +97,7 @@ private struct ChatWeb: UIViewRepresentable {
     let target: ChatTarget
     let keys: ChatKeys
     let reload: Int
+    let moved: (Int) -> Void
     @Binding var problem: String?
     @Binding var saved: URL?
 
@@ -104,6 +107,7 @@ private struct ChatWeb: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.userContentController.add(MovedHandler(context.coordinator), name: "biaMoved")
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
         web.uiDelegate = context.coordinator
@@ -120,6 +124,17 @@ private struct ChatWeb: UIViewRepresentable {
         if context.coordinator.reloads != reload {
             context.coordinator.reloads = reload
             web.reload()
+        }
+    }
+
+    /// Holds the coordinator weakly: a web view keeps its message handlers alive.
+    final class MovedHandler: NSObject, WKScriptMessageHandler {
+        weak var coordinator: Coordinator?
+        init(_ c: Coordinator) { coordinator = c }
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard let c = coordinator, message.name == "biaMoved", message.frameInfo.isMainFrame,
+                  c.parent.target.isHere(message.frameInfo.securityOrigin.host), let port = message.body as? Int else { return }
+            c.parent.moved(port)
         }
     }
 

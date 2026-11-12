@@ -444,7 +444,7 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
     crate::push::notify(
         identity,
         crate::push::Note {
-            title: "bia is calling".into(),
+            title: format!("{} is calling", crate::push::who()),
             body: "Open the chat to answer".into(),
             tag: format!("ring-{}", k.1),
             url: format!("chat/{}", k.1),

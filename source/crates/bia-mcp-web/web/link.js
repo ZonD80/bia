@@ -152,9 +152,15 @@ const BiaLink = (() => {
       emit('onOutbox', [...L.out.values()]);
     }
 
+    // this page's address on bia's new HTTPS port
+    function movedUrl(port) {
+      const host = location.hostname.includes(':') && !location.hostname.startsWith('[') ? '[' + location.hostname + ']' : location.hostname;
+      return 'https://' + host + (port === 443 ? '' : ':' + port) + location.pathname + location.hash;
+    }
+
     function connect() {
       clearTimeout(L.timer);
-      L.hello = null; L.bye = null;
+      L.hello = null; L.bye = null; L.movedTo = 0;
       const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
       ws.binaryType = 'arraybuffer';
       L.ws = ws;
@@ -171,7 +177,7 @@ const BiaLink = (() => {
             emit('onHello', v);
             for (const [cid, a] of L.out) ws.send(JSON.stringify(Object.assign({}, a, { cid })));
             for (const [fid, p] of L.pulls) sendJson({ t: 'fget', fid, off: p.got });
-          } else if (v.t === 'bye') L.bye = v.reason;
+          } else if (v.t === 'bye') { L.bye = v.reason; L.movedTo = v.port || 0; }
           return;
         }
         onFrame(v);
@@ -182,6 +188,8 @@ const BiaLink = (() => {
         L.jobs.clear();
         const why = L.bye;
         let wait = Math.min(15000, 800 * Math.pow(1.6, L.tries++));
+        // bia's web app answers on another port from now on: this address is gone for good
+        if (L.movedTo) { emit('onMoved', movedUrl(L.movedTo), L.movedTo); setState('moved'); return; }
         if (why === 'duplicate_key') { setState('blocked'); wait = 30000; }
         else if (why === 'duplicate') { setState('replaced'); return; }
         else if (why === 'banned') { setState('banned'); wait = 600000; }
@@ -218,7 +226,7 @@ const BiaLink = (() => {
           const p = L.pulls.get(v.fid); if (p) { L.pulls.delete(v.fid); p.reject(new Error(v.reason || 'not available')); }
           return;
         }
-        case 'bye': L.bye = v.reason; return;
+        case 'bye': L.bye = v.reason; L.movedTo = v.port || 0; return;
         default: emit('onFrame', v);
       }
     }

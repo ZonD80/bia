@@ -471,6 +471,19 @@ impl Note {
     }
 }
 
+/// What this bia is called in a notification: the name root gave it, else "bia". Read each
+/// time, since the name can change while this runs.
+pub fn who() -> String {
+    PUSH.get().and_then(|p| name_in(p.dir.parent()?.parent()?)).unwrap_or_else(|| "bia".into())
+}
+
+/// `<state>/self.json`'s name, under the rules bia_pki::Pki::chosen_name keeps.
+fn name_in(state: &Path) -> Option<String> {
+    let v: Value = serde_json::from_slice(&std::fs::read(state.join("self.json")).ok()?).ok()?;
+    let n = v["name"].as_str()?.trim().to_string();
+    (!n.is_empty() && n.chars().count() <= 40 && !n.chars().any(char::is_control)).then_some(n)
+}
+
 /// Notify every subscribed browser of `identity` in the background, unless one of its tabs
 /// is in front right now.
 pub fn notify(identity: &str, note: Note) {
@@ -499,7 +512,7 @@ pub fn test(identity: &str) -> Result<usize, String> {
         return Err("no browser of yours is subscribed".into());
     }
     let note = Note {
-        title: "bia".into(),
+        title: who(),
         body: "Notifications work.".into(),
         tag: "bia-test".into(),
         url: String::new(),
@@ -697,7 +710,7 @@ fn watch_tasks(files: &Path) {
         for (id, title) in &now {
             if seen.insert(id.clone()) {
                 let note = Note {
-                    title: "bia needs you".into(),
+                    title: format!("{} needs you", who()),
                     body: title.clone(),
                     tag: format!("hitl-{id}"),
                     url: format!("task/{id}"),
@@ -852,6 +865,18 @@ mod tests {
         ] {
             assert_eq!(device_of(ua), want, "{ua}");
         }
+    }
+
+    #[test]
+    fn notifications_carry_the_name_root_gave() {
+        let d = std::env::temp_dir().join(format!("bia-push-name-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        assert_eq!(name_in(&d), None);
+        std::fs::write(d.join("self.json"), r#"{"name":" Fred ","gender":"male"}"#).unwrap();
+        assert_eq!(name_in(&d).as_deref(), Some("Fred"));
+        std::fs::write(d.join("self.json"), r#"{"name":""}"#).unwrap();
+        assert_eq!(name_in(&d), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

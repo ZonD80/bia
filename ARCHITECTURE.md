@@ -299,7 +299,8 @@ those functions are the agent's own path and are not model tools). The channel
 does not name the person, so a reply always carries the identity:
 `say(channel="web")` without one uses whoever last wrote on web, and the MCP refuses
 an unknown identity or `bia` itself. The agent loads the MCP at boot when `[web] enabled` and passes
-`BIA_WEB_PORT` / `BIA_WEB_HTTP_PORT` (443/80, dev 8443/0); the MCP publishes its
+`BIA_WEB_PORT` / `BIA_WEB_HTTP_PORT` (443/80, dev 8443/0; a port root chose with `web_port`,
+kept in `files/state/web/port.json`, wins and applies at the MCP's next start; off 443 there is no HTTP redirect, port 80 stays free); the MCP publishes its
 address in `files/state/web.json`.
 
 HTTPS on :443 (HTTP :80 redirects), rustls + ring. The CA,
@@ -473,7 +474,10 @@ context whether a reply is needed. When an identity connects or goes away (after
 of grace) the model gets the quiet `[web open]` / `[web closed]` notice, for a bia too.
 A ban (`web_peer_ban`, root's ban through `peer_root`) refuses an identity's sessions
 until it is lifted. Shutdown: on SIGTERM (systemd stopping `bia.service`) or stdin EOF
-the web MCP sends `bye {reason}` on every link and waits up to 2 s. The reason comes
+the web MCP sends `bye {reason}` on every link and waits up to 2 s. When root just had the web
+app moved (`web_port`), that `bye` also carries `port`, the HTTPS port it answers on next:
+the web app shows the new address and stops reconnecting, bia-bridge rewrites its profile's
+URL, another bia its peer record, and both dial there. The reason comes
 from `/run/bia/shutdown-reason` (written by `bia-update`), else systemd's queued
 `reboot.target` / `poweroff.target`, else `restart`.
 
@@ -861,8 +865,9 @@ the image is downloaded and checked, and `bia_pki::seed` makes the CA, the serve
 certificate (fixed names and addresses in `server_extra.json`, kept across
 reissues), root's certificate (an active root closes `/v1/pki/bootstrap/root`) and
 the agent key. A one-time HTTPS page served with the new server certificate
-hands out `bia-root.p12` (also saved to `/root/bia-root.p12`); the operator
-confirms having it.
+hands out root's certificate as `bia-root.p12`, or as a `.biaconfig` (the same
+certificate with the server's addresses, sealed by `bia_pki::biaconfig` under a
+password posted to the page); the takeover goes on once either file was sent whole.
 
 The boot entry is one-shot: UEFI copies bia's shim and GRUB into
 `EFI/bia-takeover/` on the old ESP, adds an entry and sets `BootNext` (works under

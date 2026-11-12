@@ -6,7 +6,7 @@
 //! Every call blocks: the apps call them off the main thread (coroutines, Swift tasks).
 use bia_deploy::remote::{self, ssh, Agent, Auth, Deploy, HostKey, Progress};
 use bia_deploy::{chatgpt, FmmInput};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -507,8 +507,7 @@ pub fn saved_bias() -> Vec<SavedBia> {
     out
 }
 
-const ADDRESS_FILE: &str = "address";
-const NAME_FILE: &str = "name";
+use remote::{ADDRESS_FILE, NAME_FILE};
 
 fn failed(e: impl std::fmt::Display) -> DeployError {
     DeployError::Failed { reason: e.to_string() }
@@ -559,6 +558,89 @@ pub fn biaconfig_import(path: String, password: String, replace: bool) -> R<Save
     std::fs::write(folder.join(ADDRESS_FILE), &host).map_err(failed)?;
     std::fs::write(folder.join(NAME_FILE), &c.name).map_err(failed)?;
     Ok(SavedBia { host, name: c.name, folder: folder.display().to_string(), saved_at: 0 })
+}
+
+/// `host` as the apps keep it (a port only when not 443, IPv6 bare without one), on another port.
+fn host_on_port(host: &str, port: u16) -> Option<String> {
+    let bare_v6 = !host.starts_with('[') && host.matches(':').count() > 1;
+    let url = if bare_v6 { format!("https://[{host}]") } else { format!("https://{host}") };
+    let moved = bia_pki::client::with_port(&url, port).ok()??;
+    let at = moved.strip_prefix("https://")?;
+    // without a port an IPv6 address is kept bare
+    Some(match at.strip_prefix('[').and_then(|v6| v6.strip_suffix(']')) {
+        Some(v6) => v6.to_string(),
+        None => at.to_string(),
+    })
+}
+
+fn move_saved(servers: &Path, folder: &Path, port: u16) -> Result<(String, PathBuf), String> {
+    let servers = servers.canonicalize().map_err(|e| e.to_string())?;
+    let folder = folder.canonicalize().map_err(|e| e.to_string())?;
+    if folder.parent() != Some(servers.as_path()) || port == 0 {
+        return Err(format!("{} is not a saved bia", folder.display()));
+    }
+    let read = |f: &str| std::fs::read_to_string(folder.join(f)).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    let old = read(ADDRESS_FILE).or_else(|| folder.file_name().map(|n| n.to_string_lossy().into_owned())).unwrap_or_default();
+    let Some(host) = host_on_port(&old, port) else { return Ok((old, folder)) };
+    std::fs::write(folder.join(ADDRESS_FILE), &host).map_err(|e| e.to_string())?;
+    // the folder is named after the address, so a later .biaconfig for the new one finds this key;
+    // a folder already there is another key: then this one stays where it is
+    let safe: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
+    let to = servers.join(safe);
+    if to != folder && !to.exists() && std::fs::rename(&folder, &to).is_ok() {
+        return Ok((host, to));
+    }
+    Ok((host, folder))
+}
+
+/// bia said, on its own page in this app, that its web app answers on another port from now on:
+/// its key here is kept under the new address. Only the port changes, never the host.
+#[uniffi::export]
+pub fn bia_moved(folder: String, port: u16) -> R<SavedBia> {
+    let servers = bia_deploy::app_dir().map(|d| d.join("servers")).ok_or_else(|| failed("no app folder"))?;
+    let (_, at) = move_saved(&servers, Path::new(&folder), port).map_err(failed)?;
+    // the folder list holds canonical or plain paths alike: match by what the folder is
+    saved_bias()
+        .into_iter()
+        .find(|b| Path::new(&b.folder).canonicalize().ok().as_deref() == Some(at.as_path()))
+        .ok_or_else(|| failed("the key was not kept"))
+}
+
+#[cfg(test)]
+mod moved_tests {
+    use super::*;
+
+    #[test]
+    fn a_saved_address_follows_the_port() {
+        assert_eq!(host_on_port("bia.example", 8444).as_deref(), Some("bia.example:8444"));
+        assert_eq!(host_on_port("bia.example:8444", 443).as_deref(), Some("bia.example"));
+        assert_eq!(host_on_port("2001:db8::1", 8444).as_deref(), Some("[2001:db8::1]:8444"));
+        assert_eq!(host_on_port("[2001:db8::1]:8444", 443).as_deref(), Some("2001:db8::1"));
+        assert_eq!(host_on_port("10.0.0.5:8444", 8444), None);
+    }
+
+    #[test]
+    fn the_key_moves_with_its_address() {
+        let servers = std::env::temp_dir().join(format!("bia-moved-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&servers);
+        let old = servers.join("203.0.113.7");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("bia-root.p12"), b"key").unwrap();
+        let (host, at) = move_saved(&servers, &old, 8444).unwrap();
+        assert_eq!(host, "203.0.113.7:8444");
+        assert!(at.ends_with("203.0.113.7_8444") && !old.exists(), "{}", at.display());
+        assert_eq!(std::fs::read_to_string(at.join(ADDRESS_FILE)).unwrap(), "203.0.113.7:8444");
+        assert_eq!(std::fs::read(at.join("bia-root.p12")).unwrap(), b"key");
+        // another key already lives under the next address: this one stays in its folder
+        std::fs::create_dir_all(servers.join("203.0.113.7")).unwrap();
+        let (host, kept) = move_saved(&servers, &at, 443).unwrap();
+        assert_eq!(host, "203.0.113.7");
+        assert_eq!(kept, at.canonicalize().unwrap());
+        assert_eq!(std::fs::read_to_string(kept.join(ADDRESS_FILE)).unwrap(), "203.0.113.7");
+        // not a saved bia
+        assert!(move_saved(&servers, &servers, 8444).is_err());
+        let _ = std::fs::remove_dir_all(&servers);
+    }
 }
 
 /// The password on bia-root.p12.

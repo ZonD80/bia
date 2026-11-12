@@ -684,7 +684,7 @@ fn push_msg(h: &Hub, identity: &str, m: &Msg) {
     crate::push::notify(
         identity,
         crate::push::Note {
-            title: BIA.into(),
+            title: crate::push::who(),
             body,
             tag: "bia-chat".into(),
             url: "chat/main".into(),

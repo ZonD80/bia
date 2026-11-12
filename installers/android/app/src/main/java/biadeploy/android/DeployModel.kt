@@ -22,6 +22,7 @@ import uniffi.bia_deploy_mobile.Server
 import uniffi.bia_deploy_mobile.SshKey
 import uniffi.bia_deploy_mobile.Target
 import uniffi.bia_deploy_mobile.WaitListener
+import uniffi.bia_deploy_mobile.biaMoved
 import uniffi.bia_deploy_mobile.biaconfigImport
 import uniffi.bia_deploy_mobile.isBiaconfig
 import uniffi.bia_deploy_mobile.AppLink
@@ -275,6 +276,25 @@ class DeployModel : ViewModel() {
     fun openKeys() {
         saved.clear(); saved.addAll(savedBias())
         page = Page.Keys
+    }
+
+    /**
+     * bia said in its chat here that its web app moves to another port: its key is kept under the
+     * new address, and the chat opens there once bia has restarted.
+     */
+    fun chatMoved(target: ChatTarget, port: Int) {
+        if (port !in 1..65535) return
+        viewModelScope.launch {
+            val b = try {
+                withContext(Dispatchers.IO) { biaMoved(target.folder, port.toUShort()) }
+            } catch (e: Exception) {
+                error = e.message
+                return@launch
+            }
+            saved.clear(); saved.addAll(savedBias())
+            kotlinx.coroutines.delay(4000)
+            if (chat?.folder == target.folder) chat = ChatTarget(b.host, b.folder)
+        }
     }
 
     /** This phone's key and address for a bia. bia itself keeps running. */

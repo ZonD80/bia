@@ -253,5 +253,27 @@ ib = inbound(lambda n: n["identity"] == "bob")
 check(ib is not None and ib["message"] == "hi, bob here", f"bob's message reaches the model: {ib}")
 check(os.path.exists(f"{files}/state/web/bob/main.json") and "hi, bob here" not in open(f"{files}/state/web/root/main.json").read(), "each identity has its own chat")
 
+# root has the web app moved to another port: whoever is connected is told where it went
+import socket
+with socket.socket() as sk:
+    sk.bind(("0.0.0.0", 0)); new_port = sk.getsockname()[1]
+txt, err = tool("port", port=80000); check(err, f"a port that cannot exist is refused: {txt}")
+txt, err = tool("port", port=new_port)
+check(not err and f":{new_port}/" in txt and "restart=true" in txt, f"web_port saved: {txt[:90]}")
+check(sb3.bye is None and json.load(open(f"{files}/state/web.json"))["port"] == 8443, "nothing moves before the restart")
 p.stdin.close(); p.wait(timeout=10)
+check(sb3.wait(lambda f: False, 3) is None and sb3.bye_port == new_port, f"the session is told the new port as it closes: bye {sb3.bye} port {sb3.bye_port}")
+p = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True, bufsize=1)
+threading.Thread(target=reader, daemon=True).start()
+rpc("initialize")
+for _ in range(100):
+    if json.load(open(f"{files}/state/web.json")).get("port") == new_port: break
+    time.sleep(0.05)
+check(json.load(open(f"{files}/state/web.json")).get("port") == new_port, f"after the restart the web app answers on {new_port}")
+sb4 = Session(new_port, bob, rx=None)
+check(sb4.hello is not None and sb4.hello["me"]["identity"] == "bob", "bob is back on the new port")
+txt, err = tool("port", port=new_port); check(not err and "already answers" in txt, f"the same port again changes nothing: {txt[:60]}")
+p.stdin.close(); p.wait(timeout=10)
+check(sb4.wait(lambda f: False, 3) is None and sb4.bye is not None and sb4.bye_port is None, f"an ordinary restart names no port: bye {sb4.bye} port {sb4.bye_port}")
+
 print("RESULT", "FAILED" if check.failed else "PASSED")

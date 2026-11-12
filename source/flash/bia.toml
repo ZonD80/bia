@@ -32,7 +32,7 @@ show_thinking = true
 # unless you want your own.
 
 [web]
-# The web MCP (MCPs/web): HTTPS app on :443 (:80 redirects) — Telegram-style chats with bia for people
+# The web MCP (MCPs/web): HTTPS app on :443 (:80 redirects; on another port :80 stays free) — Telegram-style chats with bia for people
 # with a client certificate (a bus like telegram, not the console); for root also shell, files, display.
-# CA at /v1/pki/ca. false = the agent does not start it.
+# CA at /v1/pki/ca. false = the agent does not start it. Another HTTPS port: ask bia (web_port).
 enabled = true

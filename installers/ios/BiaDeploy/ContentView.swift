@@ -43,7 +43,7 @@ struct ContentView: View {
                 ProgressView("Getting bia's key…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .fullScreenCover(item: $model.chat) { ChatPage(target: $0) }
+        .fullScreenCover(item: $model.chat) { target in ChatPage(target: target, moved: { model.chatMoved(target, port: $0) }) }
         .sheet(item: $model.configFile, onDismiss: { model.closeConfig() }) { _ in ImportSheet(model: model) }
         .sheet(item: $model.noKey) { NoKeySheet(model: model, link: $0) }
         #if DEBUG
@@ -442,7 +442,7 @@ struct InstalledStep: View {
                 if !model.land, let u = url { Button("Try to open it anyway") { openURL(u) }.buttonStyle(.bordered) }
             }
         }
-        if let folder = model.done?.folder { KeyCard(model: model, folder: folder, host: host) }
+        if let folder = model.done?.folder { KeyCard(model: model, folder: folder, host: host, name: model.saved.first { $0.folder == folder }?.name ?? "") }
         if model.land { LandSecretCard(model: model) }
         Button("Set up another server") { model.again() }
         Button("Your bias") { model.openKeys() }

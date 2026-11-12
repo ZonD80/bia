@@ -363,10 +363,12 @@ pub fn init(files: &Path, bus: Arc<Bus>) -> Arc<Links> {
     l
 }
 
-/// Shut every link with `bye {reason}` and wait (2 s at most) for those to go out.
-pub fn shutdown_all(reason: &str) {
+/// Shut every link with `bye {reason}` and wait (2 s at most) for those to go out. `moved`
+/// is the HTTPS port this web app answers on next, when that is another one: the `bye` says
+/// so, and every client follows it there.
+pub fn shutdown_all(reason: &str, moved: Option<u16>) {
     if let Some(l) = links() {
-        l.shutdown(reason);
+        l.shutdown(reason, moved);
     }
 }
 
@@ -1221,6 +1223,7 @@ impl Links {
                 // the client is leaving (a tab closing): its session ends now, so the
                 // next one of this identity is not kept waiting
                 *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+                self.peer_moved(link, v);
                 link.tls.shutdown();
             }
             "fget" | "fack" | "fdone" | "frefuse" | "fcancel" => self.on_file_frame(link, v),
@@ -1299,7 +1302,10 @@ impl Links {
                 rt.unsaved = 0;
                 self.save_state(name, &rt.st);
             }
-            "bye" => *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string),
+            "bye" => {
+                *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+                self.peer_moved(link, v);
+            }
             "fget" | "fack" | "fdone" | "frefuse" | "fcancel" => self.on_file_frame(link, v),
             _ => {}
         }
@@ -1608,9 +1614,23 @@ impl Links {
         }
     }
 
-    fn shutdown(&self, reason: &str) {
+    /// Another bia said in its `bye` that its web app moves to `v["port"]`.
+    fn peer_moved(&self, link: &Link, v: &Value) {
+        let Some(port) = v["port"].as_u64().and_then(|p| u16::try_from(p).ok()).filter(|p| *p > 0) else { return };
+        match self.pki().and_then(|pki| pki.peer_moved(&link.peer, port).map_err(|e| format!("{e:#}"))) {
+            Ok(Some(url)) => self.bus.log(&format!("  web: {} moved its web app to {url}", link.peer)),
+            Ok(None) => {}
+            Err(e) => self.bus.log(&format!("  web: {} moved to port {port}, not saved: {e}", link.peer)),
+        }
+    }
+
+    fn shutdown(&self, reason: &str, moved: Option<u16>) {
         if self.closing.swap(true, Ordering::SeqCst) {
             return;
+        }
+        let mut bye = json!({"t": "bye", "reason": reason});
+        if let Some(port) = moved {
+            bye["port"] = port.into();
         }
         let links: Vec<Arc<Link>> = self
             .inner
@@ -1622,7 +1642,7 @@ impl Links {
             .collect();
         for l in &links {
             *l.our_bye.lock().unwrap() = Some(reason.to_string());
-            l.w.close_with(Some(&json!({"t": "bye", "reason": reason})));
+            l.w.close_with(Some(&bye));
         }
         let until = Instant::now() + BYE_FLUSH;
         for l in &links {
