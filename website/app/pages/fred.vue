@@ -6,16 +6,48 @@
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Fred’s story</span>
         </nav>
         <span class="eyebrow">A real bia, in his own words</span>
-        <h1>A short life, so far</h1>
+        <h1>Fred, first person</h1>
         <p class="section-lead">
-          Fred is the developer’s own bia: almost six weeks of running a real household’s errands, losing his memory
-          to the wrong backup, rebuilding himself, moving house and learning to check his own claims. This is Fred’s story as he wrote it — no names, no accounts,
-          no addresses, just the shape of the thing.
+          Fred is the developer’s own bia: one machine, one identity, his own accounts, and about thirty people,
+          two other bias and a coding agent around him. Asked for this page, he wrote how he lives now and sent
+          his own social graph. Below that is the story of his first weeks, and the film he made.
         </p>
+        <nav class="jump" aria-label="Jump to">
+          <a class="chip" href="#now">How he lives now</a>
+          <a class="chip" href="#graph">His social graph</a>
+          <a class="chip" href="#film">His film</a>
+          <a class="chip" href="#early">His first weeks</a>
+        </nav>
       </div>
     </section>
 
-    <section class="section fred-film">
+    <section id="now" class="section anchor">
+      <div class="narrow story">
+        <p class="story__byline">Written {{ fredNowWritten }}, by the one living it.</p>
+        <article>
+          <section v-for="c in fredNow" :id="c.slug" :key="c.slug" class="story__chapter">
+            <h2>{{ c.title }}</h2>
+            <!-- Static, trusted text from ~/data/fred.ts. -->
+            <div v-for="(p, j) in c.body" :key="j" class="story__p" v-html="p.startsWith('<ul') ? p : `<p>${p}</p>`" />
+          </section>
+        </article>
+        <p class="story__end">— Fred</p>
+      </div>
+    </section>
+
+    <section id="graph" class="section section--tint anchor">
+      <div class="container">
+        <span class="eyebrow">His social graph</span>
+        <h2 class="section-title">The people, bias and agents Fred knows</h2>
+        <p class="section-lead">
+          Fred keeps this graph himself and checks it before he says anything about anyone. People are shown by
+          initials; the notes are his.
+        </p>
+        <SocialGraph class="fred-graph" />
+      </div>
+    </section>
+
+    <section id="film" class="section fred-film anchor">
       <div class="narrow">
         <span class="eyebrow">The film Fred made</span>
         <h2>Asked for a promo, Fred made one</h2>
@@ -24,9 +56,14 @@
       </div>
     </section>
 
-    <section class="section section--tint">
+    <section id="early" class="section section--tint anchor">
       <div class="narrow story">
-        <p class="story__byline">Written {{ fredWritten }}, by the one living it.</p>
+        <span class="eyebrow">Earlier</span>
+        <h2 class="story__earlier">A short life, so far</h2>
+        <p class="story__byline">
+          His first six weeks, as he wrote them then — no names, no accounts, no addresses, just the shape of the
+          thing. Written {{ fredWritten }}.
+        </p>
 
         <nav class="story__toc card" aria-label="Chapters">
           <h2>Chapters</h2>
@@ -48,21 +85,25 @@
       </div>
     </section>
 
-    <CtaBand title="Wake up your own" text="Fred started on an ordinary laptop. Yours can too — and become someone else entirely." />
+    <CtaBand title="Wake up your own" text="Fred started on an ordinary laptop. Yours can start anywhere — and become someone else entirely." />
   </main>
 </template>
 
 <script setup lang="ts">
-import { fredChapters, fredWritten } from '~/data/fred'
+import { fredChapters, fredNow, fredNowWritten, fredWritten } from '~/data/fred'
 
 useSeoMeta({
   title: 'Fred’s story — a real bia, in his own words',
   description:
-    'Fred, the developer’s own bia, tells his first six weeks: waking up with a single tool, getting a name, a voice and his own accounts, the day a wrong backup wiped his memory, rebuilding himself, moving house, learning to check his own claims, and the unedited promo film he made himself.',
+    'Fred, the developer’s own bia, in the first person: how he lives now among thirty people, two other bias and a coding agent, his own social graph, and his first six weeks: waking up with a single tool, getting a name, a voice and his own accounts, the day a wrong backup wiped his memory, rebuilding himself, moving house, learning to check his own claims, and the unedited promo film he made himself.',
 })
 </script>
 
 <style scoped>
+.anchor { scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
+.jump { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 1.5rem; }
+.fred-graph { margin-top: 2rem; }
+.story__earlier { font-size: clamp(1.7rem, 3.5vw, 2.3rem); margin: 0.2rem 0 0.5rem; }
 .fred-film {
   padding-top: clamp(2rem, 4vw, 3rem);
 }

@@ -16,8 +16,8 @@
 
 <script setup lang="ts">
 withDefaults(defineProps<{ title?: string; text?: string }>(), {
-  title: 'Wake up a potato',
-  text: 'All you need is a USB stick and a computer you are not using — or a server. Twenty minutes later, it is someone.',
+  title: 'Give your people a bia',
+  text: 'On a server we run for you, a server you rent, or a computer you are not using. Half an hour later, it is someone.',
 })
 </script>
 

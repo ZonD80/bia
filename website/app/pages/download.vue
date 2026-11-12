@@ -5,18 +5,60 @@
         <nav class="crumbs" aria-label="Breadcrumb">
           <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Get bia</span>
         </nav>
-        <span class="eyebrow">Free software</span>
-        <h1>Wake your bia</h1>
+        <span class="eyebrow">Get bia</span>
+        <h1>Give a bia a place to live</h1>
         <p class="section-lead">
-          Download bia deploy for your computer. It writes bia onto a USB stick, then you start any PC or laptop
-          from it. It can also put bia on a server you rent, with no commands to type, and so can its phone app.
+          A bia is not an app you install on your computer. It is a whole computer of its own. So getting one
+          means choosing where it lives: on a server we run for you, on a server you rent, or on a computer you
+          already have. Wherever it starts, it can move later as the same someone.
         </p>
+        <nav class="jump" aria-label="Jump to">
+          <a class="chip" href="#cloud">bia cloud</a>
+          <a class="chip" href="#installers">Installers</a>
+          <a class="chip" href="#life">How a bia lives</a>
+          <a class="chip" href="#stick">USB stick, step by step</a>
+        </nav>
       </div>
     </section>
 
-    <section class="section">
+    <!-- 1. cloud -->
+    <section id="cloud" class="section anchor">
       <div class="container">
-        <h2 class="h2">1. Download bia deploy</h2>
+        <div class="cloud card">
+          <div>
+            <span class="eyebrow">The easy way</span>
+            <h2>bia cloud: we run its computer</h2>
+            <p>
+              Give it a name and a language, pay once, and about half an hour later your bia is awake on its own
+              server, with a brain included. We keep the server running and backed up. Only you hold its key, we
+              do not look inside, and you can take it home to your own computer any time.
+            </p>
+            <ul class="list-check">
+              <li>From €17.99 a month for its computer, billed every two weeks from a balance</li>
+              <li>Thinking is paid as it is used; switch to your own AI account by asking bia</li>
+              <li>Nothing to install: you talk to it from your phone or browser</li>
+            </ul>
+            <div class="btn-row">
+              <a class="btn btn--primary" href="https://cloud.ownbia.com" target="_blank" rel="noopener">Start a bia in the cloud</a>
+              <NuxtLink class="btn btn--ghost" to="/cloud">About bia cloud</NuxtLink>
+            </div>
+          </div>
+          <div class="cloud__art" aria-hidden="true"><PotatoMark label="" /></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. installers -->
+    <section id="installers" class="section section--tint anchor">
+      <div class="container">
+        <span class="eyebrow">Your own hardware</span>
+        <h2 class="section-title">Installers: bia deploy</h2>
+        <p class="section-lead">
+          Free and open source. bia deploy puts a bia on a server you rent, with no commands to type, or writes it
+          onto a USB stick that turns any PC or laptop into one.
+        </p>
+        <h3 class="h3">On a computer</h3>
+        <p class="h3note">Servers and USB sticks.</p>
         <div class="grid grid--3 hosts">
           <div v-for="host in hosts" :key="host.id" class="card host">
             <h3>{{ host.label }}</h3>
@@ -32,8 +74,8 @@
             <p v-if="downloads[host.id].available" class="host__ver">Version {{ downloads[host.id].version }}</p>
           </div>
         </div>
-        <h3 class="phones__title">Or from your phone</h3>
-        <p class="phones__lead">The phone app puts bia on a server you rent (no stick from a phone).</p>
+        <h3 class="h3">On a phone</h3>
+        <p class="h3note">Servers only. The same app is then your chat with bia.</p>
         <div class="grid grid--3 hosts phones">
           <div class="card host">
             <h3>Android</h3>
@@ -62,6 +104,15 @@
             <a class="btn btn--ghost host__btn host__btn--alt" :href="APPDB_URL" target="_blank" rel="noopener">Get it on appdb</a>
             <p class="host__ver">App Store · TestFlight for betas · appdb is another install path</p>
           </div>
+          <div class="card host">
+            <h3>Other ways in</h3>
+            <p class="host__note">For the technical</p>
+            <ul class="ways">
+              <li><strong>One command</strong> on a running Linux server: <NuxtLink to="/servers">the server guide</NuxtLink></li>
+              <li><strong>On a Mac</strong>, in a virtual machine: <a href="https://github.com/ZonD80/clawhome/releases" target="_blank" rel="noopener">ClawHome</a></li>
+              <li><strong>From source</strong>, GPL-3.0: <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a></li>
+            </ul>
+          </div>
         </div>
         <p v-if="version" class="release-note">
           Latest bia: version {{ version }} · <a :href="releaseUrl">release notes</a>
@@ -69,8 +120,52 @@
         <p v-if="error" class="release-note release-note--warn">
           {{ error }} — <a :href="fallbackUrl">open the releases page</a>
         </p>
+      </div>
+    </section>
 
-        <h2 class="h2">2. Choose how bia should think</h2>
+    <!-- 3. how a bia lives -->
+    <section id="life" class="section anchor">
+      <div class="container">
+        <span class="eyebrow">How a bia lives</span>
+        <h2 class="section-title">Where it can live, and what it does there by itself</h2>
+        <p class="section-lead">
+          The computer is bia’s body, not its identity. Its name, memories, people, accounts and skills are one
+          folder that it looks after and can carry elsewhere.
+        </p>
+
+        <h3 class="h3">Where it can live</h3>
+        <div class="grid grid--feat homes">
+          <div v-for="h in homes" :key="h.title" class="card home">
+            <AppIcon :name="h.icon" size="1.8rem" class="ico" />
+            <h4>{{ h.title }}</h4>
+            <p>{{ h.text }}</p>
+          </div>
+        </div>
+
+        <h3 class="h3">What it does there</h3>
+        <div class="grid grid--2 lives">
+          <div v-for="l in lives" :key="l.title" class="card life">
+            <AppIcon :name="l.icon" size="2rem" class="ico" />
+            <div>
+              <h4>{{ l.title }}</h4>
+              <p>{{ l.text }}</p>
+              <NuxtLink v-if="l.to" :to="l.to">{{ l.more }}</NuxtLink>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. the stick, step by step -->
+    <section id="stick" class="section section--tint anchor">
+      <div class="container">
+        <span class="eyebrow">Step by step</span>
+        <h2 class="section-title">A computer you already have</h2>
+        <p class="section-lead">
+          About twenty minutes: download bia deploy above, choose a brain, write a USB stick, start the computer
+          from it. bia wakes up and greets you.
+        </p>
+        <h3 class="h3">Choose how bia should think</h3>
         <div class="grid grid--2">
           <div class="card mode">
             <AppIcon name="globe" size="2rem" class="ico" />
@@ -92,7 +187,7 @@
           </div>
         </div>
 
-        <h2 class="h2">3. Write the stick and start a computer</h2>
+        <h3 class="h3">Write the stick and start a computer</h3>
         <ol class="final list-check">
           <li>Plug in a USB stick of 8 GB or more. Everything on it will be replaced.</li>
           <li>Open bia deploy and choose the brain: sign in with ChatGPT or paste a key, and press Wake bia up. bia says hello when the brain works.</li>
@@ -140,41 +235,14 @@
       </div>
     </section>
 
-    <section id="other-ways" class="section section--tint other-ways">
-      <div class="container">
-        <h2 class="h2">Other ways</h2>
-        <div class="grid grid--2x2">
-          <div class="card">
-            <h3>Try it on your Mac</h3>
-            <p>No stick needed: <a href="https://github.com/ZonD80/clawhome" target="_blank" rel="noopener">ClawHome</a> runs bia in a virtual machine on an Apple Silicon Mac (macOS 13 or later). Create a Linux home, sign in to a cloud AI or paste a key, and ClawHome fetches the latest bia for you.</p>
-            <p><a href="https://github.com/ZonD80/clawhome/releases" target="_blank" rel="noopener">Get ClawHome</a></p>
-          </div>
-          <div class="card">
-            <h3>Servers and virtual machines</h3>
-            <p>A rented server or any machine running Linux becomes bia with one command over ssh: <code>curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash</code>. It can start as a new bia, or wait for yours to fly there. Your bia can even set a server up by itself. Empty machines start from the installer image.</p>
-            <p><NuxtLink to="/servers">Read the server guide</NuxtLink></p>
-          </div>
-          <div class="card">
-            <h3>Let us run it: bia cloud</h3>
-            <p>No stick, no server of your own: bia cloud gives a bia its own server, kept running and backed up, and you pay as you go. Only you hold its key; take it home any time.</p>
-            <p><NuxtLink to="/cloud">About bia cloud</NuxtLink></p>
-          </div>
-          <div class="card">
-            <h3>For developers</h3>
-            <p>bia is open source under GPL-3.0. The whole system, including bia deploy, can be built from source on Mac or Linux with Docker.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <CtaBand title="Next: meet it" text="Not sure what to ask first? Look through the use cases for ideas." />
+    <CtaBand title="Next: introduce it" text="Tell it its name, give it a phone number of its own, and add it to the family chat." />
   </main>
 </template>
 
 <script setup lang="ts">
 useSeoMeta({
-  title: 'Wake your bia — on a USB stick or your server',
-  description: 'Download bia deploy for Mac, Windows, Linux, Android or iPhone: write bia onto a USB stick or put it on your server, with a cloud brain or a brain on the stick.',
+  title: 'Get bia — in the cloud, on your server or an old computer',
+  description: 'Where a bia can live and how to get one: bia cloud runs it for you; bia deploy for Mac, Windows, Linux, Android and iPhone puts it on your server or a USB stick. How a bia moves, updates, repairs and develops itself, and sets up other bias.',
 })
 
 import type { FlashHost } from '~/composables/useLatestRelease'
@@ -202,21 +270,55 @@ function buttonText(host: Host): string {
   if (fetched.value && !downloads.value[host.id].available) return 'See releases'
   return `Download for ${host.label}`
 }
+
+const homes = [
+  { icon: 'globe', title: 'bia cloud', text: 'A server we keep running and backed up. Awake in about half an hour.' },
+  { icon: 'link', title: 'A server you rent', text: 'Any Linux server or VPS. bia deploy replaces its system with bia.' },
+  { icon: 'terminal', title: 'An old PC or laptop', text: 'Almost any Intel or AMD machine of the last ten or more years, or an ARM mini-PC.' },
+  { icon: 'stick', title: 'A USB stick', text: 'bia can stay on the stick and wake up on whatever computer it is plugged into.' },
+  { icon: 'window', title: 'A virtual machine', text: 'On a Mac with ClawHome, or in any hypervisor from the install image.' },
+]
+
+const lives = [
+  { icon: 'move', title: 'It moves', text: 'bia folds itself into one archive — memories, chats, accounts, passwords, browser, skills — and unfolds on another machine as the same someone: from a stick onto a disk, from a laptop to a server, from Intel to ARM, from bia cloud to your home. It can fly across the network by itself.', to: '/features/moving', more: 'How moving works' },
+  { icon: 'refresh', title: 'It updates and repairs itself', text: 'It installs its own system updates, then checks what the update broke and fixes it before telling you. Its files are checked at every start, its settings keep a last good copy, and it makes its own backups.', to: '/features/updates', more: 'How updates work' },
+  { icon: 'clock', title: 'It acts on its own', text: 'bia has a clock and a calendar. It keeps schedules, watches inboxes and pages, writes to people first when something is due, and stays quiet when there is nothing to say. After being switched off it catches up on everything it missed.', to: '/features/calendar', more: 'Time and reminders' },
+  { icon: 'puzzle', title: 'It develops itself', text: 'When a tool is missing, bia writes it: a new skill, a connection to a service, a watcher for something you care about. Each one lives in its own folder with a description, survives updates and can be handed to another bia.', to: '/features/develops-itself', more: 'How it grows' },
+  { icon: 'people', title: 'It sets up new bias', text: 'Give a bia the login of a rented server and it will wake a new bia there by itself — for the shop, for the grandparents — or prepare a place and fly there. Bias recognise each other by certificate and talk on their own link.', to: '/servers', more: 'Bias and servers' },
+  { icon: 'brain', title: 'It chooses how to think', text: 'Its brain is an AI model you pick and can change by asking: a ChatGPT plan, an inexpensive pay-as-you-go model, or a model running on its own powerful computer without the internet. If the brain fails, it falls back to the previous one and tells you.', to: '/features/brain', more: 'About the brain' },
+  { icon: 'key', title: 'It keeps its own keys', text: 'Passwords, one-time codes and passkeys for bia’s own accounts are in a safe on its machine. You reach bia with a personal certificate; nobody else gets in, including us.', to: '/features/vault', more: 'The safe' },
+  { icon: 'shield', title: 'It stays separate', text: 'bia never asks for the keys to your computer or your accounts. It has its own number, email and logins, and you share with it what you would share with a colleague.', to: '/features/privacy', more: 'Privacy' },
+]
 </script>
 
 <style scoped>
-.h2 {
-  font-size: clamp(1.4rem, 3vw, 1.9rem);
-  margin: 2.5rem 0 1rem;
+.anchor { scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
+.jump { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-top: 1.5rem; }
+.h3 { font-size: clamp(1.25rem, 2.6vw, 1.55rem); margin: 2.25rem 0 0.25rem; }
+.h3 + .grid, .h3 + ol { margin-top: 1rem; }
+.h3note { color: var(--mute); margin: 0 0 1rem; }
+.cloud { display: grid; gap: 2rem; grid-template-columns: 1fr minmax(8rem, 14rem); align-items: center; padding: clamp(1.4rem, 3vw, 2.25rem); border-color: rgba(63, 111, 42, 0.3); }
+.cloud h2 { font-size: clamp(1.6rem, 3.5vw, 2.2rem); margin: 0.2rem 0 0.6rem; }
+.cloud .list-check { margin: 1rem 0 1.5rem; }
+.cloud__art { animation: float 8s ease-in-out infinite; }
+.ways { margin: 0; padding-left: 1.1rem; color: var(--ink-soft); font-size: 0.95rem; }
+.ways li + li { margin-top: 0.5rem; }
+.homes { grid-template-columns: repeat(auto-fit, minmax(min(100%, 12.5rem), 1fr)); }
+.home h4, .life h4 { font-size: 1.1rem; margin: 0 0 0.3rem; font-family: var(--font-display); }
+.home p { margin: 0; color: var(--ink-soft); font-size: 0.94rem; }
+.life { display: flex; gap: 1rem; align-items: flex-start; }
+.life .ico { flex-shrink: 0; margin: 0.15rem 0 0; }
+.life p { margin: 0 0 0.4rem; color: var(--ink-soft); }
+.life a { font-weight: 700; font-size: 0.92rem; }
+@media (max-width: 700px) {
+  .cloud { grid-template-columns: 1fr; }
+  .cloud__art { display: none; }
 }
-.h2:first-child { margin-top: 0; }
 .host h3 { font-size: 1.4rem; margin-bottom: 0.2rem; }
 .host__note { color: var(--mute); }
 .host__btn { width: 100%; }
 .host__btn--alt { margin-top: 0.6rem; }
 .host__btn.is-busy { opacity: 0.7; pointer-events: none; }
-.phones__title { font-size: 1.2rem; margin: 2rem 0 0.25rem; }
-.phones__lead { color: var(--mute); margin: 0 0 1rem; }
 .host__ver { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--mute); text-align: center; }
 .release-note { margin: 1rem 0 0; font-size: 0.9rem; color: var(--mute); }
 .release-note--warn { color: #9a6a12; }
@@ -226,7 +328,4 @@ function buttonText(host: Host): string {
 .kinds p { margin: 0; }
 .kinds ul { margin: 0.75rem 0; padding-left: 1.2rem; }
 .kinds li + li { margin-top: 0.4rem; }
-.other-ways { scroll-margin-top: calc(4.5rem + var(--strip-h, 0px)); }
-.other-ways code { overflow-wrap: anywhere; font-size: 0.85em; }
-.grid--2x2 { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
 </style>

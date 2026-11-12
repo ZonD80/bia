@@ -48,25 +48,29 @@ function robotsTxt() {
 function llmsTxt() {
   return `# bia
 
-> Boot into agent. Making every potato smart — on a global scale.
+> A social harness agent. Turn anything into someone.
 
-bia is a free operating system that boots on any computer or server — even an old laptop — and turns it into a helpful AI personality.
-It starts from a USB stick or its own disk, lives on WhatsApp, Telegram, Facebook Messenger and Instagram as a real account, answers voice calls in about
+bia is a social harness agent: an AI with a personality, accounts and a social graph of its own, that lives among a circle of people
+(a family, a small business, a small community) and acts across all its connections the way a person would: it writes first, calls,
+remembers everyone, passes things on, and asks when a decision is someone else's. One bia serves the whole circle; it is not a personal
+assistant per user. A social harness is the part around an AI model built around people instead of tools: its own identity, a social
+graph, every channel people use, a memory of each relationship, initiative and manners, and a computer to act with.
+It is also a free operating system: bia is the whole computer, on a server run for it (bia cloud), a rented server, an old laptop or a USB stick. It lives on WhatsApp, Telegram, Facebook Messenger and Instagram as a real account, answers voice calls in about
 100 languages, remembers, keeps a calendar, uses its own computer, browser and password vault, and can move
 to other computers and update itself without forgetting anything. Its computer can also be a server or VPS: one
 command replaces a running Linux with bia. Its data stays there, not in a company's cloud.
 
 ## Pages
 
-- [Home](${siteUrl}/): what bia is, a day with bia, all features
+- [Home](${siteUrl}/): what a social harness is, a real bia's social graph, one day with a family, a small business and a community
 - [Features](${siteUrl}/features): every ability, one page each
 ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline}`).join('\n')}
 - [Use cases](${siteUrl}/use-cases): ${useCaseGroups.map((g) => g.title.toLowerCase()).join('; ')}
 - [How it works](${siteUrl}/how-it-works): plain-language overview
 - [Why bia](${siteUrl}/why-bia): compared with typical AI assistants
-- [Fred's story](${siteUrl}/fred): a real bia's first six weeks in his own words, and the unedited promo film it made (${FRED_FILM.url})
+- [Fred's story](${siteUrl}/fred): a real bia in the first person: how he lives among thirty people and two other bias, his own social graph, his first six weeks, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
-- [Get bia](${siteUrl}/download): bia deploy for Mac, Windows and Linux (USB sticks and servers), Android on Google Play (https://play.google.com/store/apps/details?id=biadeploy.android; servers), and iPhone on the App Store (https://apps.apple.com/app/bia-deploy/id6827948196), TestFlight (https://testflight.apple.com/join/qePtQWqF) or appdb (https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0; servers)
+- [Get bia](${siteUrl}/download): where a bia can live (bia cloud, a rented server, an old computer, a USB stick) and how it moves, updates, repairs and develops itself and sets up other bias; bia deploy for Mac, Windows and Linux (USB sticks and servers), Android on Google Play (https://play.google.com/store/apps/details?id=biadeploy.android; servers), and iPhone on the App Store (https://apps.apple.com/app/bia-deploy/id6827948196), TestFlight (https://testflight.apple.com/join/qePtQWqF) or appdb (https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0; servers)
 - [bia cloud](${siteUrl}/cloud): a bia on its own server run for you (https://cloud.ownbia.com) — pay as you go from €17.99 a month, only the person holds its key, take it home any time; API for agents at https://cloud.ownbia.com/developers/
 - [Privacy](${siteUrl}/privacy): no data collected, by the website, the bia deploy apps or bia
 - [Servers and virtual machines](${siteUrl}/servers): turn a running Linux server or VPS into bia with one command (takeover.sh, also in land mode), let a bia set up a server over ssh and fly there, or install from the land ISO

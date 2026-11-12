@@ -420,7 +420,8 @@ needing an update.
 
 *Frames from the server:* `m {seq, m}` (a message's full state after a change; `seq`
 is its revision), `gone {seq, ids}`, `reset`, `typing {on}`, `ack {cid, ok, r|error}`,
-`call …` (voice call signalling) and `bye {reason}`.
+`call …` (voice call signalling), `self {called}` (root gave this bia a name or another one;
+`hello` carries the same `called`, and the web app puts it in its tab title) and `bye {reason}`.
 *Frames from the client:* actions carry a `cid` that `ack` echoes:
 `send {id, text, reply_to?, files: [{fid, name, size, kind}], paths?}` (`paths`:
 files already on this machine, root only), `edit {id, text}`, `delete {ids}`,

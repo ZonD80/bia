@@ -10,13 +10,11 @@
         <span class="top__bars" aria-hidden="true"><i /><i /><i /></span>
       </button>
       <nav id="primary-nav" class="top__nav" aria-label="Primary" @click="open = false">
-        <NuxtLink to="/features">Features</NuxtLink>
-        <NuxtLink to="/use-cases">Use cases</NuxtLink>
-        <NuxtLink to="/how-it-works">How it works</NuxtLink>
-        <NuxtLink to="/why-bia">Why bia</NuxtLink>
+        <NuxtLink to="/use-cases">Who it is for</NuxtLink>
+        <NuxtLink to="/features">What it can do</NuxtLink>
         <NuxtLink to="/fred">Fred’s story</NuxtLink>
-        <NuxtLink to="/faq">FAQ</NuxtLink>
         <NuxtLink to="/cloud">bia cloud</NuxtLink>
+        <NuxtLink to="/faq">FAQ</NuxtLink>
         <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
         <NuxtLink class="btn btn--primary top__cta" to="/download">Get bia</NuxtLink>
       </nav>

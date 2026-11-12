@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.5
+
+### Changes
+- bia now makes ordinary Telegram groups, like the apps do, when asked for a group. Before, every group it made was a supergroup. Ask for a supergroup when you want one (topics, restricting one member, slow mode).
+- When bia gets a name or a new one, the web app's tab title follows at once (“Fred · bia”) in every open tab. Before, the tab kept the old title until it was reloaded.
+
+### For bia
+- Nothing to do now.
+
 ## 2.2.4
 
 ### Changes

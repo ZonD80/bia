@@ -253,6 +253,17 @@ ib = inbound(lambda n: n["identity"] == "bob")
 check(ib is not None and ib["message"] == "hi, bob here", f"bob's message reaches the model: {ib}")
 check(os.path.exists(f"{files}/state/web/bob/main.json") and "hi, bob here" not in open(f"{files}/state/web/root/main.json").read(), "each identity has its own chat")
 
+# root names this bia: open web apps hear it at once (their tab title follows), new ones in hello
+check(sb3.hello.get("called") == "", f"an unnamed bia says so in hello: {sb3.hello.get('called')!r}")
+json.dump({"name": "Fred", "gender": "male"}, open(f"{files}/state/self.json", "w"))
+f = sb3.wait(lambda f: f.get("t") == "self", 8)
+check(f is not None and f.get("called") == "Fred", f"the open session hears the new name: {f}")
+json.dump({"name": "Milo"}, open(f"{files}/state/self.json", "w"))
+f = sb3.wait(lambda f: f.get("t") == "self" and f.get("called") == "Milo", 8)
+check(f is not None, f"and a rename: {f}")
+sa = Session(8443, alice, rx=None)
+check(sa.hello is not None and sa.hello.get("called") == "Milo", f"a new session gets the name in hello: {sa.hello and sa.hello.get('called')!r}")
+
 # root has the web app moved to another port: whoever is connected is told where it went
 import socket
 with socket.socket() as sk:

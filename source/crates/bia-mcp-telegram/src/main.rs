@@ -508,11 +508,12 @@ fn main() {
         )
         .tool(
             "create_group",
-            "Create a Telegram group (a supergroup) with this account as its owner and add people to it. members are @usernames, chat numbers from telegram_search, or phone numbers of your contacts. Returns the group's chat_id (use it with telegram_send) and an invite link; people whose privacy settings block adding them are listed — send them the link.",
+            "Create a Telegram group with this account as its owner and add people: title, members=[@username | chat number | contact phone]. An ordinary group, as the apps make one; supergroup=true only when asked for one or for what only it has (topics, restricting one member, slow mode). Returns the group's chat_id (use it with telegram_send) and an invite link; people whose privacy settings block adding them are listed — send them the link.",
             json!({"type": "object", "required": ["title"], "properties": {
                 "title": {"type": "string", "description": "group name"},
                 "members": {"type": "array", "items": {"type": "string"}, "description": "people to add: @username, chat number or contact phone"},
-                "about": {"type": "string", "description": "optional description"}
+                "about": {"type": "string", "description": "optional description"},
+                "supergroup": {"type": "boolean", "description": "true makes a supergroup instead of an ordinary group (default false)"}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
@@ -520,6 +521,7 @@ fn main() {
                     arg_str(&a, "title")?,
                     &arg_str_list(&a, "members"),
                     arg_str_opt(&a, "about").unwrap_or_default(),
+                    arg_bool(&a, "supergroup", false),
                 )
             },
         )

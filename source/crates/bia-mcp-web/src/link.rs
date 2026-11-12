@@ -413,6 +413,15 @@ pub fn emit(identity: &str, v: Value) {
     }
 }
 
+/// A frame for every session that came to this bia (web apps, bridges, bias that dialed in).
+pub fn broadcast(v: &Value) {
+    let Some(l) = links() else { return };
+    let all: Vec<Arc<Link>> = l.inner.lock().unwrap().rt.values().filter_map(|r| r.link.clone()).collect();
+    for link in all.iter().filter(|k| !k.dialed) {
+        link.w.json(v);
+    }
+}
+
 /// Something of the identity's is connected.
 pub fn online(identity: &str) -> bool {
     links().is_some_and(|l| {
@@ -1051,7 +1060,9 @@ impl Links {
         drop(inner);
         if !link.dialed {
             let mut h = json!({"t": "hello", "proto": PROTO, "name": me, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance,
-                               "me": {"identity": name, "root": link.root}});
+                               "me": {"identity": name, "root": link.root},
+                               // what root called this bia ("" while unnamed): the web app's title
+                               "called": self.pki().ok().and_then(|p| p.chosen_name()).unwrap_or_default()});
             if let Some(o) = crate::chat::hello_info(name).as_object() {
                 for (k, v) in o {
                     h[k] = v.clone();

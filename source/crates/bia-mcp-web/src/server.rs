@@ -349,8 +349,15 @@ impl Web {
             .name("web-net".into())
             .spawn(move || {
                 let mut last = String::new();
+                let mut called = w.pki.chosen_name();
                 loop {
                     std::thread::sleep(Duration::from_secs(2));
+                    // root named this bia (self_set): open web apps show it without a reload
+                    let now = w.pki.chosen_name();
+                    if now != called {
+                        called = now;
+                        crate::link::broadcast(&json!({"t": "self", "called": called.clone().unwrap_or_default()}));
+                    }
                     let ips = lan_ips();
                     if w.pki.ensure_server_sans(&ips).unwrap_or(false) {
                         if let Ok(cfg) = w.pki.server_config() {

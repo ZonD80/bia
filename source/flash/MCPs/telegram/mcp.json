@@ -1,6 +1,6 @@
 {
   "name": "telegram",
-  "version": "2.2.4",
+  "version": "2.2.5",
   "description": "bia's own Telegram account, a real user, not a bot: login, chats, messages, groups, bans, voice calls and voice messages. Before the first login, tell root that bia needs its own account with its own phone number, separate from root's. Login: telegram_login shows a QR, which root scans in the Telegram app of that account (Settings > Devices > Link Desktop Device). telegram_login(phone) with a code is only for when nobody can scan. Received files are saved in /home/bia/files/inbox/telegram/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-telegram",
@@ -102,6 +102,7 @@
     "alice|telegram:123|<issued>|<delivered>|[speech en] hello -> say(identity='alice', channel='telegram:123', message='Hi — short spoken reply.', lang='en'); wait for [you finished speaking] before speaking again",
     "root|console|<issued>|<delivered>|send alice a voice message saying I am late -> telegram_send_voice(chat_id='123', text='Hi, I am running about ten minutes late.', lang='en')",
     "root|console|<issued>|<delivered>|make a telegram group Family with @mom and @dad -> telegram_create_group(title='Family', members=['@mom', '@dad'])",
+    "root|console|<issued>|<delivered>|make a telegram supergroup Club with topics -> telegram_create_group(title='Club', supergroup=true)",
     "root|console|<issued>|<delivered>|make @ann an admin of that telegram group who can only pin and delete -> telegram_set_admin(chat_id='-1001234567890', member='@ann', rights=['pin_messages', 'delete_messages'])"
   ]
 }

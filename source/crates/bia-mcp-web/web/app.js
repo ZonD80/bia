@@ -574,6 +574,7 @@ async function hist(params) {
 
 function onHello(v) {
   S.wsOk = true;
+  setCalled(v.called);
   const main = S.chats.get('main');
   main.muted = !!v.muted;
   if (v.typing) S.typing.add('main'); else S.typing.delete('main');
@@ -598,6 +599,7 @@ function onEvent(v) {
   switch (v.t) {
     case 'm': upsertMsg(v.m); return;
     case 'gone': removeMsgs(v.ids); return;
+    case 'self': setCalled(v.called); return;
     case 'ring': showRing(Object.assign({}, v, { chat: 'main' })); return;
     case 'ring_end': if (RING.chat) stopRing(); return;
     case 'call': return;
@@ -868,7 +870,14 @@ function renderNotifAsk() {
     iconBtn('close', 'Not now', () => { S.prefs.notifAsked = true; savePrefs(); renderNotifAsk(); notifDecided('dismissed'); }));
 }
 // the server names the page after this bia ("Fred · bia")
-const BASE_TITLE = document.title || 'bia';
+let BASE_TITLE = document.title || 'bia';
+// bia's name as it is now (hello, and a `self` frame when root renames it): the same title the
+// server gives a page it serves
+function setCalled(name) {
+  if (typeof name !== 'string') return; // an older bia does not say
+  BASE_TITLE = BASE_TITLE.replace(/^(?:.* · )?bia/, (name.trim() ? name.trim() + ' · ' : '') + 'bia');
+  updateTitle();
+}
 function updateTitle() {
   let n = 0;
   for (const c of S.chats.values()) if (!c.muted) n += c.unread || 0;

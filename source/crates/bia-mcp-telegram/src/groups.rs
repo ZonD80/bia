@@ -1,4 +1,4 @@
-//! Groups: create one (a supergroup), join one (invite link or public name), add and remove
+//! Groups: create one (an ordinary group, or a supergroup when asked), join one (invite link or public name), add and remove
 //! members, leave, invite link.
 //! Basic groups (older small chats) are handled with the messages.* calls.
 use crate::client::Tg;
@@ -263,14 +263,76 @@ fn report(head: String, added: &[String], failed: &[String], link: Option<String
     out
 }
 
+/// An ordinary (basic) group: its members go in with the call that makes it.
+async fn create_basic(client: &Client, title: &str, members: &[String], about: &str) -> Result<String, String> {
+    let (mut users, mut names, mut failed) = (vec![], vec![], vec![]);
+    for m in members {
+        match input_user(client, m).await {
+            Ok((u, _)) => {
+                users.push(u);
+                names.push(m.clone());
+            }
+            Err(e) => failed.push(e),
+        }
+    }
+    let req = tl::functions::messages::CreateChat { users: users.clone(), title: title.to_string(), ttl_period: None };
+    let tl::enums::messages::InvitedUsers::InvitedUsers(made) = client.invoke(&req).await.map_err(|e| {
+        let e = e.to_string();
+        if e.contains("USERS_TOO_FEW") {
+            format!("create group: Telegram wants at least one other member in an ordinary group ({e}); name someone in members, or pass supergroup=true{}", if failed.is_empty() { String::new() } else { format!("; not found: {}", failed.join("; ")) })
+        } else {
+            format!("create group: {e}")
+        }
+    })?;
+    let chat = chats_of(&made.updates)
+        .into_iter()
+        .find_map(|c| match c {
+            tl::enums::Chat::Chat(c) => Some(c),
+            _ => None,
+        })
+        .ok_or("Telegram did not return the new group")?;
+    let missing: Vec<i64> = made.missing_invitees.iter().map(|tl::enums::MissingInvitee::MissingInvitee(m)| m.user_id).collect();
+    let mut added = vec![];
+    for (u, n) in users.iter().zip(names) {
+        let id = match u {
+            tl::enums::InputUser::InputUser(x) => x.user_id,
+            _ => 0,
+        };
+        if missing.contains(&id) {
+            failed.push(format!("{n}: their privacy settings do not allow adding them; send them the invite link"));
+        } else {
+            added.push(n);
+        }
+    }
+    let peer = tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id: chat.id });
+    if !about.trim().is_empty() {
+        let req = tl::functions::messages::EditChatAbout { peer: peer.clone(), about: about.to_string() };
+        if let Err(e) = client.invoke(&req).await {
+            failed.push(format!("the description was not set: {e}"));
+        }
+    }
+    let link = invite_link(client, &peer).await;
+    let id = basic_chat_id(chat.id);
+    Ok(report(format!("created group \"{title}\": chat_id {id} (telegram:{id})"), &added, &failed, link))
+}
+
+/// Bot-API style id of an ordinary group: its number, negative.
+pub(crate) fn basic_chat_id(chat_id: i64) -> i64 {
+    -chat_id
+}
+
 impl Tg {
-    /// A new supergroup with this account as its owner, then the members.
-    pub fn create_group(&self, title: &str, members: &[String], about: &str) -> Result<String, String> {
+    /// A new group with this account as its owner, then the members: an ordinary group, as the
+    /// apps make one, unless a supergroup is asked for (topics, per-member restrictions, slow mode).
+    pub fn create_group(&self, title: &str, members: &[String], about: &str, supergroup: bool) -> Result<String, String> {
         let title = title.trim();
         if title.is_empty() {
             return Err("title is required".into());
         }
         let client = self.require_ready()?;
+        if !supergroup {
+            return self.block_on(create_basic(&client, title, members, about));
+        }
         self.block_on(async {
             let req = tl::functions::channels::CreateChannel {
                 broadcast: false,
@@ -304,7 +366,7 @@ impl Tg {
             let link = invite_link(&client, &peer).await;
             let id = channel_chat_id(ch.id);
             Ok(report(
-                format!("created group \"{title}\": chat_id {id} (telegram:{id})"),
+                format!("created supergroup \"{title}\": chat_id {id} (telegram:{id})"),
                 &added,
                 &failed,
                 link,
@@ -457,5 +519,10 @@ mod tests {
     #[test]
     fn supergroup_chat_ids_use_the_minus_100_prefix() {
         assert_eq!(super::channel_chat_id(1_234_567_890), -1_001_234_567_890);
+    }
+
+    #[test]
+    fn ordinary_group_chat_ids_are_the_negative_number() {
+        assert_eq!(super::basic_chat_id(4_123_456_789), -4_123_456_789);
     }
 }
