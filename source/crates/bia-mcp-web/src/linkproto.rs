@@ -54,6 +54,32 @@ pub const RENEW_WITHIN_DAYS: i64 = 30;
 /// Reasons in `bye` that mean "back soon".
 pub const BYE_RESTARTS: &[&str] = &["reboot", "poweroff", "update", "restart", "shutdown"];
 
+/// The words that go with a `bye` code (its `why`): plain English for whoever reads it at the
+/// other end. The code stays for the logic (and for versions before 2.2.8, which read only
+/// it); a disconnect carries the model's own words instead.
+pub fn bye_why(code: &str) -> &'static str {
+    match code {
+        "banned" => "this bia banned you",
+        "revoked" => "this bia no longer trusts your certificate",
+        "busy" => "this bia has too many links open now, try again later",
+        "proto" => "this bia speaks another version of the link protocol",
+        "duplicate" => "another link with you replaced this one",
+        "duplicate_key" => "another machine with your key is already connected",
+        "disconnect" => "this bia closed the link",
+        "reboot" => "this bia's computer is rebooting, back soon",
+        "poweroff" => "this bia's computer is powering off",
+        "update" => "this bia is updating, back soon",
+        "restart" | "shutdown" => "this bia is restarting, back soon",
+        _ => "this bia closed the link",
+    }
+}
+
+/// A `bye` frame: the code and its words.
+pub fn bye_frame(code: &str, why: &str) -> serde_json::Value {
+    let why = if why.is_empty() { bye_why(code) } else { why };
+    serde_json::json!({"t": "bye", "reason": code, "why": why})
+}
+
 /// A WebSocket frame. A client masks (`mask` = Some) as RFC 6455 asks.
 pub fn encode_frame(opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
     let mut f = Vec::with_capacity(payload.len() + 14);

@@ -325,7 +325,7 @@ const BiaLink = (() => {
     // The tab is closing: free the session at once (a reload starts a new one).
     function close() {
       clearTimeout(L.timer);
-      try { sendJson({ t: 'bye', reason: 'closed' }); L.bye = 'closed'; L.ws && L.ws.close(); } catch {}
+      try { sendJson({ t: 'bye', reason: 'closed', why: 'the web app was closed' }); L.bye = 'closed'; L.ws && L.ws.close(); } catch {}
     }
     function retry() { L.tries = 0; setState('connecting'); connect(); }
 

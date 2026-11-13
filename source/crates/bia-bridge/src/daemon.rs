@@ -293,7 +293,7 @@ fn serve(d: Arc<Daemon>, conn: TcpStream, token: &str) {
         d.stop.store(true, Ordering::Relaxed);
         d.cv.notify_all();
         if let Some(c) = d.conn() {
-            let _ = c.json(&json!({"t": "bye", "reason": "shutdown"}));
+            let _ = c.json(&json!({"t": "bye", "reason": "shutdown", "why": "the bridge was stopped"}));
             c.tls.shutdown();
         }
         let _ = fs::remove_file(d.profile().path("daemon.json"));

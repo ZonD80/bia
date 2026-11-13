@@ -475,7 +475,10 @@ context whether a reply is needed. When an identity connects or goes away (after
 of grace) the model gets the quiet `[web open]` / `[web closed]` notice, for a bia too.
 A ban (`web_peer_ban`, root's ban through `peer_root`) refuses an identity's sessions
 until it is lifted. Shutdown: on SIGTERM (systemd stopping `bia.service`) or stdin EOF
-the web MCP sends `bye {reason}` on every link and waits up to 2 s. When root just had the web
+the web MCP sends `bye {reason}` on every link and waits up to 2 s. Every `bye` also carries
+`why`, English words for the reader at the other end (`linkproto::bye_why` per code; for
+`disconnect` the reason `web_peer_disconnect` requires, kept in the link state so a bia that
+was away hears it when it comes back). The logic reads only the code. When root just had the web
 app moved (`web_port`), that `bye` also carries `port`, the HTTPS port it answers on next:
 the web app shows the new address and stops reconnecting, bia-bridge rewrites its profile's
 URL, another bia its peer record, and both dial there. The reason comes

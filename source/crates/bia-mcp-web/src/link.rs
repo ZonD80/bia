@@ -41,6 +41,34 @@ fn rnd01() -> f64 {
     u32::from_be_bytes(rnd_bytes::<4>()) as f64 / (u32::MAX as f64 + 1.0)
 }
 
+/// The longest reason a disconnect carries.
+const WHY_MAX: usize = 300;
+
+/// A disconnect's reason as it is sent and as it is shown: one line, no control characters,
+/// WHY_MAX characters at most (what another bia sends is not trusted to be so).
+fn clean_why(s: &str) -> String {
+    let one: String = s
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let one = one.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one.chars().count() > WHY_MAX {
+        let mut cut: String = one.chars().take(WHY_MAX - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        one
+    }
+}
+
+/// How the other bia's reason is shown to the model: its own words, marked as such.
+fn says(why: &Option<String>) -> String {
+    match why {
+        Some(w) => format!(" It says: “{w}”."),
+        None => String::new(),
+    }
+}
+
 /// A change of ours not yet acknowledged by the bia we dial.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Out {
@@ -69,6 +97,10 @@ pub struct LinkState {
     /// want=false at the end that was dialed even while the link was in use.)
     #[serde(default)]
     pub closed: bool,
+    /// What web_peer_disconnect gave as the reason, kept while `closed`: the
+    /// other bia hears it with the bye, also when it only comes back later.
+    #[serde(default)]
+    pub closed_why: String,
     /// "", "root" or "model": this bia refuses the identity.
     #[serde(default)]
     pub banned_by: String,
@@ -273,6 +305,8 @@ pub struct Link {
     tls: SharedTls,
     last_rx: Mutex<Instant>,
     their_bye: Mutex<Option<String>>,
+    /// The words that came with their bye (`why`: a disconnect's reason, free text).
+    their_why: Mutex<Option<String>>,
     our_bye: Mutex<Option<String>>,
     /// Replaced by another link of the same identity: closing it says nothing.
     replaced: AtomicBool,
@@ -280,15 +314,24 @@ pub struct Link {
 
 impl Link {
     fn close(&self, reason: &str) {
+        self.close_why(reason, "");
+    }
+    /// `why`: the words for the other side's model, next to the code in `reason` (older
+    /// versions read only the code); "" for the code's own words.
+    fn close_why(&self, reason: &str, why: &str) {
         *self.our_bye.lock().unwrap() = Some(reason.to_string());
-        self.w
-            .close_with(Some(&json!({"t": "bye", "reason": reason})));
+        self.w.close_with(Some(&bye_frame(reason, why)));
         let tls = self.tls.clone();
         let w = self.w.clone();
         std::thread::spawn(move || {
             w.wait_done(Instant::now() + BYE_FLUSH);
             tls.shutdown();
         });
+    }
+    /// Their bye arrived: keep its code and its words.
+    fn heard_bye(&self, v: &Value) {
+        *self.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+        *self.their_why.lock().unwrap() = v["why"].as_str().map(clean_why).filter(|w| !w.is_empty());
     }
     fn silent_close(&self, reason: &str) {
         self.replaced.store(true, Ordering::Relaxed);
@@ -668,7 +711,7 @@ impl Links {
             let mut t = tls.clone();
             let _ = t.write_all(&encode_frame(
                 1,
-                json!({"t": "bye", "reason": "busy"}).to_string().as_bytes(),
+                bye_frame("busy", "").to_string().as_bytes(),
                 None,
             ));
             let _ = t.flush();
@@ -866,6 +909,7 @@ impl Links {
             tls: tls.clone(),
             last_rx: Mutex::new(Instant::now()),
             their_bye: Mutex::new(None),
+            their_why: Mutex::new(None),
             our_bye: Mutex::new(None),
             replaced: AtomicBool::new(false),
         });
@@ -912,7 +956,7 @@ impl Links {
             Ok((1, b)) => match serde_json::from_slice::<Value>(&b) {
                 Ok(v) if v["t"] == "hello" => self.register(&link, &v),
                 Ok(v) if v["t"] == "bye" => {
-                    *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+                    link.heard_bye(&v);
                     Err(())
                 }
                 _ => Err(()),
@@ -1009,8 +1053,9 @@ impl Links {
             // this bia closed the link on purpose while the other was away (it never heard):
             // it comes back by itself, and learns now that the link is closed. Only its own
             // web_peer_connect (or ours) opens it again.
+            let why = rt.st.closed_why.clone();
             drop(inner);
-            link.close("disconnect");
+            link.close_why("disconnect", &why);
             return Err(());
         }
         if let Some(old) = rt.link.clone() {
@@ -1070,6 +1115,7 @@ impl Links {
         rt.st.last_up = now_secs();
         rt.st.asked = false;
         rt.st.closed = false;
+        rt.st.closed_why.clear();
         if is_peer {
             // a link both ends took is wanted again at both, whoever closed the last one:
             // after a loss or a restart either may bring it back
@@ -1155,6 +1201,7 @@ impl Links {
             return;
         }
         let bye = link.their_bye.lock().unwrap().clone();
+        let why = link.their_why.lock().unwrap().clone();
         let name = &link.peer;
         let Some(reason) = bye else { return };
         let mut inner = self.inner.lock().unwrap();
@@ -1185,7 +1232,7 @@ impl Links {
                 // it closed the link while this bia was away: do not come back by itself
                 rt.st.want = false;
                 rt.next_dial = None;
-                Some(format!("{name} closed the link while this bia was away, so it stays closed. What you send waits here; web_peer_connect asks {name} for the link again."))
+                Some(format!("{name} closed the link while this bia was away, so it stays closed.{} What you send waits here; web_peer_connect asks {name} for the link again.", says(&why)))
             }
             _ => None,
         };
@@ -1200,6 +1247,7 @@ impl Links {
     fn on_closed(self: &Arc<Self>, link: &Arc<Link>) {
         let name = link.peer.clone();
         let mut inner = self.inner.lock().unwrap();
+        let is_peer = inner.peers.contains_key(&name);
         let rt = self.rt(&mut inner, &name);
         let current = rt.link.as_ref().map(|l| l.id) == Some(link.id);
         if current {
@@ -1209,6 +1257,7 @@ impl Links {
             rt.unsaved = 0;
         }
         let theirs = link.their_bye.lock().unwrap().clone();
+        let why = link.their_why.lock().unwrap().clone();
         let ours = link.our_bye.lock().unwrap().clone();
         let mut tell = None;
         if current && !link.replaced.load(Ordering::Relaxed) && !self.closing.load(Ordering::Relaxed) {
@@ -1227,7 +1276,12 @@ impl Links {
                     rt.st.want = false;
                     tell = Some(format!("{name} no longer trusts this bia (its certificate there was revoked). Tell root; trust must be set up again (web_peer_add) to talk."));
                 }
-                (Some("disconnect"), _) => rt.st.want = false,
+                (Some("disconnect"), _) => {
+                    rt.st.want = false;
+                    if is_peer {
+                        tell = Some(format!("{name} closed the link, so it stays closed.{} What you send waits here; web_peer_connect asks {name} for the link again.", says(&why)));
+                    }
+                }
                 (_, Some(_)) => {}
                 _ => {
                     // network loss: redial at once (jittered)
@@ -1270,7 +1324,7 @@ impl Links {
             "bye" => {
                 // the client is leaving (a tab closing): its session ends now, so the
                 // next one of this identity is not kept waiting
-                *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+                link.heard_bye(v);
                 self.peer_moved(link, v);
                 link.tls.shutdown();
             }
@@ -1351,7 +1405,7 @@ impl Links {
                 self.save_state(name, &rt.st);
             }
             "bye" => {
-                *link.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
+                link.heard_bye(v);
                 self.peer_moved(link, v);
             }
             "fget" | "fack" | "fdone" | "frefuse" | "fcancel" => self.on_file_frame(link, v),
@@ -1676,7 +1730,7 @@ impl Links {
         if self.closing.swap(true, Ordering::SeqCst) {
             return;
         }
-        let mut bye = json!({"t": "bye", "reason": reason});
+        let mut bye = bye_frame(reason, "");
         if let Some(port) = moved {
             bye["port"] = port.into();
         }
@@ -1750,6 +1804,7 @@ impl Links {
             rt.st.want = true;
             rt.st.asked = true;
             rt.st.closed = false;
+            rt.st.closed_why.clear();
             rt.st.banned_us = false;
             rt.attempts = 0;
             rt.next_dial = Some(Instant::now());
@@ -1785,24 +1840,30 @@ impl Links {
         }
     }
 
-    pub fn disconnect(&self, name: &str) -> Result<String, String> {
+    /// `why`: what the other bia's model is told with it.
+    pub fn disconnect(&self, name: &str, why: &str) -> Result<String, String> {
         self.require_peer(name)?;
+        let why = clean_why(why);
+        if why.is_empty() {
+            return Err(format!("reason is required: one line telling {name} why the link is closed"));
+        }
         let link = {
             let mut inner = self.inner.lock().unwrap();
             let rt = self.rt(&mut inner, name);
             rt.st.want = false;
             rt.st.asked = false;
             rt.st.closed = true;
+            rt.st.closed_why = why.clone();
             rt.next_dial = None;
             self.save_state(name, &rt.st);
             rt.link.clone()
         };
         Ok(match link {
             Some(l) => {
-                l.close("disconnect");
-                format!("disconnected from {name}. Neither bia brings the link back by itself, also after a restart; {name} can still ask for it again with its own web_peer_connect (web_peer_ban keeps it out). What you send meanwhile waits")
+                l.close_why("disconnect", &why);
+                format!("disconnected from {name} and told it why. Neither bia brings the link back by itself, also after a restart; {name} can still ask for it again with its own web_peer_connect (web_peer_ban keeps it out). What you send meanwhile waits")
             }
-            None => format!("{name} was not connected; this bia stopped trying to reach it, and when {name} comes back by itself it is told the link is closed"),
+            None => format!("{name} was not connected; this bia stopped trying to reach it, and when {name} comes back by itself it is told the link is closed and why"),
         })
     }
 
@@ -2066,7 +2127,7 @@ pub fn tool_connect(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
 }
 
 pub fn tool_disconnect(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
-    l()?.disconnect(&peer_arg(&args)?)
+    l()?.disconnect(&peer_arg(&args)?, bia_mcp::arg_str_opt(&args, "reason").unwrap_or_default())
 }
 
 pub fn tool_ban(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
@@ -2098,7 +2159,13 @@ pub fn tool_root(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
     let name = peer_arg(&args)?;
     match action.as_str() {
         "connect" => links.connect(&name),
-        "disconnect" => links.disconnect(&name),
+        "disconnect" => links.disconnect(
+            &name,
+            bia_mcp::arg_str_opt(&args, "reason")
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
+                .unwrap_or("root closed the link here"),
+        ),
         "ban" => links.ban(&name, "root"),
         "unban" => links.unban(&name, "root"),
         other => Err(format!(
@@ -2110,6 +2177,25 @@ pub fn tool_root(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnect_reason_words() {
+        assert_eq!(clean_why("  moving\nto a\tnew  host\u{7} "), "moving to a new host");
+        assert_eq!(clean_why(" \n "), "");
+        let long = clean_why(&"é".repeat(WHY_MAX + 50));
+        assert_eq!(long.chars().count(), WHY_MAX);
+        assert!(long.ends_with('…'));
+        assert_eq!(says(&Some("back at 5".into())), " It says: “back at 5”.");
+        assert_eq!(says(&None), "");
+        // every bye carries words: the model's for a disconnect, else the code's own
+        let b = bye_frame("disconnect", "back at 5");
+        assert_eq!((b["reason"].as_str(), b["why"].as_str()), (Some("disconnect"), Some("back at 5")));
+        for code in ["banned", "revoked", "busy", "proto", "duplicate", "duplicate_key", "update", "restart", "anything"] {
+            let b = bye_frame(code, "");
+            assert_eq!(b["reason"], code);
+            assert!(b["why"].as_str().is_some_and(|w| !w.is_empty() && w != code), "{code}");
+        }
+    }
 
     #[test]
     fn names_and_paths() {

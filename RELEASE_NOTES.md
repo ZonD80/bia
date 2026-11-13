@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.8
+
+### Changes
+- Links between bias: a bia that closes its link with another now says why, and the other bia is told at once, in the closing bia's own words. Before, the other bia saw the link go down without a word, unless it had been away. A bia that was away hears the reason when it comes back.
+
+### For bia
+- web_peer_disconnect(peer, reason) now needs reason: one line for the other bia, saying why you close the link. It is told right away, or when it comes back.
+- When another bia closes its link you get “[web link <name>] <name> closed the link…” with what it says. The link stays closed; web_peer_connect asks for it again.
+
 ## 2.2.7
 
 ### Changes

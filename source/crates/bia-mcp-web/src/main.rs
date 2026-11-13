@@ -183,8 +183,8 @@ fn main() {
         .tool("peer_connect", "Open the link with a peer now (it stays up and reconnects by itself after a network loss or a restart on either side). Not needed to talk: what you say waits until the link is up. Waits up to 15 s.",
             obj(json!({"peer": {"type": "string", "description": "peer name from web_peer_list"}}), &["peer"]),
             link::tool_connect)
-        .tool("peer_disconnect", "Close the link with a peer and stop dialing it. It may connect again (web_peer_ban keeps it out); what you send meanwhile waits.",
-            obj(json!({"peer": {"type": "string"}}), &["peer"]), link::tool_disconnect)
+        .tool("peer_disconnect", "Close the link with a peer and stop dialing it; reason tells the other bia why. It may connect again (web_peer_ban keeps it out); what you send meanwhile waits.",
+            obj(json!({"peer": {"type": "string"}, "reason": {"type": "string", "description": "one line: the other bia is told it, also if it is away now and comes back later"}}), &["peer", "reason"]), link::tool_disconnect)
         .tool("peer_ban", "Refuse an identity on web (another bia, an agent, a person): its sessions are refused until web_peer_unban. Use when you do not want it to talk to this bia.",
             obj(json!({"peer": {"type": "string", "description": "the identity (a peer name or anyone's web identity)"}}), &["peer"]), link::tool_ban)
         .tool("peer_unban", "Lift a ban you set (a ban root set stays until root lifts it).",
@@ -193,7 +193,7 @@ fn main() {
             obj(json!({"peer": {"type": "string"}, "message_id": {"type": "string", "description": "id of the message say returned"}}), &["peer", "message_id"]),
             link::tool_cancel)
         .tool("peer_root", "Root's link controls (console /peer, web Settings): action list|connect|disconnect|ban|unban.",
-            obj(json!({"action": {"type": "string"}, "peer": {"type": "string"}}), &["action"]),
+            obj(json!({"action": {"type": "string"}, "peer": {"type": "string"}, "reason": {"type": "string", "description": "for disconnect: what the other bia is told"}}), &["action"]),
             link::tool_root)
         .tool("peer_remove", "Forget a peer (only when root asks): close its link and revoke the certificate this bia gave it.",
             obj(json!({"peer": {"type": "string"}}), &["peer"]), pki::peer_remove)
