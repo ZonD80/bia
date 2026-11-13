@@ -204,14 +204,25 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     }
     let packages = manifest_packages(&manifest);
     ctx.log(format!("unfold: {} manually installed packages", packages.len()));
+    let custom = manifest_custom(&manifest);
+    let custom_set: std::collections::HashSet<String> = custom.iter().cloned().collect();
+    let image = image_files_at(Path::new("/")).unwrap_or_default();
     if mode == Mode::Update {
         let etc = stage.0.join("etc");
         if etc.is_dir() {
-            apply_etc(&etc, Mode::Update)?;
+            apply_etc(&etc, Mode::Update, &custom_set)?;
             ctx.log("unfold: restored this machine's network before installing packages");
             let _ = Command::new("ifup").args(["-a"]).status();
         }
     }
+    // Links from system paths into the home (apt sources, a site's config, data folders)
+    // go back before packages install: apt needs its own sources to find them.
+    let links = manifest_links(&manifest);
+    // Users and groups first: packages then find theirs with the ids their data has.
+    restore_accounts(ctx, &manifest);
+    let lost_links = restore_links(ctx, &links, &stage.0, Path::new("/"));
+    // The owner's apt sources and keys too: without them apt cannot find their packages.
+    let mut not_kept = apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| rel.starts_with("etc/apt/"));
     let debs_dir = {
         let staged = stage.0.join(crate::debs::STORE_REL);
         if staged.is_dir() {
@@ -232,7 +243,14 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
         })
         .collect();
     ctx.log("unfold: copying files");
-    apply_tree(ctx, &stage.0, mode)?;
+    apply_tree(ctx, &stage.0, mode, &custom_set)?;
+    // after the packages: the owner's version of a package's config wins over the fresh one
+    not_kept.extend(apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| !rel.starts_with("etc/apt/")));
+    for rel in manifest_left_out(&manifest) {
+        if !not_kept.contains(&rel) {
+            not_kept.push(rel);
+        }
+    }
     if mode == Mode::Update {
         if let Some(dir) = stash {
             restore_stashed_mcps(ctx, dir)?;
@@ -240,9 +258,30 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     }
     let host = rewrite_native_host();
     ctx.log(&host);
-    let _ = Command::new("chown")
-        .args(["-R", "bia:bia", HOME])
-        .status();
+    // Every file in the home keeps the owner and mode it was folded with (a database's
+    // folder is its service's); what the archive does not have (the image's own files) is
+    // bia's. Root's files there become bia's when the agent starts (sys.rs), as always. The ids mean the same here: the accounts were
+    // merged above. An archive without accounts, or from a machine where bia had another
+    // id, gives the home to bia as before, except what system paths link to.
+    let kept: Vec<PathBuf> = links.iter().map(|(_, target)| target.clone()).collect();
+    let staged_home = stage.0.join("home/bia");
+    match same_bia(&manifest, Path::new("/")) {
+        Some(bia) if staged_home.is_dir() => {
+            // moved out of the extracted archive whole (restore_link): already right
+            let moved: Vec<PathBuf> = kept
+                .iter()
+                .filter(|t| t.strip_prefix("/").is_ok_and(|rel| fs::symlink_metadata(stage.0.join(rel)).is_err()))
+                .cloned()
+                .collect();
+            settle_owners(&staged_home, Path::new(HOME), bia, &moved);
+        }
+        _ => {
+            for target in &kept {
+                restore_owners(&stage.0, target, Path::new("/"));
+            }
+            chown_home(Path::new(HOME), &kept);
+        }
+    }
     let mut missing_bins = Vec::new();
     if mode != Mode::Update {
         let staged = stage.0.join("mcps");
@@ -276,7 +315,19 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     } else {
         base
     };
-    let notice = boot_notice(&base, &failed, &missing_bins);
+    let mut notice = boot_notice(&base, &failed, &missing_bins);
+    if !lost_links.is_empty() {
+        notice.push_str(&format!(
+            " Links into /home/bia that did not come back (what they pointed to was not in the archive, or the path is taken): {}.",
+            lost_links.join(", ")
+        ));
+    }
+    if !not_kept.is_empty() {
+        for rel in &not_kept {
+            ctx.log(format!("unfold: not kept /{rel} (this system's own version is in place)"));
+        }
+        notice.push_str(&not_kept_note(&not_kept));
+    }
     ctx.log(&notice);
     let _ = std::fs::remove_file("/etc/bia-land-mode");
     // The extracted tree can be large and may sit in /bia-update; remove it while
@@ -353,6 +404,18 @@ fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, to
     }
     ctx.log("fold: listing /etc selections");
     etc_members(base, &mut members)?;
+    let custom = custom_members(base, &mut members);
+    ctx.log(format!(
+        "fold: {} own system files outside the home, {} changed files of the image left out",
+        custom.carried.len(),
+        custom.left_out.len()
+    ));
+    for rel in &custom.carried {
+        ctx.log(format!("fold:   own /{rel}"));
+    }
+    for rel in &custom.left_out {
+        ctx.log(format!("fold:   left out /{rel}"));
+    }
     ctx.log(format!("fold: {} files, {} bytes", members.files, members.bytes));
     if !force && members.bytes > 0 {
         space_short("fold", &dir_ready(dest_dir)?, members.bytes, 1, tool, "")?;
@@ -362,7 +425,7 @@ fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, to
     let _ = fs::remove_dir_all(&meta.0);
     fs::create_dir_all(&meta.0).map_err(|e| e.to_string())?;
     ctx.log("fold: recording packages and MCP binaries");
-    let manifest_len = write_manifest(&meta.0.join("manifest.json"), base)?;
+    let manifest_len = write_manifest(&meta.0.join("manifest.json"), base, &custom)?;
     let list = meta.0.join("members");
     members.write_list(&list)?;
     let unpacked = members.bytes + manifest_len;
@@ -447,7 +510,7 @@ impl Members {
     }
 }
 
-fn write_manifest(path: &Path, base: &Path) -> Result<u64, String> {
+fn write_manifest(path: &Path, base: &Path, custom: &Custom) -> Result<u64, String> {
     let mcps = base.join("home/bia/MCPs");
     let manifest = json!({
         "format": "bia-carry",
@@ -455,12 +518,640 @@ fn write_manifest(path: &Path, base: &Path) -> Result<u64, String> {
         "source_arch": arch_at(base),
         "debian": debian_codename_at(base),
         "packages": package_records_at(base),
+        "links": links_at(base).iter().map(|(p, t)| json!({"path": p, "target": t})).collect::<Vec<_>>(),
+        "accounts": accounts_at(base),
+        "custom": custom.carried,
+        "left_out": custom.left_out,
         "mcp_bins": mcp_bins_at(&mcps),
     });
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
     fs::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(bytes.len() as u64)
 }
+/// Where a symlink into the home is looked for at a fold, and how many levels down.
+/// Nothing outside /home/bia (and the /etc selections) survives an update, a restore or a
+/// move, so what must survive is kept in the home and linked from its system path; these
+/// links are recorded in the manifest and made again at unfold.
+const LINK_ROOTS: &[(&str, usize)] = &[
+    ("etc", 6),
+    ("usr/local", 6),
+    ("var/lib", 2),
+    ("var/www", 3),
+    ("opt", 3),
+    ("srv", 3),
+    ("root", 2),
+];
+
+/// `/home/bia/…` with nothing but plain names below it.
+fn home_target(target: &Path) -> bool {
+    target
+        .strip_prefix(HOME)
+        .is_ok_and(|rest| rel_ok(rest))
+}
+
+fn link_path_ok(rel: &Path) -> bool {
+    rel_ok(rel) && LINK_ROOTS.iter().any(|(root, _)| rel.starts_with(root) && rel != Path::new(root))
+}
+
+/// Symlinks under `LINK_ROOTS` that point into /home/bia: (path relative to the root, target).
+fn links_at(base: &Path) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (root, depth) in LINK_ROOTS {
+        let mut stack = vec![(PathBuf::from(root), 0usize)];
+        while let Some((cur, level)) = stack.pop() {
+            let Ok(rd) = fs::read_dir(base.join(&cur)) else { continue };
+            for ent in rd.flatten() {
+                let Ok(ft) = ent.file_type() else { continue };
+                let rel = cur.join(ent.file_name());
+                if ft.is_symlink() {
+                    let Ok(target) = fs::read_link(ent.path()) else { continue };
+                    if home_target(&target) && link_path_ok(&rel) {
+                        out.push((rel.to_string_lossy().into_owned(), target.to_string_lossy().into_owned()));
+                    }
+                } else if ft.is_dir() && level + 1 < *depth {
+                    stack.push((rel, level + 1));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+fn manifest_links(manifest: &Value) -> Vec<(PathBuf, PathBuf)> {
+    let Some(items) = manifest.get("links").and_then(|v| v.as_array()) else {
+        return vec![];
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let path = PathBuf::from(item.get("path")?.as_str()?);
+            let target = PathBuf::from(item.get("target")?.as_str()?);
+            (link_path_ok(&path) && home_target(&target)).then_some((path, target))
+        })
+        .collect()
+}
+
+/// Make the folded machine's links into the home again under `root`, each with what it
+/// points to (taken from the extracted archive in `stage` when the home is not restored
+/// yet). A folder the image has at the link's place gives its files to the target first
+/// (the target's own win). One link that fails is logged; the unfold goes on.
+fn restore_links(ctx: &Ctx, links: &[(PathBuf, PathBuf)], stage: &Path, root: &Path) -> Vec<String> {
+    let mut failed = Vec::new();
+    for (rel, target) in links {
+        match restore_link(ctx, rel, target, stage, root) {
+            Ok(()) => ctx.log(format!("unfold: link /{} -> {}", rel.display(), target.display())),
+            Err(e) => {
+                ctx.log(format!("unfold: link /{} -> {} not restored: {e}", rel.display(), target.display()));
+                failed.push(format!("/{}", rel.display()));
+            }
+        }
+    }
+    failed
+}
+
+fn restore_link(ctx: &Ctx, rel: &Path, target: &Path, stage: &Path, root: &Path) -> Result<(), String> {
+    let inside = target.strip_prefix("/").map_err(|e| e.to_string())?;
+    let live = root.join(inside);
+    if fs::symlink_metadata(&live).is_err() {
+        let staged = stage.join(inside);
+        let meta = fs::symlink_metadata(&staged).map_err(|_| "what it points to is not in the archive".to_string())?;
+        if let Some(parent) = live.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        // The kept .debs are read from the extracted archive right after this: never move them out.
+        let holds_debs = stage.join(crate::debs::STORE_REL).starts_with(&staged);
+        if holds_debs || fs::rename(&staged, &live).is_err() {
+            if meta.is_dir() {
+                copy_any(ctx, "unfold", &staged, &live, None, 0)?;
+            } else if meta.is_file() {
+                copy_file(Some(ctx), &staged, &live)?;
+            } else {
+                return Err("what it points to is neither a file nor a folder".into());
+            }
+        }
+    }
+    let at = root.join(rel);
+    if let Some(parent) = at.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    if let Ok(meta) = fs::symlink_metadata(&at) {
+        if meta.is_dir() {
+            if !live.is_dir() {
+                return Err("a folder is there and the link points to a file".into());
+            }
+            copy_tree_skip_existing(Some(ctx), &at, &live)?;
+            fs::remove_dir_all(&at).map_err(|e| format!("{}: {e}", at.display()))?;
+        } else {
+            fs::remove_file(&at).map_err(|e| format!("{}: {e}", at.display()))?;
+        }
+    }
+    std::os::unix::fs::symlink(target, &at).map_err(|e| format!("{}: {e}", at.display()))
+}
+
+/// Give the home to bia, except what system paths link to (`keep`, absolute).
+fn chown_home(home: &Path, keep: &[PathBuf]) {
+    let keep: Vec<&PathBuf> = keep
+        .iter()
+        .filter(|t| t.starts_with(home) && t.as_path() != home && fs::symlink_metadata(t).is_ok())
+        .collect();
+    if keep.is_empty() {
+        let _ = Command::new("chown").args(["-R", "bia:bia"]).arg(home).status();
+        return;
+    }
+    let mut cmd = Command::new("find");
+    cmd.arg(home).arg("(");
+    for (i, t) in keep.iter().enumerate() {
+        if i > 0 {
+            cmd.arg("-o");
+        }
+        cmd.arg("-path").arg(t);
+    }
+    cmd.args([")", "-prune", "-o", "-exec", "chown", "-h", "bia:bia", "{}", "+"]);
+    let _ = cmd.status();
+}
+
+/// bia's (uid, gid) on this system, when the folded machine had the same.
+fn same_bia(manifest: &Value, root: &Path) -> Option<(u32, u32)> {
+    let ids = |passwd: &str| -> Option<(u32, u32)> {
+        let line = passwd.lines().find(|l| l.starts_with("bia:"))?;
+        let mut it = line.split(':').skip(2);
+        Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+    };
+    let old = ids(manifest.get("accounts")?.get("passwd")?.as_str()?)?;
+    let now = ids(&fs::read_to_string(root.join("etc/passwd")).ok()?)?;
+    (old == now).then_some(now)
+}
+
+/// Owners and modes under `home` as the extracted archive (`staged`) has them; a path the
+/// archive lacks becomes bia's. `skip` (absolute, under `home`) is left untouched.
+fn settle_owners(staged: &Path, home: &Path, bia: (u32, u32), skip: &[PathBuf]) {
+    use std::os::unix::fs::{lchown, MetadataExt, PermissionsExt};
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let live = home.join(&rel);
+        if skip.iter().any(|s| s == &live) {
+            continue;
+        }
+        let Ok(now) = fs::symlink_metadata(&live) else { continue };
+        match fs::symlink_metadata(staged.join(&rel)) {
+            Ok(old) => {
+                let _ = lchown(&live, Some(old.uid()), Some(old.gid()));
+                let same_kind = (old.is_dir() && now.is_dir()) || (old.is_file() && now.is_file());
+                if same_kind {
+                    let _ = fs::set_permissions(&live, fs::Permissions::from_mode(old.mode() & 0o7777));
+                }
+            }
+            Err(_) => {
+                let _ = lchown(&live, Some(bia.0), Some(bia.1));
+            }
+        }
+        if now.is_dir() {
+            if let Ok(rd) = fs::read_dir(&live) {
+                for ent in rd.flatten() {
+                    stack.push(rel.join(ent.file_name()));
+                }
+            }
+        }
+    }
+}
+
+/// Owners and modes of `target` (`/home/bia/…`) and everything below, as the archive has them.
+fn restore_owners(stage: &Path, target: &Path, root: &Path) {
+    use std::os::unix::fs::{lchown, MetadataExt, PermissionsExt};
+    let Ok(inside) = target.strip_prefix("/") else { return };
+    let mut stack = vec![PathBuf::from(inside)];
+    while let Some(rel) = stack.pop() {
+        let Ok(meta) = fs::symlink_metadata(stage.join(&rel)) else { continue };
+        let live = root.join(&rel);
+        if fs::symlink_metadata(&live).is_err() {
+            continue;
+        }
+        let _ = lchown(&live, Some(meta.uid()), Some(meta.gid()));
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        let _ = fs::set_permissions(&live, fs::Permissions::from_mode(meta.mode() & 0o7777));
+        if meta.is_dir() {
+            if let Ok(rd) = fs::read_dir(stage.join(&rel)) {
+                for ent in rd.flatten() {
+                    stack.push(rel.join(ent.file_name()));
+                }
+            }
+        }
+    }
+}
+
+/// The folded machine's users and groups (`passwd`, `group`, `shadow` as text). The files
+/// themselves are never copied: a newer image may bring accounts of its own.
+fn accounts_at(base: &Path) -> Value {
+    let read = |name: &str| fs::read_to_string(base.join("etc").join(name)).unwrap_or_default();
+    json!({"passwd": read("passwd"), "group": read("group"), "shadow": read("shadow")})
+}
+
+fn account_name_ok(name: &str) -> bool {
+    let mut chars = name.chars();
+    name.len() <= 32
+        && chars.next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_.-$".contains(c))
+}
+
+fn field_ok(v: &str) -> bool {
+    !v.starts_with('-') && !v.chars().any(|c| c.is_control() || c == ':')
+}
+
+/// The commands that bring the old machine's accounts to this one: groups and users this
+/// system lacks (same ids while they are free), the old memberships, and the passwords of
+/// root and of people (uid 1000 and up) where one was set.
+fn accounts_plan(old: (&str, &str, &str), new: (&str, &str, &str)) -> Vec<Vec<String>> {
+    use std::collections::{HashMap, HashSet};
+    let rows = |text: &str| -> Vec<Vec<String>> {
+        text.lines().filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.split(':').map(str::to_string).collect()).collect()
+    };
+    let hashes = |text: &str| -> HashMap<String, String> {
+        rows(text).into_iter().filter(|r| r.len() >= 2).map(|r| (r[0].clone(), r[1].clone())).collect()
+    };
+    let (old_users, old_groups, old_hash) = (rows(old.0), rows(old.1), hashes(old.2));
+    let (new_users, new_groups, new_hash) = (rows(new.0), rows(new.1), hashes(new.2));
+    let mut users: HashSet<String> = new_users.iter().map(|r| r[0].clone()).collect();
+    let mut uids: HashSet<String> = new_users.iter().filter(|r| r.len() >= 3).map(|r| r[2].clone()).collect();
+    let mut groups: HashSet<String> = new_groups.iter().map(|r| r[0].clone()).collect();
+    let mut gids: HashSet<String> = new_groups.iter().filter(|r| r.len() >= 3).map(|r| r[2].clone()).collect();
+    let system = |id: &str| id.parse::<u32>().is_ok_and(|n| n < 1000);
+    let real = |h: Option<&String>| h.filter(|h| h.starts_with('$') && field_ok(h)).cloned();
+    let s = |v: &str| v.to_string();
+    let mut plan = Vec::new();
+    for g in old_groups.iter().filter(|g| g.len() >= 3) {
+        let (name, gid) = (&g[0], &g[2]);
+        if groups.contains(name) || !account_name_ok(name) || gid.parse::<u32>().is_err() {
+            continue;
+        }
+        let mut cmd = vec![s("groupadd")];
+        if system(gid) {
+            cmd.push(s("-r"));
+        }
+        if !gids.contains(gid) {
+            cmd.extend([s("-g"), gid.clone()]);
+            gids.insert(gid.clone());
+        }
+        cmd.push(name.clone());
+        groups.insert(name.clone());
+        plan.push(cmd);
+    }
+    for u in old_users.iter().filter(|u| u.len() >= 7) {
+        let (name, uid, gid, gecos, home, shell) = (&u[0], &u[2], &u[3], &u[4], &u[5], &u[6]);
+        if users.contains(name) || !account_name_ok(name) || uid.parse::<u32>().is_err() {
+            continue;
+        }
+        if !home.starts_with('/') || !field_ok(home) || !shell.starts_with('/') || !field_ok(shell) {
+            continue;
+        }
+        let mut cmd = vec![s("useradd"), s("-M")];
+        if system(uid) {
+            cmd.push(s("-r"));
+        }
+        if !uids.contains(uid) {
+            cmd.extend([s("-u"), uid.clone()]);
+            uids.insert(uid.clone());
+        }
+        // its group by the old name (made above when it was missing)
+        if let Some(g) = old_groups.iter().find(|g| g.len() >= 3 && &g[2] == gid && groups.contains(&g[0])) {
+            cmd.extend([s("-g"), g[0].clone()]);
+        }
+        cmd.extend([s("-d"), home.clone(), s("-s"), shell.clone()]);
+        if !gecos.is_empty() && field_ok(gecos) {
+            cmd.extend([s("-c"), gecos.clone()]);
+        }
+        cmd.push(name.clone());
+        plan.push(cmd);
+        users.insert(name.clone());
+        if let Some(h) = real(old_hash.get(name)) {
+            plan.push(vec![s("usermod"), s("-p"), h, name.clone()]);
+        }
+    }
+    for g in old_groups.iter().filter(|g| g.len() >= 4 && groups.contains(&g[0])) {
+        let now: Vec<&str> = new_groups.iter().find(|n| n[0] == g[0]).and_then(|n| n.get(3)).map(|m| m.split(',').collect()).unwrap_or_default();
+        for member in g[3].split(',').filter(|m| !m.is_empty()) {
+            if users.contains(member) && !now.contains(&member) && account_name_ok(member) && account_name_ok(&g[0]) {
+                plan.push(vec![s("gpasswd"), s("-a"), s(member), g[0].clone()]);
+            }
+        }
+    }
+    for u in new_users.iter().filter(|u| u.len() >= 3) {
+        let person = u[2] == "0" || u[2].parse::<u32>().is_ok_and(|n| (1000..65000).contains(&n));
+        if let (true, Some(h)) = (person && account_name_ok(&u[0]), real(old_hash.get(&u[0]))) {
+            if new_hash.get(&u[0]) != Some(&h) {
+                plan.push(vec![s("usermod"), s("-p"), h, u[0].clone()]);
+            }
+        }
+    }
+    plan
+}
+
+fn restore_accounts(ctx: &Ctx, manifest: &Value) {
+    let Some(acc) = manifest.get("accounts") else { return };
+    let old = |k: &str| acc.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let new = accounts_at(Path::new("/"));
+    let now = |k: &str| new.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let plan = accounts_plan((&old("passwd"), &old("group"), &old("shadow")), (&now("passwd"), &now("group"), &now("shadow")));
+    for cmd in plan {
+        // never a password hash in the log
+        let shown = if cmd[0] == "usermod" { format!("usermod -p … {}", cmd[cmd.len() - 1]) } else { cmd.join(" ") };
+        let ok = Command::new(&cmd[0]).args(&cmd[1..]).status().is_ok_and(|s| s.success());
+        ctx.log(format!("unfold: accounts: {shown}{}", if ok { "" } else { " (failed)" }));
+    }
+}
+
+/// The owner's own files outside the home: under these roots, everything that neither the
+/// image has (`/etc/bia-image-files`, written when the image is built) nor a package owns,
+/// plus a package's config file the owner changed, when the image does not have it.
+const CUSTOM_ROOTS: &[&str] = &["etc", "usr/local", "opt", "srv"];
+const CUSTOM_FILE_MAX: u64 = 256 << 20;
+const CUSTOM_TOTAL_MAX: u64 = 2 << 30;
+/// Without the image's list (an image older than 2.2.7) only these are told apart safely.
+const CUSTOM_APT: &[&str] = &[
+    "etc/apt/sources.list.d/",
+    "etc/apt/keyrings/",
+    "etc/apt/trusted.gpg.d/",
+    "etc/apt/preferences.d/",
+    "etc/apt/auth.conf.d/",
+];
+
+#[derive(Default)]
+struct Custom {
+    carried: Vec<String>,
+    /// Files of the image the owner changed, and own files too large to carry.
+    left_out: Vec<String>,
+}
+
+/// Made by the system or a package for this machine, or carried by its own rule: never
+/// one of the owner's files.
+fn custom_denied(rel: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "etc/passwd", "etc/passwd-", "etc/group", "etc/group-", "etc/shadow", "etc/shadow-",
+        "etc/gshadow", "etc/gshadow-", "etc/subuid", "etc/subuid-", "etc/subgid", "etc/subgid-",
+        "etc/fstab", "etc/mtab", "etc/resolv.conf", "etc/adjtime", "etc/ld.so.cache", "etc/.pwd.lock", "etc/.updated",
+        "etc/hostname", "etc/hosts", "etc/machine-id", "etc/timezone", "etc/localtime",
+        "etc/ca-certificates.conf", "etc/udev/hwdb.bin", "etc/docker/key.json", "etc/wpa_supplicant.conf",
+    ];
+    const UNDER: &[&str] = &[
+        "etc/bia", "etc/alternatives/", "etc/ssl/certs/", "etc/systemd/system/", "etc/network/",
+        "etc/wpa_supplicant/", "etc/opt/chrome/", "etc/opt/google/chrome/", "etc/chromium/",
+        "etc/ssh/ssh_host_", "etc/apparmor.d/cache", "etc/lvm/", "etc/cups/", "etc/.java/",
+        "usr/local/lib/bia/", "usr/local/share/bia/",
+    ];
+    const ENDS: &[&str] = &[".dpkg-old", ".dpkg-dist", ".dpkg-new", ".dpkg-tmp", ".ucf-old", ".ucf-dist", "~"];
+    let rc = rel.strip_prefix("etc/rc").is_some_and(|r| r.len() > 3 && &r[1..4] == ".d/");
+    rc || EXACT.contains(&rel) || UNDER.iter().any(|p| rel.starts_with(p)) || ENDS.iter().any(|e| rel.ends_with(e))
+}
+
+fn custom_path_ok(rel: &str) -> bool {
+    rel_ok(Path::new(rel)) && CUSTOM_ROOTS.iter().any(|r| rel.starts_with(&format!("{r}/"))) && !custom_denied(rel)
+}
+
+/// `/etc/bia-image-files`: path -> sha256 (empty when the list has none for it).
+fn image_files_at(base: &Path) -> Option<std::collections::HashMap<String, String>> {
+    let text = fs::read_to_string(base.join("etc/bia-image-files")).ok()?;
+    Some(
+        text.lines()
+            .filter_map(|l| l.split_once("  "))
+            .map(|(sum, path)| (path.to_string(), if sum == "-" { String::new() } else { sum.to_string() }))
+            .collect(),
+    )
+}
+
+/// Paths under `CUSTOM_ROOTS` that installed packages own (root-relative).
+fn package_files_at(base: &Path) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let Ok(rd) = fs::read_dir(base.join("var/lib/dpkg/info")) else { return out };
+    for ent in rd.flatten() {
+        if ent.path().extension().is_none_or(|x| x != "list") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(ent.path()) else { continue };
+        for line in text.lines() {
+            let rel = line.trim_start_matches('/');
+            if CUSTOM_ROOTS.iter().any(|r| rel.starts_with(&format!("{r}/"))) {
+                out.insert(rel.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// dpkg's record of each config file as its package installed it: path -> md5.
+fn conffile_sums(status: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let mut inside = false;
+    for line in status.lines() {
+        if line.starts_with("Conffiles:") {
+            inside = true;
+        } else if inside && line.starts_with(' ') {
+            let mut it = line.split_whitespace();
+            if let (Some(path), Some(sum)) = (it.next(), it.next()) {
+                out.insert(path.trim_start_matches('/').to_string(), sum.to_string());
+            }
+        } else {
+            inside = false;
+        }
+    }
+    out
+}
+
+fn md5_of(path: &Path) -> Option<String> {
+    let out = Command::new("md5sum").arg(path).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or("").to_string())
+}
+
+fn sha256_of(path: &Path) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut f = File::open(path).ok()?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        h.update(&buf[..n]);
+    }
+    Some(h.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Add the owner's own system files to the archive members.
+fn custom_members(base: &Path, m: &mut Members) -> Custom {
+    use std::os::unix::fs::MetadataExt;
+    let mut out = Custom::default();
+    let image = image_files_at(base);
+    let owned = package_files_at(base);
+    let conf = conffile_sums(&fs::read_to_string(base.join("var/lib/dpkg/status")).unwrap_or_default());
+    let have: std::collections::HashSet<PathBuf> = m.list.iter().cloned().collect();
+    let mut total = 0u64;
+    for root in CUSTOM_ROOTS {
+        let Ok(top) = fs::symlink_metadata(base.join(root)) else { continue };
+        if !top.is_dir() {
+            continue;
+        }
+        let mut stack = vec![PathBuf::from(root)];
+        while let Some(cur) = stack.pop() {
+            let Ok(rd) = fs::read_dir(base.join(&cur)) else { continue };
+            let mut kids: Vec<_> = rd.flatten().collect();
+            kids.sort_by_key(|e| e.file_name());
+            for ent in kids {
+                let rel_p = cur.join(ent.file_name());
+                let rel = rel_p.to_string_lossy().into_owned();
+                let Ok(meta) = fs::symlink_metadata(ent.path()) else { continue };
+                if meta.is_dir() {
+                    // another disk mounted there is not this system's
+                    if meta.dev() == top.dev() && !custom_denied(&format!("{rel}/")) {
+                        stack.push(rel_p);
+                    }
+                    continue;
+                }
+                let link = meta.file_type().is_symlink();
+                if !(link || meta.is_file()) || !custom_path_ok(&rel) || have.contains(&rel_p) {
+                    continue;
+                }
+                if link && fs::read_link(ent.path()).is_ok_and(|t| home_target(&t)) {
+                    continue; // manifest `links`
+                }
+                match &image {
+                    None => {
+                        if !CUSTOM_APT.iter().any(|p| rel.starts_with(p)) || owned.contains(&rel) {
+                            continue;
+                        }
+                    }
+                    Some(image) => {
+                        if let Some(sum) = image.get(&rel) {
+                            if !link && !sum.is_empty() && sha256_of(&ent.path()).is_some_and(|now| &now != sum) {
+                                out.left_out.push(rel);
+                            }
+                            continue;
+                        }
+                        if owned.contains(&rel) {
+                            // a package's file: only its config, and only when the owner changed it
+                            let changed = !link && conf.get(&rel).is_some_and(|sum| md5_of(&ent.path()).is_some_and(|now| &now != sum));
+                            if !changed {
+                                continue;
+                            }
+                        }
+                    }
+                }
+                if !link {
+                    if meta.len() > CUSTOM_FILE_MAX || total + meta.len() > CUSTOM_TOTAL_MAX {
+                        out.left_out.push(rel);
+                        continue;
+                    }
+                    total += meta.len();
+                    m.files += 1;
+                    m.bytes += meta.len();
+                }
+                m.list.push(rel_p);
+                out.carried.push(rel);
+            }
+        }
+    }
+    out.carried.sort();
+    out.left_out.sort();
+    out
+}
+
+fn manifest_custom(manifest: &Value) -> Vec<String> {
+    manifest
+        .get("custom")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).filter(|r| custom_path_ok(r)).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn manifest_left_out(manifest: &Value) -> Vec<String> {
+    manifest
+        .get("left_out")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).filter(|r| rel_ok(Path::new(r))).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// Put the folded machine's own system files (those `pick` chooses) under `root`. A path
+/// this system's image has itself keeps the image's file and is returned as not kept.
+fn apply_custom(
+    ctx: &Ctx,
+    stage: &Path,
+    root: &Path,
+    custom: &[String],
+    image: &std::collections::HashMap<String, String>,
+    mode: Mode,
+    pick: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    use std::os::unix::fs::MetadataExt;
+    let mut not_kept = Vec::new();
+    let mut done = 0u32;
+    for rel in custom.iter().filter(|r| pick(r)) {
+        if mode == Mode::Land && rel.strip_prefix("etc/").is_some_and(land_skips_etc) {
+            continue;
+        }
+        let from = stage.join(rel);
+        let Ok(meta) = fs::symlink_metadata(&from) else { continue };
+        if image.contains_key(rel) {
+            not_kept.push(rel.clone());
+            continue;
+        }
+        let to = root.join(rel);
+        let put = || -> Result<(), String> {
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            if meta.file_type().is_symlink() {
+                if fs::symlink_metadata(&to).is_err() {
+                    let target = fs::read_link(&from).map_err(|e| e.to_string())?;
+                    std::os::unix::fs::symlink(&target, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+                }
+            } else if meta.is_file() {
+                if fs::symlink_metadata(&to).is_ok_and(|m| m.is_dir()) {
+                    return Err(format!("{}: a folder is there", to.display()));
+                }
+                copy_file(Some(ctx), &from, &to)?;
+                let _ = std::os::unix::fs::chown(&to, Some(meta.uid()), Some(meta.gid()));
+            }
+            Ok(())
+        };
+        match put() {
+            Ok(()) => done += 1,
+            Err(e) => {
+                ctx.log(format!("unfold: own system file /{rel} not restored: {e}"));
+                not_kept.push(rel.clone());
+            }
+        }
+    }
+    if done > 0 {
+        ctx.log(format!("unfold: {done} own system files restored outside the home"));
+    }
+    not_kept
+}
+
+fn not_kept_note(not_kept: &[String]) -> String {
+    const SHOWN: usize = 15;
+    let mut names: Vec<String> = not_kept.iter().take(SHOWN).map(|r| format!("/{r}")).collect();
+    if not_kept.len() > SHOWN {
+        names.push(format!("and {} more (all in the log)", not_kept.len() - SHOWN));
+    }
+    format!(
+        " System files that were changed here and not kept (this system's own version is in place): {}. If one is your own change that must stay, put your version in /home/bia/files/system/ and symlink it from that path; otherwise nothing to do.",
+        names.join(", ")
+    )
+}
+
+/// A link under /etc/systemd/system that is the owner's own choice: one of its own units
+/// enabled (`…wants/x.timer` -> /etc/systemd/system/x.timer), an alias, a mask. Links to
+/// units of packages are left to the packages, which enable them when they install.
+fn unit_link_ok(target: &Path) -> bool {
+    target == Path::new("/dev/null")
+        || rel_ok(target) && target.components().count() == 1
+        || ["etc/systemd/system", "usr/local", "home/bia"]
+            .iter()
+            .any(|p| target.strip_prefix("/").is_ok_and(|t| t.starts_with(p) && rel_ok(t)))
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     if a == b {
         return true;
@@ -681,7 +1372,7 @@ fn etc_members(base: &Path, m: &mut Members) -> Result<(), String> {
     }
     Ok(())
 }
-fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode) -> Result<(), String> {
+fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode, custom: &std::collections::HashSet<String>) -> Result<(), String> {
     // Keep the image's MCP files: the archive's may be from another release,
     // and Update has already put the image's in place.
     let keep = keep_image_mcps()?;
@@ -726,12 +1417,17 @@ fn apply_tree(ctx: &Ctx, stage: &Path, mode: Mode) -> Result<(), String> {
     put_back_image_mcps(ctx, &keep.0)?;
     let etc = stage.join("etc");
     if etc.is_dir() {
-        apply_etc(&etc, mode)?;
+        apply_etc(&etc, mode, custom)?;
     }
     Ok(())
 }
 
-fn apply_etc(src: &Path, mode: Mode) -> Result<(), String> {
+/// `custom` (root-relative, `etc/…`) is left to `apply_custom`.
+fn apply_etc(src: &Path, mode: Mode, custom: &std::collections::HashSet<String>) -> Result<(), String> {
+    apply_etc_into(src, Path::new("/etc"), mode, custom)
+}
+
+fn apply_etc_into(src: &Path, dest: &Path, mode: Mode, custom: &std::collections::HashSet<String>) -> Result<(), String> {
     let mut stack = vec![src.to_path_buf()];
     while let Some(cur) = stack.pop() {
         let rd = match fs::read_dir(&cur) {
@@ -742,9 +1438,6 @@ fn apply_etc(src: &Path, mode: Mode) -> Result<(), String> {
             let ent = ent.map_err(|e| e.to_string())?;
             let path = ent.path();
             let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            if meta.file_type().is_symlink() {
-                continue;
-            }
             let rel = path.strip_prefix(src).unwrap_or(&path);
             if !rel_ok(rel) {
                 continue;
@@ -753,7 +1446,24 @@ fn apply_etc(src: &Path, mode: Mode) -> Result<(), String> {
             if mode == Mode::Land && land_skips_etc(&rel_s) {
                 continue;
             }
-            let dst = Path::new("/etc").join(rel);
+            if custom.contains(&format!("etc/{rel_s}")) {
+                continue;
+            }
+            let dst = dest.join(rel);
+            if meta.file_type().is_symlink() {
+                // a unit the owner enabled or masked; what the image links itself stays
+                if rel.starts_with("systemd/system") && fs::symlink_metadata(&dst).is_err() {
+                    if let Ok(target) = fs::read_link(&path) {
+                        if unit_link_ok(&target) {
+                            if let Some(parent) = dst.parent() {
+                                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                            }
+                            std::os::unix::fs::symlink(&target, &dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+                        }
+                    }
+                }
+                continue;
+            }
             if meta.is_dir() {
                 fs::create_dir_all(&dst).map_err(|e| e.to_string())?;
                 stack.push(path);
@@ -2083,6 +2793,323 @@ curl:
         assert!(has("home/bia/files/carry"));
         assert!(!has("home/bia/files/carry/fold.tar.gz"));
         assert_eq!(m.files, 3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn links_into_the_home_come_back() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("bia-carry-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        // the folded machine
+        let old = dir.join("old");
+        let sys = old.join("home/bia/files/system");
+        fs::create_dir_all(sys.join("apt/sources.list.d")).unwrap();
+        fs::write(sys.join("apt/sources.list.d/docker.list"), b"deb docker").unwrap();
+        fs::create_dir_all(sys.join("nginx")).unwrap();
+        fs::write(sys.join("nginx/site.conf"), b"server {}").unwrap();
+        fs::create_dir_all(old.join("home/bia/files/debs")).unwrap();
+        fs::create_dir_all(old.join("etc/apt")).unwrap();
+        fs::create_dir_all(old.join("etc/nginx/sites-enabled")).unwrap();
+        fs::create_dir_all(old.join("usr/local/sbin")).unwrap();
+        fs::create_dir_all(old.join("var/lib/a/b/c")).unwrap();
+        symlink("/home/bia/files/system/apt/sources.list.d", old.join("etc/apt/sources.list.d")).unwrap();
+        symlink("/home/bia/files/system/nginx/site.conf", old.join("etc/nginx/sites-enabled/site.conf")).unwrap();
+        symlink("/home/bia/files/gone", old.join("usr/local/sbin/gone")).unwrap();
+        symlink("/home/bia/files/debs", old.join("srv")).unwrap(); // a root itself: left alone
+        symlink("/home/bia/files/../../etc/shadow", old.join("etc/escape")).unwrap();
+        symlink("/usr/bin/python3", old.join("etc/python")).unwrap();
+        symlink("/home/bia/files/system", old.join("var/lib/a/b/c/deep")).unwrap(); // below the depth
+        let found = super::links_at(&old);
+        assert_eq!(
+            found,
+            vec![
+                ("etc/apt/sources.list.d".to_string(), "/home/bia/files/system/apt/sources.list.d".to_string()),
+                ("etc/nginx/sites-enabled/site.conf".to_string(), "/home/bia/files/system/nginx/site.conf".to_string()),
+                ("usr/local/sbin/gone".to_string(), "/home/bia/files/gone".to_string()),
+            ]
+        );
+        let manifest = serde_json::json!({"links": [
+            {"path": "etc/apt/sources.list.d", "target": "/home/bia/files/system/apt/sources.list.d"},
+            {"path": "etc/nginx/sites-enabled/site.conf", "target": "/home/bia/files/system/nginx/site.conf"},
+            {"path": "usr/local/sbin/gone", "target": "/home/bia/files/gone"},
+            {"path": "etc/../boot/x", "target": "/home/bia/files/system"},
+            {"path": "boot/x", "target": "/home/bia/files/system"},
+            {"path": "etc/x", "target": "/etc/shadow"},
+        ]});
+        let links = super::manifest_links(&manifest);
+        assert_eq!(links.len(), 3);
+        // the new image, home not restored yet; the extracted archive is the old tree
+        let new = dir.join("new");
+        fs::create_dir_all(new.join("etc/apt/sources.list.d")).unwrap();
+        fs::write(new.join("etc/apt/sources.list.d/image.list"), b"deb image").unwrap();
+        fs::write(new.join("etc/apt/sources.list.d/docker.list"), b"deb stale").unwrap();
+        let ctx = bia_mcp::Ctx::console();
+        let failed = super::restore_links(&ctx, &links, &old, &new);
+        assert_eq!(failed, vec!["/usr/local/sbin/gone".to_string()]);
+        let apt = new.join("etc/apt/sources.list.d");
+        assert_eq!(fs::read_link(&apt).unwrap(), Path::new("/home/bia/files/system/apt/sources.list.d"));
+        let live = new.join("home/bia/files/system/apt/sources.list.d");
+        assert_eq!(fs::read(live.join("docker.list")).unwrap(), b"deb docker");
+        assert_eq!(fs::read(live.join("image.list")).unwrap(), b"deb image");
+        assert_eq!(fs::read(new.join("home/bia/files/system/nginx/site.conf")).unwrap(), b"server {}");
+        assert!(fs::symlink_metadata(new.join("etc/nginx/sites-enabled/site.conf")).unwrap().file_type().is_symlink());
+        assert!(fs::symlink_metadata(new.join("usr/local/sbin/gone")).is_err());
+        // again, with the home in place: nothing changes
+        assert_eq!(super::restore_links(&ctx, &links[..2], &old, &new), Vec::<String>::new());
+        assert_eq!(fs::read(live.join("docker.list")).unwrap(), b"deb docker");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn own_system_files_are_carried() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("bia-carry-custom-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let old = dir.join("old");
+        let put = |rel: &str, body: &str| {
+            let p = old.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, body).unwrap();
+        };
+        put("etc/apt/sources.list", "deb debian changed");
+        put("etc/apt/sources.list.d/docker.list", "deb docker");
+        put("etc/apt/keyrings/docker.asc", "key");
+        put("etc/nginx/nginx.conf", "stock");
+        put("etc/nginx/fastcgi.conf", "edited");
+        put("etc/nginx/sites-available/market", "server {}");
+        put("etc/nginx/ssl/privkey.pem", "secret");
+        put("etc/passwd", "root");
+        put("etc/.updated", "systemd's own marker");
+        put("etc/hostname", "box");
+        put("etc/systemd/system/own.service", "[Unit]");
+        put("etc/motd", "image motd");
+        put("usr/local/sbin/biamarket-backup", "#!/bin/sh");
+        put("usr/local/sbin/bia-agent", "image binary");
+        put("usr/local/lib/bia/new-helper", "x");
+        put("opt/tool/run", "tool");
+        put("opt/google/chrome/chrome", "pkg");
+        put("srv/www/index.html", "hi");
+        put("home/bia/files/system/site", "s");
+        symlink("../sites-available/market", {
+            fs::create_dir_all(old.join("etc/nginx/sites-enabled")).unwrap();
+            old.join("etc/nginx/sites-enabled/market")
+        })
+        .unwrap();
+        symlink("/home/bia/files/system/site", old.join("etc/nginx/sites-enabled/linked")).unwrap();
+        let sha = |rel: &str| super::sha256_of(&old.join(rel)).unwrap();
+        // the image had: sources.list (other text), motd (same), bia-agent
+        fs::write(
+            old.join("etc/bia-image-files"),
+            format!("{}  etc/apt/sources.list\n{}  etc/motd\n-  usr/local/sbin/bia-agent\n-  etc/bia-image-files\n", "0".repeat(64), sha("etc/motd")),
+        )
+        .unwrap();
+        fs::create_dir_all(old.join("var/lib/dpkg/info")).unwrap();
+        fs::write(old.join("var/lib/dpkg/info/nginx.list"), "/etc/nginx\n/etc/nginx/nginx.conf\n/etc/nginx/fastcgi.conf\n").unwrap();
+        fs::write(old.join("var/lib/dpkg/info/chrome.list"), "/opt/google/chrome/chrome\n").unwrap();
+        let md5 = |rel: &str| super::md5_of(&old.join(rel)).unwrap();
+        fs::write(
+            old.join("var/lib/dpkg/status"),
+            format!("Package: nginx\nStatus: install ok installed\nConffiles:\n /etc/nginx/nginx.conf {}\n /etc/nginx/fastcgi.conf 00000000000000000000000000000000\nDescription: x\n", md5("etc/nginx/nginx.conf")),
+        )
+        .unwrap();
+        let mut m = super::Members::default();
+        m.file(&old, "etc/hostname");
+        let c = super::custom_members(&old, &mut m);
+        assert_eq!(
+            c.carried,
+            vec![
+                "etc/apt/keyrings/docker.asc",
+                "etc/apt/sources.list.d/docker.list",
+                "etc/nginx/fastcgi.conf",
+                "etc/nginx/sites-available/market",
+                "etc/nginx/sites-enabled/market",
+                "etc/nginx/ssl/privkey.pem",
+                "opt/tool/run",
+                "srv/www/index.html",
+                "usr/local/sbin/biamarket-backup",
+            ]
+        );
+        assert_eq!(c.left_out, vec!["etc/apt/sources.list"]);
+        assert!(m.list.iter().any(|p| p == Path::new("opt/tool/run")));
+        // an image without the list: only the apt sources and keys
+        fs::remove_file(old.join("etc/bia-image-files")).unwrap();
+        let c2 = super::custom_members(&old, &mut super::Members::default());
+        assert_eq!(c2.carried, vec!["etc/apt/keyrings/docker.asc", "etc/apt/sources.list.d/docker.list"]);
+        assert!(c2.left_out.is_empty());
+
+        // unfold on a new system that ships opt/tool/run itself
+        let manifest = serde_json::json!({"custom": c.carried, "left_out": c.left_out});
+        let mut custom = super::manifest_custom(&manifest);
+        assert_eq!(custom.len(), 9);
+        assert!(super::manifest_custom(&serde_json::json!({"custom": ["etc/passwd", "boot/x", "etc/../x", "/etc/x", "etc/systemd/system/a.service"]})).is_empty());
+        custom.push("etc/never-folded".into());
+        let new = dir.join("new");
+        fs::create_dir_all(new.join("etc/nginx")).unwrap();
+        fs::write(new.join("etc/nginx/fastcgi.conf"), "fresh from the package").unwrap();
+        let image: std::collections::HashMap<String, String> = [("opt/tool/run".to_string(), String::new())].into();
+        let ctx = bia_mcp::Ctx::console();
+        let first = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| r.starts_with("etc/apt/"));
+        assert!(first.is_empty());
+        assert_eq!(fs::read(new.join("etc/apt/sources.list.d/docker.list")).unwrap(), b"deb docker");
+        assert!(!new.join("usr/local/sbin/biamarket-backup").exists());
+        let rest = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| !r.starts_with("etc/apt/"));
+        assert_eq!(rest, vec!["opt/tool/run".to_string()]);
+        assert_eq!(fs::read(new.join("etc/nginx/fastcgi.conf")).unwrap(), b"edited");
+        assert_eq!(fs::read(new.join("usr/local/sbin/biamarket-backup")).unwrap(), b"#!/bin/sh");
+        assert_eq!(fs::read_link(new.join("etc/nginx/sites-enabled/market")).unwrap(), Path::new("../sites-available/market"));
+        assert!(!new.join("opt/tool/run").exists());
+        let note = super::not_kept_note(&rest);
+        assert!(note.contains("/opt/tool/run") && note.contains("files/system"));
+        // apply_etc leaves the custom ones alone
+        let etc = dir.join("etc2");
+        let set: std::collections::HashSet<String> = custom.iter().cloned().collect();
+        super::apply_etc_into(&old.join("etc"), &etc, super::Mode::Update, &set).unwrap();
+        assert!(etc.join("hostname").exists());
+        assert!(!etc.join("nginx/fastcgi.conf").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accounts_are_merged_not_copied() {
+        let old_passwd = "root:x:0:0:root:/root:/bin/bash\nbia:x:1000:1000::/home/bia:/bin/bash\npostgres:x:105:110:PostgreSQL:/var/lib/postgresql:/bin/bash\nanna:x:1001:1001:Anna:/home/anna:/bin/bash\nevil:x:1002:1002::/home/evil:-rf\n-bad:x:1003:1003::/home/b:/bin/sh\n";
+        let old_group = "root:x:0:\nbia:x:1000:\ndocker:x:990:bia,ghost\npostgres:x:110:\nanna:x:1001:\nsudo:x:27:bia,anna\n";
+        let old_shadow = "root:$y$rootpw:19000:0:99999:7:::\nbia:!:19000::::::\nanna:$y$annapw:19000::::::\npostgres:!:19000::::::\n";
+        let new_passwd = "root:x:0:0:root:/root:/bin/bash\nbia:x:1000:1000::/home/bia:/bin/bash\nnewsvc:x:105:105::/nonexistent:/usr/sbin/nologin\n";
+        let new_group = "root:x:0:\nbia:x:1000:\nsudo:x:27:bia\nnewsvc:x:105:\n";
+        let new_shadow = "root:*:19000::::::\nbia:!:19000::::::\n";
+        let plan = super::accounts_plan((old_passwd, old_group, old_shadow), (new_passwd, new_group, new_shadow));
+        let lines: Vec<String> = plan.iter().map(|c| c.join(" ")).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "groupadd -r -g 990 docker",
+                "groupadd -r -g 110 postgres",
+                "groupadd -g 1001 anna",
+                // uid 105 is taken by the new image's own account: another id, same name
+                "useradd -M -r -g postgres -d /var/lib/postgresql -s /bin/bash -c PostgreSQL postgres",
+                "useradd -M -u 1001 -g anna -d /home/anna -s /bin/bash -c Anna anna",
+                "usermod -p $y$annapw anna",
+                "gpasswd -a bia docker",
+                "gpasswd -a anna sudo",
+                "usermod -p $y$rootpw root",
+            ]
+        );
+        // nothing to do on the same system
+        assert!(super::accounts_plan((new_passwd, new_group, new_shadow), (new_passwd, new_group, new_shadow)).is_empty());
+    }
+
+    #[test]
+    fn linked_data_keeps_its_owner() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("bia-carry-owner-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        for side in ["stage", "live"] {
+            let d = dir.join(side).join("home/bia/files/system/db");
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("data"), b"x").unwrap();
+        }
+        let staged = dir.join("stage/home/bia/files/system/db");
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(staged.join("data"), fs::Permissions::from_mode(0o600)).unwrap();
+        let root_user = unsafe { libc::geteuid() } == 0;
+        if root_user {
+            std::os::unix::fs::chown(&staged, Some(70), Some(70)).unwrap();
+            std::os::unix::fs::chown(staged.join("data"), Some(70), Some(70)).unwrap();
+        }
+        super::restore_owners(&dir.join("stage"), Path::new("/home/bia/files/system/db"), &dir.join("live"));
+        let live = dir.join("live/home/bia/files/system/db");
+        assert_eq!(fs::metadata(&live).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(live.join("data")).unwrap().mode() & 0o777, 0o600);
+        if root_user {
+            assert_eq!(fs::metadata(live.join("data")).unwrap().uid(), 70);
+            // the rest of the home goes to its owner, the linked data does not
+            fs::write(dir.join("live/home/bia/files/other"), b"y").unwrap();
+            std::os::unix::fs::chown(dir.join("live/home/bia/files/other"), Some(71), Some(71)).unwrap();
+            let home = dir.join("live/home/bia");
+            let mut cmd = Command::new("find");
+            cmd.arg(&home).arg("(").arg("-path").arg(&live).args([")", "-prune", "-o", "-exec", "chown", "-h", "72:72", "{}", "+"]);
+            assert!(cmd.status().unwrap().success());
+            assert_eq!(fs::metadata(dir.join("live/home/bia/files/other")).unwrap().uid(), 72);
+            assert_eq!(fs::metadata(live.join("data")).unwrap().uid(), 70);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_home_keeps_its_owners() {
+        use std::os::unix::fs::{chown, MetadataExt, PermissionsExt};
+        let dir = std::env::temp_dir().join(format!("bia-carry-owners-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (staged, home) = (dir.join("stage/home/bia"), dir.join("root/home/bia"));
+        for base in [&staged, &home] {
+            fs::create_dir_all(base.join("files/pg")).unwrap();
+            fs::create_dir_all(base.join("files/state")).unwrap();
+            fs::write(base.join("files/pg/base"), b"db").unwrap();
+            fs::write(base.join("files/state/ca.key"), b"key").unwrap();
+            fs::write(base.join("bia.toml"), b"t").unwrap();
+        }
+        fs::create_dir_all(home.join("MCPs/web")).unwrap();
+        fs::write(home.join("MCPs/web/new-in-image"), b"n").unwrap();
+        fs::create_dir_all(home.join("files/moved")).unwrap();
+        fs::write(home.join("files/moved/x"), b"m").unwrap();
+        fs::set_permissions(staged.join("files/pg"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(staged.join("files/state/ca.key"), fs::Permissions::from_mode(0o600)).unwrap();
+        let etc = dir.join("root/etc");
+        fs::create_dir_all(&etc).unwrap();
+        fs::write(etc.join("passwd"), "root:x:0:0::/root:/bin/sh\nbia:x:1000:1000::/home/bia:/bin/bash\n").unwrap();
+        let same = serde_json::json!({"accounts": {"passwd": "bia:x:1000:1000::/home/bia:/bin/bash\n"}});
+        let other = serde_json::json!({"accounts": {"passwd": "bia:x:1001:1001::/home/bia:/bin/bash\n"}});
+        assert_eq!(super::same_bia(&same, &dir.join("root")), Some((1000, 1000)));
+        assert_eq!(super::same_bia(&other, &dir.join("root")), None);
+        assert_eq!(super::same_bia(&serde_json::json!({}), &dir.join("root")), None);
+        let root_user = unsafe { libc::geteuid() } == 0;
+        if root_user {
+            chown(staged.join("files/pg"), Some(70), Some(70)).unwrap();
+            chown(staged.join("files/pg/base"), Some(70), Some(70)).unwrap();
+            chown(staged.join("bia.toml"), Some(1000), Some(1000)).unwrap();
+            chown(home.join("files/moved/x"), Some(55), Some(55)).unwrap();
+        }
+        super::settle_owners(&staged, &home, (1000, 1000), &[home.join("files/moved")]);
+        let uid = |p: &str| fs::metadata(home.join(p)).unwrap().uid();
+        let mode = |p: &str| fs::metadata(home.join(p)).unwrap().mode() & 0o777;
+        assert_eq!(mode("files/pg"), 0o700);
+        assert_eq!(mode("files/state/ca.key"), 0o600);
+        if root_user {
+            assert_eq!((uid("files/pg"), uid("files/pg/base")), (70, 70));
+            assert_eq!(uid("files/state/ca.key"), 0);
+            assert_eq!(uid("bia.toml"), 1000);
+            assert_eq!(uid("MCPs/web/new-in-image"), 1000);
+            assert_eq!(uid("files/moved/x"), 55);
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enabled_own_units_come_back() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("bia-carry-units-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let src = dir.join("staged-etc");
+        let wants = src.join("systemd/system/timers.target.wants");
+        fs::create_dir_all(&wants).unwrap();
+        fs::write(src.join("systemd/system/backup.timer"), b"[Timer]").unwrap();
+        symlink("/etc/systemd/system/backup.timer", wants.join("backup.timer")).unwrap();
+        symlink("/usr/lib/systemd/system/docker.service", wants.join("docker.service")).unwrap();
+        symlink("/etc/systemd/system/kept.timer", wants.join("kept.timer")).unwrap();
+        symlink("/dev/null", src.join("systemd/system/masked.service")).unwrap();
+        symlink("/etc/passwd", src.join("hostname-link")).unwrap();
+        let dest = dir.join("etc");
+        fs::create_dir_all(dest.join("systemd/system/timers.target.wants")).unwrap();
+        symlink("/usr/lib/systemd/system/image.timer", dest.join("systemd/system/timers.target.wants/kept.timer")).unwrap();
+        super::apply_etc_into(&src, &dest, super::Mode::Update, &Default::default()).unwrap();
+        let link = |p: &str| fs::read_link(dest.join(p)).ok();
+        assert_eq!(fs::read(dest.join("systemd/system/backup.timer")).unwrap(), b"[Timer]");
+        assert_eq!(link("systemd/system/timers.target.wants/backup.timer").unwrap(), Path::new("/etc/systemd/system/backup.timer"));
+        assert_eq!(link("systemd/system/masked.service").unwrap(), Path::new("/dev/null"));
+        assert_eq!(link("systemd/system/timers.target.wants/kept.timer").unwrap(), Path::new("/usr/lib/systemd/system/image.timer"));
+        assert!(link("systemd/system/timers.target.wants/docker.service").is_none());
+        assert!(link("hostname-link").is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 

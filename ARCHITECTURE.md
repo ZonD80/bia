@@ -702,6 +702,55 @@ overwritten:
    `/bia-update/pending`, removes the marker and reboots.
 4. `bia-update.service` unfolds the agent and reboots into the new system.
 
+What an unfold brings back outside `/home/bia` (all in `archive.rs`):
+
+- The `/etc` selections: network, identity, Chrome policy, SSH host keys, the owner's
+  units in `/etc/systemd/system` and the links that enable or mask them (links to
+  package units are the packages' business).
+- The manually installed packages, by name or from a kept .deb.
+- **The owner's own system files** (`custom_members`, manifest `custom`): every file or
+  symlink under `/etc`, `/usr/local`, `/opt` and `/srv` that is neither in the image's
+  own list nor owned by a package, plus a package's config file the owner changed. The
+  list is `/etc/bia-image-files`, written by `builders/rootfs.sh` (path, and sha256 for
+  `/etc` files). Machine-made files (`passwd`, `fstab`, `resolv.conf`, `alternatives`,
+  `ssl/certs`, …; `custom_denied`) are never taken, another disk mounted below is not
+  entered, one file is at most 256 MB and all together 2 GB. Those under `/etc/apt/` go
+  back before `apt-get update`, so a third-party source and its key are there when its
+  packages are installed again; the rest go back after the packages, so the owner's
+  version of a config wins over the fresh one. A path the new image has itself keeps the
+  image's file. A system that has no list (older than 2.2.7) gives only its apt sources
+  and keys.
+- **Links into the home** (`links_at`, manifest `links`): every symlink under `/etc`,
+  `/usr/local`, `/var/lib`, `/var/www`, `/opt`, `/srv` and `/root` whose target is
+  `/home/bia/…`, made again before `apt-get` runs, with its target taken from the
+  archive when the home is not restored yet. A folder the new image has at the link's
+  place gives its files to the target first (the target's own win).
+
+- **Users and groups** (manifest `accounts`: the old `passwd`, `group`, `shadow` as
+  text; `accounts_plan`). The files are never copied, a newer image may bring accounts of
+  its own. Before anything else unfold creates the groups and users this system lacks
+  (`groupadd`, `useradd`, same ids while they are free, so a package that installs next
+  finds its user with the id its data has), adds the old memberships (`bia` in `docker`)
+  and sets the passwords of root and of people (uid 1000 and up) where one was set.
+
+The home keeps its owners and modes (`settle_owners`): every path gets what the archive
+has for it (a database's folder stays its service's, a 0700 folder stays 0700), and a
+path the archive lacks (the image's own files) becomes bia's. When the agent starts,
+root's files in the home become bia's (`sys.rs` `ensure_volume_dirs`: the agent and the
+MCPs write as root, Chrome and schedules read as bia); files of any other user are left
+alone. Before 2.2.7 that start gave every file in the home to bia.
+The ids mean the same on the new system because the accounts were merged first. Only an
+archive without accounts (older than 2.2.7), or one from a machine where bia had another
+uid, gives the whole home to bia as before (`chown_home`), except what system paths link
+to. So a database's folder moved into the home and linked from `/var/lib/…`, or
+bind-mounted into a container, works as before. All of `/var` can never be linked: it
+holds the package database and other state that must match the image.
+
+Not kept, and named in the boot notice (manifest `left_out`): files of the image that
+were changed (the new image's version is in place), own files over the size limits, and
+links whose target is not in the archive. Data under `/var` is never carried by itself:
+it is kept in the home and linked from its system path, or bind-mounted from there.
+
 On failure the marker stays (every boot retries), the log goes to
 `<dst>/bia-update/rescue.log`, and a shell opens. `carry_rescue` / `/rescue`
 does the same from the flash with the internal disk as destination.

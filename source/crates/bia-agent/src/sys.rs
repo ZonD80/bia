@@ -172,8 +172,12 @@ pub fn ensure_volume_dirs() -> Result<()> {
         let p = format!("/home/bia/{d}");
         fs::create_dir_all(&p).with_context(|| format!("create {p}"))?;
     }
-    let _ = std::process::Command::new("chown")
-        .args(["-R", "bia:bia", "/home/bia"])
+    // The agent and its MCPs run as root; what they wrote becomes bia's, so Chrome,
+    // schedules and bash as bia can use it. Files of other users (a database's or a
+    // container's data kept in the home) stay theirs.
+    let _ = std::process::Command::new("chown").args(["bia:bia", "/home/bia"]).status();
+    let _ = std::process::Command::new("find")
+        .args(["/home/bia", "-xdev", "-uid", "0", "-exec", "chown", "-h", "bia:bia", "{}", "+"])
         .status();
     Ok(())
 }

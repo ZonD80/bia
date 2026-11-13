@@ -160,6 +160,99 @@ def make_disk():
               f"esp={blk(f.esp_dev, 'UUID')}")
 
 
+# The owner's own system files on the destination (2.2.7): carried by the fold or linked
+# into the home, they must be there again after the update. path -> (text, mode)
+OWN = {
+    "etc/apt/sources.list.d/ut.list": ("# ut: an own apt source\n", 0o644),
+    "etc/apt/keyrings/ut.asc": ("ut key\n", 0o644),
+    "etc/ut-own.conf": ("ut own config\n", 0o600),
+    "etc/systemd/system/ut-own.service": ("[Service]\nType=oneshot\nExecStart=/bin/true\n", 0o644),
+    "etc/systemd/system/ut-own.timer": ("[Timer]\nOnCalendar=yearly\n[Install]\nWantedBy=timers.target\n", 0o644),
+    "usr/local/sbin/ut-own-script": ("#!/bin/sh\necho ut\n", 0o755),
+    "opt/ut/tool": ("ut tool\n", 0o755),
+    "home/bia/files/system/ut-linked.conf": ("ut linked\n", 0o644),
+}
+OWN_LINKS = {
+    "etc/ut-linked.conf": "/home/bia/files/system/ut-linked.conf",
+    "etc/systemd/system/timers.target.wants/ut-own.timer": "/etc/systemd/system/ut-own.timer",
+    "etc/ut-rel-link": "ut-own.conf",
+}
+# data a system path links to keeps its owner (a database's uid), not bia's
+DATA = "home/bia/files/system/utdata"
+DATA_LINK = ("var/lib/utdata", "/" + DATA)
+DATA_UID = 70
+BIND = "home/bia/files/ut-bind"
+ROOTS = "home/bia/files/ut-roots-file"
+# accounts the owner made: a group bia is in, and a user
+ACC_GROUP = "utgrp:x:2345:bia\n"
+ACC_USER = "utuser:x:2346:2345:ut:/home/utuser:/bin/sh\n"
+ACC_SHADOW = "utuser:$y$utpw:19000:0:99999:7:::\n"
+ACC = (("etc/group", ACC_GROUP), ("etc/passwd", ACC_USER), ("etc/shadow", ACC_SHADOW))
+CHANGED = "etc/issue"   # a file of the image, changed on the destination: not kept, named
+CHANGED_MARK = "ut changed this image file\n"
+IMAGE_LIST = "etc/bia-image-files"
+
+
+def own_clean(root):
+    for p in list(OWN) + list(OWN_LINKS):
+        if os.path.lexists(f"{root}/{p}"):
+            os.remove(f"{root}/{p}")
+    if os.path.exists(f"{root}/{CHANGED}"):
+        t = open(f"{root}/{CHANGED}").read()
+        if CHANGED_MARK in t:
+            put(f"{root}/{CHANGED}", t.replace(CHANGED_MARK, ""))
+    if os.path.lexists(f"{root}/{DATA_LINK[0]}"):
+        os.remove(f"{root}/{DATA_LINK[0]}")
+    shutil.rmtree(f"{root}/{DATA}", ignore_errors=True)
+    shutil.rmtree(f"{root}/{BIND}", ignore_errors=True)
+    if os.path.exists(f"{root}/{ROOTS}"):
+        os.remove(f"{root}/{ROOTS}")
+    for f, line in ACC:
+        t = open(f"{root}/{f}").read()
+        name = line.split(":")[0]
+        kept = "".join(l for l in t.splitlines(True) if not l.startswith(name + ":"))
+        if kept != t:
+            st = os.stat(f"{root}/{f}")
+            put(f"{root}/{f}", kept)
+            os.chmod(f"{root}/{f}", st.st_mode & 0o7777), os.chown(f"{root}/{f}", st.st_uid, st.st_gid)
+    lst = f"{root}/{IMAGE_LIST}"
+    if os.path.exists(lst):
+        lines = [l for l in open(lst).read().splitlines() if not l.endswith("  usr/local/share/ut-old-only")]
+        put(lst, "\n".join(lines) + "\n")
+
+
+def own_seed(root):
+    for p, (text, mode) in OWN.items():
+        put(f"{root}/{p}", text)
+        os.chmod(f"{root}/{p}", mode)
+        if p.startswith("home/"):
+            os.chown(f"{root}/{p}", 1000, 1000)
+            os.chown(os.path.dirname(f"{root}/{p}"), 1000, 1000)
+    for p, target in OWN_LINKS.items():
+        os.makedirs(os.path.dirname(f"{root}/{p}"), exist_ok=True)
+        os.symlink(target, f"{root}/{p}")
+    os.makedirs(f"{root}/{DATA}")
+    put(f"{root}/{DATA}/base", "ut data\n")
+    os.chmod(f"{root}/{DATA}/base", 0o600), os.chmod(f"{root}/{DATA}", 0o700)
+    os.chown(f"{root}/{DATA}/base", DATA_UID, DATA_UID), os.chown(f"{root}/{DATA}", DATA_UID, DATA_UID)
+    os.symlink(DATA_LINK[1], f"{root}/{DATA_LINK[0]}")
+    # not linked from anywhere (a container's bind mount): keeps its owner too
+    os.makedirs(f"{root}/{BIND}")
+    put(f"{root}/{BIND}/base", "ut bind data\n")
+    os.chmod(f"{root}/{BIND}", 0o700)
+    os.chown(f"{root}/{BIND}/base", DATA_UID, DATA_UID), os.chown(f"{root}/{BIND}", DATA_UID, DATA_UID)
+    put(f"{root}/{ROOTS}", "root's own\n")
+    os.chmod(f"{root}/{ROOTS}", 0o600)
+    for f, line in ACC:
+        with open(f"{root}/{f}", "a") as fh:
+            fh.write(line)
+    with open(f"{root}/{CHANGED}", "a") as f:
+        f.write(CHANGED_MARK)
+    # "a file only the old OS had" belongs to the old image, so it is in its list
+    with open(f"{root}/{IMAGE_LIST}", "a") as f:
+        f.write("-  usr/local/share/ut-old-only\n")
+
+
 def prep(scen):
     dst, src = SCEN[scen]
     with Img("flash") as fl, Img("disk") as dk:
@@ -171,6 +264,7 @@ def prep(scen):
             for p in ("etc/ut-new-os", "usr/local/share/ut-old-only", "home/bia/files/ut-agent-marker"):
                 if os.path.exists(f"{im.root}/{p}"):
                     os.remove(f"{im.root}/{p}")
+            own_clean(im.root)
             for d in ("bia-rescue", "EFI/bia/bia-rescue"):
                 if os.path.exists(f"{im.esp}/{d}/next.cfg"):
                     os.remove(f"{im.esp}/{d}/next.cfg")
@@ -193,6 +287,8 @@ def prep(scen):
         put(f"{imgs[dst].root}/usr/local/share/ut-old-only", "must be deleted by the update\n")
         put(f"{imgs[dst].root}/home/bia/files/ut-agent-marker", f"agent of {dst}\n")
         os.chown(f"{imgs[dst].root}/home/bia/files/ut-agent-marker", 1000, 1000)
+        if scen not in ("fsck",):
+            own_seed(imgs[dst].root)
         for name, im in imgs.items():
             print(f"{name}: {LABEL[name]} version {open(im.root + '/etc/bia-version').read().strip()}"
                   + ("  <- source" if name == src and scen != "internet" else "  <- destination" if name == dst else ""))
@@ -308,7 +404,46 @@ def check(scen):
         want(not os.path.exists(f"{d.root}/usr/local/share/ut-old-only"), "file only in the old OS was deleted")
         mk = f"{d.root}/home/bia/files/ut-agent-marker"
         want(os.path.exists(mk) and open(mk).read() == f"agent of {dst}\n", "destination agent's files survived (fold/unfold)")
-        want(not os.path.exists(f"{d.root}/bia-update"), "/bia-update cleaned up after unfold")
+        left = os.listdir(f"{d.root}/bia-update") if os.path.isdir(f"{d.root}/bia-update") else []
+        want(left in ([], ["update.log"]), f"/bia-update cleaned up after unfold (only the log stays) {left}")
+        for p, (text, mode) in OWN.items():
+            f = f"{d.root}/{p}"
+            ok = os.path.isfile(f) and open(f).read() == text and (os.stat(f).st_mode & 0o777) == mode
+            want(ok, f"own system file /{p} is back (mode {mode:o})")
+        for p, target in OWN_LINKS.items():
+            f = f"{d.root}/{p}"
+            want(os.path.islink(f) and os.readlink(f) == target, f"own link /{p} -> {target} is back")
+        want(os.stat(f"{d.root}/etc/ut-own.conf").st_uid == 0 if os.path.exists(f"{d.root}/etc/ut-own.conf") else False,
+             "own system file outside the home stays root's")
+        lk = f"{d.root}/{DATA_LINK[0]}"
+        want(os.path.islink(lk) and os.readlink(lk) == DATA_LINK[1], f"link /{DATA_LINK[0]} -> {DATA_LINK[1]} is back")
+        dd, df = f"{d.root}/{DATA}", f"{d.root}/{DATA}/base"
+        ok = os.path.isfile(df) and os.stat(df).st_uid == DATA_UID and os.stat(dd).st_uid == DATA_UID \
+            and (os.stat(dd).st_mode & 0o777) == 0o700 and (os.stat(df).st_mode & 0o777) == 0o600
+        want(ok, f"linked data keeps owner {DATA_UID} and its modes")
+        bd = f"{d.root}/{BIND}"
+        ok = os.path.isfile(f"{bd}/base") and os.stat(bd).st_uid == DATA_UID and os.stat(f"{bd}/base").st_uid == DATA_UID \
+            and (os.stat(bd).st_mode & 0o777) == 0o700
+        want(ok, f"data in the home that is not linked keeps owner {DATA_UID} and mode 700")
+        rf = f"{d.root}/{ROOTS}"
+        want(os.path.isfile(rf) and os.stat(rf).st_uid == 1000 and (os.stat(rf).st_mode & 0o777) == 0o600, "root's 0600 file in the home is bia's, still 0600")
+        bins = f"{d.root}/home/bia/MCPs"
+        strays = [n for n in os.listdir(bins) if os.stat(f"{bins}/{n}").st_uid not in (0, 1000)]
+        want(not strays, f"MCP folders are bia's or root's {strays or ''}")
+        mk_st = os.stat(mk) if os.path.exists(mk) else None
+        want(mk_st is not None and mk_st.st_uid == 1000, "the rest of the home is bia's")
+        grp = [l for l in open(f"{d.root}/etc/group").read().splitlines() if l.startswith("utgrp:")]
+        want(len(grp) == 1 and grp[0].split(":")[2] == "2345" and "bia" in grp[0].split(":")[3].split(","),
+             f"own group utgrp (gid 2345) is back with bia in it {grp}")
+        usr = [l for l in open(f"{d.root}/etc/passwd").read().splitlines() if l.startswith("utuser:")]
+        want(len(usr) == 1 and usr[0].split(":")[2:4] == ["2346", "2345"], f"own user utuser is back with its ids {usr}")
+        shd = [l for l in open(f"{d.root}/etc/shadow").read().splitlines() if l.startswith("utuser:")]
+        want(len(shd) == 1 and shd[0].split(":")[1] == "$y$utpw", "own user's password is back")
+        want(CHANGED_MARK not in open(f"{d.root}/{CHANGED}").read(), f"changed image file /{CHANGED} has the new image's text")
+        log = open(f"{UT}/run-{scen}.log", errors="replace").read() if os.path.exists(f"{UT}/run-{scen}.log") else ""
+        want(f"not kept /{CHANGED}" in log or f"left out /{CHANGED}" in log, f"/{CHANGED} was named as not kept")
+        for line in sorted(set(re.findall(r"(?:fold|unfold): [^\r\n]*(?:own system files|  own /|left out|not kept|link /|accounts:)[^\r\n]*", log))):
+            print("  log  " + line)
         fstab = open(f"{d.root}/etc/fstab").read()
         want(f"LABEL={LABEL[dst]} " in fstab or f"LABEL={LABEL[dst]}\t" in fstab, f"fstab still mounts LABEL={LABEL[dst]}")
         want(blk(d.root_dev, "LABEL") == LABEL[dst], f"root label still {LABEL[dst]}")

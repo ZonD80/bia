@@ -256,6 +256,16 @@ rm -rf "$ROOT/var/lib/apt/lists/"*
 rm -f "$ROOT/usr/sbin/policy-rc.d"
 # Docker's resolv.conf is not valid in the guest; DHCP rewrites this at boot.
 printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > "$ROOT/etc/resolv.conf"
+# Every file the image itself has under /etc, /usr/local, /opt and /srv (sha256 for /etc
+# files, "-" otherwise). A fold carries what is neither in this list nor a package's: the
+# owner's own files; see bia-mcp-carry archive.rs (custom_members).
+( cd "$ROOT" && {
+    find etc -type f ! -name bia-image-files -print0 | xargs -0 sha256sum
+    find etc -type l | sed 's|^|-  |'
+    find usr/local opt srv \( -type f -o -type l \) 2>/dev/null | sed 's|^|-  |'
+    echo "-  etc/bia-image-files"
+  } ) > "$ROOT/etc/bia-image-files.tmp"
+mv "$ROOT/etc/bia-image-files.tmp" "$ROOT/etc/bia-image-files"
 
 cleanup
 trap - EXIT

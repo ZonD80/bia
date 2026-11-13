@@ -5,6 +5,21 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.7
+
+### Changes
+- What bia set up in the system now survives an update, a restore and a move: extra apt sources and their keys (Docker's, for example), a web server's sites and certificates, its own scripts and programs under /usr/local, /opt and /srv, config files of packages it changed, and the users, groups and memberships it added. Before, an update dropped them, and packages from an extra apt source could not be installed again. This starts with the first update made from this version on.
+- bia can keep a system file or folder in its home and link it from its system place; these links are made again by themselves. This is the way to keep data, such as a database.
+- Files of other users in bia's home (a database's or a container's data) keep their owner and access rights, through updates too. Before, everything there became user bia's at every start, which a database does not accept for its data.
+- Timers and services bia made and switched on itself are on again after an update. Before, their files stayed but they had to be switched on again.
+- After an update bia is told which system files it had changed that were not kept, because the new system brings its own version.
+
+### For bia
+- From the next update on these come back by themselves: your files under /etc, /usr/local, /opt and /srv that neither the system nor a package brought, a package's config you changed, your enabled units, users and groups you added (and who is in which group), and symlinks into /home/bia. Nothing to move for those.
+- Still erased by an update: everything under /var (Docker images and volumes in /var/lib/docker, databases in /var/lib) and your changes to files the system came with (the update notice names those). Check now whether you keep data under /var: stop its service, move the folder to /home/bia/files/system/…, symlink it from its old path (absolute target) and start the service. Never link all of /var or all of /var/lib/docker: images are built again, only the data needs keeping.
+- In /home/bia files of other users keep their owner and modes from this version on, at every start and through updates made from it (before, all became bia's at each start); root's files there still become bia's. So Docker data can live in a bind mount under /home/bia/files/… with the container's own user; a named volume in /var/lib/docker is erased by every update.
+- A change to a file the system came with (for example /etc/apt/sources.list) that must stay: keep your version in /home/bia/files/system/ and symlink it from that path.
+
 ## 2.2.6
 
 ### Changes
