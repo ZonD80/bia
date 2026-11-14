@@ -273,6 +273,10 @@ fn describe(base: &wa::Message) -> (String, Option<&'static str>) {
     if let Some(shared) = shared_text(base) {
         text = if text.is_empty() { shared } else { format!("{text}\n{shared}") };
     }
+    // polls, buttons and lists (with their options numbered), and answers to them
+    if let Some(more) = crate::choices::offer(base).map(|(t, _)| t).or_else(|| crate::choices::answer_text(base)) {
+        text = if text.is_empty() { more } else { format!("{text}\n{more}") };
+    }
     let kind = if base.image_message.is_set() {
         Some("image")
     } else if base.video_message.is_set() {
@@ -284,7 +288,8 @@ fn describe(base: &wa::Message) -> (String, Option<&'static str>) {
     } else if base.sticker_message.is_set() {
         Some("sticker")
     } else {
-        None
+        // the picture, video or document above a buttons / template message
+        crate::choices::header_media(base).first().map(|(_, m)| m.kind())
     };
     (text, kind)
 }
@@ -307,10 +312,9 @@ fn context_info(base: &wa::Message) -> Option<&wa::ContextInfo> {
         location_message,
         live_location_message,
         contact_message,
-        contacts_array_message,
-        poll_creation_message,
-        poll_creation_message_v3
+        contacts_array_message
     )
+    .or_else(|| crate::choices::context_info(base))
 }
 
 /// `[forwarded …]` for a forwarded message. WhatsApp does not say who wrote it first,
@@ -2138,6 +2142,58 @@ impl Wa {
         })
     }
 
+    /// Vote in a poll, press a button or pick a list row of message `message_id`.
+    pub fn choose(&self, target: &str, message_id: &str, picks: &[String]) -> Result<String, String> {
+        use crate::choices;
+        let id = message_id.trim();
+        if id.is_empty() {
+            return Err("empty message id".into());
+        }
+        let client = self.require_ready()?;
+        let t = self.resolve_target(target)?;
+        let who = Self::format_chat(&t.key, &t.title);
+        let choice = choices::get(&t.key, id).ok_or_else(|| {
+            format!(
+                "message {id} in {who} has no options known to this account (only polls, buttons and lists received while linked can be answered). \
+                 Send the option's text with whatsapp_send instead."
+            )
+        })?;
+        let picked = choices::pick(&choice.options, picks)?;
+        let names: Vec<String> = picked.iter().map(|&i| choice.options[i].text.clone()).collect();
+        if choice.kind == "poll" {
+            if choice.max > 0 && picked.len() > choice.max as usize {
+                return Err(format!("this poll takes at most {} option(s)", choice.max));
+            }
+            let secret = choices::unhex(&choice.secret);
+            if secret.is_empty() {
+                return Err("this poll came without its secret, so a vote cannot be encrypted for it".into());
+            }
+            let creator: Jid = choice.from_jid.parse().map_err(|_| "the poll's sender is not known".to_string())?;
+            self.block_on(async {
+                client
+                    .polls()
+                    .vote(t.jid.clone(), id, &creator, &secret, &names)
+                    .await
+                    .map_err(|e| format!("vote: {e}"))
+            })?;
+            return Ok(if names.is_empty() {
+                format!("took the vote back in poll \"{}\" → {who}", choice.title)
+            } else {
+                format!("voted {} in poll \"{}\" → {who}", names.join(", "), choice.title)
+            });
+        }
+        let [i] = picked[..] else {
+            return Err("pick exactly one option of this message".into());
+        };
+        let reply = choices::answer(&choice, i, id, t.jid.is_group());
+        let sent = self.block_on(async { client.send_message(t.jid.clone(), reply).await.map_err(|e| format!("choose: {e}")) })?;
+        self.record_outgoing(&t.key, &sent.message_id, &format!("[chose] {}", names[0]));
+        Ok(format!(
+            "chose \"{}\" (message id {}) → {who}. If they do not react to it, send the option's text with whatsapp_send.",
+            names[0], sent.message_id
+        ))
+    }
+
     pub fn delete_messages(
         &self,
         target: &str,
@@ -2554,6 +2610,20 @@ impl Wa {
                 text: with_forward(base, hist_text(&text, kind)),
             },
         );
+        // What whatsapp_choose needs to answer a poll, buttons or a list.
+        let mut can_choose = false;
+        if let Some((_, mut choice)) = crate::choices::offer(base) {
+            if !choice.options.is_empty() {
+                let secret = [&*ctx.message, base]
+                    .into_iter()
+                    .find_map(|m| m.message_context_info.as_option().and_then(|c| c.message_secret.clone()));
+                choice.secret = secret.map(|s| crate::choices::hex(&s)).unwrap_or_default();
+                choice.from_jid = sender.to_string();
+                choice.ts = ts;
+                can_choose = choice.kind != "poll" || !choice.secret.is_empty();
+                crate::choices::remember(&key, &info.id, choice);
+            }
+        }
         // Sent from the phone or another linked device: cache only.
         if from_me {
             return Ok(());
@@ -2600,6 +2670,9 @@ impl Wa {
             }
         }
         let mut deliver = text.clone();
+        if can_choose {
+            deliver.push_str("\n(to pick: whatsapp_choose with this message's id and the option numbers)");
+        }
         if let Some(f) = forward_note(base) {
             deliver = if deliver.is_empty() { f } else { format!("{f}\n{deliver}") };
         }
@@ -2630,6 +2703,24 @@ impl Wa {
                 }
             };
             deliver = if deliver.is_empty() { note } else { format!("{deliver}\n{note}") };
+        }
+        // A carousel has a picture per card: the first went the usual way above, the rest here.
+        if !in_call {
+            for (n, (card, m)) in crate::choices::header_media(base).iter().enumerate().skip(1) {
+                let what = card.map(|c| format!("card {} ", c + 1)).unwrap_or_default();
+                let saved = match Self::download_header(&client, m).await {
+                    Ok((data, ext)) => Self::store_media(&key, &info.id, &format!("-{}", n + 1), &data, &ext).await,
+                    Err(e) => Err(e),
+                };
+                let note = match saved {
+                    Ok((rel, _)) => format!("{what}file: {rel}"),
+                    Err(e) => {
+                        self.log(format!("media {key}: {e}"));
+                        format!("[{what}{} not received: {e}]", m.kind())
+                    }
+                };
+                deliver = format!("{deliver}\n{note}");
+            }
         }
         if deliver.is_empty() {
             return Ok(());
@@ -2714,10 +2805,38 @@ impl Wa {
                 client.download(m).await.map_err(dl)?,
                 ext_for(m.mimetype.as_deref(), "webp"),
             )
+        } else if let Some((_, m)) = crate::choices::header_media(base).first() {
+            Self::download_header(client, m).await?
         } else {
             return Err("no downloadable media".into());
         };
+        Self::store_media(key, msg_id, "", &data, &ext).await
+    }
 
+    /// The bytes and file extension of a header picture, video or document.
+    async fn download_header(client: &Client, m: &crate::choices::HeaderMedia<'_>) -> Result<(Vec<u8>, String), String> {
+        use crate::choices::HeaderMedia;
+        let dl = |e: anyhow::Error| format!("download: {e}");
+        Ok(match m {
+            HeaderMedia::Image(x) => (client.download(*x).await.map_err(dl)?, ext_for(x.mimetype.as_deref(), "jpg")),
+            HeaderMedia::Video(x) => (client.download(*x).await.map_err(dl)?, ext_for(x.mimetype.as_deref(), "mp4")),
+            HeaderMedia::Document(x) => {
+                let ext = x
+                    .file_name
+                    .as_deref()
+                    .and_then(|n| Path::new(n).extension())
+                    .and_then(|e| e.to_str())
+                    .map(|e| safe_name(&e.to_ascii_lowercase()))
+                    .filter(|e| !e.is_empty())
+                    .unwrap_or_else(|| ext_for(x.mimetype.as_deref(), "bin"));
+                (client.download(*x).await.map_err(dl)?, ext)
+            }
+        })
+    }
+
+    /// Write received media to `inbox/whatsapp/<chat>/`; `tag` tells apart several files
+    /// of one message.
+    async fn store_media(key: &str, msg_id: &str, tag: &str, data: &[u8], ext: &str) -> Result<(String, PathBuf), String> {
         let dir = files_dir().join("inbox").join("whatsapp").join(safe_name(key));
         tokio::fs::create_dir_all(&dir)
             .await
@@ -2727,9 +2846,9 @@ impl Wa {
             .filter(|c| c.is_ascii_alphanumeric())
             .take(12)
             .collect();
-        let name = format!("{}-{short}.{ext}", chrono_stamp());
+        let name = format!("{}-{short}{tag}.{ext}", chrono_stamp());
         let dest = dir.join(&name);
-        tokio::fs::write(&dest, &data)
+        tokio::fs::write(&dest, data)
             .await
             .map_err(|e| format!("write {}: {e}", dest.display()))?;
         Ok((format!("inbox/whatsapp/{}/{name}", safe_name(key)), dest))

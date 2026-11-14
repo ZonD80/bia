@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.9
+
+### Changes
+- WhatsApp: bia now sees messages that offer options: polls, buttons, lists and the button menus of shops and services. Before, such messages did not reach it at all. It can vote in a poll, press a button and pick a list row, as a person does in the app.
+- WhatsApp: the picture, video or document above such a message is saved like any other received file, so bia can look at it or read its text.
+
+### For bia
+- WhatsApp polls, buttons and lists arrive as text with numbered options ([poll], [buttons], [list]); link and call buttons come as “- text: link or number”. To answer: whatsapp_choose(chat_id, message_id, options=['2']) with the numbers shown (a poll takes several when it says so; an empty list takes your vote back).
+- If the other side does not react to a pressed button or picked row, send the option's text with whatsapp_send. Only messages received from this version on can be answered with whatsapp_choose.
+- A picture, video or document above a buttons message comes as “file: inbox/whatsapp/…” (one per card of a carousel); read it by that path, or OCR it, when the options depend on it. “[chose] …” is someone's own pressed button or picked row.
+
 ## 2.2.8
 
 ### Changes

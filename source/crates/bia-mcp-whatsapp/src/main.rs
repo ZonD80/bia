@@ -1,5 +1,6 @@
 mod audio_out;
 mod calls;
+mod choices;
 mod client;
 mod groups;
 mod qr_win;
@@ -397,6 +398,24 @@ fn main() {
                 } else {
                     Ok(format!("reacted {emoji} on message {msg_id} → {who}"))
                 }
+            },
+        )
+        .tool(
+            "choose",
+            "Pick options of a WhatsApp poll, buttons or list message: chat_id, message_id, options (the numbers shown in the message). Votes in the poll, presses the button or picks the list row, as the person would in the app. A poll takes several numbers when it allows it; an empty options list takes this account's vote back. Buttons and lists take exactly one. Links and call buttons are not options: open the link or call the number yourself. If the other side does not react to a pressed button, send the option's text with whatsapp_send instead.",
+            json!({"type": "object", "required": ["chat_id", "message_id", "options"], "properties": {
+                "chat_id": {"type": "string", "description": "chat id the message is in"},
+                "message_id": {"type": "string", "description": "id of the message with the options"},
+                "options": {"type": "array", "items": {"type": "string"}, "description": "option numbers as shown in the message (\"2\"), or the option texts"}
+            }}),
+            |ctx, a| {
+                require_login(ctx)?;
+                let picks: Vec<String> = match a.get("options") {
+                    Some(serde_json::Value::Array(v)) => v.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect(),
+                    Some(serde_json::Value::Null) | None => Vec::new(),
+                    Some(x) => vec![x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())],
+                };
+                Wa::global().choose(arg_str(&a, "chat_id")?, arg_str(&a, "message_id")?, &picks)
             },
         )
         .tool(

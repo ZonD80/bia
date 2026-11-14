@@ -1,7 +1,7 @@
 {
   "name": "whatsapp",
-  "version": "2.2.8",
-  "description": "bia's own WhatsApp account as a linked device, a real user, not a bot. Before the first login, tell root that bia needs its own account with its own phone number, separate from root's (QR login only): chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/whatsapp/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines. The login is restored by itself at boot.",
+  "version": "2.2.9",
+  "description": "bia's own WhatsApp account as a linked device, a real user, not a bot. Before the first login, tell root that bia needs its own account with its own phone number, separate from root's (QR login only): chats, messages, groups, bans, voice calls and voice messages. Received files are saved in /home/bia/files/inbox/whatsapp/; voice notes arrive transcribed as [speech <lang>]; locations, contacts and edits arrive as [location], [live location], [contact] and [edited <id>] lines; polls, buttons and lists arrive with their options numbered (a picture above them as a file), and whatsapp_choose picks one. The login is restored by itself at boot.",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-whatsapp",
     "x86_64": "bin/x86_64/bia-mcp-whatsapp"
@@ -86,7 +86,16 @@
     "approve",
     "disappearing",
     "announcement",
-    "only admins"
+    "only admins",
+    "poll",
+    "vote",
+    "button",
+    "buttons",
+    "option",
+    "options",
+    "choose",
+    "menu",
+    "list"
   ],
   "examples": [
     "root|console|<issued>|<delivered>|log into whatsapp -> discover(path='mcp/whatsapp', enable=true); say bia needs its own account with its own phone number, then whatsapp_login()  (QR opens in a WhatsApp QR window on :0)",
@@ -96,6 +105,7 @@
     "alice|whatsapp:15551234567|<issued>|<delivered>|[speech en] hello -> say(identity='alice', channel='whatsapp:15551234567', message='Hi — short spoken reply.', lang='en'); wait for [you finished speaking] before speaking again",
     "root|console|<issued>|<delivered>|send alice a voice message saying I am late -> whatsapp_send_voice(chat_id='15551234567', text='Hi, I am running about ten minutes late.', lang='en')",
     "root|console|<issued>|<delivered>|make a whatsapp group Trip with +49 170 1234567 and +1 555 555 0100 -> whatsapp_create_group(title='Trip', members=['491701234567', '15555550100'])",
-    "root|console|<issued>|<delivered>|only admins may write in that whatsapp group -> whatsapp_group_permissions(chat_id='120363012345678901@g.us', only_admins_send=true)"
+    "root|console|<issued>|<delivered>|only admins may write in that whatsapp group -> whatsapp_group_permissions(chat_id='120363012345678901@g.us', only_admins_send=true)",
+    "shop|whatsapp:15551234567|<issued>|<delivered>|Confirm the order? [buttons] 1. Yes 2. No -> whatsapp_choose(chat_id='15551234567', message_id='<the envelope id>', options=['1'])"
   ]
 }
