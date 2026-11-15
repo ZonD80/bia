@@ -1,22 +1,23 @@
 <template>
   <header class="top" :class="{ 'top--open': open }">
     <div class="container top__inner">
-      <NuxtLink class="top__brand" to="/" aria-label="bia home" @click="open = false">
+      <NuxtLink class="top__brand" :to="$lp('/')" :aria-label="$t('common:bia_home')" @click="open = false">
         <span class="top__potato"><PotatoMark label="" /></span>
         <span>bia</span>
       </NuxtLink>
       <button class="top__menu" type="button" :aria-expanded="open" aria-controls="primary-nav" @click="open = !open">
-        <span class="sr-only">Menu</span>
+        <span class="sr-only">{{ $t('common:menu') }}</span>
         <span class="top__bars" aria-hidden="true"><i /><i /><i /></span>
       </button>
-      <nav id="primary-nav" class="top__nav" aria-label="Primary" @click="open = false">
-        <NuxtLink to="/use-cases">Who it is for</NuxtLink>
-        <NuxtLink to="/features">What it can do</NuxtLink>
-        <NuxtLink to="/fred">Fred’s story</NuxtLink>
-        <NuxtLink to="/cloud">bia cloud</NuxtLink>
-        <NuxtLink to="/faq">FAQ</NuxtLink>
+      <nav id="primary-nav" class="top__nav" :aria-label="$t('common:primary')" @click="open = false">
+        <NuxtLink :to="$lp('/use-cases')">{{ $t('common:who_it_is_for') }}</NuxtLink>
+        <NuxtLink :to="$lp('/features')">{{ $t('common:what_it_can_do') }}</NuxtLink>
+        <NuxtLink :to="$lp('/fred')">{{ $t('common:freds_story') }}</NuxtLink>
+        <NuxtLink :to="$lp('/cloud')">bia cloud</NuxtLink>
+        <NuxtLink :to="$lp('/faq')">{{ $t('common:faq') }}</NuxtLink>
         <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
-        <NuxtLink class="btn btn--primary top__cta" to="/download">Get bia</NuxtLink>
+        <LangSwitch />
+        <NuxtLink class="btn btn--primary top__cta" :to="$lp('/download')">{{ $t('common:get_bia') }}</NuxtLink>
       </nav>
     </div>
   </header>

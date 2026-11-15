@@ -6,48 +6,53 @@
           <span class="foot__potato"><PotatoMark label="" /></span>
           <p class="foot__name">bia</p>
         </div>
-        <p class="foot__motto">Boot into agent. Making every potato smart — on a global scale.</p>
+        <p class="foot__motto">{{ $t('common:boot_into_agent_making_every_potato') }}</p>
       </div>
-      <nav class="foot__col" aria-label="Talks with people">
-        <h3>Talks</h3>
-        <NuxtLink v-for="f in byGroup('talk')" :key="f.slug" :to="`/features/${f.slug}`">{{ f.name }}</NuxtLink>
+      <nav class="foot__col" :aria-label="$t('common:talks_with_people')">
+        <h3>{{ $t('common:talks') }}</h3>
+        <NuxtLink v-for="f in byGroup('talk')" :key="f.slug" :to="$lp(`/features/${f.slug}`)">{{ f.name }}</NuxtLink>
       </nav>
-      <nav class="foot__col" aria-label="Thinks and remembers">
-        <h3>Thinks</h3>
-        <NuxtLink v-for="f in byGroup('mind')" :key="f.slug" :to="`/features/${f.slug}`">{{ f.name }}</NuxtLink>
+      <nav class="foot__col" :aria-label="$t('common:thinks_and_remembers')">
+        <h3>{{ $t('common:thinks') }}</h3>
+        <NuxtLink v-for="f in byGroup('mind')" :key="f.slug" :to="$lp(`/features/${f.slug}`)">{{ f.name }}</NuxtLink>
       </nav>
-      <nav class="foot__col" aria-label="Gets things done">
-        <h3>Does</h3>
-        <NuxtLink v-for="f in byGroup('hands')" :key="f.slug" :to="`/features/${f.slug}`">{{ f.name }}</NuxtLink>
+      <nav class="foot__col" :aria-label="$t('common:gets_things_done')">
+        <h3>{{ $t('common:does') }}</h3>
+        <NuxtLink v-for="f in byGroup('hands')" :key="f.slug" :to="$lp(`/features/${f.slug}`)">{{ f.name }}</NuxtLink>
       </nav>
-      <nav class="foot__col" aria-label="Lives and grows">
-        <h3>Lives</h3>
-        <NuxtLink v-for="f in byGroup('life')" :key="f.slug" :to="`/features/${f.slug}`">{{ f.name }}</NuxtLink>
+      <nav class="foot__col" :aria-label="$t('common:lives_and_grows')">
+        <h3>{{ $t('common:lives') }}</h3>
+        <NuxtLink v-for="f in byGroup('life')" :key="f.slug" :to="$lp(`/features/${f.slug}`)">{{ f.name }}</NuxtLink>
       </nav>
-      <nav class="foot__col" aria-label="More">
-        <h3>More</h3>
-        <NuxtLink to="/use-cases">Use cases</NuxtLink>
-        <NuxtLink to="/how-it-works">How it works</NuxtLink>
-        <NuxtLink to="/why-bia">Why bia</NuxtLink>
-        <NuxtLink to="/fred">Fred’s story</NuxtLink>
-        <NuxtLink to="/faq">FAQ</NuxtLink>
-        <NuxtLink to="/download">Get bia</NuxtLink>
-        <NuxtLink to="/servers">Servers and VMs</NuxtLink>
-        <NuxtLink to="/cloud">bia cloud — we run it for you</NuxtLink>
-        <NuxtLink to="/privacy">Privacy</NuxtLink>
-        <a :href="REPO_URL" target="_blank" rel="noopener">Source code on GitHub</a>
+      <nav class="foot__col" :aria-label="$t('common:more')">
+        <h3>{{ $t('common:more') }}</h3>
+        <NuxtLink :to="$lp('/use-cases')">{{ $t('common:use_cases') }}</NuxtLink>
+        <NuxtLink :to="$lp('/how-it-works')">{{ $t('common:how_it_works') }}</NuxtLink>
+        <NuxtLink :to="$lp('/why-bia')">{{ $t('common:why_bia') }}</NuxtLink>
+        <NuxtLink :to="$lp('/fred')">{{ $t('common:freds_story') }}</NuxtLink>
+        <NuxtLink :to="$lp('/faq')">{{ $t('common:faq') }}</NuxtLink>
+        <NuxtLink :to="$lp('/download')">{{ $t('common:get_bia') }}</NuxtLink>
+        <NuxtLink :to="$lp('/servers')">{{ $t('common:servers_and_vms') }}</NuxtLink>
+        <NuxtLink :to="$lp('/cloud')">{{ $t('common:bia_cloud_we_run_it_for') }}</NuxtLink>
+        <NuxtLink :to="$lp('/privacy')">{{ $t('common:privacy') }}</NuxtLink>
+        <a :href="REPO_URL" target="_blank" rel="noopener">{{ $t('common:source_code_on_github') }}</a>
       </nav>
     </div>
     <div class="container foot__base">
-      <span>bia is free software (GPL-3.0): <a :href="REPO_URL" target="_blank" rel="noopener">{{ REPO_URL.replace('https://', '') }}</a>. Use it kindly: tell people when they are talking to an assistant.</span>
+      <span><Tr k="common:bia_is_free_software_gpl_3" :v="{ REPO_URL: REPO_URL.replace('https://', '') }"><a :href="REPO_URL" target="_blank" rel="noopener" /></Tr></span>
     </div>
   </footer>
 </template>
 
 <script setup lang="ts">
-import { features, type Feature } from '~/data/features'
+import { featuresFor, type Feature } from '~/data/features'
 
-const byGroup = (g: Feature['group']) => features.filter((f) => f.group === g)
+// the footer stays while the language changes
+const { $i18n } = useNuxtApp()
+const locale = useLocale()
+const features = computed(() => (locale.value, featuresFor($i18n).features))
+
+const byGroup = (g: Feature['group']) => features.value.filter((f) => f.group === g)
 </script>
 
 <style scoped>

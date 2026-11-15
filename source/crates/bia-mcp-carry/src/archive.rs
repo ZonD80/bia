@@ -222,7 +222,7 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     restore_accounts(ctx, &manifest);
     let lost_links = restore_links(ctx, &links, &stage.0, Path::new("/"));
     // The owner's apt sources and keys too: without them apt cannot find their packages.
-    let mut not_kept = apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| rel.starts_with("etc/apt/"));
+    let mut not_kept = apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| custom_before_apt(rel));
     let debs_dir = {
         let staged = stage.0.join(crate::debs::STORE_REL);
         if staged.is_dir() {
@@ -245,7 +245,7 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     ctx.log("unfold: copying files");
     apply_tree(ctx, &stage.0, mode, &custom_set)?;
     // after the packages: the owner's version of a package's config wins over the fresh one
-    not_kept.extend(apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| !rel.starts_with("etc/apt/")));
+    not_kept.extend(apply_custom(ctx, &stage.0, Path::new("/"), &custom, &image, mode, &|rel| !custom_before_apt(rel)));
     for rel in manifest_left_out(&manifest) {
         if !not_kept.contains(&rel) {
             not_kept.push(rel);
@@ -865,7 +865,10 @@ fn restore_accounts(ctx: &Ctx, manifest: &Value) {
 /// The owner's own files outside the home: under these roots, everything that neither the
 /// image has (`/etc/bia-image-files`, written when the image is built) nor a package owns,
 /// plus a package's config file the owner changed, when the image does not have it.
-const CUSTOM_ROOTS: &[&str] = &["etc", "usr/local", "opt", "srv"];
+/// usr/share/keyrings: a third-party repository's signing key (Google Chrome, Docker…) lives
+/// there while its sources file is in /etc; carrying one without the other makes the whole
+/// `apt-get update` fail, and with it the reinstall of every package after an update.
+const CUSTOM_ROOTS: &[&str] = &["etc", "usr/local", "usr/share/keyrings", "opt", "srv"];
 const CUSTOM_FILE_MAX: u64 = 256 << 20;
 const CUSTOM_TOTAL_MAX: u64 = 2 << 30;
 /// Without the image's list (an image older than 2.2.7) only these are told apart safely.
@@ -875,6 +878,7 @@ const CUSTOM_APT: &[&str] = &[
     "etc/apt/trusted.gpg.d/",
     "etc/apt/preferences.d/",
     "etc/apt/auth.conf.d/",
+    "usr/share/keyrings/",
 ];
 
 #[derive(Default)]
@@ -903,6 +907,12 @@ fn custom_denied(rel: &str) -> bool {
     const ENDS: &[&str] = &[".dpkg-old", ".dpkg-dist", ".dpkg-new", ".dpkg-tmp", ".ucf-old", ".ucf-dist", "~"];
     let rc = rel.strip_prefix("etc/rc").is_some_and(|r| r.len() > 3 && &r[1..4] == ".d/");
     rc || EXACT.contains(&rel) || UNDER.iter().any(|p| rel.starts_with(p)) || ENDS.iter().any(|e| rel.ends_with(e))
+}
+
+/// Own system files that go back before `apt-get update`: third-party sources and the keys
+/// they are signed with, so their packages can be installed again.
+fn custom_before_apt(rel: &str) -> bool {
+    rel.starts_with("etc/apt/") || rel.starts_with("usr/share/keyrings/")
 }
 
 fn custom_path_ok(rel: &str) -> bool {
@@ -2875,6 +2885,9 @@ curl:
         put("etc/apt/sources.list", "deb debian changed");
         put("etc/apt/sources.list.d/docker.list", "deb docker");
         put("etc/apt/keyrings/docker.asc", "key");
+        put("etc/apt/sources.list.d/google-chrome.sources", "Signed-By: /usr/share/keyrings/google-chrome.gpg");
+        put("usr/share/keyrings/google-chrome.gpg", "chrome key");
+        put("usr/share/keyrings/debian-archive-keyring.gpg", "debian's own");
         put("etc/nginx/nginx.conf", "stock");
         put("etc/nginx/fastcgi.conf", "edited");
         put("etc/nginx/sites-available/market", "server {}");
@@ -2907,6 +2920,7 @@ curl:
         fs::create_dir_all(old.join("var/lib/dpkg/info")).unwrap();
         fs::write(old.join("var/lib/dpkg/info/nginx.list"), "/etc/nginx\n/etc/nginx/nginx.conf\n/etc/nginx/fastcgi.conf\n").unwrap();
         fs::write(old.join("var/lib/dpkg/info/chrome.list"), "/opt/google/chrome/chrome\n").unwrap();
+        fs::write(old.join("var/lib/dpkg/info/debian-archive-keyring.list"), "/usr/share/keyrings/debian-archive-keyring.gpg\n").unwrap();
         let md5 = |rel: &str| super::md5_of(&old.join(rel)).unwrap();
         fs::write(
             old.join("var/lib/dpkg/status"),
@@ -2921,6 +2935,7 @@ curl:
             vec![
                 "etc/apt/keyrings/docker.asc",
                 "etc/apt/sources.list.d/docker.list",
+                "etc/apt/sources.list.d/google-chrome.sources",
                 "etc/nginx/fastcgi.conf",
                 "etc/nginx/sites-available/market",
                 "etc/nginx/sites-enabled/market",
@@ -2928,6 +2943,7 @@ curl:
                 "opt/tool/run",
                 "srv/www/index.html",
                 "usr/local/sbin/biamarket-backup",
+                "usr/share/keyrings/google-chrome.gpg",
             ]
         );
         assert_eq!(c.left_out, vec!["etc/apt/sources.list"]);
@@ -2935,13 +2951,21 @@ curl:
         // an image without the list: only the apt sources and keys
         fs::remove_file(old.join("etc/bia-image-files")).unwrap();
         let c2 = super::custom_members(&old, &mut super::Members::default());
-        assert_eq!(c2.carried, vec!["etc/apt/keyrings/docker.asc", "etc/apt/sources.list.d/docker.list"]);
+        assert_eq!(
+            c2.carried,
+            vec![
+                "etc/apt/keyrings/docker.asc",
+                "etc/apt/sources.list.d/docker.list",
+                "etc/apt/sources.list.d/google-chrome.sources",
+                "usr/share/keyrings/google-chrome.gpg",
+            ]
+        );
         assert!(c2.left_out.is_empty());
 
         // unfold on a new system that ships opt/tool/run itself
         let manifest = serde_json::json!({"custom": c.carried, "left_out": c.left_out});
         let mut custom = super::manifest_custom(&manifest);
-        assert_eq!(custom.len(), 9);
+        assert_eq!(custom.len(), 11);
         assert!(super::manifest_custom(&serde_json::json!({"custom": ["etc/passwd", "boot/x", "etc/../x", "/etc/x", "etc/systemd/system/a.service"]})).is_empty());
         custom.push("etc/never-folded".into());
         let new = dir.join("new");
@@ -2949,11 +2973,13 @@ curl:
         fs::write(new.join("etc/nginx/fastcgi.conf"), "fresh from the package").unwrap();
         let image: std::collections::HashMap<String, String> = [("opt/tool/run".to_string(), String::new())].into();
         let ctx = bia_mcp::Ctx::console();
-        let first = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| r.starts_with("etc/apt/"));
+        let first = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| super::custom_before_apt(r));
         assert!(first.is_empty());
         assert_eq!(fs::read(new.join("etc/apt/sources.list.d/docker.list")).unwrap(), b"deb docker");
+        // the key of a source goes back with it, before apt
+        assert_eq!(fs::read(new.join("usr/share/keyrings/google-chrome.gpg")).unwrap(), b"chrome key");
         assert!(!new.join("usr/local/sbin/biamarket-backup").exists());
-        let rest = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| !r.starts_with("etc/apt/"));
+        let rest = super::apply_custom(&ctx, &old, &new, &custom, &image, super::Mode::Update, &|r| !super::custom_before_apt(r));
         assert_eq!(rest, vec!["opt/tool/run".to_string()]);
         assert_eq!(fs::read(new.join("etc/nginx/fastcgi.conf")).unwrap(), b"edited");
         assert_eq!(fs::read(new.join("usr/local/sbin/biamarket-backup")).unwrap(), b"#!/bin/sh");

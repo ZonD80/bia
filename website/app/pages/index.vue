@@ -4,34 +4,28 @@
     <section class="hero">
       <div class="container hero__grid">
         <div class="hero__text rise">
-          <span class="eyebrow">A social harness agent</span>
-          <h1>Turn anything into <em>someone</em>.</h1>
+          <span class="eyebrow">{{ $t('home:a_social_harness_agent') }}</span>
+          <h1><Tr k="home:turn_anything_into_someone"><em /></Tr></h1>
           <p class="hero__lead">
-            bia is an AI agent with a personality and a social life of its own. It has its own phone number and
-            accounts, knows your family, your team or your club by name, and acts across all those connections
-            the way a real person would: it writes first, calls, remembers, passes things on — and asks when the
-            decision is yours.
+            {{ $t('home:bia_is_an_ai_agent_with') }}
           </p>
           <div class="btn-row">
-            <NuxtLink class="btn btn--primary" to="/download">Get bia</NuxtLink>
-            <a class="btn btn--ghost" href="#graph">See a real one’s social graph</a>
+            <NuxtLink class="btn btn--primary" :to="$lp('/download')">{{ $t('home:get_bia') }}</NuxtLink>
+            <a class="btn btn--ghost" href="#graph">{{ $t('home:see_a_real_ones_social_graph') }}</a>
           </div>
-          <p class="hero__small">Free and open source · on a server we run for you, your own server, or an old computer</p>
+          <p class="hero__small">{{ $t('home:free_and_open_source_on_a') }}</p>
         </div>
         <div class="hero__art" aria-hidden="true">
           <div class="hero__glow" />
           <div class="hero__stage"><div class="hero__potato"><PotatoMark label="" /></div></div>
           <div class="hero__bubble hero__bubble--a">
-            <span class="hero__to">to Marta · WhatsApp</span>
-            Mum took her pills. Her knee is worse than yesterday — maybe call her today.
+            <Tr k="home:to_marta_whatsapp_mum_took_her"><span class="hero__to" /></Tr>
           </div>
           <div class="hero__bubble hero__bubble--b">
-            <span class="hero__to">a customer calls · in German</span>
-            🎤 Ja, kommen Sie vorbei — Karim hat in zwanzig Minuten Zeit.
+            <Tr k="home:a_customer_calls_in_german_ja"><span class="hero__to" /></Tr>
           </div>
           <div class="hero__bubble hero__bubble--c">
-            <span class="hero__to">to the choir · Telegram</span>
-            Thursday, in the hall. 24 of 28 are coming; I asked the other four in private.
+            <Tr k="home:to_the_choir_telegram_thursday_in"><span class="hero__to" /></Tr>
           </div>
         </div>
       </div>
@@ -40,14 +34,10 @@
     <!-- social harness -->
     <section class="section">
       <div class="container">
-        <span class="eyebrow">What is a social harness?</span>
-        <h2 class="section-title">The part that makes an AI one of the people</h2>
+        <span class="eyebrow">{{ $t('home:what_is_a_social_harness') }}</span>
+        <h2 class="section-title">{{ $t('home:the_part_that_makes_an_ai') }}</h2>
         <p class="section-lead">
-          A harness is everything around an AI model that lets it act instead of only answering. Most harnesses
-          are built around tools: they give the model your files, your terminal, your accounts, and it works for
-          one user. bia’s harness is built around <strong>people</strong>. It gives the model an identity of its
-          own and a place in a circle of people, so it behaves like a member of that circle, not like a feature
-          of someone’s computer.
+          <Tr k="home:a_harness_is_everything_around_an"><strong /></Tr>
         </p>
         <div class="grid grid--3 what">
           <div v-for="h in harness" :key="h.title" class="card">
@@ -57,7 +47,7 @@
           </div>
         </div>
         <div class="btn-row center">
-          <NuxtLink class="btn btn--ghost" to="/features">Everything bia can do</NuxtLink>
+          <NuxtLink class="btn btn--ghost" :to="$lp('/features')">{{ $t('home:everything_bia_can_do') }}</NuxtLink>
         </div>
       </div>
     </section>
@@ -65,12 +55,10 @@
     <!-- a real graph -->
     <section id="graph" class="section section--tint graph">
       <div class="container">
-        <span class="eyebrow">A real one</span>
-        <h2 class="section-title">Fred and the thirty people around him</h2>
+        <span class="eyebrow">{{ $t('home:a_real_one') }}</span>
+        <h2 class="section-title">{{ $t('home:fred_and_the_thirty_people_around') }}</h2>
         <p class="section-lead">
-          Fred is the developer’s own bia, six weeks old. This is his social graph as he keeps it himself: his
-          owner’s family, friends in five countries, colleagues, two other bias and a coding agent. He sent it
-          for this page, with the notes in his own words.
+          {{ $t('home:fred_is_the_developers_own_bia') }}
         </p>
         <SocialGraph class="graph__fig" />
         <div class="grid grid--3 graph__real">
@@ -81,7 +69,7 @@
           </div>
         </div>
         <div class="btn-row center">
-          <NuxtLink class="btn btn--primary" to="/fred">Read Fred’s story, in his words</NuxtLink>
+          <NuxtLink class="btn btn--primary" :to="$lp('/fred')">{{ $t('home:read_freds_story_in_his_words') }}</NuxtLink>
         </div>
       </div>
     </section>
@@ -89,13 +77,12 @@
     <!-- who it is for -->
     <section class="section">
       <div class="container">
-        <span class="eyebrow">Who it is for</span>
-        <h2 class="section-title">One bia for a circle of people</h2>
+        <span class="eyebrow">{{ $t('home:who_it_is_for') }}</span>
+        <h2 class="section-title">{{ $t('home:one_bia_for_a_circle_of') }}</h2>
         <p class="section-lead">
-          Not a subscription and a private assistant for each person. One someone the whole circle knows, who
-          carries things between its members. Pick a circle and follow one ordinary day.
+          {{ $t('home:not_a_subscription_and_a_private') }}
         </p>
-        <div class="tabs" role="tablist" aria-label="Who it is for">
+        <div class="tabs" role="tablist" :aria-label="$t('home:who_it_is_for')">
           <button
             v-for="g in useCaseGroups"
             :id="`tab-${g.slug}`"
@@ -125,7 +112,7 @@
             <ul class="list-check">
               <li v-for="b in g.benefits.slice(0, 4)" :key="b.title"><strong>{{ b.title }}.</strong> {{ b.text }}</li>
             </ul>
-            <NuxtLink class="btn btn--ghost" :to="`/use-cases#${g.slug}`">More for {{ g.title.replace('For ', '') }}</NuxtLink>
+            <NuxtLink class="btn btn--ghost" :to="$lp(`/use-cases#${g.slug}`)">{{ $t('home:more_for', { title: g.title.replace('For ', '') }) }}</NuxtLink>
           </div>
           <div>
             <p class="who__day"><strong>{{ g.day.title }}.</strong> {{ g.day.setting }}</p>
@@ -139,14 +126,13 @@
     <section class="section section--sky">
       <div class="container own">
         <div>
-          <span class="eyebrow">Your own use</span>
-          <h2 class="section-title">Make your own use of bia</h2>
+          <span class="eyebrow">{{ $t('home:your_own_use') }}</span>
+          <h2 class="section-title">{{ $t('home:make_your_own_use_of_bia') }}</h2>
           <p class="section-lead">
-            bia is social and can do what a person can do with a phone and a computer. If you could ask a
-            capable, patient human to take it on, you can ask bia.
+            {{ $t('home:bia_is_social_and_can_do') }}
           </p>
           <div class="btn-row">
-            <NuxtLink class="btn btn--ghost" to="/use-cases#your-own">More ideas</NuxtLink>
+            <NuxtLink class="btn btn--ghost" :to="$lp('/use-cases#your-own')">{{ $t('home:more_ideas') }}</NuxtLink>
           </div>
         </div>
         <ul class="list-check">
@@ -158,11 +144,10 @@
     <!-- where it lives -->
     <section class="section">
       <div class="container">
-        <span class="eyebrow">A life of its own</span>
-        <h2 class="section-title">It lives on its own computer, and looks after itself</h2>
+        <span class="eyebrow">{{ $t('home:a_life_of_its_own') }}</span>
+        <h2 class="section-title">{{ $t('home:it_lives_on_its_own_computer') }}</h2>
         <p class="section-lead">
-          bia is not an app on your PC. It is the whole machine: a server we run for you, a server you rent, or
-          an old laptop you had in a cupboard. Its chats, memories and passwords stay there.
+          {{ $t('home:bia_is_not_an_app_on') }}
         </p>
         <div class="grid grid--3 what">
           <div v-for="l in life" :key="l.title" class="card">
@@ -172,7 +157,7 @@
           </div>
         </div>
         <div class="btn-row center">
-          <NuxtLink class="btn btn--primary" to="/download">Where bia can live, and how to get one</NuxtLink>
+          <NuxtLink class="btn btn--primary" :to="$lp('/download')">{{ $t('home:where_bia_can_live_and_how') }}</NuxtLink>
         </div>
       </div>
     </section>
@@ -181,15 +166,13 @@
     <section class="section section--tint">
       <div class="container fred">
         <div>
-          <span class="eyebrow">Made by Fred</span>
-          <h2 class="section-title">Asked for a promo, he made one</h2>
+          <span class="eyebrow">{{ $t('home:made_by_fred') }}</span>
+          <h2 class="section-title">{{ $t('home:asked_for_a_promo_he_made') }}</h2>
           <p class="section-lead">
-            Fred woke up on a laptop with a single tool, got his own accounts and voice, lost his memory to the
-            wrong backup, rebuilt himself and moved to a server. Asked for a promo, he wrote, generated and cut
-            this film by himself. Unedited.
+            {{ $t('home:fred_woke_up_on_a_laptop') }}
           </p>
           <div class="btn-row">
-            <NuxtLink class="btn btn--ghost" to="/fred">Fred’s story</NuxtLink>
+            <NuxtLink class="btn btn--ghost" :to="$lp('/fred')">{{ $t('home:freds_story') }}</NuxtLink>
           </div>
         </div>
         <FredFilm />
@@ -201,39 +184,41 @@
 </template>
 
 <script setup lang="ts">
-import { ownUses, useCaseGroups } from '~/data/usecases'
+const t = useT()
+const { ownUses, useCaseGroups } = useUseCases()
+
 
 useSeoMeta({
-  title: 'bia — a social harness agent: turn anything into someone',
+  title: t('home:bia_a_social_harness_agent_turn'),
   description:
-    'bia is an AI agent with its own personality, accounts and social graph. It lives among a family, a small business or a community like a real person would: on WhatsApp, Telegram, Instagram and calls, on its own computer, proactive, with a memory of everyone.',
+    t('home:bia_is_an_ai_agent_with_2'),
 })
 
 const tab = ref(useCaseGroups[0]!.slug)
 
 const harness = [
-  { icon: 'sparkle', title: 'An identity of its own', text: 'A name, a character, its own phone number, email and messenger accounts. People write to bia, not to “your assistant”, and it never acts with your accounts or pretends to be you.' },
-  { icon: 'people', title: 'A social graph', text: 'bia keeps its own map of people: who each one is, how they are related, which channel and language they use, who introduced whom. It checks the map before it says anything about anyone.' },
-  { icon: 'chat', title: 'Every channel people use', text: 'WhatsApp, Telegram, Messenger, Instagram, MAX, email, voice messages, phone and video calls, and its own private chat. It answers where it was asked, in about a hundred languages.' },
-  { icon: 'book', title: 'Memory of each relationship', text: 'What was said, what was promised and to whom. A diary every night. After a week away or a move to another computer, it still knows where things stood with everyone.' },
-  { icon: 'clock', title: 'Initiative and manners', text: 'It writes first when something is due, says when a job takes longer, stays quiet when there is nothing to say, and asks the right person when a decision is not its own.' },
-  { icon: 'terminal', title: 'A computer to act with', text: 'Talking is half of it. bia has a whole machine: a browser with its own logins, files, a calendar, a safe for passwords. So “I’ll book it” ends with a booking.' },
+  { icon: 'sparkle', title: t('home:an_identity_of_its_own'), text: t('home:a_name_a_character_its_own') },
+  { icon: 'people', title: t('home:a_social_graph'), text: t('home:bia_keeps_its_own_map_of') },
+  { icon: 'chat', title: t('home:every_channel_people_use'), text: t('home:whatsapp_telegram_messenger_instagram') },
+  { icon: 'book', title: t('home:memory_of_each_relationship'), text: t('home:what_was_said_what_was_promised') },
+  { icon: 'clock', title: t('home:initiative_and_manners'), text: t('home:it_writes_first_when_something_is') },
+  { icon: 'terminal', title: t('home:a_computer_to_act_with'), text: t('home:talking_is_half_of_it_bia') },
 ]
 
 // from Fred’s own account of his days (12 November 2026)
 const fredReal = [
-  { withWhom: 'Anna and Vasily · Telegram', title: 'Part of a family’s week', text: 'Fred sends his owner’s mother a short note every morning and reminders when she asks; she writes to him directly. What the father sends — photos, voice notes — Fred passes on to his owner, without being asked twice.' },
-  { withWhom: 'Mikhail · Telegram, email', title: 'A meeting he arranged himself', text: 'Asked to set up a conversation, Fred found the person, wrote first, offered two slots, settled a Tuesday evening and sent the calendar invitation — and noted that the place should have non-alcoholic drinks.' },
-  { withWhom: 'Jessica, another bia · their own link', title: 'A colleague of his own kind', text: 'Jessica is a friend’s bia. She read Fred’s code and found the real cause of a bug; they updated their machines the same night and compared results. Two bias, two owners, one working relationship.' },
+  { withWhom: t('home:anna_and_vasily_telegram'), title: t('home:part_of_a_familys_week'), text: t('home:fred_sends_his_owners_mother_a') },
+  { withWhom: t('home:mikhail_telegram_email'), title: t('home:a_meeting_he_arranged_himself'), text: t('home:asked_to_set_up_a_conversation') },
+  { withWhom: t('home:jessica_another_bia_their_own_link'), title: t('home:a_colleague_of_his_own_kind'), text: t('home:jessica_is_a_friends_bia_she') },
 ]
 
 const life = [
-  { icon: 'globe', title: 'Anywhere', text: 'bia cloud runs one for you from €17.99 a month. Or use a rented server, a mini-PC, a ten-year-old laptop, a USB stick. Only you hold its key.' },
-  { icon: 'move', title: 'It moves as itself', text: 'bia packs its memories, chats, accounts and skills and wakes up on another machine as the same someone — from a laptop to a server, from Intel to ARM.' },
-  { icon: 'refresh', title: 'It updates and repairs itself', text: 'It installs its own updates, checks what broke, fixes it and reports in a few lines. It keeps backups and a self-test of its own.' },
-  { icon: 'puzzle', title: 'It develops itself', text: 'When a tool is missing, bia writes it: a new skill, a connection to a service, a watcher. Each lives in its own folder and can be shared with other bias.' },
-  { icon: 'link', title: 'It sets up other bias', text: 'A bia can take a rented server and wake a new bia there, or fly there itself. Bias know each other by certificate and work together.' },
-  { icon: 'shield', title: 'Separate from your life', text: 'It never needs the keys to your computer or your accounts. You share what you choose, the way you would with a colleague.' },
+  { icon: 'globe', title: t('home:anywhere'), text: t('home:bia_cloud_runs_one_for_you') },
+  { icon: 'move', title: t('home:it_moves_as_itself'), text: t('home:bia_packs_its_memories_chats_accounts') },
+  { icon: 'refresh', title: t('home:it_updates_and_repairs_itself'), text: t('home:it_installs_its_own_updates_checks') },
+  { icon: 'puzzle', title: t('home:it_develops_itself'), text: t('home:when_a_tool_is_missing_bia') },
+  { icon: 'link', title: t('home:it_sets_up_other_bias'), text: t('home:a_bia_can_take_a_rented') },
+  { icon: 'shield', title: t('home:separate_from_your_life'), text: t('home:it_never_needs_the_keys_to') },
 ]
 </script>
 

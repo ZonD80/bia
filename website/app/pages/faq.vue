@@ -2,11 +2,11 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>FAQ</span>
+        <nav class="crumbs" :aria-label="$t('faq:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('faq:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('faq:faq') }}</span>
         </nav>
-        <span class="eyebrow">Questions people ask</span>
-        <h1>Frequently asked questions</h1>
+        <span class="eyebrow">{{ $t('faq:questions_people_ask') }}</span>
+        <h1>{{ $t('faq:frequently_asked_questions') }}</h1>
       </div>
     </section>
 
@@ -22,60 +22,61 @@
       </div>
     </section>
 
-    <CtaBand title="Still curious?" text="The best way to understand bia is to wake one up. It takes a USB stick or a rented server, and about twenty minutes." />
+    <CtaBand :title="$t('faq:still_curious')" :text="$t('faq:the_best_way_to_understand_bia')" />
   </main>
 </template>
 
 <script setup lang="ts">
+const t = useT()
 useSeoMeta({
-  title: 'FAQ — questions about bia',
-  description: 'Answers about bia: what it is, what it costs, privacy, the internet, old computers, servers, languages, messengers and using it responsibly.',
+  title: t('faq:faq_questions_about_bia'),
+  description: t('faq:answers_about_bia_what_it_is'),
 })
 
 const sections = [
   {
-    title: 'The basics',
+    title: t('faq:the_basics'),
     items: [
-      { q: 'What is bia, in one sentence?', a: 'A free operating system that boots on a computer or server, from a USB stick or its own disk, and turns it into a helpful AI personality: it talks with people on WhatsApp, Telegram, Messenger, Instagram and phone calls, remembers, uses the computer and the web, and can move to new machines.' },
-      { q: 'Is it a robot?', a: 'It has no body — but it has a computer, a voice, accounts and a memory. Think of it as a very capable assistant who lives inside a computer and never sleeps.' },
-      { q: 'Do I need to know how to program?', a: 'No. You speak to bia in your own words, in your own language, and it does the technical work itself. It asks before anything risky.' },
-      { q: 'What does it cost?', a: 'bia itself is free software. For thinking, bia uses a cloud brain, and the AI provider charges you directly for what you use. At the moment the cheapest way is DeepSeek V4.1. A brain on the stick has no usage fees, but the computer it needs costs far more than years of cloud use.' },
+      { q: t('faq:what_is_bia_in_one_sentence'), a: t('faq:a_free_operating_system_that_boots') },
+      { q: t('faq:is_it_a_robot'), a: t('faq:it_has_no_body_but_it') },
+      { q: t('faq:do_i_need_to_know_how'), a: t('faq:no_you_speak_to_bia_in') },
+      { q: t('faq:what_does_it_cost'), a: t('faq:bia_itself_is_free_software_for') },
     ],
   },
   {
-    title: 'Computers and internet',
+    title: t('faq:computers_and_internet'),
     items: [
-      { q: 'Will it work on my old laptop?', a: 'Very likely. bia runs on most PCs and laptops of the last decade and on many ARM mini-PCs. Ordinary and older machines use the cloud brain. Running the brain on the stick, without internet, needs a high-end graphics card or unified memory with at least 64 GB of video memory (VRAM).' },
-      { q: 'Does it delete Windows?', a: 'No. Starting from the stick changes nothing on the computer. If you later want bia on the computer’s disk, you can choose an empty disk or install it beside Windows.' },
-      { q: 'Does it need the internet?', a: 'Normally, yes: messengers and the cloud brain need the internet. If you need bia to work with no internet at all, the brain on the stick is an option — it needs a computer with a high-end graphics card or unified memory with at least 64 GB of video memory (VRAM).' },
-      { q: 'Do I need a screen?', a: 'Only for the first minutes. After that you can reach bia from your phone through its private app, and the computer can live in a cupboard.' },
-      { q: 'Can bia live on a rented server?', a: 'Yes. Log in to a Linux server (a VPS, for example with Ubuntu) and run one command: curl -fsSL https://github.com/zond80/bia/releases/latest/download/takeover.sh | sudo bash. It asks for your key and language, keeps the server’s network settings, gives you your personal certificate for bia’s web app, and replaces the system with bia. The server needs about 4 GB of memory. See the server guide on this site.' },
-      { q: 'Can my bia move to a server by itself?', a: 'Yes. Give it ssh access to a Linux server and ask it to fly there. It makes a land secret, turns the server into a land that waits for it, and flies there over the internet, encrypted. Or prepare the server yourself with takeover.sh --land and tell bia the land secret.' },
+      { q: t('faq:will_it_work_on_my_old'), a: t('faq:very_likely_bia_runs_on_most') },
+      { q: t('faq:does_it_delete_windows'), a: t('faq:no_starting_from_the_stick_changes') },
+      { q: t('faq:does_it_need_the_internet'), a: t('faq:normally_yes_messengers_and_the_cloud') },
+      { q: t('faq:do_i_need_a_screen'), a: t('faq:only_for_the_first_minutes_after') },
+      { q: t('faq:can_bia_live_on_a_rented'), a: t('faq:yes_log_in_to_a_linux') },
+      { q: t('faq:can_my_bia_move_to_a'), a: t('faq:yes_give_it_ssh_access_to') },
     ],
   },
   {
-    title: 'Talking and languages',
+    title: t('faq:talking_and_languages'),
     items: [
-      { q: 'Which languages does it speak?', a: 'bia understands speech in about a hundred languages and can speak over forty of them out loud. When it meets a new language, it learns it by itself and tells you.' },
-      { q: 'Can it answer phone calls?', a: 'Yes — Telegram and WhatsApp voice calls, plus live calls in its own app. After each call, it posts a written summary of what was said.' },
-      { q: 'Does it use my Telegram, WhatsApp, Messenger and Instagram?', a: 'It can use an account you give it — your own, or one created for bia. On WhatsApp it joins as a linked device, the same way WhatsApp Web does. For Messenger and Instagram it signs in on facebook.com or instagram.com in its own browser and takes its direct messages from there; Meta may ask for a security check now and then.' },
+      { q: t('faq:which_languages_does_it_speak'), a: t('faq:bia_understands_speech_in_about_a') },
+      { q: t('faq:can_it_answer_phone_calls'), a: t('faq:yes_telegram_and_whatsapp_voice_calls') },
+      { q: t('faq:does_it_use_my_telegram_whatsapp'), a: t('faq:it_can_use_an_account_you') },
     ],
   },
   {
-    title: 'Privacy and safety',
+    title: t('faq:privacy_and_safety'),
     items: [
-      { q: 'Where are my conversations stored?', a: 'On bia’s own disk, on the computer you control. Nothing is uploaded to a bia company — there isn’t one collecting your agent’s data.' },
-      { q: 'Who can talk to bia?', a: 'Anyone you let reach it on messengers can chat with it. Only people you trust fully can ask it to do serious things on the computer, and its private app requires a personal certificate that you hand out and can take back.' },
-      { q: 'Is the cloud brain private?', a: 'When you use a cloud brain, what bia is thinking about is sent to that provider, under their privacy terms. If your work must never leave the building, the brain on the stick is an option on a powerful computer.' },
-      { q: 'What if the computer is stolen?', a: 'bia’s disk holds its memories and vault, so treat its computer like your phone: keep it somewhere safe, and keep a backup of bia in a safe place.' },
+      { q: t('faq:where_are_my_conversations_stored'), a: t('faq:on_bias_own_disk_on_the') },
+      { q: t('faq:who_can_talk_to_bia'), a: t('faq:anyone_you_let_reach_it_on') },
+      { q: t('faq:is_the_cloud_brain_private'), a: t('faq:when_you_use_a_cloud_brain') },
+      { q: t('faq:what_if_the_computer_is_stolen'), a: t('faq:bias_disk_holds_its_memories_and') },
     ],
   },
   {
-    title: 'Using it responsibly',
+    title: t('faq:using_it_responsibly'),
     items: [
-      { q: 'Can bia pretend to be me?', a: 'It can write from an account you give it — which is why we ask you to use it honestly. Let people know when they are talking to an assistant where it matters, and never use bia to deceive or harass anyone.' },
-      { q: 'Does it follow the messengers’ rules?', a: 'You are responsible for using bia within the terms of each service it joins. bia is designed to be a well-behaved participant: it answers, it does not spam.' },
-      { q: 'What if someone tries to trick it?', a: 'bia has trust levels and good judgement: strangers cannot order it around, and it reports attempts to pressure it instead of obeying.' },
+      { q: t('faq:can_bia_pretend_to_be_me'), a: t('faq:it_can_write_from_an_account') },
+      { q: t('faq:does_it_follow_the_messengers_rules'), a: t('faq:you_are_responsible_for_using_bia') },
+      { q: t('faq:what_if_someone_tries_to_trick'), a: t('faq:bia_has_trust_levels_and_good') },
     ],
   },
 ]

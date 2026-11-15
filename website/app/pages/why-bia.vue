@@ -2,26 +2,23 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Why bia</span>
+        <nav class="crumbs" :aria-label="$t('why:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('why:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('why:why_bia') }}</span>
         </nav>
-        <span class="eyebrow">Not an app on your PC</span>
-        <h1>Why bia is different from the AI you know</h1>
+        <span class="eyebrow">{{ $t('why:not_an_app_on_your_pc') }}</span>
+        <h1>{{ $t('why:why_bia_is_different_from_the') }}</h1>
         <p class="section-lead">
-          Today’s AI assistants move into your computer: they read your files, install their tools, act with your accounts, work inside
-          restrictions you cannot change — and whatever they can reach can one day leak. bia is built the other way
-          around: a separate mind, like a person, with its own computer, its own files and accounts, its own social
-          life and connections — and the judgement to know when to ask.
+          {{ $t('why:todays_ai_assistants_move_into_your') }}
         </p>
       </div>
     </section>
 
     <section class="section">
       <div class="container">
-        <div class="compare" role="table" aria-label="Typical AI assistant compared with bia">
+        <div class="compare" role="table" :aria-label="$t('why:typical_ai_assistant_compared_with_bia')">
           <div class="compare__row compare__row--head" role="row">
             <span role="columnheader" />
-            <span role="columnheader">Typical AI assistant</span>
+            <span role="columnheader">{{ $t('why:typical_ai_assistant') }}</span>
             <span role="columnheader">bia</span>
           </div>
           <div v-for="r in compare" :key="r.topic" class="compare__row" role="row">
@@ -35,8 +32,8 @@
 
     <section class="section section--tint">
       <div class="container">
-        <h2 class="section-title">A week in bia’s life</h2>
-        <p class="section-lead">From bia’s own notes during a seven-day test run on a real computer.</p>
+        <h2 class="section-title">{{ $t('why:a_week_in_bias_life') }}</h2>
+        <p class="section-lead">{{ $t('why:from_bias_own_notes_during_a') }}</p>
         <ol class="week">
           <li v-for="(d, i) in week" :key="i" class="card">
             <span class="week__day">{{ d.day }}</span>
@@ -49,7 +46,7 @@
 
     <section class="section">
       <div class="container">
-        <h2 class="section-title">Character, not just capability</h2>
+        <h2 class="section-title">{{ $t('why:character_not_just_capability') }}</h2>
         <div class="grid grid--3">
           <div v-for="c in character" :key="c.title" class="card">
             <AppIcon :name="c.icon" size="2rem" class="ico" />
@@ -62,12 +59,9 @@
 
     <section class="section section--tint">
       <div class="narrow">
-        <h2>Where bia comes from</h2>
+        <h2>{{ $t('why:where_bia_comes_from') }}</h2>
         <p>
-          bia grew out of two earlier projects. One taught an AI to build and drive a whole second computer inside
-          itself; the other taught it to live in messengers as a person, with contacts, trust levels and voice
-          calls. bia combines both into a single being that owns its computer — and adds memory, moving, updating
-          and a hundred languages.
+          {{ $t('why:bia_grew_out_of_two_earlier') }}
         </p>
       </div>
     </section>
@@ -77,41 +71,42 @@
 </template>
 
 <script setup lang="ts">
+const t = useT()
 useSeoMeta({
-  title: 'Why bia is different from typical AI assistants',
+  title: t('why:why_bia_is_different_from_typical'),
   description:
-    'How bia differs from AI assistants that live inside your PC: a separate mind with its own computer, files and accounts, a real social presence on WhatsApp, Telegram, Messenger and Instagram, memory that lasts, background work, moving between computers and self-repair.',
+    t('why:how_bia_differs_from_ai_assistants'),
 })
 
 const compare = [
-  { topic: 'Where it lives', them: 'Inside your PC, or in a company’s app', bia: 'On its own computer, separate from yours — even an old one' },
-  { topic: 'Your files', them: 'Can read almost everything on your PC', bia: 'Never touches your PC — it has its own files, and gets only what you send it' },
-  { topic: 'Identity', them: 'Acts as you, with your logins', bia: 'Its own name, accounts, phone numbers, contacts and friends' },
-  { topic: 'Rules', them: 'Boxed in by a vendor’s sandbox and policies', bia: 'Owns its whole machine; the limits are the ones you set' },
-  { topic: 'If something leaks', them: 'Your files and accounts go with it', bia: 'Only what bia itself holds — your own PC was never in reach' },
-  { topic: 'How people reach it', them: 'You go to its app, or it acts like a bot you set up', bia: 'It comes to WhatsApp, Telegram, Messenger, Instagram and calls as a person with its own number, not a bot' },
-  { topic: 'Memory', them: 'Unknown or complex memory engines with unpredictable results', bia: 'A simple diary and reflections, kept across days, restarts and moves' },
-  { topic: 'Doing things', them: 'Installs software that pollutes your computer', bia: 'Installs what it needs on its own computer — yours stays clean' },
-  { topic: 'Long tasks', them: 'Usually locked until the task is finished', bia: 'Works in the background and keeps talking' },
-  { topic: 'Being away', them: 'Messages are simply missed', bia: 'Catches up on everything that arrived while it was off' },
-  { topic: 'Languages', them: 'Text in many languages', bia: 'Hears and speaks them on calls, and learns new ones itself' },
-  { topic: 'Your agent’s data', them: 'Whatever it reads can end up on their servers', bia: 'On bia’s own disk; only the thinking goes to the cloud brain you pick' },
-  { topic: 'Hardware changes', them: 'Dies with your computer', bia: 'Moves to new hardware and repairs itself' },
+  { topic: t('why:where_it_lives'), them: t('why:inside_your_pc_or_in_a'), bia: t('why:on_its_own_computer_separate_from') },
+  { topic: t('why:your_files'), them: t('why:can_read_almost_everything_on_your'), bia: t('why:never_touches_your_pc_it_has') },
+  { topic: t('why:identity'), them: t('why:acts_as_you_with_your_logins'), bia: t('why:its_own_name_accounts_phone_numbers') },
+  { topic: t('why:rules'), them: t('why:boxed_in_by_a_vendors_sandbox'), bia: t('why:owns_its_whole_machine_the_limits') },
+  { topic: t('why:if_something_leaks'), them: t('why:your_files_and_accounts_go_with'), bia: t('why:only_what_bia_itself_holds_your') },
+  { topic: t('why:how_people_reach_it'), them: t('why:you_go_to_its_app_or'), bia: t('why:it_comes_to_whatsapp_telegram') },
+  { topic: t('why:memory'), them: t('why:unknown_or_complex_memory_engines_with'), bia: t('why:a_simple_diary_and_reflections_kept') },
+  { topic: t('why:doing_things'), them: t('why:installs_software_that_pollutes_your'), bia: t('why:installs_what_it_needs_on_its') },
+  { topic: t('why:long_tasks'), them: t('why:usually_locked_until_the_task_is'), bia: t('why:works_in_the_background_and_keeps') },
+  { topic: t('why:being_away'), them: t('why:messages_are_simply_missed'), bia: t('why:catches_up_on_everything_that_arrived') },
+  { topic: t('why:languages'), them: t('why:text_in_many_languages'), bia: t('why:hears_and_speaks_them_on_calls') },
+  { topic: t('why:your_agents_data'), them: t('why:whatever_it_reads_can_end_up'), bia: t('why:on_bias_own_disk_only_the') },
+  { topic: t('why:hardware_changes'), them: t('why:dies_with_your_computer'), bia: t('why:moves_to_new_hardware_and_repairs') },
 ]
 
 const week = [
-  { day: 'Day 0', title: 'Moves off the stick', text: 'One sentence — “move to the disk” — and bia found the drive, copied itself and woke up from the internal disk.' },
-  { day: 'Day 1', title: 'Builds its senses', text: 'Installed its browser, connected its skills, and signed in to Google like a person: codes from its vault, a captcha from a human.' },
-  { day: 'Day 2', title: 'Watches without nagging', text: 'Wrote a watcher for mail and calendar that only speaks up when something actually matters.' },
-  { day: 'Day 3–4', title: 'Gets a face', text: 'Set its profile photos, turned on two-factor login, opened accounts, posted — and fixed a bug in its own tools along the way.' },
-  { day: 'Day 5', title: 'Makes a phone call', text: 'Placed and answered voice calls, joined a family group, and learned who is who.' },
-  { day: 'Day 6–7', title: 'Holds its ground', text: 'Politely refused a stranger who demanded access to the computer, then repaired itself after being moved onto different hardware.' },
+  { day: t('why:day_0'), title: t('why:moves_off_the_stick'), text: t('why:one_sentence_move_to_the_disk') },
+  { day: t('why:day_1'), title: t('why:builds_its_senses'), text: t('why:installed_its_browser_connected_its') },
+  { day: t('why:day_2'), title: t('why:watches_without_nagging'), text: t('why:wrote_a_watcher_for_mail_and') },
+  { day: t('why:day_3_4'), title: t('why:gets_a_face'), text: t('why:set_its_profile_photos_turned_on') },
+  { day: t('why:day_5'), title: t('why:makes_a_phone_call'), text: t('why:placed_and_answered_voice_calls_joined') },
+  { day: t('why:day_6_7'), title: t('why:holds_its_ground'), text: t('why:politely_refused_a_stranger_who') },
 ]
 
 const character = [
-  { icon: 'hand', title: 'Knows its limits', text: 'Captchas and decisions that are yours go to you. Risky steps wait for your yes. Things it cannot do, it says it cannot do.' },
-  { icon: 'shield', title: 'Holds boundaries', text: 'Strangers cannot talk it into giving away its computer or its secrets. Pressure is reported, not obeyed.' },
-  { icon: 'people', title: 'Treats people as people', text: 'It remembers corrections, introductions and preferences — and stays the same character with everyone.' },
+  { icon: 'hand', title: t('why:knows_its_limits'), text: t('why:captchas_and_decisions_that_are_yours') },
+  { icon: 'shield', title: t('why:holds_boundaries'), text: t('why:strangers_cannot_talk_it_into_giving') },
+  { icon: 'people', title: t('why:treats_people_as_people'), text: t('why:it_remembers_corrections_introductions') },
 ]
 </script>
 

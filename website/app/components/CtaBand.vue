@@ -3,11 +3,11 @@
     <div class="container cta__inner">
       <div class="cta__potato" aria-hidden="true"><PotatoMark label="" /></div>
       <div>
-        <h2>{{ title }}</h2>
-        <p>{{ text }}</p>
+        <h2>{{ title ?? $t('common:cta_title') }}</h2>
+        <p>{{ text ?? $t('common:cta_text') }}</p>
         <div class="btn-row">
-          <NuxtLink class="btn btn--primary" to="/download">Get bia</NuxtLink>
-          <NuxtLink class="btn btn--ghost cta__ghost" to="/how-it-works">How it works</NuxtLink>
+          <NuxtLink class="btn btn--primary" :to="$lp('/download')">{{ $t('common:get_bia') }}</NuxtLink>
+          <NuxtLink class="btn btn--ghost cta__ghost" :to="$lp('/how-it-works')">{{ $t('common:how_it_works') }}</NuxtLink>
         </div>
       </div>
     </div>
@@ -15,10 +15,7 @@
 </template>
 
 <script setup lang="ts">
-withDefaults(defineProps<{ title?: string; text?: string }>(), {
-  title: 'Give your people a bia',
-  text: 'On a server we run for you, a server you rent, or a computer you are not using. Half an hour later, it is someone.',
-})
+defineProps<{ title?: string; text?: string }>()
 </script>
 
 <style scoped>

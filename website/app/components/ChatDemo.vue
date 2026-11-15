@@ -1,12 +1,12 @@
 <template>
-  <figure class="demo" :aria-label="title || 'Example conversation'">
+  <figure class="demo" :aria-label="title || $t('common:example_conversation')">
     <figcaption v-if="title" class="demo__title">{{ title }}</figcaption>
     <div class="demo__body">
       <template v-for="(l, i) in lines" :key="i">
         <p v-if="l.from === 'note'" class="demo__note">{{ l.text }}</p>
         <div v-else class="demo__row" :class="`demo__row--${l.from}`">
           <span class="demo__who">
-            {{ l.from === 'bia' ? 'bia' : l.from === 'you' ? 'You' : 'Someone' }}<template v-if="l.where"> · {{ l.where }}</template>
+            {{ l.from === 'bia' ? 'bia' : l.from === 'you' ? $t('common:you') : $t('common:someone') }}<template v-if="l.where"> · {{ l.where }}</template>
           </span>
           <p class="demo__bubble">{{ l.text }}</p>
         </div>

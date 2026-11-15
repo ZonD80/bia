@@ -2,14 +2,13 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Privacy</span>
+        <nav class="crumbs" :aria-label="$t('privacy:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('privacy:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('privacy:privacy') }}</span>
         </nav>
-        <span class="eyebrow">Privacy policy</span>
-        <h1>We collect no data</h1>
+        <span class="eyebrow">{{ $t('privacy:privacy_policy') }}</span>
+        <h1>{{ $t('privacy:we_collect_no_data') }}</h1>
         <p class="section-lead">
-          Not on this website, not in the bia deploy apps, not in bia. There are no accounts, no analytics, no ads and
-          no telemetry, and nothing is sent to us. Updated {{ UPDATED }}.
+          {{ $t('privacy:not_on_this_website_not_in', { UPDATED }) }}
         </p>
       </div>
     </section>
@@ -20,11 +19,9 @@
           <h2>{{ s.title }}</h2>
           <p v-for="(p, i) in s.text" :key="i">{{ p }}</p>
         </div>
-        <h2>Questions</h2>
+        <h2>{{ $t('privacy:questions') }}</h2>
         <p>
-          Ask in the project's issues on GitHub:
-          <a :href="`${REPO_URL}/issues`" target="_blank" rel="noopener">{{ REPO_URL.replace('https://', '') }}/issues</a>.
-          The source code of everything described here is public, so every claim on this page can be checked.
+          <Tr k="privacy:ask_in_the_projects_issues_on" :v="{ REPO_URL: REPO_URL.replace('https://', '') }"><a :href="`${REPO_URL}/issues`" target="_blank" rel="noopener" /></Tr>
         </p>
       </div>
     </section>
@@ -32,42 +29,44 @@
 </template>
 
 <script setup lang="ts">
+const t = useT()
 import { REPO_URL } from '~/composables/useLatestRelease'
 
-const UPDATED = '28 October 2026'
+
+const UPDATED = longDate('2026-10-28', useLocale().value)
 
 useSeoMeta({
-  title: 'Privacy policy — bia',
-  description: 'bia, the bia deploy apps (Mac, Windows, Linux, Android, iPhone) and this website collect no data: no accounts, analytics, ads or telemetry.',
+  title: t('privacy:privacy_policy_bia'),
+  description: t('privacy:bia_the_bia_deploy_apps_mac'),
 })
 
 const sections = [
   {
-    title: 'This website',
+    title: t('privacy:this_website'),
     text: [
-      'ownbia.com sets no cookies, runs no analytics or tracking scripts and has no forms or accounts.',
-      'Like any website, it is delivered by its host (Cloudflare Pages), which handles each request, including your IP address, to serve the page. Its fonts come from Google Fonts, so your browser also asks Google for them. Fred’s film plays from YouTube (youtube-nocookie.com) only after you press play; until then nothing is loaded from YouTube.',
+      t('privacy:ownbia_com_sets_no_cookies_runs'),
+      t('privacy:like_any_website_it_is_delivered'),
     ],
   },
   {
-    title: 'bia deploy (Mac, Windows, Linux, Android and iPhone)',
+    title: t('privacy:bia_deploy_mac_windows_linux_android'),
     text: [
-      'The app needs no account and sends nothing to us. What you enter stays on your device or goes straight to the service it is meant for:',
-      'Your AI key goes to the AI provider you chose, to check it and to wake bia once. A ChatGPT sign-in goes to OpenAI. The bia system is downloaded from GitHub, and a model, if you pick one, from Hugging Face. A server’s address, user and password or SSH key are used to log in to that server over SSH; the password is used only then and is not saved.',
-      'An SSH key the app makes, the servers it has seen, and each bia’s key (its certificate) are kept in the app’s own storage on your device, so you can use them again. Uninstalling the app removes them. Sharing a bia’s key happens only when you press Share, to the app you choose.',
-      'The app does not save your AI key. After setup, the key and a ChatGPT sign-in belong to your bia, and the app drops its copy of the sign-in, keeping only its own app registration with OpenAI.',
+      t('privacy:the_app_needs_no_account_and'),
+      t('privacy:your_ai_key_goes_to_the'),
+      t('privacy:an_ssh_key_the_app_makes'),
+      t('privacy:the_app_does_not_save_your'),
     ],
   },
   {
-    title: 'bia itself',
+    title: t('privacy:bia_itself'),
     text: [
-      'bia runs on a computer or server you control, and its memory, files, contacts and passwords stay there. We never receive any of it.',
-      'To work, bia talks to the services you set it up with: the AI provider you chose receives what bia thinks about (that is how a cloud brain works; a brain on the stick keeps even that local), and the messengers you connect carry its messages. It downloads updates, languages and voices from GitHub and Hugging Face. Each of those services follows its own privacy policy.',
+      t('privacy:bia_runs_on_a_computer_or'),
+      t('privacy:to_work_bia_talks_to_the'),
     ],
   },
   {
-    title: 'Changes',
-    text: ['If this ever changes, this page will say so first, with a new date.'],
+    title: t('privacy:changes'),
+    text: [t('privacy:if_this_ever_changes_this_page')],
   },
 ]
 </script>

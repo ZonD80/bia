@@ -6,7 +6,7 @@
         <p class="dl__head">
           <strong>{{ s.who }}</strong>
           <span class="dl__where">{{ s.where }}</span>
-          <span v-if="s.own" class="dl__tag" title="bia started this itself">on its own</span>
+          <span v-if="s.own" class="dl__tag" :title="$t('common:bia_started_this_itself')">{{ $t('common:on_its_own') }}</span>
         </p>
         <p class="dl__what">{{ s.what }}</p>
       </div>

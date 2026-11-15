@@ -712,14 +712,15 @@ What an unfold brings back outside `/home/bia` (all in `archive.rs`):
   package units are the packages' business).
 - The manually installed packages, by name or from a kept .deb.
 - **The owner's own system files** (`custom_members`, manifest `custom`): every file or
-  symlink under `/etc`, `/usr/local`, `/opt` and `/srv` that is neither in the image's
+  symlink under `/etc`, `/usr/local`, `/usr/share/keyrings`, `/opt` and `/srv` that is neither in the image's
   own list nor owned by a package, plus a package's config file the owner changed. The
   list is `/etc/bia-image-files`, written by `builders/rootfs.sh` (path, and sha256 for
   `/etc` files). Machine-made files (`passwd`, `fstab`, `resolv.conf`, `alternatives`,
   `ssl/certs`, …; `custom_denied`) are never taken, another disk mounted below is not
-  entered, one file is at most 256 MB and all together 2 GB. Those under `/etc/apt/` go
-  back before `apt-get update`, so a third-party source and its key are there when its
-  packages are installed again; the rest go back after the packages, so the owner's
+  entered, one file is at most 256 MB and all together 2 GB. Those under `/etc/apt/` and
+  `/usr/share/keyrings/` go back before `apt-get update`, so a third-party source and its key
+  are there when its packages are installed again (a source without its key fails the whole
+  `apt-get update`, and every reinstall with it); the rest go back after the packages, so the owner's
   version of a config wins over the fresh one. A path the new image has itself keeps the
   image's file. A system that has no list (older than 2.2.7) gives only its apt sources
   and keys.

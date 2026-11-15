@@ -2,11 +2,10 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <span class="eyebrow">A link from your bia</span>
-        <h1>Open it in bia deploy</h1>
+        <span class="eyebrow">{{ $t('open:a_link_from_your_bia') }}</span>
+        <h1>{{ $t('open:open_it_in_bia_deploy') }}</h1>
         <p class="section-lead">
-          Your bia sent a page that opens in the bia deploy app, which holds bia's key on your phone. If you see
-          this, the app did not open by itself: open it with the button, or get the app first.
+          {{ $t('open:your_bia_sent_a_page_that') }}
         </p>
       </div>
     </section>
@@ -14,38 +13,37 @@
     <section class="section">
       <div class="container narrow">
         <p v-if="!link" class="card warn">
-          This link is not complete. Ask your bia to send it again.
+          {{ $t('open:this_link_is_not_complete_ask') }}
         </p>
         <template v-else>
-          <a class="btn btn--primary wide" :href="appUrl">Open in bia deploy</a>
-          <p class="mute small">Opens {{ what }} on bia<template v-if="link.at.length"> at {{ link.at[0] }}</template>.</p>
+          <a class="btn btn--primary wide" :href="appUrl">{{ $t('open:open_in_bia_deploy') }}</a>
+          <p class="mute small">{{ $t('open:opens_on_bia', { what }) }}<template v-if="link.at.length">{{ $t('open:at', { at: link.at[0] }) }}</template>.</p>
 
-          <h2 class="h2">No app yet?</h2>
+          <h2 class="h2">{{ $t('open:no_app_yet') }}</h2>
           <div class="grid grid--2">
             <div class="stores">
               <h3 class="h3">Android</h3>
-              <a class="btn btn--ghost wide" :href="PLAY_URL" target="_blank" rel="noopener">Get it on Google Play</a>
-              <a class="btn btn--ghost wide" :href="appDownloads.android.url" :aria-busy="loading">Download the APK</a>
+              <a class="btn btn--ghost wide" :href="PLAY_URL" target="_blank" rel="noopener">{{ $t('open:get_it_on_google_play') }}</a>
+              <a class="btn btn--ghost wide" :href="appDownloads.android.url" :aria-busy="loading">{{ $t('open:download_the_apk') }}</a>
               <p class="mute small">
-                <template v-if="appDownloads.android.available">Version {{ appDownloads.android.version }} · </template>APK from GitHub, no Play Store needed
+                <template v-if="appDownloads.android.available">{{ $t('open:version', { version: appDownloads.android.version }) }}</template>{{ $t('open:apk_from_github_no_play_store') }}
               </p>
             </div>
             <div class="stores">
               <h3 class="h3">iPhone</h3>
-              <a class="btn btn--ghost wide" :href="APP_STORE_URL" target="_blank" rel="noopener">Download on the App Store</a>
-              <a class="btn btn--ghost wide" :href="TESTFLIGHT_URL" target="_blank" rel="noopener">Join the TestFlight beta</a>
-              <a class="btn btn--ghost wide" :href="APPDB_URL" target="_blank" rel="noopener">Get it on appdb</a>
+              <a class="btn btn--ghost wide" :href="APP_STORE_URL" target="_blank" rel="noopener">{{ $t('open:download_on_the_app_store') }}</a>
+              <a class="btn btn--ghost wide" :href="TESTFLIGHT_URL" target="_blank" rel="noopener">{{ $t('open:join_the_testflight_beta') }}</a>
+              <a class="btn btn--ghost wide" :href="APPDB_URL" target="_blank" rel="noopener">{{ $t('open:get_it_on_appdb') }}</a>
             </div>
           </div>
-          <p class="mute small">All downloads, including bia deploy for Mac, Windows and Linux: <NuxtLink to="/download">Get bia</NuxtLink>.</p>
+          <p class="mute small"><Tr k="open:all_downloads_including_bia_deploy_for"><NuxtLink :to="$lp('/download')" /></Tr></p>
           <p class="mute small">
-            Then come back to this message and tap the link again. The link brings bia's key to the app, so nothing else
-            is needed. That key works once and only for 10 minutes; after that, ask bia for a new link.
+            {{ $t('open:then_come_back_to_this_message') }}
           </p>
 
           <template v-if="direct.length">
-            <h2 class="h2">On a computer or a phone with bia's certificate</h2>
-            <p>The same page in a browser that has bia's certificate:</p>
+            <h2 class="h2">{{ $t('open:on_a_computer_or_a_phone') }}</h2>
+            <p>{{ $t('open:the_same_page_in_a_browser') }}</p>
             <ul class="direct">
               <li v-for="u in direct" :key="u"><a :href="u" rel="noopener">{{ u }}</a></li>
             </ul>
@@ -57,9 +55,10 @@
 </template>
 
 <script setup lang="ts">
+const t = useT()
 useSeoMeta({
-  title: 'Open in bia deploy',
-  description: 'A link from your bia that opens in the bia deploy phone app.',
+  title: t('open:open_in_bia_deploy'),
+  description: t('open:a_link_from_your_bia_that'),
   robots: 'noindex, nofollow',
 })
 
@@ -103,9 +102,9 @@ const appUrl = computed(() => {
 
 const what = computed(() => {
   const go = link.value?.go || '/'
-  if (go.startsWith('/hitl/')) return 'a task for you'
-  if (go.startsWith('/dl/')) return 'a file'
-  return 'the chat'
+  if (go.startsWith('/hitl/')) return t('open:what_task')
+  if (go.startsWith('/dl/')) return t('open:what_file')
+  return t('open:what_chat')
 })
 
 const direct = computed(() => (link.value ? link.value.at.map((h) => `https://${h}${link.value!.go}`) : []))

@@ -37,6 +37,9 @@ else
   npm install --no-audit --no-fund
 fi
 
+echo "==> translations (every language has every text)"
+node check-locales.mjs
+
 echo "==> nuxt generate (static HTML for crawlers)"
 npm run generate
 
@@ -46,7 +49,7 @@ if [[ ! -f "$OUT/index.html" ]]; then
 fi
 
 # Spot-check prerendered routes (not client-only shells).
-for path in features features/messengers features/brain use-cases why-bia faq download; do
+for path in features features/messengers features/brain use-cases why-bia faq download es es/fred ca ca/features/messengers; do
   f="$OUT/${path}/index.html"
   if [[ ! -f "$f" ]]; then
     echo "error: prerender missing $f" >&2

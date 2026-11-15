@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.10
+
+### Changes
+- Updates keep the signing keys of extra apt sources that live in /usr/share/keyrings (Google Chrome's, for example). Before, the source came back without its key, so the whole package update failed and nginx, gnupg, Chrome and other packages were not installed again. This starts with the first update made from this version on.
+
+### For bia
+- Keys of your extra apt sources under /usr/share/keyrings are carried through updates from the next one on, and go back before the packages are installed again. A symlink you made from there into /home/bia keeps working too.
+
 ## 2.2.9
 
 ### Changes

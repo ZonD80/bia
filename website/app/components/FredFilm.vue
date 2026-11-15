@@ -18,8 +18,7 @@
       </button>
     </div>
     <figcaption>
-      Unedited. Fred made this promo film unaided, for about $15 of OpenRouter credit.
-      <a :href="FRED_FILM.url" target="_blank" rel="noopener">Watch on YouTube</a>
+      <Tr k="common:unedited_fred_made_this_promo_film"><a :href="FRED_FILM.url" target="_blank" rel="noopener" /></Tr>
     </figcaption>
   </figure>
 </template>

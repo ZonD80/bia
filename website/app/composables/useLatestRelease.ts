@@ -106,6 +106,7 @@ function pick<K extends string>(assets: Record<K, string>, releases: GitHubRelea
 }
 
 export function useLatestRelease() {
+  const { $i18n } = useNuxtApp()
   const downloads = useState<Record<FlashHost, FlashDownload>>('bia-deploy-downloads', () => unchecked(FLASH_ASSETS))
   const landDownloads = useState<Record<LandArch, FlashDownload>>('bia-land-downloads', () => unchecked(LAND_ASSETS))
   const appDownloads = useState<Record<AppPlatform, FlashDownload>>('bia-app-downloads', () => unchecked(APP_ASSETS))
@@ -138,13 +139,13 @@ export function useLatestRelease() {
       const os = releases.find((r) => r.assets.some((a) => a.name === 'bia-os.json'))
       version.value = os ? tagVersion(os.tag_name) : null
       releaseUrl.value = os?.html_url || FALLBACK_RELEASE_PAGE
-      if (!Object.values(next).some((d) => d.available)) error.value = 'No release has a bia deploy download yet'
-      else if (!os) error.value = 'No release has the bia system yet'
+      if (!Object.values(next).some((d) => d.available)) error.value = $i18n.t('common:no_deploy_release')
+      else if (!os) error.value = $i18n.t('common:no_system_release')
     } catch {
       downloads.value = unchecked(FLASH_ASSETS)
       landDownloads.value = unchecked(LAND_ASSETS)
       appDownloads.value = unchecked(APP_ASSETS)
-      error.value = 'Could not load the latest release'
+      error.value = $i18n.t('common:release_load_failed')
     } finally {
       fetched.value = true
       loading.value = false

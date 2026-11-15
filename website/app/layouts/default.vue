@@ -1,8 +1,8 @@
 <template>
   <div class="layout">
-    <a class="skip" href="#content">Skip to content</a>
+    <a class="skip" href="#content">{{ $t('common:skip_to_content') }}</a>
     <div class="stick">
-      <CloudStrip v-if="route.path.replace(/\/$/, '') !== '/cloud'" />
+      <CloudStrip v-if="stripLocale(route.path).replace(/\/$/, '') !== '/cloud'" />
       <SiteHeader />
     </div>
     <div id="content">

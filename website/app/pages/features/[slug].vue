@@ -3,9 +3,9 @@
     <section class="page-hero">
       <div class="container fhero">
         <div>
-          <nav class="crumbs" aria-label="Breadcrumb">
-            <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span>
-            <NuxtLink to="/features">Features</NuxtLink><span aria-hidden="true">/</span>
+          <nav class="crumbs" :aria-label="$t('features:breadcrumb')">
+            <NuxtLink :to="$lp('/')">{{ $t('features:home') }}</NuxtLink><span aria-hidden="true">/</span>
+            <NuxtLink :to="$lp('/features')">{{ $t('features:features') }}</NuxtLink><span aria-hidden="true">/</span>
             <span>{{ feature.name }}</span>
           </nav>
           <span class="eyebrow">{{ groups[feature.group].title }}</span>
@@ -20,7 +20,7 @@
       <div class="container intro__grid">
         <div>
           <p class="intro__lead">{{ feature.lead }}</p>
-          <h2 class="h-small">What it means for you</h2>
+          <h2 class="h-small">{{ $t('features:what_it_means_for_you') }}</h2>
           <div class="points">
             <div v-for="p in feature.points" :key="p.title" class="point">
               <h3>{{ p.title }}</h3>
@@ -29,7 +29,7 @@
           </div>
         </div>
         <aside class="intro__aside">
-          <ChatDemo :lines="feature.chat" title="For example" />
+          <ChatDemo :lines="feature.chat" :title="$t('features:for_example')" />
         </aside>
       </div>
     </section>
@@ -37,16 +37,16 @@
     <section class="section section--tint">
       <div class="container ideas">
         <div>
-          <h2 class="h-small">Ideas for using it</h2>
+          <h2 class="h-small">{{ $t('features:ideas_for_using_it') }}</h2>
           <ul class="list-check">
             <li v-for="e in feature.examples" :key="e">{{ e }}</li>
           </ul>
         </div>
         <div>
-          <h2 class="h-small">Good to know</h2>
+          <h2 class="h-small">{{ $t('features:good_to_know') }}</h2>
           <div class="note-box">
             <p>{{ feature.good_to_know }}</p>
-            <p class="note-box__ask">Or just ask bia: <q>{{ feature.ask }}</q></p>
+            <p class="note-box__ask"><Tr k="features:or_just_ask_bia" :v="{ ask: feature.ask }"><q /></Tr></p>
           </div>
         </div>
       </div>
@@ -54,14 +54,14 @@
 
     <section class="section">
       <div class="container">
-        <h2 class="h-small">Works hand in hand with</h2>
+        <h2 class="h-small">{{ $t('features:works_hand_in_hand_with') }}</h2>
         <div class="grid grid--feat">
           <FeatureCard v-for="r in related" :key="r.slug" :feature="r" />
         </div>
-        <nav class="pager" aria-label="More features">
-          <NuxtLink v-if="prev" :to="`/features/${prev.slug}`" class="pager__link">← {{ prev.name }}</NuxtLink>
+        <nav class="pager" :aria-label="$t('features:more_features')">
+          <NuxtLink v-if="prev" :to="$lp(`/features/${prev.slug}`)" class="pager__link">← {{ prev.name }}</NuxtLink>
           <span v-else />
-          <NuxtLink v-if="next" :to="`/features/${next.slug}`" class="pager__link pager__link--next">{{ next.name }} →</NuxtLink>
+          <NuxtLink v-if="next" :to="$lp(`/features/${next.slug}`)" class="pager__link pager__link--next">{{ next.name }} →</NuxtLink>
         </nav>
       </div>
     </section>
@@ -71,13 +71,15 @@
 </template>
 
 <script setup lang="ts">
-import { features, groups, getFeature, type Feature } from '~/data/features'
+import type { Feature } from '~/data/features'
+
+const { features, groups, getFeature } = useFeatures()
 
 const route = useRoute()
 const feature = computed(() => getFeature(String(route.params.slug)))
 
 if (!feature.value) {
-  throw createError({ statusCode: 404, statusMessage: 'Feature not found', fatal: true })
+  throw createError({ statusCode: 404, statusMessage: 'Not found', fatal: true })
 }
 
 const related = computed(() =>
@@ -89,7 +91,7 @@ const next = computed(() => (index.value < features.length - 1 ? features[index.
 
 useSeoMeta({
   title: () => `${feature.value?.name} — bia`,
-  description: () => `${feature.value?.tagline} ${feature.value?.lead}`.slice(0, 300),
+  description: () => feature.value?.tagline,
 })
 </script>
 

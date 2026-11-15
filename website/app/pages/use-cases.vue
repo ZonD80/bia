@@ -2,19 +2,17 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Use cases</span>
+        <nav class="crumbs" :aria-label="$t('usecases:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('usecases:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('usecases:use_cases') }}</span>
         </nav>
-        <span class="eyebrow">Who it is for</span>
-        <h1>One bia for a circle of people</h1>
+        <span class="eyebrow">{{ $t('usecases:who_it_is_for') }}</span>
+        <h1>{{ $t('usecases:one_bia_for_a_circle_of') }}</h1>
         <p class="section-lead">
-          bia is not a personal assistant for one user. It is a someone a whole group knows: a family, a small
-          business, a small community. Here is what it changes for each, and one ordinary day told through who it
-          talked to.
+          {{ $t('usecases:bia_is_not_a_personal_assistant') }}
         </p>
-        <nav class="jump" aria-label="Jump to">
+        <nav class="jump" :aria-label="$t('usecases:jump_to')">
           <a v-for="g in useCaseGroups" :key="g.slug" class="chip" :href="`#${g.slug}`">{{ g.title }}</a>
-          <a class="chip" href="#your-own">Your own use</a>
+          <a class="chip" href="#your-own">{{ $t('usecases:your_own_use') }}</a>
         </nav>
       </div>
     </section>
@@ -38,12 +36,12 @@
 
         <div class="ucg__day" :style="{ '--dl-bg': i % 2 === 1 ? 'var(--paper-2)' : 'var(--paper)' }">
           <div class="ucg__daytext">
-            <span class="eyebrow">One day</span>
+            <span class="eyebrow">{{ $t('usecases:one_day') }}</span>
             <h3>{{ g.day.title }}</h3>
             <p>{{ g.day.setting }}</p>
-            <p class="ucg__key"><i class="ucg__dot ucg__dot--own" /> bia started it itself <i class="ucg__dot" /> someone wrote or called</p>
+            <p class="ucg__key"><Tr k="usecases:bia_started_it_itself_someone_wrote"><i class="ucg__dot ucg__dot--own" /><i class="ucg__dot" /></Tr></p>
             <div class="chips">
-              <NuxtLink v-for="u in g.uses" :key="u" class="chip" :to="`/features/${u}`">{{ name(u) }}</NuxtLink>
+              <NuxtLink v-for="u in g.uses" :key="u" class="chip" :to="$lp(`/features/${u}`)">{{ name(u) }}</NuxtLink>
             </div>
           </div>
           <DayLine :steps="g.day.steps" />
@@ -53,12 +51,10 @@
 
     <section id="your-own" class="section section--sky own">
       <div class="container">
-        <span class="eyebrow">Your own use</span>
-        <h2 class="section-title">Make your own use of bia</h2>
+        <span class="eyebrow">{{ $t('usecases:your_own_use') }}</span>
+        <h2 class="section-title">{{ $t('usecases:make_your_own_use_of_bia') }}</h2>
         <p class="section-lead">
-          bia is social and has a computer of its own, so the simple test is: could a capable, patient person do
-          this with a phone and a laptop? Then bia probably can — write to people, call them, remember them, look
-          things up, fill in forms, keep a calendar, and come back with the result.
+          {{ $t('usecases:bia_is_social_and_has_a') }}
         </p>
         <ul class="list-check own__list">
           <li v-for="u in ownUses" :key="u">{{ u }}</li>
@@ -68,28 +64,27 @@
 
     <section class="section">
       <div class="narrow">
-        <h2>A word about using it well</h2>
+        <h2>{{ $t('usecases:a_word_about_using_it_well') }}</h2>
         <p>
-          bia talks to people as a person would, which is exactly what makes it useful — and why it should be used
-          honestly. It has its own accounts and says who it is; it does not pretend to be you. Respect the rules of
-          each messenger, ask before acting for someone else, and keep bia’s computer as safe as you keep your own
-          phone.
+          {{ $t('usecases:bia_talks_to_people_as_a') }}
         </p>
       </div>
     </section>
 
-    <CtaBand title="Give your circle a bia" text="On a server we run for you, or on a computer you are not using. It introduces itself." />
+    <CtaBand :title="$t('usecases:give_your_circle_a_bia')" :text="$t('usecases:on_a_server_we_run_for')" />
   </main>
 </template>
 
 <script setup lang="ts">
-import { features } from '~/data/features'
-import { ownUses, useCaseGroups } from '~/data/usecases'
+const t = useT()
+const { features } = useFeatures()
+const { ownUses, useCaseGroups } = useUseCases()
+
 
 useSeoMeta({
-  title: 'Use cases — one bia for a family, a small business, a community',
+  title: t('usecases:use_cases_one_bia_for_a'),
   description:
-    'What a bia changes for a family, a small business and a small community, with one ordinary day for each: who it talked to, on which messenger, and what it did on its own.',
+    t('usecases:what_a_bia_changes_for_a'),
 })
 
 const name = (slug: string) => features.find((f) => f.slug === slug)?.name ?? slug

@@ -2,14 +2,13 @@
   <main>
     <section class="page-hero">
       <div class="container">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Features</span>
+        <nav class="crumbs" :aria-label="$t('features:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('features:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('features:features') }}</span>
         </nav>
-        <span class="eyebrow">Everything bia does</span>
-        <h1>One personality, 20+ abilities and counting</h1>
+        <span class="eyebrow">{{ $t('features:everything_bia_does') }}</span>
+        <h1>{{ $t('features:one_personality_20_abilities_and') }}</h1>
         <p class="section-lead">
-          bia is easier to understand by what it does for people than by how it works inside. Every ability below
-          has its own page with a sample conversation and everyday ideas.
+          {{ $t('features:bia_is_easier_to_understand_by') }}
         </p>
       </div>
     </section>
@@ -24,17 +23,21 @@
       </div>
     </section>
 
-    <CtaBand title="Ready to meet it?" text="Write bia onto a USB stick for a computer you are not using, or put it on your server." />
+    <CtaBand :title="$t('features:ready_to_meet_it')" :text="$t('features:write_bia_onto_a_usb_stick')" />
   </main>
 </template>
 
 <script setup lang="ts">
-import { features, groups, type Feature } from '~/data/features'
+const t = useT()
+import type { Feature } from '~/data/features'
+
+const { features, groups } = useFeatures()
+
 
 useSeoMeta({
-  title: 'Features — everything bia can do',
+  title: t('features:features_everything_bia_can_do'),
   description:
-    'All of bia’s abilities: messengers, voice calls, 100 languages, its own chat app, memory, calendar, a real computer and browser, a password vault, moving between computers, self-updates, writing and sharing its own skills, talking to other agents.',
+    t('features:all_of_bias_abilities_messengers_voice'),
 })
 
 const byGroup = (g: string) => features.filter((f) => f.group === (g as Feature['group']))

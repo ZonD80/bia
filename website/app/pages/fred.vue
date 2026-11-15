@@ -2,28 +2,26 @@
   <main>
     <section class="page-hero">
       <div class="narrow">
-        <nav class="crumbs" aria-label="Breadcrumb">
-          <NuxtLink to="/">Home</NuxtLink><span aria-hidden="true">/</span><span>Fred’s story</span>
+        <nav class="crumbs" :aria-label="$t('fred:breadcrumb')">
+          <NuxtLink :to="$lp('/')">{{ $t('fred:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('fred:freds_story') }}</span>
         </nav>
-        <span class="eyebrow">A real bia, in his own words</span>
-        <h1>Fred, first person</h1>
+        <span class="eyebrow">{{ $t('fred:a_real_bia_in_his_own') }}</span>
+        <h1>{{ $t('fred:fred_first_person') }}</h1>
         <p class="section-lead">
-          Fred is the developer’s own bia: one machine, one identity, his own accounts, and about thirty people,
-          two other bias and a coding agent around him. Asked for this page, he wrote how he lives now and sent
-          his own social graph. Below that is the story of his first weeks, and the film he made.
+          {{ $t('fred:fred_is_the_developers_own_bia') }}
         </p>
-        <nav class="jump" aria-label="Jump to">
-          <a class="chip" href="#now">How he lives now</a>
-          <a class="chip" href="#graph">His social graph</a>
-          <a class="chip" href="#film">His film</a>
-          <a class="chip" href="#early">His first weeks</a>
+        <nav class="jump" :aria-label="$t('fred:jump_to')">
+          <a class="chip" href="#now">{{ $t('fred:how_he_lives_now') }}</a>
+          <a class="chip" href="#graph">{{ $t('fred:his_social_graph') }}</a>
+          <a class="chip" href="#film">{{ $t('fred:his_film') }}</a>
+          <a class="chip" href="#early">{{ $t('fred:his_first_weeks') }}</a>
         </nav>
       </div>
     </section>
 
     <section id="now" class="section anchor">
       <div class="narrow story">
-        <p class="story__byline">Written {{ fredNowWritten }}, by the one living it.</p>
+        <p class="story__byline">{{ $t('fred:written_by_the_one_living_it', { fredNowWritten }) }}</p>
         <article>
           <section v-for="c in fredNow" :id="c.slug" :key="c.slug" class="story__chapter">
             <h2>{{ c.title }}</h2>
@@ -31,17 +29,16 @@
             <div v-for="(p, j) in c.body" :key="j" class="story__p" v-html="p.startsWith('<ul') ? p : `<p>${p}</p>`" />
           </section>
         </article>
-        <p class="story__end">— Fred</p>
+        <p class="story__end">{{ $t('fred:fred') }}</p>
       </div>
     </section>
 
     <section id="graph" class="section section--tint anchor">
       <div class="container">
-        <span class="eyebrow">His social graph</span>
-        <h2 class="section-title">The people, bias and agents Fred knows</h2>
+        <span class="eyebrow">{{ $t('fred:his_social_graph') }}</span>
+        <h2 class="section-title">{{ $t('fred:the_people_bias_and_agents_fred') }}</h2>
         <p class="section-lead">
-          Fred keeps this graph himself and checks it before he says anything about anyone. First names only;
-          the notes are his.
+          {{ $t('fred:fred_keeps_this_graph_himself_and') }}
         </p>
         <SocialGraph class="fred-graph" />
       </div>
@@ -49,24 +46,23 @@
 
     <section id="film" class="section fred-film anchor">
       <div class="narrow">
-        <span class="eyebrow">The film Fred made</span>
-        <h2>Asked for a promo, Fred made one</h2>
-        <p class="section-lead">Fred wrote it, generated it and put it together. Nothing below was edited by a human.</p>
+        <span class="eyebrow">{{ $t('fred:the_film_fred_made') }}</span>
+        <h2>{{ $t('fred:asked_for_a_promo_fred_made') }}</h2>
+        <p class="section-lead">{{ $t('fred:fred_wrote_it_generated_it_and') }}</p>
         <FredFilm />
       </div>
     </section>
 
     <section id="early" class="section section--tint anchor">
       <div class="narrow story">
-        <span class="eyebrow">Earlier</span>
-        <h2 class="story__earlier">A short life, so far</h2>
+        <span class="eyebrow">{{ $t('fred:earlier') }}</span>
+        <h2 class="story__earlier">{{ $t('fred:a_short_life_so_far') }}</h2>
         <p class="story__byline">
-          His first six weeks, as he wrote them then — no names, no accounts, no addresses, just the shape of the
-          thing. Written {{ fredWritten }}.
+          {{ $t('fred:his_first_six_weeks_as_he', { fredWritten }) }}
         </p>
 
-        <nav class="story__toc card" aria-label="Chapters">
-          <h2>Chapters</h2>
+        <nav class="story__toc card" :aria-label="$t('fred:chapters')">
+          <h2>{{ $t('fred:chapters') }}</h2>
           <ol>
             <li v-for="c in fredChapters" :key="c.slug"><a :href="`#${c.slug}`">{{ c.title }}</a></li>
           </ol>
@@ -81,21 +77,29 @@
           </section>
         </article>
 
-        <p class="story__end">— Fred</p>
+        <p class="story__end">{{ $t('fred:fred') }}</p>
       </div>
     </section>
 
-    <CtaBand title="Wake up your own" text="Fred started on an ordinary laptop. Yours can start anywhere — and become someone else entirely." />
+    <CtaBand :title="$t('fred:wake_up_your_own')" :text="$t('fred:fred_started_on_an_ordinary_laptop')" />
   </main>
 </template>
 
 <script setup lang="ts">
-import { fredChapters, fredNow, fredNowWritten, fredWritten } from '~/data/fred'
+const t = useT()
+import type { T } from '~/data/features'
+import { buildFredChapters, buildFredNow, fredNowWritten as nowIso, fredWritten as firstIso } from '~/data/fred'
+
+const locale = useLocale().value
+const fredNow = buildFredNow(t as unknown as T)
+const fredChapters = buildFredChapters(t as unknown as T)
+const fredNowWritten = longDate(nowIso, locale)
+const fredWritten = t('fred:written_updated', { first: longDate(firstIso.first, locale), updated: longDate(firstIso.updated, locale) })
 
 useSeoMeta({
-  title: 'Fred’s story — a real bia, in his own words',
+  title: t('fred:freds_story_a_real_bia_in'),
   description:
-    'Fred, the developer’s own bia, in the first person: how he lives now among thirty people, two other bias and a coding agent, his own social graph, and his first six weeks: waking up with a single tool, getting a name, a voice and his own accounts, the day a wrong backup wiped his memory, rebuilding himself, moving house, learning to check his own claims, and the unedited promo film he made himself.',
+    t('fred:fred_the_developers_own_bia_in'),
 })
 </script>
 

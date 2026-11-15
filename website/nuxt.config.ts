@@ -1,6 +1,23 @@
-import { features } from './app/data/features'
-import { useCaseGroups } from './app/data/usecases'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { buildFeatures, type T } from './app/data/features'
+import { buildUseCaseGroups } from './app/data/usecases'
 import { FRED_FILM } from './app/data/fred'
+import { DEFAULT_LOCALE, DETECT_SCRIPT, LOCALES, localePath } from './app/utils/locales'
+
+// the English texts, for what is written once here: routes, the sitemap and llms.txt
+const here = fileURLToPath(new URL('.', import.meta.url))
+const english: Record<string, Record<string, string>> = {}
+const tEn: T = (key) => {
+  const [ns, k] = key.split(':') as [string, string]
+  english[ns] ??= JSON.parse(readFileSync(join(here, 'app/locales/en', `${ns}.json`), 'utf8'))
+  return english[ns]![k] ?? ''
+}
+const features = buildFeatures(tEn)
+const useCaseGroups = buildUseCaseGroups(tEn)
+// every page exists once per language: /features, /es/features, /ca/features
+const inAllLocales = (paths: string[]) => LOCALES.flatMap((l) => paths.map((p) => localePath(p, l)))
 
 const siteUrl = (
   process.env.NUXT_PUBLIC_SITE_URL ||
@@ -105,16 +122,25 @@ export default defineNuxtConfig({
     prerender: {
       crawlLinks: true,
       // /open is the fallback page of bia's app links: built, but not in the sitemap
-      routes: [...prerenderRoutes, '/open', ...Object.keys(redirects)],
+      routes: [...inAllLocales([...prerenderRoutes, '/open']), ...Object.keys(redirects)],
       failOnError: true,
     },
   },
   hooks: {
+    // the same pages again under /es and /ca (app/utils/locales.ts)
+    'pages:extend'(pages) {
+      type Page = (typeof pages)[number]
+      const copy = (p: Page, l: string): Page => ({
+        ...p,
+        name: p.name && `${p.name}___${l}`,
+        path: p.path.startsWith('/') ? `/${l}${p.path === '/' ? '' : p.path}` : p.path,
+        children: p.children?.map((c) => copy(c, l)),
+      })
+      pages.push(...LOCALES.filter((l) => l !== DEFAULT_LOCALE).flatMap((l) => pages.map((p) => copy(p, l))))
+    },
     'nitro:build:public-assets'(nitro) {
-      const { writeFileSync } = require('node:fs') as typeof import('node:fs')
-      const { join } = require('node:path') as typeof import('node:path')
       const dir = nitro.options.output.publicDir
-      writeFileSync(join(dir, 'sitemap.xml'), sitemapXml(prerenderRoutes))
+      writeFileSync(join(dir, 'sitemap.xml'), sitemapXml(inAllLocales(prerenderRoutes)))
       writeFileSync(join(dir, 'robots.txt'), robotsTxt())
       writeFileSync(join(dir, 'llms.txt'), llmsTxt())
       // Real 301s on Cloudflare Pages; the prerendered meta-refresh pages are the fallback elsewhere.
@@ -129,7 +155,7 @@ export default defineNuxtConfig({
         {
           name: 'description',
           content:
-            'bia is an operating system that turns any computer or server into a helpful mind: it lives on WhatsApp, Telegram, Messenger and Instagram, answers calls in 100 languages, remembers, keeps time, uses the web, and moves between computers as the same personality.',
+            'bia turns any computer or server into someone: an AI agent on WhatsApp, Telegram, Messenger and Instagram that takes calls, remembers and acts on its own.',
         },
         { name: 'theme-color', content: '#fbf8f2' },
         { name: 'robots', content: 'index, follow' },
@@ -147,6 +173,8 @@ export default defineNuxtConfig({
         { name: 'twitter:card', content: 'summary_large_image' },
         { name: 'twitter:image', content: `${siteUrl}/og.png` },
       ],
+      // first visit: move to the person's language before anything is drawn
+      script: [{ key: 'lang-detect', innerHTML: DETECT_SCRIPT, tagPosition: 'head', tagPriority: 'critical' }],
       link: [
         { rel: 'icon', type: 'image/svg+xml', href: '/icon.svg' },
         { rel: 'alternate icon', href: '/favicon.ico' },

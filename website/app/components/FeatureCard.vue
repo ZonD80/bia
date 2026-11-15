@@ -1,9 +1,9 @@
 <template>
-  <NuxtLink class="fcard" :to="`/features/${feature.slug}`">
+  <NuxtLink class="fcard" :to="$lp(`/features/${feature.slug}`)">
     <span class="fcard__icon"><AppIcon :name="feature.icon" size="1.6rem" /></span>
     <h3>{{ feature.name }}</h3>
     <p>{{ feature.tagline }}</p>
-    <span class="fcard__more">Learn more <AppIcon name="arrow" size="1rem" /></span>
+    <span class="fcard__more">{{ $t('common:learn_more') }} <AppIcon name="arrow" size="1rem" /></span>
   </NuxtLink>
 </template>
 

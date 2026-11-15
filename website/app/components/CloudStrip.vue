@@ -2,11 +2,11 @@
   <div v-if="!closed" class="cloud-strip" role="region" aria-label="bia cloud">
     <div class="container cloud-strip__inner">
       <p class="cloud-strip__text">
-        <span class="cloud-strip__tag">New</span>
-        <span><strong>bia cloud</strong> — no computer to spare? Wake up a bia on its own server, run for you.</span>
-        <a class="cloud-strip__link" href="https://cloud.ownbia.com/">Try bia cloud →</a>
+        <span class="cloud-strip__tag">{{ $t('common:new') }}</span>
+        <span><Tr k="common:bia_cloud_no_computer_to_spare"><strong /></Tr></span>
+        <a class="cloud-strip__link" :href="'https://cloud.ownbia.com' + $lp('/')">{{ $t('common:try_bia_cloud') }}</a>
       </p>
-      <button type="button" class="cloud-strip__x" aria-label="Close" @click="close">
+      <button type="button" class="cloud-strip__x" :aria-label="$t('common:close')" @click="close">
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
         </svg>
