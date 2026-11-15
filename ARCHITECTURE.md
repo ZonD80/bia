@@ -205,6 +205,18 @@ an MCP's function definitions as a `system` message, so the cached prompt
 prefix stays valid. Keyword matches in a request can load a server too.
 Loaded servers persist with the conversation.
 
+### Provider log
+
+`files/state/provider.jsonl` (`provider_log.rs`) keeps the last 20 cloud-brain calls in
+full, one JSON line each, newest last, for debugging turns that end with no text and no
+tool call. Each line has the HTTP status and response headers (request ids), retries,
+every raw stream line (finish_reason, usage, provider comments, the end marker or its
+absence: `stream.saw_end`), the text and reasoning as assembled, the tool calls as
+parsed, the error, and timings (first byte, first piece, total). The request is kept as
+its size, options, tool names and last 4 messages (images replaced by their size), not
+the whole conversation. Raw stream past 4 MB per call is only counted. The file is 0600
+and holds message bodies: it stays on the machine.
+
 ### Long-term memory and dreaming
 
 The journal (`files/state/journal.jsonl`) keeps every message and tool result. When

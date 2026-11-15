@@ -2,6 +2,7 @@
 //! (chat completions API), Anthropic (Messages API) or a ChatGPT plan (Responses API, signed in
 //! by bia-deploy), streaming the reply. For ChatGPT, bia owns the OAuth session: it renews the
 //! one-hour access token before requests and rotates the 30-day refresh token at least daily.
+use crate::provider_log::Capture;
 use crate::tools::{Msg, Role, ToolCall, ToolSpec};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -925,11 +926,25 @@ impl Remote {
         _thinking: bool,
         timeout: Duration,
     ) -> Result<RemoteResult> {
-        match self.api {
-            Api::OpenAi => self.generate_openai(system, tools, history, on_piece, timeout),
-            Api::Anthropic => self.generate_anthropic(system, tools, history, on_piece, timeout),
-            Api::Responses => self.generate_responses(system, tools, history, on_piece, timeout),
-        }
+        let mut cap = Capture::new(&self.provider, &self.model);
+        let t0 = std::time::Instant::now();
+        let (mut first_ms, mut reasoning) = (None, String::new());
+        let mut piece = |thought: bool, p: &str| {
+            first_ms.get_or_insert_with(|| t0.elapsed().as_millis());
+            if thought {
+                reasoning.push_str(p);
+            }
+            on_piece(thought, p)
+        };
+        let out = match self.api {
+            Api::OpenAi => self.generate_openai(system, tools, history, &mut piece, timeout, &mut cap),
+            Api::Anthropic => self.generate_anthropic(system, tools, history, &mut piece, timeout, &mut cap),
+            Api::Responses => self.generate_responses(system, tools, history, &mut piece, timeout, &mut cap),
+        };
+        drop(piece);
+        cap.pieces(first_ms, reasoning);
+        cap.finish(&out);
+        out
     }
 
     // ---------------- OpenAI-compatible chat completions ----------------
@@ -1009,6 +1024,7 @@ impl Remote {
         history: &[Msg],
         on_piece: &mut dyn FnMut(bool, &str) -> bool,
         timeout: Duration,
+        cap: &mut Capture,
     ) -> Result<RemoteResult> {
         let gemini = self.provider == "gemini";
         let mut body = json!({
@@ -1042,10 +1058,14 @@ impl Remote {
                 .header("HTTP-Referer", "https://bia.local")
                 .header("X-Title", "bia");
         }
+        let url = format!("{}/chat/completions", self.base_url);
+        cap.request(&url, &body);
         let resp = req.send_json(&body).context("request")?;
         let status = resp.status().as_u16();
+        cap.response(status, resp.headers());
         if status >= 400 {
             let text = resp.into_body().read_to_string().unwrap_or_default();
+            cap.error_body(&text);
             bail!(
                 "HTTP {status}: {}",
                 text.chars().take(400).collect::<String>()
@@ -1059,6 +1079,7 @@ impl Remote {
         let mut stop = String::from("end");
         for line in reader.lines() {
             let line = line.context("stream read")?;
+            cap.line(&line);
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
@@ -1228,6 +1249,7 @@ impl Remote {
         history: &[Msg],
         on_piece: &mut dyn FnMut(bool, &str) -> bool,
         timeout: Duration,
+        cap: &mut Capture,
     ) -> Result<RemoteResult> {
         let mut forced = false;
         loop {
@@ -1260,16 +1282,20 @@ impl Remote {
                     Value::Array(fns)
                 };
             }
+            let url = format!("{}/responses", self.base_url);
+            cap.request(&url, &body);
             let resp = self
                 .agent(timeout)
-                .post(&format!("{}/responses", self.base_url))
+                .post(&url)
                 .header("Authorization", &format!("Bearer {token}"))
                 .header("Content-Type", "application/json")
                 .send_json(&body)
                 .context("request")?;
             let status = resp.status().as_u16();
+            cap.response(status, resp.headers());
             if status >= 400 {
                 let text = resp.into_body().read_to_string().unwrap_or_default();
+                cap.error_body(&text);
                 let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
                 let code = v["error"]["code"].as_str().unwrap_or("").to_string();
                 let msg = v["error"]["message"].as_str().unwrap_or("").to_string();
@@ -1294,16 +1320,26 @@ impl Remote {
                 }
                 bail!("HTTP {status}: {}", chatgpt_plan_error(&code, &msg, &text));
             }
-            return Self::read_responses_stream(
+            return Self::read_responses_stream_cap(
                 BufReader::new(resp.into_body().into_reader()),
                 on_piece,
+                cap,
             );
         }
     }
 
+    #[cfg(test)]
     fn read_responses_stream(
         reader: impl BufRead,
         on_piece: &mut dyn FnMut(bool, &str) -> bool,
+    ) -> Result<RemoteResult> {
+        Self::read_responses_stream_cap(reader, on_piece, &mut Capture::default())
+    }
+
+    fn read_responses_stream_cap(
+        reader: impl BufRead,
+        on_piece: &mut dyn FnMut(bool, &str) -> bool,
+        cap: &mut Capture,
     ) -> Result<RemoteResult> {
         let mut text = String::new();
         let mut calls = vec![];
@@ -1312,6 +1348,7 @@ impl Remote {
         let mut completed = false;
         for line in reader.lines() {
             let line = line.context("stream read")?;
+            cap.line(&line);
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };
@@ -1449,6 +1486,7 @@ impl Remote {
         history: &[Msg],
         on_piece: &mut dyn FnMut(bool, &str) -> bool,
         timeout: Duration,
+        cap: &mut Capture,
     ) -> Result<RemoteResult> {
         let mut msgs = Self::anthropic_messages(history);
         if let Some(last) = msgs.last_mut() {
@@ -1490,9 +1528,11 @@ impl Remote {
             body["thinking"] = t;
         }
         let agent = self.agent(timeout);
+        let url = format!("{}/v1/messages", self.base_url);
         let resp = loop {
+            cap.request(&url, &body);
             let mut req = agent
-                .post(&format!("{}/v1/messages", self.base_url))
+                .post(&url)
                 .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
                 .header("Content-Type", "application/json");
@@ -1501,8 +1541,10 @@ impl Remote {
             }
             let resp = req.send_json(&body).context("request")?;
             let status = resp.status().as_u16();
+            cap.response(status, resp.headers());
             if status >= 400 {
                 let text = resp.into_body().read_to_string().unwrap_or_default();
+                cap.error_body(&text);
                 // A model or proxy that refuses the thinking config: answer without it.
                 if status == 400 && text.contains("thinking") && body.get("thinking").is_some() {
                     body.as_object_mut().unwrap().remove("thinking");
@@ -1522,6 +1564,7 @@ impl Remote {
         let mut stop = String::from("end_turn");
         for line in reader.lines() {
             let line = line.context("stream read")?;
+            cap.line(&line);
             let Some(data) = line.strip_prefix("data:") else {
                 continue;
             };

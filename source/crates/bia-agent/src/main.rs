@@ -21,6 +21,7 @@ mod mcp_update;
 mod me;
 mod memory;
 mod outbox;
+mod provider_log;
 mod release;
 mod remote;
 mod repairs;
@@ -729,6 +730,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     };
     let report = (!talkers.is_empty()).then(|| report_back(&talkers, was_update));
     // the previous run crashed and restarted by itself (crash.rs): say what crashed
+    // the last provider_log::KEEP cloud-brain calls in full (files/state/provider.jsonl)
+    provider_log::init(&paths.files.join("state"));
     let crashed = crash::take_last(&paths.files.join("state"));
     let how = if let Some(c) = &crashed {
         boot.note(&format!("restarted after a crash: {}", c.message));

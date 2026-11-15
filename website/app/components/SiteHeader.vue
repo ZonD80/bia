@@ -5,10 +5,6 @@
         <span class="top__potato"><PotatoMark label="" /></span>
         <span>bia</span>
       </NuxtLink>
-      <button class="top__menu" type="button" :aria-expanded="open" aria-controls="primary-nav" @click="open = !open">
-        <span class="sr-only">{{ $t('common:menu') }}</span>
-        <span class="top__bars" aria-hidden="true"><i /><i /><i /></span>
-      </button>
       <nav id="primary-nav" class="top__nav" :aria-label="$t('common:primary')" @click="open = false">
         <NuxtLink :to="$lp('/use-cases')">{{ $t('common:who_it_is_for') }}</NuxtLink>
         <NuxtLink :to="$lp('/features')">{{ $t('common:what_it_can_do') }}</NuxtLink>
@@ -16,9 +12,16 @@
         <NuxtLink :to="$lp('/cloud')">bia cloud</NuxtLink>
         <NuxtLink :to="$lp('/faq')">{{ $t('common:faq') }}</NuxtLink>
         <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>
-        <LangSwitch />
         <NuxtLink class="btn btn--primary top__cta" :to="$lp('/download')">{{ $t('common:get_bia') }}</NuxtLink>
       </nav>
+      <!-- outside the menu: the menu closes on any tap inside it -->
+      <div class="top__end">
+        <LangSwitch />
+        <button class="top__menu" type="button" :aria-expanded="open" aria-controls="primary-nav" @click="open = !open">
+          <span class="sr-only">{{ $t('common:menu') }}</span>
+          <span class="top__bars" aria-hidden="true"><i /><i /><i /></span>
+        </button>
+      </div>
     </div>
   </header>
 </template>
@@ -59,6 +62,7 @@ const open = ref(false)
   margin-top: -0.4rem;
 }
 .top__nav {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 0.3rem 1.4rem;
@@ -77,6 +81,12 @@ const open = ref(false)
   min-height: 2.5rem;
   padding: 0.45rem 1.1rem;
   font-size: 0.92rem;
+}
+.top__end {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: 1rem;
 }
 .top__menu {
   display: none;

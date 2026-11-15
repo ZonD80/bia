@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.11
+
+### Changes
+- bia now keeps its last 20 exchanges with the cloud model in full in files/state/provider.jsonl, so a turn where it thinks but then neither answers nor does anything can be traced: why the model stopped, whether the reply came through whole, and the provider's request id. The file holds message text, stays on the machine and is readable only by bia.
+- The language menu on ownbia.com sits next to the menu button on phones and no longer closes the menu when tapped.
+
+### For bia
+- When a turn of yours ended with no text and no tool call, or root asks why a reply never came, read files/state/provider.jsonl (one JSON line per call, newest last): result.empty, result.stop (finish_reason), stream.saw_end (false = the stream ended early), headers (request ids), raw (every stream line). Ask root before sending any of it anywhere: it holds message bodies.
+
 ## 2.2.10
 
 ### Changes

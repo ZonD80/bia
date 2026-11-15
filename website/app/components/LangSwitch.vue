@@ -24,6 +24,13 @@ const box = ref<HTMLDetailsElement>()
 
 const to = (l: Locale) => localePath(stripLocale(route.fullPath), l)
 
+// a tap anywhere else closes the list
+function outside(e: Event) {
+  if (box.value?.open && !box.value.contains(e.target as Node)) box.value.open = false
+}
+onMounted(() => document.addEventListener('click', outside))
+onBeforeUnmount(() => document.removeEventListener('click', outside))
+
 function choose(l: Locale) {
   try {
     localStorage.setItem(LOCALE_KEY, l)
@@ -74,8 +81,4 @@ function choose(l: Locale) {
 }
 .lang__list a:hover { background: var(--accent-soft); }
 .lang__list a[aria-current] { color: var(--accent); }
-@media (max-width: 860px) {
-  .lang { margin-top: 0.9rem; }
-  .lang__list { position: static; margin-top: 0.4rem; box-shadow: none; }
-}
 </style>
