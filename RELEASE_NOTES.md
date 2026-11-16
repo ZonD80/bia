@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.12
+
+### Changes
+- Telegram: bia can now join a voice or video chat in an ordinary (basic) Telegram group. Before, joining failed with a misleading "stale access hash" error however often it was retried; only supergroups and channels worked. Joining in private supergroups is more reliable too.
+
+### For bia
+- telegram_call_join_group now works in basic groups (chat ids like telegram:-5426103755) as well as supergroups and channels (telegram:-100…). It joins only a chat already running there and does not start one; if it says no group call is active, ask root to start it.
+- If a group call join failed earlier with "stale access hash", that was this bug: try telegram_call_join_group again when root asks.
+
 ## 2.2.11
 
 ### Changes

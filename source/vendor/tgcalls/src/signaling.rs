@@ -2,12 +2,57 @@ use crate::error::TgCallsError;
 use ferogram::{tl, Client};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-async fn resolve_channel(client: &Client, chat_id: i64) -> Result<(i64, i64), TgCallsError> {
-    let channel_id = if chat_id < -1_000_000_000_000 {
-        (-chat_id) - 1_000_000_000_000
+/// The group a call lives in. Basic groups (`-<id>`, below 10^12) are
+/// `Chat`s, reached by bare id; supergroups/channels (`-100<id>`) need an
+/// access hash. Treating a basic group as a channel made Telegram answer
+/// `CHANNEL_INVALID`, which ferogram reports as a "stale access hash".
+enum GroupPeer {
+    Basic(i64),
+    Channel(i64, i64),
+}
+
+impl GroupPeer {
+    fn input_peer(&self) -> tl::enums::InputPeer {
+        match *self {
+            GroupPeer::Basic(chat_id) => {
+                tl::enums::InputPeer::Chat(tl::types::InputPeerChat { chat_id })
+            }
+            GroupPeer::Channel(channel_id, access_hash) => {
+                tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
+                    channel_id,
+                    access_hash,
+                })
+            }
+        }
+    }
+}
+
+/// `(is_basic, raw id)` for a bot-API style group id: `-<chat>` or `-100<channel>`.
+fn group_id(chat_id: i64) -> Option<(bool, i64)> {
+    if chat_id >= 0 {
+        None
+    } else if chat_id > -1_000_000_000_000 {
+        Some((true, -chat_id))
     } else {
-        -chat_id
+        Some((false, (-chat_id) - 1_000_000_000_000))
+    }
+}
+
+async fn resolve_group(client: &Client, chat_id: i64) -> Result<GroupPeer, TgCallsError> {
+    let channel_id = match group_id(chat_id) {
+        None => return Err(TgCallsError::NoActiveGroupCall),
+        Some((true, id)) => return Ok(GroupPeer::Basic(id)),
+        Some((false, id)) => id,
     };
+
+    // The client's peer cache knows the real hash for any channel it has
+    // seen (dialogs, resolve, messages); hash 0 is only valid for bots.
+    let peer = tl::enums::Peer::Channel(tl::types::PeerChannel { channel_id });
+    if let Ok(tl::enums::InputPeer::Channel(c)) = client.resolve_to_input_peer(&peer).await {
+        if c.access_hash != 0 {
+            return Ok(GroupPeer::Channel(c.channel_id, c.access_hash));
+        }
+    }
 
     let chats = client
         .invoke(&tl::functions::channels::GetChannels {
@@ -25,32 +70,40 @@ async fn resolve_channel(client: &Client, chat_id: i64) -> Result<(i64, i64), Tg
         tl::enums::messages::Chats::Slice(c) => extract_access_hash(c.chats)?,
     };
 
-    Ok((channel_id, access_hash))
+    Ok(GroupPeer::Channel(channel_id, access_hash))
 }
 
 pub async fn resolve_call(
     client: &Client,
     chat_id: i64,
 ) -> Result<tl::enums::InputGroupCall, TgCallsError> {
-    let (channel_id, access_hash) = resolve_channel(client, chat_id).await?;
-
-    let full = client
-        .invoke(&tl::functions::channels::GetFullChannel {
-            channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
-                channel_id,
-                access_hash,
-            }),
-        })
-        .await?;
-
-    let full_chat = match full {
-        tl::enums::messages::ChatFull::ChatFull(f) => f.full_chat,
+    let call = match resolve_group(client, chat_id).await? {
+        GroupPeer::Basic(id) => {
+            let tl::enums::messages::ChatFull::ChatFull(f) = client
+                .invoke(&tl::functions::messages::GetFullChat { chat_id: id })
+                .await?;
+            match f.full_chat {
+                tl::enums::ChatFull::ChatFull(cf) => cf.call,
+                tl::enums::ChatFull::ChannelFull(cf) => cf.call,
+                _ => None,
+            }
+        }
+        GroupPeer::Channel(channel_id, access_hash) => {
+            let tl::enums::messages::ChatFull::ChatFull(f) = client
+                .invoke(&tl::functions::channels::GetFullChannel {
+                    channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                        channel_id,
+                        access_hash,
+                    }),
+                })
+                .await?;
+            match f.full_chat {
+                tl::enums::ChatFull::ChannelFull(cf) => cf.call,
+                _ => None,
+            }
+        }
     };
-
-    match full_chat {
-        tl::enums::ChatFull::ChannelFull(cf) => cf.call.ok_or(TgCallsError::NoActiveGroupCall),
-        _ => Err(TgCallsError::NoActiveGroupCall),
-    }
+    call.ok_or(TgCallsError::NoActiveGroupCall)
 }
 
 /// Starts a new voice chat in `chat_id`. Fails if one is already active -
@@ -59,7 +112,7 @@ pub async fn create_group_call(
     client: &Client,
     chat_id: i64,
 ) -> Result<tl::enums::InputGroupCall, TgCallsError> {
-    let (channel_id, access_hash) = resolve_channel(client, chat_id).await?;
+    let peer = resolve_group(client, chat_id).await?.input_peer();
 
     // Telegram just needs this for de-duplicating retried requests; a
     // time-based value is unique enough without pulling in a `rand` dep.
@@ -71,10 +124,7 @@ pub async fn create_group_call(
     let updates = client
         .invoke(&tl::functions::phone::CreateGroupCall {
             rtmp_stream: false,
-            peer: tl::enums::InputPeer::Channel(tl::types::InputPeerChannel {
-                channel_id,
-                access_hash,
-            }),
+            peer,
             random_id,
             title: None,
             schedule_date: None,
@@ -622,4 +672,16 @@ fn extract_created_call(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group_id;
+
+    #[test]
+    fn basic_and_super_group_ids() {
+        assert_eq!(group_id(-5426103755), Some((true, 5426103755)));
+        assert_eq!(group_id(-1001234567890), Some((false, 1234567890)));
+        assert_eq!(group_id(922640895), None);
+    }
 }

@@ -798,7 +798,7 @@ fn main() {
         )
         .tool(
             "call_join_group",
-            "Join or create a group voice chat in a Telegram group/channel. chat_id is the group. Speaker identity in group calls uses per-participant SSRC when media is available.",
+            "Join the voice or video chat already running in a Telegram group (basic or supergroup) or channel; it does not start one. chat_id is the group. Speaker identity in group calls uses per-participant SSRC when media is available.",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "group or channel chat number, telegram:<id>, or @username"}
             }}),
