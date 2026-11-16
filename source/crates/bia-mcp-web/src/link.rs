@@ -665,12 +665,19 @@ impl Links {
             return;
         }
         let rt = self.rt(&mut inner, name);
+        // a message (not an edit, reaction or read mark) brings a link that is down up
+        let message = action["t"] == "send";
         let o = Out { cid: format!("o{}", hex(&rnd_bytes::<6>())), rev, action };
         rt.st.outbox.push(o.clone());
+        if message && rt.link.is_none() {
+            bring_up(rt, Instant::now());
+        }
         self.save_state(name, &rt.st);
         if let Some(l) = rt.link.as_ref().filter(|l| l.dialed) {
             l.w.json(&out_frame(&o));
         }
+        drop(inner);
+        self.changed.notify_all();
     }
 
     // ---- admission (server side, before the WebSocket upgrade) ----
@@ -1232,7 +1239,7 @@ impl Links {
                 // it closed the link while this bia was away: do not come back by itself
                 rt.st.want = false;
                 rt.next_dial = None;
-                Some(format!("{name} closed the link while this bia was away, so it stays closed.{} What you send waits here; web_peer_connect asks {name} for the link again.", says(&why)))
+                Some(format!("{name} closed the link while this bia was away, so it stays closed.{} What you send waits here, and sending to {name} asks it for the link again (so does web_peer_connect).", says(&why)))
             }
             _ => None,
         };
@@ -1279,7 +1286,7 @@ impl Links {
                 (Some("disconnect"), _) => {
                     rt.st.want = false;
                     if is_peer {
-                        tell = Some(format!("{name} closed the link, so it stays closed.{} What you send waits here; web_peer_connect asks {name} for the link again.", says(&why)));
+                        tell = Some(format!("{name} closed the link, so it stays closed.{} What you send waits here, and sending to {name} asks it for the link again (so does web_peer_connect).", says(&why)));
                     }
                 }
                 (_, Some(_)) => {}
@@ -2174,6 +2181,50 @@ pub fn tool_root(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
     }
 }
 
+/// A message is sent to a peer whose link is down (edits, reactions and read marks only wait): bring the link up now, as
+/// `web_peer_connect` does. A link either end closed on purpose is asked for again (the
+/// other bia may close it again, with a reason); after a network loss the backoff wait is
+/// cut short, at most once every SEND_REDIAL. Not while a ban stands on either side, nor
+/// for a bia that cannot link (older, refused our certificate): those retry hourly.
+/// Returns whether a dial is (now) on its way.
+fn bring_up(rt: &mut Rt, now: Instant) -> bool {
+    if !rt.st.banned_by.is_empty() || rt.st.banned_us || !rt.st.cannot.is_empty() {
+        return false;
+    }
+    if rt.dialing {
+        return true;
+    }
+    if !rt.st.want || rt.st.closed {
+        rt.st.want = true;
+        rt.st.asked = true;
+        rt.st.closed = false;
+        rt.st.closed_why.clear();
+        rt.attempts = 0;
+        rt.next_dial = Some(now);
+        return true;
+    }
+    let recent = rt.err_at.is_some_and(|t| now.saturating_duration_since(t) < SEND_REDIAL);
+    if !recent && rt.next_dial.is_none_or(|t| t > now) {
+        rt.next_dial = Some(now);
+    }
+    true
+}
+
+/// Sends to a peer that is down dial it again at most this often (the regular backoff goes on).
+const SEND_REDIAL: Duration = Duration::from_secs(5);
+
+/// For a send to `identity` while it is not connected: whether this bia is bringing the
+/// link up (a peer it can dial), so the tool can say so.
+pub fn bringing_up(identity: &str) -> bool {
+    links().is_some_and(|l| {
+        let inner = l.inner.lock().unwrap();
+        inner.peers.get(identity).is_some_and(|u| !u.is_empty())
+            && inner.rt.get(identity).is_some_and(|r| {
+                r.link.is_none() && r.st.want && r.st.banned_by.is_empty() && !r.st.banned_us && r.st.cannot.is_empty()
+            })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2209,5 +2260,48 @@ mod tests {
         let o = Out { cid: "o1".into(), rev: 3, action: json!({"t": "edit", "id": "b1", "text": "x"}) };
         assert_eq!(out_frame(&o), json!({"t": "edit", "id": "b1", "text": "x", "cid": "o1"}));
         let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn sending_brings_a_link_up() {
+        let now = Instant::now();
+        // closed on purpose (either end): asked for again, at once
+        let mut rt = Rt::default();
+        rt.st.closed = true;
+        rt.st.closed_why = "away".into();
+        rt.attempts = 6;
+        assert!(bring_up(&mut rt, now));
+        assert!(rt.st.want && rt.st.asked && !rt.st.closed && rt.st.closed_why.is_empty());
+        assert_eq!((rt.attempts, rt.next_dial), (0, Some(now)));
+        let mut rt = Rt::default(); // the other bia closed it: want=false, closed=false here
+        assert!(bring_up(&mut rt, now));
+        assert!(rt.st.want && rt.st.asked && rt.next_dial == Some(now));
+
+        // a network loss waiting out its backoff: dial now, keep the backoff count
+        let mut rt = Rt::default();
+        rt.st.want = true;
+        rt.attempts = 5;
+        rt.next_dial = Some(now + Duration::from_secs(300));
+        rt.err_at = Some(now - Duration::from_secs(60));
+        assert!(bring_up(&mut rt, now));
+        assert_eq!((rt.attempts, rt.next_dial, rt.st.asked), (5, Some(now), false));
+        // ... but not again right after a failed dial
+        rt.next_dial = Some(now + Duration::from_secs(300));
+        rt.err_at = Some(now - Duration::from_secs(1));
+        assert!(bring_up(&mut rt, now));
+        assert_eq!(rt.next_dial, Some(now + Duration::from_secs(300)));
+
+        // bans and bias that cannot link stay as they are
+        for f in [
+            |r: &mut Rt| r.st.banned_by = "root".into(),
+            |r: &mut Rt| r.st.banned_us = true,
+            |r: &mut Rt| r.st.cannot = "old".into(),
+        ] {
+            let mut rt = Rt::default();
+            rt.st.closed = true;
+            f(&mut rt);
+            assert!(!bring_up(&mut rt, now));
+            assert!(!rt.st.want && rt.st.closed && rt.next_dial.is_none());
+        }
     }
 }

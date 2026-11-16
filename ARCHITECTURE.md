@@ -476,7 +476,12 @@ owns are taken from it: text, files and edits of its own messages, its reactions
 votes, and read marks on our messages. Pins stay local. A message from the peer reaches
 the model once, the first time it is stored, whichever way it came. Each bia dials its
 peers that have an address (`state/links/<name>.json`: `want`, `rx`, ban), at most 4 at
-once, redialing with jittered backoff (5–10 s doubling to 10 min). The first link of a
+once, redialing with jittered backoff (5–10 s doubling to 10 min). A message sent to a peer
+whose link is down brings it up at once, as `web_peer_connect` does: after a network loss
+it dials now (at most every 5 s; the backoff count stays), and a link either end closed on
+purpose is asked for again (hello `redial: false`; the other bia may close it again, with a
+reason). Not while a ban stands on either side or for a bia that cannot link (older, our
+certificate refused). Edits, reactions and read marks only wait in the outbox. The first link of a
 pair catches up from `rx: 0`. Our certificate at a peer is renewed over HTTPS
 (`POST /v1/pki/renew`) 30 days before it expires.
 

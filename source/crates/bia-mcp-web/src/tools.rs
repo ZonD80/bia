@@ -56,11 +56,20 @@ pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
     let text = arg_str_opt(&args, "text").unwrap_or_default().to_string();
     let lang = s(&args, "lang");
     let reply_to = arg_str_opt(&args, "reply_to");
-    let waits = if crate::link::online(&identity) { "" } else { "; they are not connected now, it waits there for them" };
+    let waits = || {
+        if crate::link::online(&identity) {
+            ""
+        } else if crate::link::bringing_up(&identity) {
+            "; the link to it is down: this bia is bringing it up now, and the message goes once it is up"
+        } else {
+            "; they are not connected now, it waits there for them"
+        }
+    };
     if arg_bool(&args, "voice", false) {
         let id = chat::say_voice(&identity, &text, &lang, reply_to)?;
         return Ok(format!(
-            "sent to {identity}@{channel} (voice message id {id}){waits}"
+            "sent to {identity}@{channel} (voice message id {id}){}",
+            waits()
         ));
     }
     let files = arg_str_list(&args, "files");
@@ -78,7 +87,7 @@ pub fn send(_: &Ctx, args: Value) -> Result<String, String> {
             Err(e) => format!("sent to {identity}@{channel} (message id {id}); NOT spoken in the active web call: {e}"),
         });
     }
-    Ok(format!("sent to {identity}@{channel} (message id {id}){waits}"))
+    Ok(format!("sent to {identity}@{channel} (message id {id}){}", waits()))
 }
 
 pub fn edit(_: &Ctx, args: Value) -> Result<String, String> {

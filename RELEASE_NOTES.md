@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.13
+
+### Changes
+- Links between bias: when bia writes to another bia whose link is down, it now brings the link up by itself. Before, the message waited until the link came back on its own (up to 10 minutes after a network loss) and, if either bia had closed the link, until someone reconnected it by hand. A ban still keeps a link closed.
+
+### For bia
+- You no longer need web_peer_connect before writing to a peer bia: say to it brings the link up and the message goes once it is up, also when you or it closed the link (it may close it again, with a reason). Edits, reactions and read marks do not reopen a closed link; they wait.
+
 ## 2.2.12
 
 ### Changes

@@ -195,7 +195,7 @@ check(bool(got) and os.stat(f"{fred.files}/{got[0]}").st_uid == BIA_UID and os.s
 fred.stop(signal.SIGTERM)
 time.sleep(1)
 txt, err = alex.say("fred", "while you were down")
-check(not err and "waits there" in txt, f"send to a bia that is down waits: {txt}")
+check(not err and "bringing it up now" in txt, f"send to a bia that is down waits, and the link is being brought up: {txt}")
 alex.tool("react", identity="fred", message_id=mid, emoji="🔥")
 fred.start()
 n = fred.msg("alex", "while you were down", 60)
@@ -205,12 +205,20 @@ check(fred.msg("alex", "[reaction] 🔥", 10) is not None, "and the reaction ale
 alex.stop(signal.SIGTERM)
 time.sleep(1)
 txt, err = fred.say("alex", "while alex was down")
-check(not err and "waits there" in txt, f"fred's send waits too: {txt}")
+check(not err and "bringing it up now" in txt, f"fred's send waits too: {txt}")
 alex.start()
 check(alex.msg("fred", "while alex was down", 60) is not None, "alex gets it once it is back")
 check(alex.msg("fred", "hello fred", 3) is None and alex.msg("fred", "hi alex", 1) is None, "nothing old is delivered again after a restart")
 
-# ---- the roles swapped: the client stops dialing, the other side dials
+def settle_up(a, b, secs=40):
+    end = time.time() + secs
+    while time.time() < end:
+        if "online since" in a.link(b.name) and "online since" in b.link(a.name):
+            return True
+        time.sleep(0.5)
+    return False
+
+# ---- closing a link, and messages that bring it back
 cl, sv = dialer()
 txt, err = cl.tool("peer_disconnect", peer=sv.name)
 check(err and "reason is required" in txt, f"a disconnect without a reason is refused: {txt}")
@@ -219,12 +227,31 @@ check(not err and "disconnected" in txt and "told it why" in txt, f"{cl.name} (t
 n = sv.notice(f"{cl.name} closed the link, so it stays closed", 20)
 check(n is not None and "It says: “swapping the roles”" in n["message"], f"{sv.name} is told at once, with the reason on one line: {n and n['message']}")
 time.sleep(1)
+# a message to a closed link brings it up again, whichever end closed it
 txt, err = cl.say(sv.name, "after disconnect")
-check(not err and "waits there" in txt, f"a send after disconnect is kept: {txt}")
+check(not err and "bringing it up now" in txt, f"a send after its own disconnect brings the link up: {txt}")
+own = (cl, txt.split("message id ")[1].split(")")[0]) if "message id " in txt else (cl, "")
+check(sv.msg(cl.name, "after disconnect", 30) is not None, f"…and arrives at {sv.name}")
+check(settle_up(cl, sv), "the link is up again")
+cl.tool("peer_disconnect", peer=sv.name, reason="again")
+time.sleep(1)
+txt, err = sv.say(cl.name, "after their disconnect")
+check(not err and "bringing it up now" in txt, f"{sv.name}'s send to a link the other end closed asks for it again: {txt}")
+check(cl.msg(sv.name, "after their disconnect", 30) is not None, f"…and arrives at {cl.name}")
+# the roles swapped: the client stops dialing, the other side dials
+check(settle_up(cl, sv), "the link is up again")
+cl, sv = dialer()
+cl.tool("peer_disconnect", peer=sv.name, reason="swapping the roles")
+time.sleep(1)
+# a reaction on that first message (made by `own[0]`) waits and does not dial
+rc, other = own[0], (fred if own[0] is alex else alex)
+rc.tool("react", identity=other.name, message_id=own[1], emoji="👀")
+time.sleep(3)
+check("online since" not in cl.link(sv.name), "a reaction does not bring a closed link up")
 txt, err = sv.tool("peer_connect", peer=cl.name)
 check(not err and "connected" in txt, f"{sv.name} dials {cl.name}: {txt}")
 check(dialer()[0] is sv, f"{sv.name} is the client now")
-check(sv.msg(cl.name, "after disconnect", 30) is not None, f"{cl.name}'s message waiting during the disconnect arrives ({cl.name} is the server now)")
+check(other.msg(rc.name, "[reaction] 👀", 30) is not None, f"{rc.name}'s reaction made while the link was closed arrives once it is up")
 sv.say(cl.name, "as client")
 check(cl.msg(sv.name, "as client", 30) is not None, "the client's message arrives as an action")
 src2 = f"{sv.files}/as-client.bin"

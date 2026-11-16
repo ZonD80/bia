@@ -180,10 +180,10 @@ fn main() {
             pki::peer_add)
         .tool("peer_list", "Other bias this one has trust with (active), is waiting for (pending) or was refused by, with each link's state (online, offline, banned), changes still waiting to go and files in transfer.",
             obj(json!({}), &[]), pki::peer_list)
-        .tool("peer_connect", "Open the link with a peer now (it stays up and reconnects by itself after a network loss or a restart on either side). Not needed to talk: what you say waits until the link is up. Waits up to 15 s.",
+        .tool("peer_connect", "Open the link with a peer now (it stays up and reconnects by itself after a network loss or a restart on either side). Not needed to talk: sending to a peer whose link is down brings it up by itself (also one either side closed), and the message goes once it is up. Waits up to 15 s.",
             obj(json!({"peer": {"type": "string", "description": "peer name from web_peer_list"}}), &["peer"]),
             link::tool_connect)
-        .tool("peer_disconnect", "Close the link with a peer and stop dialing it; reason tells the other bia why. It may connect again (web_peer_ban keeps it out); what you send meanwhile waits.",
+        .tool("peer_disconnect", "Close the link with a peer and stop dialing it; reason tells the other bia why. It may connect again (web_peer_ban keeps it out); sending to it opens the link again.",
             obj(json!({"peer": {"type": "string"}, "reason": {"type": "string", "description": "one line: the other bia is told it, also if it is away now and comes back later"}}), &["peer", "reason"]), link::tool_disconnect)
         .tool("peer_ban", "Refuse an identity on web (another bia, an agent, a person): its sessions are refused until web_peer_unban. Use when you do not want it to talk to this bia.",
             obj(json!({"peer": {"type": "string", "description": "the identity (a peer name or anyone's web identity)"}}), &["peer"]), link::tool_ban)
