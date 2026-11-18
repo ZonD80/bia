@@ -426,7 +426,7 @@ def check(scen):
             and (os.stat(bd).st_mode & 0o777) == 0o700
         want(ok, f"data in the home that is not linked keeps owner {DATA_UID} and mode 700")
         rf = f"{d.root}/{ROOTS}"
-        want(os.path.isfile(rf) and os.stat(rf).st_uid == 1000 and (os.stat(rf).st_mode & 0o777) == 0o600, "root's 0600 file in the home is bia's, still 0600")
+        want(os.path.isfile(rf) and os.stat(rf).st_uid == 0 and (os.stat(rf).st_mode & 0o777) == 0o600, "root's 0600 file in the home stays root's and 0600 (2.2.14)")
         bins = f"{d.root}/home/bia/MCPs"
         strays = [n for n in os.listdir(bins) if os.stat(f"{bins}/{n}").st_uid not in (0, 1000)]
         want(not strays, f"MCP folders are bia's or root's {strays or ''}")

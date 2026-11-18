@@ -5,6 +5,16 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.14
+
+### Changes
+- Files in bia's home keep their exact owner and permissions across updates and restarts. Before, every start gave root's files to bia, which undid the owners an update had just restored. Only folders bia creates itself are made bia's, and a fresh install is set up once as before.
+- bia's web certificate no longer names addresses of other machines. A minute after start and every 6 hours, bia checks each address added to its certificate by hand. Where another bia answers instead of this one, the address leaves the certificate and the certificate is renewed. Peers that already trust this bia are unaffected. Addresses where nothing answers are kept, as a router may forward a different port here.
+
+### For bia
+- A file in your home that root owns stays root's now. Read or change it with sudo instead of expecting it to become yours after a restart. Do not chown files to bia to "fix" them unless root asks.
+- If the console log shows "left the server certificate (another bia lives there)", tell root which address was removed. An app or .biaconfig that dialled that address needs a new one (pki_biaconfig with the right address).
+
 ## 2.2.13
 
 ### Changes

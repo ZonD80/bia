@@ -167,26 +167,58 @@ pub fn boot_dev() -> Option<String> {
 
 /// Create `/home/bia/{model,files,MCPs}` on the root filesystem.
 pub fn ensure_volume_dirs() -> Result<()> {
+    // A home that never booted (no files/state/version yet) is the image's: what the image
+    // packer left root's becomes bia's once. After that every file keeps the owner and mode
+    // it has (an update restores them from the fold), only folders made here are bia's.
+    let fresh = !Path::new("/home/bia/files/state/version").exists();
     fs::create_dir_all("/home/bia").ok();
     for d in ["model", "files", "MCPs"] {
         let p = format!("/home/bia/{d}");
-        fs::create_dir_all(&p).with_context(|| format!("create {p}"))?;
+        make_dir_bias(Path::new(&p)).with_context(|| format!("create {p}"))?;
     }
-    // The agent and its MCPs run as root; what they wrote becomes bia's, so Chrome,
-    // schedules and bash as bia can use it. Files of other users (a database's or a
-    // container's data kept in the home) stay theirs.
-    let _ = std::process::Command::new("chown").args(["bia:bia", "/home/bia"]).status();
-    let _ = std::process::Command::new("find")
-        .args(["/home/bia", "-xdev", "-uid", "0", "-exec", "chown", "-h", "bia:bia", "{}", "+"])
-        .status();
+    if fresh {
+        let _ = std::process::Command::new("chown").args(["bia:bia", "/home/bia"]).status();
+        let _ = std::process::Command::new("find")
+            .args(["/home/bia", "-xdev", "-uid", "0", "-exec", "chown", "-h", "bia:bia", "{}", "+"])
+            .status();
+    }
     Ok(())
+}
+
+/// Create `p` and any missing parents; the folders made here are bia's (existing ones keep
+/// their owner).
+pub fn make_dir_bias(p: &Path) -> std::io::Result<()> {
+    let mut missing = vec![];
+    let mut cur = Some(p);
+    while let Some(c) = cur {
+        if c.exists() {
+            break;
+        }
+        missing.push(c.to_path_buf());
+        cur = c.parent();
+    }
+    fs::create_dir_all(p)?;
+    if let Some((uid, gid)) = bia_ids() {
+        for m in missing {
+            let _ = std::os::unix::fs::chown(&m, Some(uid), Some(gid));
+        }
+    }
+    Ok(())
+}
+
+/// bia's uid and gid from /etc/passwd.
+fn bia_ids() -> Option<(u32, u32)> {
+    let passwd = fs::read_to_string("/etc/passwd").ok()?;
+    let line = passwd.lines().find(|l| l.starts_with("bia:"))?;
+    let mut it = line.split(':').skip(2);
+    Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
 }
 
 /// Create `/home/bia/files/state` and prove the home directory is writable so conversation, FMM and
 /// network settings can be resumed after reboot from the same media.
 pub fn ensure_volume_writable() -> Result<()> {
     let dir = Path::new("/home/bia/files/state");
-    fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    make_dir_bias(dir).with_context(|| format!("create {}", dir.display()))?;
     let probe = dir.join(".writable");
     fs::write(&probe, b"ok").with_context(|| format!("write {}", probe.display()))?;
     let _ = fs::remove_file(&probe);
@@ -198,7 +230,7 @@ pub fn ensure_volume_writable() -> Result<()> {
 pub fn ensure_inbox(files: &Path) {
     for d in ["inbox/web", "inbox/telegram", "inbox/whatsapp", "inbox/messenger", "inbox/instagram", "inbox/max"] {
         let p = files.join(d);
-        if fs::create_dir_all(&p).is_ok() {
+        if make_dir_bias(&p).is_ok() {
             let keep = p.join(".keep");
             if !keep.exists() {
                 let _ = fs::write(&keep, b"");

@@ -398,6 +398,21 @@ impl Web {
                     }
                 }
             });
+        // Fixed extra addresses in the server certificate where another bia lives (one added
+        // while setting up another machine, an old public IP now someone else's): checked a
+        // minute after start and every 6 hours; web-net then reissues without them.
+        let w = web.clone();
+        let _ = std::thread::Builder::new()
+            .name("web-sans".into())
+            .spawn(move || {
+                std::thread::sleep(Duration::from_secs(60));
+                loop {
+                    for ip in w.pki.prune_server_ips(w.port, &lan_ips()) {
+                        w.con.log(&format!("  web: {ip} left the server certificate (another bia lives there)"));
+                    }
+                    std::thread::sleep(Duration::from_secs(6 * 3600));
+                }
+            });
         // Peers this bia asked for a certificate (web_peer_connect): check until their
         // root decides, then tell the model.
         let w = web.clone();

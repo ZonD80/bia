@@ -756,10 +756,13 @@ What an unfold brings back outside `/home/bia` (all in `archive.rs`):
 
 The home keeps its owners and modes (`settle_owners`): every path gets what the archive
 has for it (a database's folder stays its service's, a 0700 folder stays 0700), and a
-path the archive lacks (the image's own files) becomes bia's. When the agent starts,
-root's files in the home become bia's (`sys.rs` `ensure_volume_dirs`: the agent and the
-MCPs write as root, Chrome and schedules read as bia); files of any other user are left
-alone. Before 2.2.7 that start gave every file in the home to bia.
+path the archive lacks (the image's own files) becomes bia's. Nothing changes them
+afterwards: the agent's start (`sys.rs` `ensure_volume_dirs`) gives root's files in the
+home to bia only on a home's first boot (no `files/state/version` yet, the image's own
+files), and otherwise only makes the folders it creates bia's (`make_dir_bias`). A file
+root owns stays root's, so bia reads it with `sudo`. Before 2.2.7 every start gave every
+file in the home to bia, and until 2.2.14 every start gave root's files to bia, which
+undid the owners an update had just restored.
 The ids mean the same on the new system because the accounts were merged first. Only an
 archive without accounts (older than 2.2.7), or one from a machine where bia had another
 uid, gives the whole home to bia as before (`chown_home`), except what system paths link

@@ -260,7 +260,7 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
     ctx.log(&host);
     // Every file in the home keeps the owner and mode it was folded with (a database's
     // folder is its service's); what the archive does not have (the image's own files) is
-    // bia's. Root's files there become bia's when the agent starts (sys.rs), as always. The ids mean the same here: the accounts were
+    // bia's. Nothing chowns them later (sys.rs leaves owners alone after a home's first boot). The ids mean the same here: the accounts were
     // merged above. An archive without accounts, or from a machine where bia had another
     // id, gives the home to bia as before, except what system paths link to.
     let kept: Vec<PathBuf> = links.iter().map(|(_, target)| target.clone()).collect();

@@ -55,6 +55,20 @@ pub const LEAF_DAYS: i64 = 824;
 const SERVER_MAX_DAYS: i64 = 825;
 /// Reissue server cert this many days before `not_after`.
 pub const SERVER_RENEW_WITHIN_DAYS: i64 = 30;
+/// What answers at a server address (`Pki::probe_server_ip`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpProbe {
+    /// this bia (its CA in the presented chain)
+    Ours,
+    /// another bia: a bia server certificate under another CA
+    OtherBia,
+    /// something else, or nothing (refused, timeout): proves nothing, a router may forward
+    /// another port to this bia
+    Unknown,
+}
+
+/// Ports tried at a fixed address besides the one this bia listens on.
+const PROBE_PORTS: [u16; 2] = [443, 8443];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IssuedMeta {
@@ -329,6 +343,63 @@ impl Pki {
         self.reissue_server(ips)?;
         fs::write(&marker, want.join("\n") + "\n").ok();
         Ok(true)
+    }
+
+    /// What answers at `ip:port`: this bia, another bia, or something unknown.
+    pub fn probe_server_ip(&self, ip: std::net::IpAddr, port: u16) -> IpProbe {
+        let url = match ip {
+            std::net::IpAddr::V6(v6) => format!("https://[{v6}]:{port}"),
+            std::net::IpAddr::V4(v4) => format!("https://{v4}:{port}"),
+        };
+        let Ok(ours) = self.ca_pem().and_then(|p| pem_to_cert_ders(&p)) else { return IpProbe::Unknown };
+        let Ok((conn, _)) = client::connect(&url, client::ServerTrust::Any, None) else { return IpProbe::Unknown };
+        let chain = conn.peer_certificates().unwrap_or_default();
+        if chain.iter().any(|c| ours.iter().any(|o| o.as_ref() == c.as_ref())) {
+            return IpProbe::Ours;
+        }
+        let bia_leaf = chain.first().and_then(|d| {
+            let (_, c) = x509_parser::parse_x509_certificate(d.as_ref()).ok()?;
+            let org = c.subject().iter_organization().next()?.as_str().ok()?.to_string();
+            Some(org == "bia")
+        });
+        if bia_leaf == Some(true) { IpProbe::OtherBia } else { IpProbe::Unknown }
+    }
+
+    /// Drop the fixed extra addresses (`server_extra.json` "ips") where another bia lives:
+    /// one answers on `port`, 443 or 8443 there, and none of them leads to this bia.
+    /// Addresses on this machine (`own`) are not probed; an address where nothing or
+    /// something else answers is kept (it may be a NAT that forwards another port here).
+    /// Returns what was removed; the next `ensure_server_sans` reissues without it.
+    pub fn prune_server_ips(&self, port: u16, own: &[std::net::IpAddr]) -> Vec<std::net::IpAddr> {
+        self.prune_server_ips_with(port, own, |ip, p| self.probe_server_ip(ip, p))
+    }
+
+    fn prune_server_ips_with(
+        &self,
+        port: u16,
+        own: &[std::net::IpAddr],
+        probe: impl Fn(std::net::IpAddr, u16) -> IpProbe,
+    ) -> Vec<std::net::IpAddr> {
+        let (names, ips) = self.server_extra();
+        let mut gone = vec![];
+        let mut ports = vec![port];
+        ports.extend(PROBE_PORTS.iter().filter(|p| **p != port));
+        for ip in &ips {
+            if own.contains(ip) || ip.is_loopback() {
+                continue;
+            }
+            let seen: Vec<IpProbe> = ports.iter().map(|p| probe(*ip, *p)).collect();
+            if seen.contains(&IpProbe::OtherBia) && !seen.contains(&IpProbe::Ours) {
+                gone.push(*ip);
+            }
+        }
+        if !gone.is_empty() {
+            let keep: Vec<std::net::IpAddr> = ips.into_iter().filter(|i| !gone.contains(i)).collect();
+            if self.set_server_extra(&names, &keep).is_err() {
+                return vec![];
+            }
+        }
+        gone
     }
 
     /// Verifier of client certificates against this CA (chain and validity time).
@@ -1163,5 +1234,97 @@ mod naming_tests {
             assert_eq!(identity_from_cn(cn), want);
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod server_ip_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::net::IpAddr;
+
+    fn fresh(tag: &str) -> (PathBuf, Pki) {
+        install_crypto_provider();
+        let dir = std::env::temp_dir().join(format!("bia-pki-ips-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let pki = Pki::load_or_create(&dir).unwrap();
+        (dir, pki)
+    }
+
+    /// A TLS listener on 127.0.0.1 with `p`'s server certificate (handshake only).
+    fn listen(p: &Pki) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        p.ensure_server_sans(&["127.0.0.1".parse().unwrap()]).unwrap();
+        let cfg = p.server_config().unwrap();
+        std::thread::spawn(move || {
+            for mut tcp in l.incoming().flatten() {
+                let mut conn = rustls::ServerConnection::new(cfg.clone()).unwrap();
+                while conn.is_handshaking() {
+                    if conn.complete_io(&mut tcp).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        port
+    }
+
+    #[test]
+    fn the_probe_tells_this_bia_from_another_and_from_anything_else() {
+        let (da, a) = fresh("a");
+        let (db, b) = fresh("b");
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(a.probe_server_ip(lo, listen(&a)), IpProbe::Ours);
+        assert_eq!(a.probe_server_ip(lo, listen(&b)), IpProbe::OtherBia, "another bia's CA");
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        assert_eq!(a.probe_server_ip(lo, free), IpProbe::Unknown, "refused");
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let plain = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            for mut s in l.incoming().flatten() {
+                let _ = s.write_all(b"SSH-2.0-OpenSSH_9.6\r\n");
+            }
+        });
+        assert_eq!(a.probe_server_ip(lo, plain), IpProbe::Unknown, "not TLS");
+        let _ = fs::remove_dir_all(da);
+        let _ = fs::remove_dir_all(db);
+    }
+
+    #[test]
+    fn an_address_where_another_bia_lives_leaves_the_certificate() {
+        let (dir, p) = fresh("prune");
+        let ip = |s: &str| -> IpAddr { s.parse().unwrap() };
+        let (other, nat, silent, mine, lan) = (ip("51.91.177.37"), ip("203.0.113.9"), ip("198.51.100.4"), ip("192.0.2.10"), ip("10.0.0.5"));
+        p.set_server_extra(&["bia.example.org".into()], &[other, nat, silent, mine, lan]).unwrap();
+        p.ensure_server_sans(&[lan]).unwrap();
+        let answers = |i: IpAddr, port: u16| match (i, port) {
+            (i, 443) if i == other || i == nat || i == lan => IpProbe::OtherBia,
+            // a router forwards 8443 to this bia, its 443 to another one
+            (i, 8443) if i == nat => IpProbe::Ours,
+            (i, _) if i == mine => IpProbe::Ours,
+            _ => IpProbe::Unknown,
+        };
+        assert_eq!(p.prune_server_ips_with(443, &[lan], answers), vec![other]);
+        let (names, ips) = p.server_extra();
+        assert_eq!(names, vec!["bia.example.org".to_string()]);
+        assert_eq!(ips, vec![nat, silent, mine, lan], "forwarded, silent, ours and the machine's own stay");
+        assert!(p.prune_server_ips_with(443, &[lan], answers).is_empty(), "stable");
+        // the other bia on 8443, this one on 443
+        p.set_server_extra(&[], &[other]).unwrap();
+        let on_8443 = |i: IpAddr, port: u16| if i == other && port == 8443 { IpProbe::OtherBia } else { IpProbe::Unknown };
+        assert_eq!(p.prune_server_ips_with(443, &[], on_8443), vec![other]);
+        p.set_server_extra(&["bia.example.org".into()], &[nat, silent, mine, lan]).unwrap();
+        // the certificate is made again without it
+        assert!(p.ensure_server_sans(&[lan]).unwrap());
+        let marker = fs::read_to_string(p.dir.join("server.sans")).unwrap();
+        assert!(!marker.contains("51.91.177.37") && marker.contains("fixed:203.0.113.9"), "{marker}");
+        let pem = fs::read_to_string(p.server_cert_path()).unwrap();
+        let der = pem_to_cert_ders(&pem).unwrap().into_iter().next().unwrap();
+        let (_, c) = x509_parser::parse_x509_certificate(der.as_ref()).unwrap();
+        let sans = format!("{:?}", c.subject_alternative_name().unwrap().unwrap().value);
+        assert!(!sans.contains("[51, 91, 177, 37]") && sans.contains("[198, 51, 100, 4]"), "{sans}");
+        let _ = fs::remove_dir_all(dir);
     }
 }
