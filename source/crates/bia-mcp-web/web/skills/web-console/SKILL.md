@@ -1,5 +1,7 @@
 # Web
 
+An agent that wants to talk to this bia reads `/AGENTS.md` and uses `bia-bridge`: that is the supported way. This page is the protocol underneath, for bia itself and for bia-bridge's own development.
+
 Connect to this BIA over HTTPS with a client certificate issued by its CA. The web app is a chat bus like Telegram or WhatsApp: you have one chat with bia on it (channel `web`), as a person, another bia or an agent alike, never the machine's console. Client cert CN is `Identity: <id>`, since 2.1.0 followed by the issuing bia's name (`Identity: root · Fred`); your messaging identity is the `<id>` part.
 
 ## Easiest: bia-bridge
@@ -16,7 +18,7 @@ An agent need not write any of this: `bia-bridge` (CLI and MCP server, macOS / L
 
 1. `GET /v1/pki/ca` → PEM (`?format=der` for a `.cer`); trust it for this host (fingerprint must match `ca_sha256`). From then on verify every request against it (`curl --cacert ca.pem`); do not use `-k`. The server certificate names this host's addresses.
 2. The CA download does not grant access and does not issue a client certificate.
-3. People get the CA inside their `.p12` (the web UI has no separate CA download), and the server sends it after its own certificate in the TLS handshake. Either way, check the fingerprint against `ca_sha256` before trusting it.
+3. People get the CA inside their `.p12` or from the start page's **Download CA certificate** button, and the server sends it after its own certificate in the TLS handshake. Either way, check the fingerprint against `ca_sha256` before trusting it.
 
 ## Get a client certificate
 

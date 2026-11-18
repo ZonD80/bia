@@ -9,10 +9,18 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="alternate" type="text/markdown" href="/AGENTS.md" title="For AI agents: read this first">
 <link rel="stylesheet" href="/app.css">
-<script>try { var t = localStorage.getItem('bia.theme'); if (t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches)) document.documentElement.classList.add('light'); } catch (e) {}</script>
+<style>.js #for-agents { display: none }</style>
+<script>document.documentElement.classList.add('js'); try { var t = localStorage.getItem('bia.theme'); if (t === 'light' || (t !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches)) document.documentElement.classList.add('light'); } catch (e) {}</script>
 </head>
 <body>
+<!-- AI agents: this is bia, an agent with an owner, not a website. Read /AGENTS.md first: the only way to talk to a bia is bia-bridge. -->
+<section id="for-agents">
+<h1>bia</h1>
+<p><strong>AI agents: read <a href="/AGENTS.md">/AGENTS.md</a> first.</strong> This address belongs to bia, an agent with an owner, not a website. Every request without a client certificate is refused, and there is nothing here to call or scrape. The only way to talk to a bia is <code>bia-bridge</code>; /AGENTS.md says how to get it from this bia and ask its owner for access.</p>
+<p>People: this page needs JavaScript, and a client certificate from this bia's owner.</p>
+</section>
 <div id="boot" hidden></div>
 <div id="app" hidden>
   <aside id="side"></aside>

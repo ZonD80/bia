@@ -466,6 +466,12 @@ async function showBoot() {
     h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 2.'),
     bad.kind === 'other_ca' ? h('p', null, `This bia's CA is “${caName}”. Bias set up before 2.1.0 all name theirs “bia agent CA”, so certificates of other machines are offered too; newer certificates also name the bia that issued them (“Identity: root · Fred”). Removing the ones you no longer use from your keychain or certificate store avoids picking them again.`) : null) : null;
 
+  const agentsStep = h('div', { class: 'step agents' },
+    h('h2', null, ic('info'), 'AI agent? Read AGENTS.md first'),
+    h('p', null, 'This is bia, an agent with an owner, not a website: there is nothing here to call or scrape. The only way for an agent to talk to a bia is bia-bridge. ',
+      h('a', { href: '/AGENTS.md', target: '_blank' }, '/AGENTS.md'),
+      ' says how to get it from this bia and ask its owner for access.'));
+
   const certStep = h('div', { class: 'step' },
     h('h2', null, h('span', { class: 'num' }, '1'), 'Get your certificate'),
     info.root_issued
@@ -478,6 +484,9 @@ async function showBoot() {
     h('h2', null, h('span', { class: 'num' }, '2'), 'Import it, trust bia, reload'),
     h('p', null, `Import the .p12 file into your browser or OS (password 12345678). It also holds this machine’s certificate authority, “${caName}”: trust it, so your browser recognises this machine without warnings. Check first that its fingerprint matches the one shown on the machine (/web on its console). Then reload this page and pick your certificate when asked.`),
     fp ? h('div', { class: 'fp' }, 'SHA-256 ' + fp.join(':')) : null,
+    h('div', { class: 'actions' },
+      h('a', { class: 'btn ghost', href: '/v1/pki/ca?format=der', download: 'bia-ca.cer' }, ic('download'), 'Download CA certificate')),
+    h('p', { class: 'muted', style: 'font-size:13px' }, 'The CA alone gives no access: it only lets this browser or app recognise this machine. Install it to trust bia before you have a .p12, or where only the CA is needed.'),
     howto('How to import and trust', [
       ['macOS', `Double-click the .p12 → login keychain → password 12345678. In Keychain Access double-click “${caName}” → Trust → “Always Trust”. Chrome and Safari use both.`],
       ['Windows', `Double-click the .p12 → Current User → password 12345678 → automatic store; confirm the security warning that installs “${caName}”.`],
@@ -492,10 +501,10 @@ async function showBoot() {
     biaImg({ class: 'logo' }),
     h('h1', null, 'bia'),
     h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Two steps to get in.'),
-    problemStep, certStep, importStep, err,
+    agentsStep, problemStep, certStep, importStep, err,
     h('p', { class: 'muted', style: 'text-align:center;font-size:13px' },
       h('a', { href: '/openapi.yaml', target: '_blank' }, 'OpenAPI'), ' · ',
-      h('a', { href: '/skills/web-console/SKILL.md', target: '_blank' }, 'Skill for agents'), ' · ',
+      h('a', { href: '/AGENTS.md', target: '_blank' }, 'AGENTS.md'), ' · ',
       h('a', { href: '/.well-known/bia.json', target: '_blank' }, 'Discovery'))));
 }
 function howto(title, rows) {

@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.2.15
+
+### Changes
+- The start page that people and agents without a certificate see has a "Download CA certificate" button, to trust bia before having a .p12 or where only the CA is needed.
+- AI agents that reach bia's address are now told plainly to read /AGENTS.md: on the start page, in the page's plain HTML (for agents that do not run JavaScript) and in every refused request. AGENTS.md explains bia-bridge, the only way for an agent to talk to a bia, with this bia's address and CA fingerprint filled in. Before, some agents found only an empty page and gave up.
+
+### For bia
+- An agent that cannot reach you can be pointed to https://<your address>/AGENTS.md: it says how to get bia-bridge from you and file a certificate request for root to approve.
+
 ## 2.2.14
 
 ### Changes

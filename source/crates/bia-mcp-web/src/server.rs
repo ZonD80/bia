@@ -77,6 +77,9 @@ fn html_text(s: &str) -> String {
 const GUI: &str = include_str!("../web/gui.html");
 const DISPLAY: &str = include_str!("../web/display.html");
 const SKILL: &str = include_str!("../web/skills/web-console/SKILL.md");
+const AGENTS_MD: &str = include_str!("../web/AGENTS.md");
+/// What a request without a client certificate is told (people get the start page).
+const NO_CERT: &[u8] = b"client certificate required\n\nAI agents: read /AGENTS.md on this address. The only way to talk to a bia is bia-bridge; it gets you a certificate.\n";
 const VNC_ADDR: (&str, u16) = ("127.0.0.1", 5900);
 /// JSON bodies; uploads and file writes stream to disk without a cap.
 const MAX_BODY: usize = 2 * 1024 * 1024;
@@ -209,6 +212,22 @@ fn write_bind_error(files: &Path, msg: &str) {
     }
 }
 
+/// AGENTS.md with this bia's address (as the agent dialled it), version and CA fingerprint.
+fn agents_md(host: Option<&str>, port: u16, ca_sha256: &str) -> String {
+    let host = host
+        .map(str::trim)
+        .filter(|h| !h.is_empty() && h.len() <= 255 && h.chars().all(|c| c.is_ascii_alphanumeric() || ".-:[]".contains(c)));
+    let address = match host {
+        Some(h) => format!("https://{h}"),
+        None if port == 443 => "https://<this address>".to_string(),
+        None => format!("https://<this address>:{port}"),
+    };
+    AGENTS_MD
+        .replace("{{ADDRESS}}", &address)
+        .replace("{{VERSION}}", env!("CARGO_PKG_VERSION"))
+        .replace("{{CA_SHA256}}", ca_sha256)
+}
+
 fn is_public(method: &str, path: &str) -> bool {
     match (method, path) {
         (
@@ -231,6 +250,8 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/.well-known/bia.json"
             | "/openapi.yaml"
             | "/skills/web-console/SKILL.md"
+            | "/AGENTS.md"
+            | "/agents.md"
             | "/v1/pki/ca"
             | "/v1/pki/agent"
             | "/v1/pki/bootstrap"
@@ -603,13 +624,7 @@ impl Web {
             return;
         }
         let Some(id) = client else {
-            respond(
-                &mut stream,
-                401,
-                "text/plain",
-                b"client certificate required",
-                None,
-            );
+            respond(&mut stream, 401, "text/plain; charset=utf-8", NO_CERT, Some("Link: </AGENTS.md>; rel=\"describedby\"; type=\"text/markdown\""));
             return;
         };
         // root options (shell, console, screen, files, tasks, certificates) go by the
@@ -775,6 +790,10 @@ impl Web {
             }
             ("GET", "/skills/web-console/SKILL.md") => {
                 asset(stream, "text/markdown; charset=utf-8", SKILL)
+            }
+            ("GET", "/AGENTS.md" | "/agents.md") => {
+                let text = agents_md(req.header("host"), self.port, &self.ca_sha256());
+                asset(stream, "text/markdown; charset=utf-8", &text)
             }
             ("GET", "/v1/pki/ca") => self.serve_ca(stream, req.q("format")),
             ("GET", "/v1/pki/bootstrap") => respond_json(
@@ -2912,5 +2931,26 @@ mod title_tests {
         assert!(page.contains(r#"<link rel="icon" href="/icon-192.png?v=abc123" type="image/png">"#) && !page.contains("/icon.svg"));
         assert!(page.contains(r#"href="/apple-touch-icon.png?v=abc123""#));
         assert_eq!(with_icon(INDEX.to_string(), ""), INDEX);
+    }
+}
+
+#[cfg(test)]
+mod agents_md_tests {
+    use super::*;
+
+    #[test]
+    fn agents_find_their_page_without_a_certificate() {
+        assert!(is_public("GET", "/AGENTS.md") && is_public("GET", "/agents.md"));
+        let t = agents_md(Some("bia.example.org:8443"), 8443, "ab12");
+        assert!(t.contains("bia-bridge connect https://bia.example.org:8443 --identity"), "{t}");
+        assert!(t.contains("`ab12`") && t.contains(env!("CARGO_PKG_VERSION")));
+        assert!(!t.contains("{{"), "every placeholder filled");
+        // only bia-bridge: no raw protocol for agents to hand-roll
+        assert!(!t.contains("/ws") && !t.contains("/v1/pki/requests"), "{t}");
+        // a Host header that is not a plain address is not echoed
+        let t = agents_md(Some("evil.com/<script>"), 443, "ab12");
+        assert!(t.contains("https://<this address>") && !t.contains("evil"));
+        assert!(std::str::from_utf8(NO_CERT).unwrap().contains("/AGENTS.md"));
+        assert!(INDEX.contains("href=\"/AGENTS.md\"") && INDEX.contains("id=\"for-agents\""));
     }
 }

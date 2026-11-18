@@ -43,6 +43,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                         "version": {"type": "string"},
                         "openapi": {"type": "string"},
                         "skill": {"type": "string"},
+                        "agents": {"type": "string"},
                         "ca_sha256": {"type": "string"},
                         "ca": {"type": "string"},
                         "pickup": {"type": "string"},
@@ -66,6 +67,13 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                     "tags": ["discovery"],
                     "summary": "This OpenAPI document",
                     "responses": {"200": {"description": "OpenAPI 3.1 YAML"}}
+                }
+            },
+            "/AGENTS.md": {
+                "get": {
+                    "tags": ["discovery"],
+                    "summary": "For AI agents: how to talk to this bia (bia-bridge, the only way)",
+                    "responses": {"200": {"description": "Markdown"}}
                 }
             },
             "/skills/web-console/SKILL.md": {
@@ -488,6 +496,7 @@ pub fn discovery(port: u16, ca_sha256: &str) -> Value {
         "version": env!("CARGO_PKG_VERSION"),
         "openapi": "/openapi.yaml",
         "skill": "/skills/web-console/SKILL.md",
+        "agents": "/AGENTS.md",
         "ca_sha256": ca_sha256,
         "ca": "/v1/pki/ca",
         "pickup": "/v1/pki/pickup/{token}",
