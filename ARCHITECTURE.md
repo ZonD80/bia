@@ -32,7 +32,7 @@ agent is the only user-facing program; everything else is there to serve it.
         │                                └── bia-agent  (console on tty1/serial/kitty)
         │                                     ├── llama-server (child, 127.0.0.1)
         │                                     └── MCP children over stdio
-        │                                          └── web: HTTPS app :443 (mTLS)
+        │                                          └── web: HTTPS app :443 (signed sign-in)
         ├── bia-land.service     (ISO/"land" mode only, instead of bia.service)
         └── networking, getty@tty2, logind …
 ```
@@ -154,8 +154,11 @@ One Rust binary, dynamically linked against glibc. Main modules:
 backend into `/usr/local/lib/bia/llama/`. The agent starts the best one that
 works on 127.0.0.1 and talks to it over HTTP; GPU stacks never touch the agent
 link and a failing backend falls back to the next. Weights stay mmap'd (and
-optionally mlocked); KV and heap spill to the 256 MiB `/swapfile` (1 GiB when
-installed to a disk with `bia-migrate`).
+optionally mlocked); KV and heap spill to `/swapfile`. The image ships it at 256 MiB
+(1 GiB when installed to a disk with `bia-migrate`); every boot `bia-swap`
+(`bia-swap.service`, after `bia-grow`) sizes it to half of the RAM when the root keeps at
+least 2 GiB and 10% free afterwards (counting what the old file gives back), shrinks it
+when there is less RAM than before, and otherwise leaves it alone.
 
 FMM replaces the local model with a cloud one. Configuration lives in
 `files/state/fmm.json` (written by `system_fmm_configure`, or seeded at first
@@ -300,7 +303,7 @@ The web app is the `web` MCP (`source/crates/bia-mcp-web`), a bus like telegram
 and whatsapp. It has nothing to do with the console: the console is the
 physical screen and serial line, and only there do slash commands, a blank
 Enter (stop) and the model's own notes exist. Everyone on web is an envelope
-identity (the name in their client certificate): people, other bias and outside
+identity (the name in the certificate they sign in with): people, other bias and outside
 agents alike, with no difference in how they talk. Each identity has exactly one
 chat with this bia, channel `web` (other buses such as telegram or whatsapp keep
 their own chats). Their messages reach the agent as MCP
@@ -315,19 +318,110 @@ an unknown identity or `bia` itself. The agent loads the MCP at boot when `[web]
 kept in `files/state/web/port.json`, wins and applies at the MCP's next start; off 443 there is no HTTP redirect, port 80 stays free); the MCP publishes its
 address in `files/state/web.json`.
 
-HTTPS on :443 (HTTP :80 redirects), rustls + ring. The CA,
-server and client certificates come from `bia-pki` under
-`files/state/pki/`. The CA is public at `/v1/pki/ca`; everything else needs a
-client certificate. The first root certificate can be issued from the
-onboarding page while none exists; later ones are issued by root (web
-Settings, `web_pki_issue` or `/pki issue <id>` on the console) and delivered once as a PKCS#12
-pickup URL. Every .p12 bia hands out uses the password `12345678` (macOS will
-not import one with an empty password). Renewal (`POST /v1/pki/renew`) takes a
-CSR and returns PEM: no key is made here. The web app's Renew button makes
-a P-256 key with WebCrypto (`web/pki.js`), sends the CSR and builds the .p12
-in the browser. Both sides write the same modern PKCS#12 (`bia-pki/src/p12.rs`,
-`web/pki.js`): PBES2 (PBKDF2-HMAC-SHA256, AES-256-CBC) key bag, SHA-256 MAC, no
-RC2/3DES, so OpenSSL 3 opens it without `-legacy`.
+HTTPS on :443 (HTTP :80 redirects, except `/.well-known/acme-challenge/`), rustls + ring.
+There is no mutual TLS: the server never asks for a client certificate. TLS only
+proves the server; who is talking is proved inside the app (*Sign-in*, below).
+
+*Server certificates* (`bia-mcp-web` `acme.rs`, state in `files/state/web/tls/`). The
+server picks a certificate per connection: by SNI when the client sent a hostname,
+else by the local address of the accepted socket (an IP is never in SNI).
+- A **public IP** on one of bia's interfaces, or one root declared (`web_public_ip`, for
+  a bia behind NAT with a port forward), gets its own Let's Encrypt certificate with the
+  `shortlived` profile (about 160 hours), one certificate per IP, validated with
+  http-01 on :80. A bia whose web port is not 443 binds :80 only while it validates.
+  The ACME account key is made here and registered without an email. Renewal follows
+  the CA's renewal info (ARI), else at half the lifetime, and runs first thing after
+  boot (a bia that was off for a week comes back expired). Until a certificate exists,
+  or when renewal fails, that address gets the self-signed one and root gets a system
+  notice.
+- A **hostname** root adds (`web_hostname add|remove|list`, root only) gets a normal
+  Let's Encrypt certificate (http-01). bia first checks that the name's A/AAAA records
+  point at it, so a typo does not spend the CA's rate limits.
+- **Private addresses** (RFC 1918, 100.64/10, link-local, ULA, loopback) get a
+  self-signed certificate with a stable key. A browser warns once and is not protected
+  from someone on that network; the web app says so on such an address.
+
+*The identity CA* (`bia-pki`, `files/state/pki/`) only issues client identities; the
+server certificate is self-signed (a stable key, every LAN address in it), never signed by
+the CA. A CA made since 2.3.0 has `pathlen:0` and EKU `clientAuth`; older ones keep their
+certificate unchanged, because its sha256 is what clients pin (`ca=` and `ca_sha256`
+everywhere, bia ids of old bias). Client certificates have `digitalSignature` and EKU
+`clientAuth`. The CA is public at `/v1/pki/ca`.
+
+*Sign-in.* After `hello`, a client proves its identity on `/ws`. The server answers with
+`challenge {proto, nonce, bind}`, `bind` being the CA key's signature over
+`bia-tls-binding-v1\n<nonce>\n<exporter base64url>`, where `exporter` is the TLS exporter of
+this connection (TLS 1.3 only; RFC 9266 label `EXPORTER-Channel-Binding`, 32 bytes). Native
+clients (bia-bridge, another bia) compute the same exporter and check `bind` against the pinned CA
+before they send anything else, which proves this bia whatever certificate TLS showed,
+and defeats a relay. Browsers cannot read the exporter and rely on the server certificate.
+The client answers `auth {chain, sig, ts}`: its certificate chain (DER, base64url) and a
+signature over `bia-auth-v1\n<nonce>\n<CA sha256 hex>\n<ts>\n<exporter base64url>`
+(exporter empty for a browser; ECDSA in the fixed `r‖s` form WebCrypto makes, DER also
+taken). The server checks the chain as before (`check_client_from`: CA, expiry,
+revocation, `from` networks) and the signature with the certificate's key; a certificate
+with role `agent` must include the exporter. A wrong or missing `auth` gets
+`bye {reason: "auth"}`. The messages and checks are `bia_pki::signin`.
+
+*Plain HTTP requests.* A page signs in with its key: `GET /v1/auth/challenge` gives a
+one-time nonce (two minutes) and the CA's hash, `POST /v1/auth/signin` with the `auth`
+fields (and `nonce`) sets the session cookie (`bia_s`, `HttpOnly; Secure;
+SameSite=Strict`, an hour, kept in memory; the page signs in again every 25 minutes).
+Not for role `agent`. Revoking a certificate ends its sessions. Pages, HITL, `/gui`, QR
+images, downloads and the root API take that cookie; with it, anything but GET/HEAD and
+every WebSocket (`/gui`, `/ws/term`, `/ws/shell`) must carry this origin's `Origin`.
+Scripts, bia-bridge and other bias sign each request instead:
+`Authorization: Bia chain=<DER base64url>[.<more>], ts=<unix>, sig=<sig>` over
+`bia-req-v1\n<METHOD>\n<path?query>\n<ts>\n<exporter>` of the connection it goes on
+(TLS keeps the body intact; the exporter stops a relay), accepted within 5 minutes.
+bia-bridge's list of builds (`GET /v1/bridge`) carries the CA's signature of its body in
+`Bia-Signature` (base64 DER, for `openssl dgst -verify`), since an agent may fetch it
+over a certificate it cannot check.
+
+*First root.* While nobody holds a root certificate, `pki/setup-code` holds a one-time
+code (8 letters) shown only in the web MCP's console line; `POST /v1/pki/bootstrap/root
+{code}` needs it (5 wrong tries, then a growing wait) and returns root's .p12 once. The
+deploy tools seed root, so this is only the bare-machine path.
+
+*Keys in the browser.* The web app keeps a non-extractable WebCrypto P-256 key, its
+certificate and the CA in IndexedDB of this origin (each address of a bia is its own
+origin and its own enrollment) and asks for persistent storage. A browser gets in in
+one of these ways, all on the no-key page:
+- **Drop or pick a `.biaconfig` or a `.p12`**, then type its password. The file is opened
+  in the page and the key never leaves it: a `.biaconfig` with WebCrypto (PBKDF2-SHA256,
+  AES-256-GCM), a `.p12` with the vendored PKCS#12 reader (`web/vendor/forge.min.js`,
+  loaded only by this page), which also reads the 3DES/RC2 files browsers, the macOS
+  Keychain and bia cloud's downloads use. A `.p12` is first tried with bia's own
+  password (`12345678`, what bia's .p12 files use) and the page asks only if that fails. A file for another bia (its certificate does
+  not chain to this CA) is refused.
+- **A link with `#biaconfig=<base64url>` or `#p12=<base64url>`** (bia cloud's first
+  access, the bia deploy apps, `bia-deploy` after a deploy): the same, the password typed
+  by the person; it is never part of a link. The page removes that part of the hash at
+  once (`history.replaceState`) and keeps the rest (a page of the app).
+- **A link with `#enroll=<token>`**: what `system_app_link` and bia's file and task links
+  send (`bia_mcp::apps::page_link`: bia's best address, a hostname with a trusted
+  certificate first): a one-time grant (10 minutes, `files/state/applink/<token>.json`)
+  for root or a known contact. A browser that already has a key signs in and ignores it;
+  one without makes a key and sends its CSR to `POST /v1/pki/link/<token>`, which
+  certifies it for that person once.
+- **First root**: the setup code from bia's screen, then **Set up root**: bia makes root's
+  .p12, the page saves it as root's spare and imports it.
+
+An imported file's key is used once: the page signs in with it, makes its own key and
+enrolls it (`POST /v1/pki/enroll {csr}` with that session), which issues a certificate for
+the same identity, role, trust and networks **without** revoking the imported one. The
+imported key is then forgotten. So every browser has its own key, listed in Settings →
+Certificates and revocable alone; a `.biaconfig` or `.p12` is for import and safekeeping.
+Renew (Settings) replaces the browser's key and certificate in place. A WKWebView cannot
+keep a CryptoKey in IndexedDB, which is why the phone apps do not show bia themselves.
+
+*The bia deploy apps* keep bias' keys (`servers/<host>/bia-root.p12`, `ca.crt`) and open
+bia in the phone's browser: **Open in browser** shows that bia's own password (made once,
+`browser.password` in its folder) and opens `https://<bia><page>#biaconfig=…`
+(`bia_deploy_mobile::browser_key`). They are also where a browser's file picker finds the
+keys: iOS keeps each saved bia's .biaconfig in the app's Documents (Files: On My iPhone →
+bia deploy), and Android answers `GET_CONTENT` (`PickKeyActivity`) with the chosen bia's
+.biaconfig, copying its password.
 
 Another agent without a certificate asks for one with a CSR for a key it made
 itself: `POST /v1/pki/requests` `{identity, role, note, csr}` checks the CSR's
@@ -357,7 +451,7 @@ profile, by default, by name or through `import`, and asks for its own certifica
 One daemon per profile (`<home>/<agent>/<bia>/`: key, cert, CA, `inbox.jsonl`, `cursors.json`,
 `link.json` with the last revision seen, `outbox.jsonl`, `daemon.json` with a 127.0.0.1
 port and token, 0600) is started by any command: it polls the request until approved,
-then keeps the web bus link (protocol 2, below; `rx: null` the first time, so it starts
+then keeps the web bus link (protocol 3, below; `rx: null` the first time, so it starts
 from now), stores bia's messages and edits with their files pulled, sends from its
 outbox (files served from disk by `fid`) and renews the certificate 30 days before expiry.
 The CLI (`send`, `wait`, `read`, `history`, `status`) and MCP mode (`bia-bridge mcp`:
@@ -393,15 +487,15 @@ local address of the connection unless `my_url` is given). B checks the grant on
 arrival: it must be for B's agent key and verify against the CA that comes with it.
 When B's root approves, B keeps A as a peer (`pki/peers/<name>/`: `peer.json`,
 `ca.pem`, `cert.pem`); A's `web-peers` thread polls, collects its certificate and
-keeps B. The server name is not checked (addresses change); the pinned CA is. A denied or
+keeps B. The server's TLS certificate and name are not checked (addresses change); the pinned CA's `bind` in the sign-in is. A denied or
 expired request revokes the certificate A made for B. Requests show the source IP
 and, for a bia, the address it claims. Any certificate can also be limited to
 networks (`IssuedMeta.from`, IP SANs for single addresses): `check_client_from`
 refuses it from elsewhere (`wrong_source`); renewals keep the limit.
 
 **The web bus protocol** (`bia-mcp-web` `link.rs`, pure parts in `linkproto.rs`;
-protocol 2). There is one WebSocket protocol for everyone on web: the browser app,
-bia-bridge, and another bia. A client opens `GET /ws` with any valid client
+protocol 3). There is one WebSocket protocol for everyone on web: the browser app,
+bia-bridge, and another bia. A client opens `GET /ws` and signs in with any valid client
 certificate of this bia's CA. Another bia's certificate is an ordinary identity
 certificate (role `agent`, trust `normal`) and opens whatever such a certificate opens.
 Chat, files, edits and acknowledgements all travel inside that one socket; there is
@@ -422,13 +516,14 @@ browser's IndexedDB, the bridge's `outbox.jsonl`, a bia's `outbox/<identity>.jso
 and is sent on reconnect. Every action is idempotent (a message id the client chose,
 set-style reactions and read marks), so sending it twice changes nothing.
 
-*Handshake.* The client sends `hello {proto: 2, name, ver, instance, rx}` first.
+*Handshake.* The client sends `hello {proto: 3, name, ver, instance, rx}` first.
 `instance` is random per installation (a browser profile, a bridge profile, a bia).
 `rx` is the last revision it has, `0` for everything or `null` for "from now".
-The server answers `hello {proto: 2, name, ver, instance, me: {identity, root}, rev,
-floor, typing}`. Then it sends the catch-up (`m` frames from `rx`, or `reset`) and
-live changes. A server that does not answer `proto: 2` (an older bia) is reported as
-needing an update.
+The server answers `hello {proto: 3, name, ver, instance, nonce, bind}`, the client
+signs in with `auth {chain, sig, ts}` (see *Sign-in* above), and the server answers
+its own `hello {…, me: {identity, root}, rev, floor, typing}`. Then it sends the catch-up (`m` frames from `rx`, or `reset`) and
+live changes. A server that does not answer `proto: 3` (an older bia, which still wants
+a client certificate) is reported as needing an update.
 
 *Frames from the server:* `m {seq, m}` (a message's full state after a change; `seq`
 is its revision), `gone {seq, ids}`, `reset`, `typing {on}`, `ack {cid, ok, r|error}`,
@@ -538,11 +633,11 @@ into `/home/bia/MCPs`.
 | MCP | What it does |
 |---|---|
 | `system` | FMM configure/disable, human-in-the-loop, file links. Disks and network are plain Debian tools through `bash`. |
-| `web` | the web bus: HTTPS + mTLS app with Telegram-style chats and calls for people (client certificates), root shell, files, display, human tasks; client certificates and agent requests (`web_pki_*`) |
+| `web` | the web bus: HTTPS app (Let's Encrypt or its own certificate, `acme.rs`; signed sign-in, `session.rs`) with Telegram-style chats and calls for people, root shell, files, display, human tasks; client certificates and agent requests (`web_pki_*`), hostnames and public addresses (`web_hostname`, `web_public_ip`) |
 | `secrets` | passwords, TOTP/HOTP, WebAuthn passkeys (ES256) in `files/state/passwords.json`; 1Password CSV/JSON import, CXF export |
 | `chrome` | Google Chrome on profile `~/.config/bia-chrome` with remote debugging; force-installed CRX extension proxies WebAuthn, and nothing is signed or created until the model answers: each request waits in `bridge.rs`/`passkey.rs`, a `[passkey request <id>]` line on `system|chrome` says what is asked (site words quoted and cleaned, since the line is a system line) and `chrome_passkey_answer(request, answer=approve|deny, passkey?)` decides, once; a page's abort or timeout, a lost extension or 10 minutes retire it, and a site gets 5 notices a minute (test: `tests/integration/chrome-passkey-e2e.py`); page automation through Google's `chrome-devtools-mcp` (vendored Node); native GTK file dialogs are announced (`[file dialog opened]`) and answered with `chrome_choose_files` (xdotool on :0; for a folder it waits for Chrome's in-window "Upload N files?" prompt and returns its words with x,y for the model to click; test: `tests/integration/chrome-dialog-test.sh`) |
 | `chrome` web calls | `voice.rs` + the extension's `page.js`: `chrome_call_open(url, lang?)` has the extension open a meeting (Google Meet or any WebRTC page) in a tab it marks; only in that tab does the page script (MAIN world, document start) change anything. Speaking: `getUserMedia`, `enumerateDevices` and the microphone permission answer with one microphone, a Web Audio track on an `AudioContext` with no output device (`sinkId: none`), so no sound card and no permission prompt are needed; `chrome_call_say(text, lang)` streams TTS to it (`play`/`end`/`stop`, the page reports `played` → `[you finished speaking]`). Hearing: every remote WebRTC audio track and every audio track given to a media element is read with `MediaStreamTrackProcessor`; when tracks carry nothing (Meet takes the encoded frames, decodes them itself and plays three output slots through an AudioWorklet) whatever the page connects to its `AudioDestinationNode` is tapped instead, one voice per connected node. Audio goes page → `relay.js` → service worker → native host → `bridge.rs` as 16 kHz base64 pieces (silence is cut after 2 s), one `bia_speech::Listener` per voice (a contributing source `c…` when the server names one, else the track `t…`/`m…` or output `a…`), and reaches the model as `voice:<name>|chrome:call|[speech <lang>] …`. Voices are numbered s1, s2 … in the order they first speak; 6 s after a second one spoke a `[several voices]` line asks the model to have people introduce themselves one at a time and to name each with `chrome_call_name(voice, name, lang?)` from the addressbook (`[new voice sN]` for later ones). `[call audio stopped]` / `[call audio back]` when the page's audio stands still, `[call page reloaded]` when the tab loads another page (voices start over), `[interrupted]` when someone talks over bia. `chrome_call_status` shows the voices and what the page uses (audio graph, encoded streams, packets and samples per connection); `chrome_call_close` lets a goodbye play out, closes the tab and saves the transcript to `files/calls/call-<time>.txt`. The policy `AutoplayAllowed` lets page audio run without a click. On Meet a voice is one of its three slots, not a person: with more than three other people, or when Meet moves someone to another slot, a name can end up on the wrong person. Test: `tests/integration/chrome-call-e2e.py` (real extension in Chromium on a page that behaves like a meeting, once over WebRTC tracks and once over Web Audio only; with the speech models bia hears its own words come back) |
-| mobile chat | `installers/ios/BiaDeploy/ChatView.swift`, `installers/android/.../ChatScreen.kt`: the web app in a WKWebView / WebView for a bia whose `bia-root.p12` and `ca.crt` are on the phone. The app presents the key and trusts only that bia's CA for that address; every other site goes to the browser. Try it with `tests/manual/mobile-chat-server.py` |
+| phone apps → browser | `installers/ios/BiaDeploy/ChatView.swift`, `installers/android/.../ChatScreen.kt`: **Open in browser** for a saved bia (its .biaconfig in the link, its password shown and copied); `PickKeyActivity` (Android) and Documents (iOS) for browsers' file pickers. Try it with `tests/manual/mobile-chat-server.py` |
 | `.biaconfig` | `bia_pki::biaconfig`: JSON envelope (`fmt:"biaconfig"`, PBKDF2-SHA256 600k, AES-256-GCM, AAD the format name) around name, addresses, CA PEM and a .p12. A password is required (10+ characters, no default); `iter` is bounded on open; addresses cannot hold URL parts, since apps build URLs from them. Makers: `pki::make_biaconfig` behind `web_pki_biaconfig` (kept in `files/biaconfig`) and root's `POST /v1/pki/biaconfig` for web Settings (returned only, never kept): a new certificate, revocable alone, and a named address joins the server certificate through `set_server_extra`. `biaconfig::seal_folder` behind the apps' `biaconfig_export` and the desktop GUI wraps the same certificate the device holds. Openers: `chrome_cert_import` (CA trusted for Chrome only) and the apps' `biaconfig_import` (a different key at that address needs `replace`; CA pinned per address; real address kept in the folder's `address` file, since folder names are sanitized). Android must also accept `application/octet-stream`: file managers report that type and their URIs may hide the name, so the app checks the content before asking for a password. |
 | `chrome` certificates | `certs.rs`: client certificates and private CAs in the NSS database Chrome reads (`~/.pki/nssdb` of user bia, via `pk12util`/`certutil`), `chrome_cert_select` writes the `AutoSelectCertificateForUrls` policy; system CAs and the policy leave with an OS update, so `files/state/chrome-cas` and `chrome-cert-rules.json` put them back when the MCP starts. Chrome runs with `--force-renderer-accessibility` on bia's own session bus, so its dialogs are readable through `screen_snapshot`. Its certificate dialog opens no window of its own, so one `bia_desktop.py` process, while Chrome runs, looks through Chrome's own windows each second (web pages skipped) and recognizes it by shape in any language: `[certificate dialog opened]` on `system|chrome`, answered with `chrome_choose_certificate` |
 | `screen` | desktop apps as elements through AT-SPI (`bia_desktop.py`, run per call as user bia on its own session bus): `screen_snapshot` gives refs bound to a path, role and name so a stale one is refused, `screen_act` works through the app itself; `screen_launch`, windows (wmctrl, xdotool), clipboard (xclip), `screen_wait`. Also screenshot, mouse and keyboard on `:0` (xdotool/scrot); `screen_ocr` lists the words on screen (or a region) with their center x,y (`bia-ocr`: PaddleOCR PP-OCRv5 mobile on the image's onnxruntime, recognizers for Chrome's languages plus English, sha256-pinned models downloaded on first use into `files/ocr/models`; test: `tests/integration/screen-ocr-test.sh`) |
@@ -1118,7 +1213,7 @@ bia-agent, bia-mcp-*}`, `dist/bia.img`, `installers/dist/<os>-<arch>/`.
   and without debuginfo, so it carries no builder paths.
 - **Runtime.** All user state (`files/state`: conversation, `passwords.json`,
   PKI, FMM, Telegram/WhatsApp sessions, Chrome profile) lives on the target's
-  ext4 root. The web app (web MCP) requires mTLS client certs from the machine's CA;
+  ext4 root. The web app (web MCP) requires a sign-in with a certificate from the machine's CA;
   the GUI/VNC bridge listens on loopback only.
 - **Telegram app credentials.** `api_id`/`api_hash` live in the gitignored
   `.env` (`BIA_TG_API_ID`, `BIA_TG_API_HASH`). `builders/build.sh` reads only
@@ -1153,7 +1248,7 @@ levels, schedules). The secrets store keeps Yaaia's `passwords.json` format
 
 - [x] Debian root, Secure Boot, BIOS + UEFI, x86_64 + arm64
 - [x] prebuilt llama-server with GPU backends; FMM cloud models
-- [x] web app as an MCP bus with its own CA / mTLS; HITL
+- [x] web app as an MCP bus with its own CA (signed sign-in); HITL
 - [x] Telegram and WhatsApp buses, voice calls with local STT/TTS
 - [x] Chrome + passkeys, screen control, secrets
 - [x] voice in web meetings through Chrome (Google Meet; other WebRTC pages by the same path)

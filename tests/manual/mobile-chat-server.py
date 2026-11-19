@@ -53,8 +53,9 @@ ctx.check_hostname = False
 ctx.verify_mode = ssl.CERT_NONE
 
 
-def get(path, method="GET"):
-    return urllib.request.urlopen(urllib.request.Request(f"https://127.0.0.1:8443{path}", method=method), context=ctx, timeout=10).read()
+def get(path, method="GET", body=None):
+    req = urllib.request.Request(f"https://127.0.0.1:8443{path}", method=method, data=body, headers={"Content-Type": "application/json"} if body else {})
+    return urllib.request.urlopen(req, context=ctx, timeout=10).read()
 
 
 for _ in range(100):
@@ -64,7 +65,8 @@ for _ in range(100):
     except OSError:
         time.sleep(0.2)
 open(f"{out}/ca.crt", "wb").write(ca)
-open(f"{out}/bia-root.p12", "wb").write(get("/v1/pki/bootstrap/root", "POST"))
+code = open(f"{files}/state/pki/setup-code").read().strip()
+open(f"{out}/bia-root.p12", "wb").write(get("/v1/pki/bootstrap/root", "POST", json.dumps({"code": code}).encode()))
 print("READY", flush=True)
 while True:
     time.sleep(0.5)

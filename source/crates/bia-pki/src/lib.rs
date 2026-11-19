@@ -4,14 +4,10 @@ use rcgen::{
     BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose, SanType,
 };
-use rustls::client::danger::HandshakeSignatureValid;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
-use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+use rustls::server::danger::ClientCertVerifier;
 use rustls::server::WebPkiClientVerifier;
-use rustls::{
-    CertificateError, DigitallySignedStruct, DistinguishedName, RootCertStore, ServerConfig,
-    SignatureScheme,
-};
+use rustls::{CertificateError, RootCertStore, ServerConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -21,6 +17,7 @@ use time::{Duration, OffsetDateTime};
 
 pub mod biaconfig;
 pub mod client;
+pub mod signin;
 mod net;
 mod p12;
 mod peers;
@@ -99,6 +96,42 @@ impl Pki {
         }
     }
 
+    /// While nobody holds root's certificate: the one-time code that lets the first visitor
+    /// set root up (shown only on this machine's own console), made when first asked for.
+    /// None once root exists (the code is deleted then).
+    pub fn setup_code(&self) -> Option<String> {
+        let path = self.dir.join("setup-code");
+        if self.has_active_identity("root") {
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+        if let Some(c) = fs::read_to_string(&path).ok().map(|c| c.trim().to_string()).filter(|c| c.len() >= 8) {
+            return Some(c);
+        }
+        // 8 letters a person reads off a screen, about 40 bits (wrong tries are rate-limited)
+        const LETTERS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+        let mut b = [0u8; 8];
+        ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut b).ok()?;
+        let s: String = b.iter().map(|x| LETTERS[*x as usize % LETTERS.len()] as char).collect();
+        let code = format!("{}-{}", &s[..4], &s[4..]);
+        fs::write(&path, &code).ok()?;
+        self.private(&path);
+        Some(code)
+    }
+
+    /// Whether `given` is the setup code (spaces, dashes and case do not matter).
+    pub fn check_setup_code(&self, given: &str) -> bool {
+        let norm = |s: &str| s.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_ascii_lowercase();
+        match self.setup_code() {
+            Some(c) => {
+                // equal-length digests compared without an early exit
+                let (a, b) = (Sha256::digest(norm(&c).as_bytes()), Sha256::digest(norm(given).as_bytes()));
+                a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+            }
+            None => false,
+        }
+    }
+
     pub fn dir_for(files: &Path) -> PathBuf {
         files.join("state").join("pki")
     }
@@ -113,8 +146,55 @@ impl Pki {
         }
         if !pki.server_cert_path().exists() || !pki.server_key_path().exists() {
             pki.reissue_server(&[])?;
+        } else if !pki.server_self_signed() {
+            // before 2.3.0 the CA signed it: same names, now self-signed
+            let ips = pki.server_ips();
+            pki.reissue_server(&ips)?;
         }
         Ok(pki)
+    }
+
+    /// Whether server.crt is its own issuer.
+    fn server_self_signed(&self) -> bool {
+        fs::read_to_string(self.server_cert_path())
+            .ok()
+            .and_then(|p| pem_to_cert_ders(&p).ok())
+            .and_then(|d| d.into_iter().next())
+            .and_then(|der| {
+                let (_, c) = x509_parser::parse_x509_certificate(der.as_ref()).ok()?;
+                Some(c.issuer() == c.subject())
+            })
+            .unwrap_or(false)
+    }
+
+    /// The IP addresses server.crt carries now.
+    fn server_ips(&self) -> Vec<std::net::IpAddr> {
+        fs::read_to_string(self.server_cert_path())
+            .ok()
+            .and_then(|p| pem_to_cert_ders(&p).ok())
+            .and_then(|d| d.into_iter().next())
+            .map(|der| {
+                let Ok((_, c)) = x509_parser::parse_x509_certificate(der.as_ref()) else { return vec![] };
+                c.subject_alternative_name()
+                    .ok()
+                    .flatten()
+                    .map(|san| {
+                        san.value
+                            .general_names
+                            .iter()
+                            .filter_map(|g| match g {
+                                x509_parser::extensions::GeneralName::IPAddress(b) => match b.len() {
+                                    4 => Some(std::net::IpAddr::from(<[u8; 4]>::try_from(*b).ok()?)),
+                                    16 => Some(std::net::IpAddr::from(<[u8; 16]>::try_from(*b).ok()?)),
+                                    _ => None,
+                                },
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
     }
 
     pub fn ca_cert_path(&self) -> PathBuf {
@@ -170,7 +250,10 @@ impl Pki {
             }
         };
         let mut params = CertificateParams::new(Vec::<String>::new())?;
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        // It only ever signs client identities (since 2.3.0): no CAs below it, and
+        // nothing it signs can serve TLS even where someone trusted it as a root.
+        params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
         params.distinguished_name.push(DnType::CommonName, format!("{id} agent CA"));
         params
             .distinguished_name
@@ -253,7 +336,6 @@ impl Pki {
     /// Reissue the HTTPS server certificate. `extra_ips` are additional SANs (LAN IPs);
     /// the names and addresses of `server_extra` are always added.
     pub fn reissue_server(&self, extra_ips: &[std::net::IpAddr]) -> Result<()> {
-        let (ca_cert, ca_key, _) = self.load_ca_issuer()?;
         let mut params = CertificateParams::new(vec!["bia".into(), "localhost".into()])?;
         params
             .distinguished_name
@@ -261,11 +343,7 @@ impl Pki {
         params
             .distinguished_name
             .push(DnType::OrganizationName, "bia");
-        params.use_authority_key_identifier_extension = true;
-        params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyEncipherment,
-        ];
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         params.not_before = OffsetDateTime::now_utc() - Duration::days(1);
         params.not_after = OffsetDateTime::now_utc() + Duration::days(LEAF_DAYS);
@@ -287,8 +365,14 @@ impl Pki {
             }
         }
         params.subject_alt_names = sans;
-        let key = KeyPair::generate()?;
-        let cert = params.signed_by(&key, &ca_cert, &ca_key)?;
+        // Self-signed (since 2.3.0), not by the CA: the CA only signs client identities.
+        // The key stays across reissues, so a browser that accepted it once is not asked
+        // again for every new address; apps and bias check the bia by `bind`, not by this.
+        let key = fs::read_to_string(self.server_key_path())
+            .ok()
+            .and_then(|p| KeyPair::from_pem(&p).ok())
+            .map_or_else(KeyPair::generate, Ok)?;
+        let cert = params.self_signed(&key)?;
         fs::write(self.server_cert_path(), cert.pem()).context("write server.crt")?;
         fs::write(self.server_key_path(), key.serialize_pem()).context("write server.key")?;
         self.private(&self.server_key_path());
@@ -351,8 +435,13 @@ impl Pki {
             std::net::IpAddr::V6(v6) => format!("https://[{v6}]:{port}"),
             std::net::IpAddr::V4(v4) => format!("https://{v4}:{port}"),
         };
-        let Ok(ours) = self.ca_pem().and_then(|p| pem_to_cert_ders(&p)) else { return IpProbe::Unknown };
-        let Ok((conn, _)) = client::connect(&url, client::ServerTrust::Any, None) else { return IpProbe::Unknown };
+        let Ok(ours) = fs::read_to_string(self.server_cert_path())
+            .map_err(anyhow::Error::from)
+            .and_then(|p| pem_to_cert_ders(&p))
+        else {
+            return IpProbe::Unknown;
+        };
+        let Ok((conn, _)) = client::connect(&url) else { return IpProbe::Unknown };
         let chain = conn.peer_certificates().unwrap_or_default();
         if chain.iter().any(|c| ours.iter().any(|o| o.as_ref() == c.as_ref())) {
             return IpProbe::Ours;
@@ -417,31 +506,32 @@ impl Pki {
             .map_err(|e| anyhow!("client verifier: {e}"))
     }
 
-    /// The handshake accepts any client certificate whose key the browser holds; the chain
-    /// is checked per request by `check_client`. A browser that picked a certificate of
-    /// another bia (same CA name) or an expired one then gets a page saying so instead of
-    /// a bare TLS alert (ERR_SSL_DECRYPT_ERROR_ALERT), which it would keep hitting until
-    /// it is restarted.
-    pub fn server_config(&self) -> Result<Arc<ServerConfig>> {
+    /// This bia's own self-signed server certificate (every LAN address in it), ready for
+    /// rustls. The fallback for every address without a Let's Encrypt certificate.
+    pub fn own_certified_key(&self) -> Result<Arc<rustls::sign::CertifiedKey>> {
         let cert_pem = fs::read(self.server_cert_path()).context("read server.crt")?;
         let key_pem = fs::read(self.server_key_path()).context("read server.key")?;
-        let mut certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
+        let certs = pem_to_cert_ders(std::str::from_utf8(&cert_pem)?)?;
         let key = pem_to_key_der(std::str::from_utf8(&key_pem)?)?;
-        // The full chain: the CA after the server certificate. Browsers trust it only once it
-        // is trusted locally, but they (and `openssl s_client -showcerts`) can show and export
-        // it from the connection; bia hands out no separate CA download, it is in every .p12.
-        for ca in pem_to_cert_ders(&self.ca_pem()?)? {
-            if !certs.iter().any(|c| c.as_ref() == ca.as_ref()) {
-                certs.push(ca);
-            }
-        }
+        certified_key(certs, &key)
+    }
 
-        let verifier = Arc::new(AnyClientCert(self.client_verifier()?));
+    /// TLS settings with bia's own certificate for every connection.
+    pub fn server_config(&self) -> Result<Arc<ServerConfig>> {
+        let own = self.own_certified_key()?;
+        self.server_config_with(Arc::new(FixedCert(own)))
+    }
 
-        let mut cfg = ServerConfig::builder()
-            .with_client_cert_verifier(verifier)
-            .with_single_cert(certs, key)
-            .map_err(|e| anyhow!("server config: {e}"))?;
+    /// `server_config` with the server certificate chosen by `resolver` (per SNI or address).
+    pub fn server_config_with(
+        &self,
+        resolver: Arc<dyn rustls::server::ResolvesServerCert>,
+    ) -> Result<Arc<ServerConfig>> {
+        // No client certificates: who is talking is proved inside the app (signin.rs).
+        // TLS 1.3 only, so the channel binding exporter (RFC 9266) is defined.
+        let mut cfg = ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+            .with_no_client_auth()
+            .with_cert_resolver(resolver);
         cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
         Ok(Arc::new(cfg))
     }
@@ -808,6 +898,26 @@ impl Pki {
         let _ = self.revoke(&current.serial_hint);
         Ok((pem, meta))
     }
+
+    /// Another certificate for `current`'s identity, role, trust and networks on a new key
+    /// (one per browser or phone): `current` stays valid. Not for another bia's
+    /// certificate, whose peer record holds one serial.
+    pub fn enroll_csr(&self, current: &ClientId, csr_pem: &str) -> Result<(String, IssuedMeta)> {
+        if self.is_revoked(&current.serial_hint) {
+            bail!("certificate is revoked; ask root for a new one");
+        }
+        if current.not_after <= OffsetDateTime::now_utc().unix_timestamp() {
+            bail!("certificate is expired; ask root for a new one");
+        }
+        if self.is_peer_cert(current).is_some() {
+            bail!("another bia's certificate is renewed, not enrolled");
+        }
+        let from: Vec<Cidr> = self
+            .issued_meta(&current.serial_hint)
+            .map(|m| m.from.iter().filter_map(|c| Cidr::parse(c).ok()).collect())
+            .unwrap_or_default();
+        self.issue_csr_from(&current.identity, &current.role, &current.trust, csr_pem, &from)
+    }
 }
 
 /// A client certificate was presented but is not accepted here.
@@ -829,51 +939,6 @@ fn presented_identity(der: &CertificateDer<'_>) -> String {
                 .and_then(|a| a.as_str().ok().map(str::to_string))
         })
         .unwrap_or_default()
-}
-
-/// Client verifier for the handshake: requests a certificate (with this CA as the hint, so
-/// browsers offer the matching ones first) and checks that the peer holds its key, but
-/// leaves the chain to `Pki::check_client`.
-#[derive(Debug)]
-struct AnyClientCert(Arc<dyn ClientCertVerifier>);
-
-impl ClientCertVerifier for AnyClientCert {
-    fn offer_client_auth(&self) -> bool {
-        true
-    }
-    fn client_auth_mandatory(&self) -> bool {
-        false
-    }
-    fn root_hint_subjects(&self) -> &[DistinguishedName] {
-        self.0.root_hint_subjects()
-    }
-    fn verify_client_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _now: UnixTime,
-    ) -> std::result::Result<ClientCertVerified, rustls::Error> {
-        Ok(ClientCertVerified::assertion())
-    }
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        self.0.verify_tls12_signature(message, cert, dss)
-    }
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        self.0.verify_tls13_signature(message, cert, dss)
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.supported_verify_schemes()
-    }
 }
 
 /// Identity extracted from a verified client certificate.
@@ -942,6 +1007,26 @@ pub fn client_id_from_certs(certs: Option<&[CertificateDer<'_>]>) -> Option<Clie
     })
 }
 
+/// Always the same server certificate.
+#[derive(Debug)]
+pub struct FixedCert(pub Arc<rustls::sign::CertifiedKey>);
+
+impl rustls::server::ResolvesServerCert for FixedCert {
+    fn resolve(&self, _: rustls::server::ClientHello<'_>) -> Option<Arc<rustls::sign::CertifiedKey>> {
+        Some(self.0.clone())
+    }
+}
+
+/// A rustls certified key from a DER chain (leaf first) and its private key.
+pub fn certified_key(
+    certs: Vec<CertificateDer<'static>>,
+    key: &PrivateKeyDer<'_>,
+) -> Result<Arc<rustls::sign::CertifiedKey>> {
+    let signer = rustls::crypto::ring::sign::any_supported_type(key)
+        .map_err(|e| anyhow!("server key: {e}"))?;
+    Ok(Arc::new(rustls::sign::CertifiedKey::new(certs, signer)))
+}
+
 pub fn pem_to_cert_ders(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
     let mut slice = pem.as_bytes();
     let mut out = Vec::new();
@@ -954,7 +1039,7 @@ pub fn pem_to_cert_ders(pem: &str) -> Result<Vec<CertificateDer<'static>>> {
     Ok(out)
 }
 
-fn pem_to_key_der(pem: &str) -> Result<PrivateKeyDer<'static>> {
+pub fn pem_to_key_der(pem: &str) -> Result<PrivateKeyDer<'static>> {
     let mut slice = pem.as_bytes();
     let item = rustls_pemfile::private_key(&mut slice)
         .context("parse key pem")?
@@ -1240,7 +1325,6 @@ mod naming_tests {
 #[cfg(test)]
 mod server_ip_tests {
     use super::*;
-    use std::collections::HashMap;
     use std::net::IpAddr;
 
     fn fresh(tag: &str) -> (PathBuf, Pki) {

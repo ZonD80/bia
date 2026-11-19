@@ -1,4 +1,6 @@
-// bia web bus client (protocol 2, GET /ws): what the web app uses to talk to bia.
+// bia web bus client (protocol 3, GET /ws): what the web app uses to talk to bia.
+// After hello the server sends a challenge; `opts.auth(challenge)` answers it with this
+// browser's signed sign-in (keys.js). A refused sign-in ends in state `signedout`.
 // One WebSocket carries everything: hello and catch-up, the chat's changes (`m`, `gone`),
 // actions with acks, and files both ways (the receiver pulls: fget → binary chunks
 // [fid 32 bytes][offset u64 BE][data] → fack / fdone). Actions that change the chat wait
@@ -164,12 +166,18 @@ const BiaLink = (() => {
       const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
       ws.binaryType = 'arraybuffer';
       L.ws = ws;
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', proto: 2, name: '', ver: 'web', instance: L.instance, rx: L.rx }));
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', proto: 3, name: '', ver: 'web', instance: L.instance, rx: L.rx }));
       ws.onmessage = e => {
         L.lastRx = Date.now();
         if (typeof e.data !== 'string') { onChunk(e.data); return; }
         let v; try { v = JSON.parse(e.data); } catch { return; }
         if (!L.hello) {
+          if (v.t === 'challenge') {
+            Promise.resolve(opts.auth ? opts.auth(v) : null)
+              .then(a => { if (a && L.ws === ws && ws.readyState === 1) ws.send(JSON.stringify(a)); else ws.close(); })
+              .catch(() => { L.bye = 'auth'; ws.close(); });
+            return;
+          }
           if (v.t === 'hello') {
             L.hello = v; L.tries = 0;
             if (v.rev < (L.rx || 0)) L.rx = null;
@@ -193,6 +201,7 @@ const BiaLink = (() => {
         if (why === 'duplicate_key') { setState('blocked'); wait = 30000; }
         else if (why === 'duplicate') { setState('replaced'); return; }
         else if (why === 'banned') { setState('banned'); wait = 600000; }
+        else if (why === 'auth' || why === 'revoked') { setState('signedout'); emit('onSignedOut', why); return; }
         else if (why === 'closed') return;
         else setState('connecting');
         L.timer = setTimeout(connect, wait);

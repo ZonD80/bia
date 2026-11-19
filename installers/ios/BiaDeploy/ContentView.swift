@@ -43,7 +43,8 @@ struct ContentView: View {
                 ProgressView("Getting bia's key…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .fullScreenCover(item: $model.chat) { target in ChatPage(target: target, moved: { model.chatMoved(target, port: $0) }) }
+        .sheet(item: $model.chat) { target in ChatPage(target: target, moved: { model.chatMoved(target, port: $0) }) }
+        .onAppear { model.publishKeys() }
         .sheet(item: $model.configFile, onDismiss: { model.closeConfig() }) { _ in ImportSheet(model: model) }
         .sheet(item: $model.noKey) { NoKeySheet(model: model, link: $0) }
         #if DEBUG
@@ -432,7 +433,7 @@ struct InstalledStep: View {
                     Text("It waits at \(host) for your bia. Tell your bia: fly to \(host) with land secret \(model.secret)")
                 } else if let u = url {
                     if let folder = model.done?.folder {
-                        PrimaryButton(title: "Open bia's chat") { model.chat = ChatTarget(host: host, folder: folder) }
+                        PrimaryButton(title: "Open bia in browser") { model.chat = ChatTarget(host: host, folder: folder) }
                     }
                     Button("Open in a browser instead") { openURL(u) }
                 }
@@ -476,15 +477,11 @@ struct KeyCard: View {
                 Text(name.isEmpty ? "bia at \(host)" : name).font(.title3.weight(.semibold))
                 if !name.isEmpty { Text(host).font(.subheadline).foregroundStyle(.secondary) }
                 Text("key saved \(savedAt.formatted(date: .abbreviated, time: .omitted))").font(.subheadline).foregroundStyle(.secondary)
-                PrimaryButton(title: "Open chat") { model.chat = ChatTarget(host: host, folder: folder) }
-                Text("For a browser:").font(.footnote).foregroundStyle(.secondary)
-                HStack {
-                    Button("Install") { model.installProfile(folder: folder, host: host) }.buttonStyle(.bordered)
-                    ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
-                        Label("Share…", systemImage: "square.and.arrow.up")
-                    }
-                    .buttonStyle(.bordered)
+                PrimaryButton(title: "Open in browser") { model.chat = ChatTarget(host: host, folder: folder, name: name) }
+                ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
+                    Label("Share…", systemImage: "square.and.arrow.up")
                 }
+                .buttonStyle(.bordered)
                 Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
                 Button("Remove from this phone…", role: .destructive) { removing = true }
             }
@@ -496,19 +493,17 @@ struct KeyCard: View {
     private var full: some View {
         Card {
             Text("bia's key").font(.title3.weight(.semibold))
-            Text("bia-\(host).p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password \(p12Password())).")
-            Text("bia's chat in this app uses it by itself. The steps below are for a browser.").font(.subheadline).foregroundStyle(.secondary)
-            Text("Install it on this phone: Safari offers it as a profile. Then Settings › General › VPN & Device Management installs it, and Settings › General › About › Certificate Trust Settings turns on full trust for \"bia \(host) certificate authority\".")
-                .font(.subheadline)
-            PrimaryButton(title: "Install bia's key") { model.installProfile(folder: folder, host: host) }
+            Text("bia-\(host).p12 is root's key: the only way into this bia. Keep a copy somewhere safe (password \(p12Password())).")
+            Text("Open in browser hands it to your browser with a password this app shows; the browser then keeps a key of its own. Nothing to install.").font(.subheadline).foregroundStyle(.secondary)
+            PrimaryButton(title: "Open in browser") { model.chat = ChatTarget(host: host, folder: folder) }
             ShareLink(items: shareCopies(folder: folder, host: host), subject: Text("bia \(host): root's key")) {
                 Label("Share bia's key…", systemImage: "square.and.arrow.up")
             }
             .buttonStyle(.bordered)
-            Text("Share sends it to a computer or another phone (AirDrop, Mail, Files); it asks for the password above when it is installed.")
+            Text("Share sends it to a computer or another phone (AirDrop, Mail, Files); there, drop it on bia's page in a browser. Any browser's file picker on this phone also finds bia's key under Files › On My iPhone › bia deploy.")
                 .font(.footnote).foregroundStyle(.secondary)
             Button("Share as .biaconfig…") { exporting = true }.buttonStyle(.bordered)
-            Text("A .biaconfig also carries bia's address and is locked with its own password: another bia app opens it and gets the chat.")
+            Text("A .biaconfig also carries bia's address and is locked with its own password: bia's page and another bia app open it.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -544,7 +539,7 @@ struct KeysPage: View {
                 Text("No bia's keys on this phone yet: they are kept here after a deploy or an import.")
                 PrimaryButton(title: "Start new bia") { model.page = .brain }
             } else {
-                Text("Each is a certificate for one bia, the way into it (password \(p12Password())). Install offers it to this device as a profile; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
+                Text("Each is the key to one bia, the way into it (password \(p12Password())). Open in browser signs a browser in with it; Share sends bia-<address>.p12 and its CA to a computer or another phone.")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
         }

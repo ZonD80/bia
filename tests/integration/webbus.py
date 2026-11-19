@@ -1,21 +1,126 @@
-"""A small client of the web bus protocol (protocol 2, `GET /ws`) for the integration tests:
-WebSocket framing over mutual TLS, hello, actions with acks, the server's frames in a queue,
-files offered here (served on `fget`) and files pulled from the server (`fget` / chunks / `fack`).
-See ARCHITECTURE.md, "The web bus protocol".
+"""A small client of the web bus protocol (protocol 3, `GET /ws`) for the integration tests:
+WebSocket framing over TLS, hello and the signed sign-in (like a browser: Python's ssl cannot
+read the TLS exporter, so the signature is not bound to the connection), actions with acks,
+the server's frames in a queue, files offered here (served on `fget`) and files pulled from the
+server (`fget` / chunks / `fack`). `Cred` also signs in over HTTP for the `bia_s` cookie.
+See ARCHITECTURE.md, "Sign-in" and "The web bus protocol".
 """
-import base64, hashlib, json, os, socket, struct, threading, time
+import base64, hashlib, http.client, json, os, socket, ssl, struct, threading, time
+
+PROTO = 3
+
+
+def noverify():
+    """TLS that takes the server's certificate as it is (self-signed here)."""
+    c = ssl.create_default_context()
+    c.check_hostname = False
+    c.verify_mode = ssl.CERT_NONE
+    return c
+
+
+def b64u(b):
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+class Cred:
+    """A client certificate chain and its key (PEM, one file or two), signing like the web app."""
+
+    def __init__(self, cert_pem, key_pem=None, port=8443, host="127.0.0.1"):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        data = open(cert_pem, "rb").read()
+        self.chain = [c.public_bytes(serialization.Encoding.DER) for c in x509.load_pem_x509_certificates(data)]
+        self.key = serialization.load_pem_private_key(open(key_pem or cert_pem, "rb").read(), None)
+        self.port, self.host = port, host
+        self.cookie = None
+        self.ca_sha = None
+
+    def sign(self, msg):
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
+        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+        k = self.key
+        if isinstance(k, ec.EllipticCurvePrivateKey):
+            h = hashes.SHA384() if k.curve.key_size == 384 else hashes.SHA256()
+            r, s = decode_dss_signature(k.sign(msg, ec.ECDSA(h)))
+            n = (k.curve.key_size + 7) // 8
+            return r.to_bytes(n, "big") + s.to_bytes(n, "big")
+        if isinstance(k, ed25519.Ed25519PrivateKey):
+            return k.sign(msg)
+        if isinstance(k, rsa.RSAPrivateKey):
+            return k.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+        raise ValueError("key type")
+
+    def auth(self, nonce, ca_sha):
+        ts = int(time.time())
+        msg = f"bia-auth-v1\n{nonce}\n{ca_sha}\n{ts}\n".encode()
+        return {"t": "auth", "chain": [b64u(d) for d in self.chain], "ts": ts, "sig": b64u(self.sign(msg)), "nonce": nonce}
+
+    def _ca(self):
+        if self.ca_sha is None:
+            c = http.client.HTTPSConnection(self.host, self.port, context=noverify(), timeout=10)
+            c.request("GET", "/v1/auth/challenge")
+            self.ca_sha = json.loads(c.getresponse().read())["ca_sha256"]
+        return self.ca_sha
+
+    def signin(self):
+        """HTTP sign-in: challenge, signed auth, the `bia_s` cookie. Returns (status, body)."""
+        c = http.client.HTTPSConnection(self.host, self.port, context=noverify(), timeout=10)
+        c.request("GET", "/v1/auth/challenge")
+        ch = json.loads(c.getresponse().read())
+        self.ca_sha = ch["ca_sha256"]
+        body = json.dumps(self.auth(ch["nonce"], self.ca_sha))
+        c = http.client.HTTPSConnection(self.host, self.port, context=noverify(), timeout=10)
+        c.request("POST", "/v1/auth/signin", body=body, headers={"Content-Type": "application/json", "Origin": self.origin()})
+        r = c.getresponse()
+        b = r.read()
+        for k, v in r.getheaders():
+            if k.lower() == "set-cookie" and v.startswith("bia_s="):
+                self.cookie = v.split(";")[0].split("=", 1)[1]
+        return r.status, b
+
+    def origin(self):
+        return f"https://{self.host}:{self.port}"
+
+    def headers(self):
+        """Headers a signed-in page sends (cookie + its own Origin)."""
+        if self.cookie is None:
+            self.signin()
+        return {"Cookie": f"bia_s={self.cookie}", "Origin": self.origin()}
+
+
+def request(port, method, path, body=None, cred=None, headers=None, host="127.0.0.1"):
+    """One HTTPS request, as `cred` (cookie) or anonymous. Returns (status, body)."""
+    h = dict(headers or {})
+    if body is not None:
+        h.setdefault("Content-Type", "application/json")
+    if cred is not None:
+        h.update(cred.headers())
+    c = http.client.HTTPSConnection(host, port, context=noverify(), timeout=10)
+    c.request(method, path, body=json.dumps(body) if isinstance(body, dict) else body, headers=h)
+    try:
+        r = c.getresponse()
+        return r.status, r.read()
+    except ConnectionResetError:
+        return 0, b""
 
 
 class Ws:
     """A client WebSocket on a TLS socket (frames masked, pings answered)."""
 
-    def __init__(self, port, ctx, path="/ws", host="127.0.0.1"):
+    def __init__(self, port, cred=None, path="/ws", host="127.0.0.1"):
         raw = socket.create_connection((host, port), timeout=10)
-        self.s = ctx.wrap_socket(raw, server_hostname=host)
+        self.s = noverify().wrap_socket(raw, server_hostname=host)
         key = base64.b64encode(os.urandom(16)).decode()
+        extra = ""
+        if cred is not None and path != "/ws":
+            # the other websockets go by the session cookie and this page's origin
+            extra = "".join(f"{k}: {v}\r\n" for k, v in cred.headers().items())
         self.s.sendall(
             f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode()
+            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{extra}\r\n".encode()
         )
         head = b""
         while b"\r\n\r\n" not in head:
@@ -88,8 +193,9 @@ def _xor(p, mask):
 class Session:
     """One live session: hello, then the server's frames arrive in `self.frames`."""
 
-    def __init__(self, port, ctx, rx=None, instance=None, name=""):
-        self.ws = Ws(port, ctx)
+    def __init__(self, port, cred, rx=None, instance=None, name=""):
+        self.cred = cred
+        self.ws = Ws(port)
         self.frames, self.acks, self.offers, self.pulls = [], {}, {}, {}
         self.cv = threading.Condition()
         self.hello = self.bye = None
@@ -100,7 +206,7 @@ class Session:
         if self.ws.status != 101:
             self.closed = True
             return
-        self.ws.send_json({"t": "hello", "proto": 2, "name": name, "ver": "test", "instance": self.instance, "rx": rx})
+        self.ws.send_json({"t": "hello", "proto": PROTO, "name": name, "ver": "test", "instance": self.instance, "rx": rx})
         threading.Thread(target=self._read, daemon=True).start()
         threading.Thread(target=self._ping, daemon=True).start()
         with self.cv:
@@ -126,6 +232,9 @@ class Session:
                     continue
                 v = json.loads(p)
                 t = v.get("t")
+                if t == "challenge":
+                    self.ws.send_json(self.cred.auth(v["nonce"], self.cred._ca()))
+                    continue
                 with self.cv:
                     if t == "hello":
                         self.hello = v
@@ -221,10 +330,6 @@ class Session:
         self.ws.close()
 
 
-def ctx_for(ca, cert_pem, key_pem=None):
-    import ssl
-
-    c = ssl.create_default_context(cafile=ca)
-    c.check_hostname = False
-    c.load_cert_chain(cert_pem, key_pem)
-    return c
+def ctx_for(ca, cert_pem, key_pem=None, port=8443):
+    """The credentials a client signs in with (`ca` is unused: the server's CA comes from it)."""
+    return Cred(cert_pem, key_pem, port=port)

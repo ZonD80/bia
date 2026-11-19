@@ -126,16 +126,29 @@ open(f"{files}/fake.p12", "wb").write(b"not a certificate")
 check(chrome.tool("cert_import", path=f"{files}/fake.p12", password="x").startswith("error"), "an ordinary import still goes the ordinary way")
 
 # ---- the web app's Settings asks over HTTPS, root only
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from webbus import Cred, request
+
+creds = {}
+
+
 def curl(path, body=None, cert=None):
-    a = ["curl", "-sk", "-o", f"{work}/answer", "-w", "%{http_code}", f"https://127.0.0.1:8443{path}"]
+    """One request as the page would send it: signed in with the .p12's key (session cookie)."""
+    cred = None
     if cert:
-        a += ["--cert-type", "P12", "--cert", f"{cert}:12345678"]
-    if body is not None:
-        a += ["-X", "POST", "-H", "Content-Type: application/json", "-d", json.dumps(body)]
-    return subprocess.run(a, capture_output=True, text=True).stdout.strip(), open(f"{work}/answer", "rb").read()
+        if cert not in creds:
+            pem = cert + ".pem"
+            subprocess.run(["openssl", "pkcs12", "-in", cert, "-passin", "pass:12345678", "-nodes", "-out", pem], check=True, capture_output=True)
+            creds[cert] = Cred(pem)
+        cred = creds[cert]
+    status, data = request(8443, "POST" if body is not None else "GET", path, body, cred=cred)
+    return str(status), data
 
 
-code, data = curl("/v1/pki/bootstrap/root", {})
+for _ in range(40):
+    if os.path.exists(f"{files}/state/pki/setup-code"): break
+    time.sleep(0.05)
+code, data = curl("/v1/pki/bootstrap/root", {"code": open(f"{files}/state/pki/setup-code").read().strip()})
 check(code == "200", f"root's certificate from the first start: {code}")
 root_p12 = f"{work}/root.p12"
 open(root_p12, "wb").write(data)

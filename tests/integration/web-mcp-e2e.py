@@ -1,4 +1,4 @@
-"""End-to-end: bia-mcp-web over stdio + HTTPS with a client certificate.
+"""End-to-end: bia-mcp-web over stdio + HTTPS, clients signing in with their certificate's key.
 
 Starts the MCP like the agent does (JSON-RPC on stdin/stdout, BIA_FILES in a temp dir, HTTPS on 8443),
 takes the root certificate like a first visitor, then drives the web bus protocol (webbus.py): both
@@ -12,7 +12,7 @@ bia, identity required), the removed HTTP chat API and root's console mirror.
 """
 import json, os, ssl, subprocess, sys, tempfile, threading, time, http.client, base64, hashlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webbus import Session
+from webbus import Session, Cred, noverify, request
 
 exe, files = sys.argv[1], tempfile.mkdtemp(prefix="bia-web-e2e-")
 # files belong to user bia while the MCP runs as root: what it writes there must stay readable for bia's backups
@@ -57,22 +57,32 @@ txt, err = tool("status")
 check(not err and "CA fingerprint" in txt, "web_status")
 
 # first visit: CA + root certificate (bootstrap)
-noverify = ssl.create_default_context(); noverify.check_hostname = False; noverify.verify_mode = ssl.CERT_NONE
-def req(method, path, body=None, ctx=noverify):
-    c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
-    c.request(method, path, body=json.dumps(body) if isinstance(body, dict) else body, headers={"Content-Type": "application/json"} if body is not None else {})
-    try:
-        r = c.getresponse(); return r.status, r.read()
-    except ConnectionResetError:
-        return 0, b""  # refused during the TLS handshake (no client certificate)
+def req(method, path, body=None, ctx=None, headers=None):
+    return request(8443, method, path, body, cred=ctx, headers=headers)
 s, ca = req("GET", "/v1/pki/ca"); check(s == 200 and b"BEGIN CERTIFICATE" in ca, "CA download")
-s, b = req("POST", "/v1/pki/bootstrap/root"); check(s == 200 and len(b) > 500, "root PKCS#12 issued")
+s, b = req("POST", "/v1/pki/bootstrap/root", {"code": "wrong-code"}); check(s == 403, f"setting root up needs the code from bia's screen ({s})")
+for _ in range(40):
+    if os.path.exists(f"{files}/state/pki/setup-code"): break
+    time.sleep(0.05)
+code = open(f"{files}/state/pki/setup-code").read().strip()
+s, b = req("POST", "/v1/pki/bootstrap/root", {"code": code}); check(s == 200 and len(b) > 500, "root PKCS#12 issued with the code")
+check(not os.path.exists(f"{files}/state/pki/setup-code"), "and the code is gone")
 d = tempfile.mkdtemp()
 open(f"{d}/root.p12", "wb").write(b); open(f"{d}/ca.pem", "wb").write(ca)
 subprocess.run(["openssl", "pkcs12", "-in", f"{d}/root.p12", "-passin", "pass:12345678", "-nodes", "-out", f"{d}/root.pem"], check=True, capture_output=True)
-ctx = ssl.create_default_context(cafile=f"{d}/ca.pem"); ctx.check_hostname = False
-ctx.load_cert_chain(f"{d}/root.pem")
-s, b = req("GET", "/v1/whoami", ctx=ctx); check(s == 200 and json.loads(b)["identity"] == "root", "mTLS as root")
+ctx = Cred(f"{d}/root.pem")
+s, b = ctx.signin(); check(s == 200 and json.loads(b)["identity"] == "root" and ctx.cookie, f"root signs in with its key ({s} {b[:80]!r})")
+s, b = req("GET", "/v1/whoami", ctx=ctx); check(s == 200 and json.loads(b)["identity"] == "root", "the session cookie is root")
+s, b = req("GET", "/v1/whoami"); check(s == 401, f"no cookie, no identity ({s})")
+s, b = req("POST", "/v1/push/subscribe", {}, headers={"Cookie": f"bia_s={ctx.cookie}", "Origin": "https://evil.example"})
+check(s == 401 and b"origin" in b, f"the cookie from another site's page is refused ({s} {b[:60]!r})")
+# a signature is good once, for its own nonce
+c = http.client.HTTPSConnection("127.0.0.1", 8443, context=noverify(), timeout=10); c.request("GET", "/v1/auth/challenge"); ch = json.loads(c.getresponse().read())
+a1 = json.dumps(ctx.auth(ch["nonce"], ch["ca_sha256"]))
+for want in (200, 401):
+    c = http.client.HTTPSConnection("127.0.0.1", 8443, context=noverify(), timeout=10)
+    c.request("POST", "/v1/auth/signin", body=a1, headers={"Origin": ctx.origin()}); check(c.getresponse().status == want, f"a sign-in replayed is refused (want {want})")
+s, _ = ctx.signin()
 s, b = req("GET", "/md.js"); check(s == 200 and b"const BiaMd" in b, f"markdown renderer served before sign-in ({s})")
 
 def inbound(pred, secs=10):
@@ -87,7 +97,7 @@ def inbound(pred, secs=10):
 
 # the web bus: hello, then a person writes -> the agent gets an inbound on channel web
 s1 = Session(8443, ctx, rx=None, instance="tab-1")
-check(s1.hello is not None and s1.hello.get("proto") == 2 and s1.hello["me"]["identity"] == "root" and s1.hello["me"]["root"] is True, f"hello (protocol 2): {s1.hello}")
+check(s1.hello is not None and s1.hello.get("proto") == 3 and s1.hello["me"]["identity"] == "root" and s1.hello["me"]["root"] is True, f"hello (protocol 3, signed in): {s1.hello}")
 n = inbound(lambda n: n["identity"] == "system" and n["message"].startswith("[web open] root connected"))
 check(n is not None, "the model hears root connected")
 a = s1.act("send", id="w-hello-1", text="hello bia", cid="c-1")
@@ -164,13 +174,16 @@ check(s2.wait(lambda f: False, 3) is None and s2.bye == "duplicate", f"the old o
 # the HTTP chat API and the old peer link are gone
 s, b = req("POST", "/v1/chats/action", {"t": "send", "text": "x"}, ctx=ctx)
 check(s == 404, f"POST /v1/chats/action is gone ({s})")
-c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
-c.request("GET", "/ws/peer", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(), "Sec-WebSocket-Version": "13"})
+c = http.client.HTTPSConnection("127.0.0.1", 8443, context=noverify(), timeout=10)
+c.request("GET", "/ws/peer", headers={**ctx.headers(), "Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(), "Sec-WebSocket-Version": "13"})
 r = c.getresponse(); check(r.status == 410, f"/ws/peer answers 410 ({r.status})")
-c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
-k = base64.b64encode(os.urandom(16)).decode()
-c.request("GET", "/ws/term", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": k, "Sec-WebSocket-Version": "13"})
-r = c.getresponse(); check(r.status == 101, f"/ws/term is root's console mirror ({r.status})")
+for origin, want in ((ctx.origin(), 101), (None, 401), ("https://evil.example", 401)):
+    c = http.client.HTTPSConnection("127.0.0.1", 8443, context=noverify(), timeout=10)
+    k = base64.b64encode(os.urandom(16)).decode()
+    h = {"Cookie": f"bia_s={ctx.cookie}", "Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": k, "Sec-WebSocket-Version": "13"}
+    if origin: h["Origin"] = origin
+    c.request("GET", "/ws/term", headers=h)
+    r = c.getresponse(); check(r.status == want, f"/ws/term (root's console mirror) from origin {origin}: {r.status}")
 
 # Web Push: worker + manifest before sign-in, VAPID key, subscriptions (no real push is sent)
 for path, what in (("/sw.js", b"pushsubscriptionchange"), ("/manifest.webmanifest", b'"standalone"'), ("/icon-192.png", b"\x89PNG")):
@@ -196,11 +209,9 @@ subs = json.load(open(f"{files}/state/web/push/subs.json"))
 check([(x["identity"], x["endpoint"]) for x in subs] == [("root", ep)], f"subscription stored for root: {subs}")
 st_s = os.stat(f"{files}/state/web/push/subs.json")
 check(oct(st_s.st_mode & 0o777) == "0o600" and st_s.st_uid == BIA_UID, f"subs.json is 0600 and belongs to the files owner ({oct(st_s.st_mode & 0o777)}, uid {st_s.st_uid})")
-s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}); check(s in (0, 401, 403), f"subscribe needs a client cert ({s})")
+s, b = req("POST", "/v1/push/subscribe", {"endpoint": ep, "keys": keys}); check(s == 401, f"subscribe needs a signed-in browser ({s})")
 def req_ua(method, path, body, ua):
-    c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ctx, timeout=10)
-    c.request(method, path, body=json.dumps(body), headers={"Content-Type": "application/json", "User-Agent": ua})
-    r = c.getresponse(); return r.status, r.read()
+    return req(method, path, body, ctx=ctx, headers={"User-Agent": ua})
 ep2 = "https://web.push.apple.com/bia-e2e"
 s, b = req_ua("POST", "/v1/push/subscribe", {"endpoint": ep2, "keys": keys, "expirationTime": 1000}, "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1")
 id2 = json.loads(b).get("id", "") if s == 200 else ""
@@ -221,9 +232,7 @@ def ctx_for(identity, trust):
     s, p12 = req("GET", path)
     open(f"{d}/{identity}.p12", "wb").write(p12)
     subprocess.run(["openssl", "pkcs12", "-in", f"{d}/{identity}.p12", "-passin", "pass:12345678", "-nodes", "-out", f"{d}/{identity}.pem"], check=True, capture_output=True)
-    c = ssl.create_default_context(cafile=f"{d}/ca.pem"); c.check_hostname = False
-    c.load_cert_chain(f"{d}/{identity}.pem")
-    return c
+    return Cred(f"{d}/{identity}.pem")
 alice, bob = ctx_for("alice", "root"), ctx_for("bob", "normal")
 s, b = req("GET", "/v1/whoami", ctx=alice); check(s == 200 and json.loads(b).get("root") is True, f"alice (trust root) is root in the web app: {b[:120]!r}")
 s, b = req("GET", "/v1/whoami", ctx=bob); check(s == 200 and json.loads(b).get("root") is False, f"bob (trust normal) is not: {b[:120]!r}")
@@ -231,8 +240,8 @@ for path in ("/v1/status", "/v1/pki/certs", "/v1/pki/requests"):
     sa, _ = req("GET", path, ctx=alice); sb, _ = req("GET", path, ctx=bob)
     check(sa == 200 and sb == 403, f"{path}: alice {sa}, bob {sb}")
 for who, c, want in (("alice", alice, 101), ("bob", bob, 403)):
-    cn = http.client.HTTPSConnection("127.0.0.1", 8443, context=c, timeout=10)
-    cn.request("GET", "/ws/shell", headers={"Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(), "Sec-WebSocket-Version": "13"})
+    cn = http.client.HTTPSConnection("127.0.0.1", 8443, context=noverify(), timeout=10)
+    cn.request("GET", "/ws/shell", headers={**c.headers(), "Upgrade": "websocket", "Connection": "Upgrade", "Sec-WebSocket-Key": base64.b64encode(os.urandom(16)).decode(), "Sec-WebSocket-Version": "13"})
     r = cn.getresponse(); check(r.status == want, f"/ws/shell for {who}: {r.status}")
     cn.close()
 
@@ -286,5 +295,23 @@ check(sb4.hello is not None and sb4.hello["me"]["identity"] == "bob", "bob is ba
 txt, err = tool("port", port=new_port); check(not err and "already answers" in txt, f"the same port again changes nothing: {txt[:60]}")
 p.stdin.close(); p.wait(timeout=10)
 check(sb4.wait(lambda f: False, 3) is None and sb4.bye is not None and sb4.bye_port is None, f"an ordinary restart names no port: bye {sb4.bye} port {sb4.bye_port}")
+
+# the release step's .biaconfig for root: the password goes into a file, never into the answer
+p = subprocess.Popen([exe], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True, bufsize=1)
+threading.Thread(target=reader, daemon=True).start()
+rpc("initialize")
+txt, err = tool("pki_biaconfig", identity="hank", address="127.0.0.1:8443", hide_password=True)
+cfg = txt.split(",")[0]
+pwf = txt.split("Its password is in ")[1].split(" ")[0] if "Its password is in " in txt else ""
+pw = open(pwf).read().strip() if pwf and os.path.exists(pwf) else ""
+check(not err and pw and pw not in txt and "TWO separate messages" in txt, f"hide_password keeps the password out of the answer: {txt[:120]}")
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes as _hh
+env_ = json.load(open(cfg))
+k = PBKDF2HMAC(algorithm=_hh.SHA256(), length=32, salt=base64.b64decode(env_["salt"]), iterations=env_["iter"]).derive(pw.encode())
+inner = json.loads(AESGCM(k).decrypt(base64.b64decode(env_["nonce"]), base64.b64decode(env_["data"]), b"biaconfig"))
+check(inner["bia"]["addresses"][0] == "127.0.0.1:8443", "and the file opens with the password from the file")
+p.stdin.close(); p.wait(timeout=10)
 
 print("RESULT", "FAILED" if check.failed else "PASSED")

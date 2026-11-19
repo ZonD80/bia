@@ -339,9 +339,11 @@ pub fn wait_up(host: &str, ca_pem: Option<&str>, limit: Duration, tick: &mut dyn
     while start.elapsed() < limit {
         tick(start.elapsed());
         let ok = match ca_pem {
-            Some(ca) => bia_pki::client::request(&format!("https://{hp}/"), "GET", "/", None, bia_pki::client::ServerTrust::Ca(ca), None)
-                .map(|_| ())
-                .map_err(|e| format!("{e:#}")),
+            // the new bia: it serves the CA made for it (its TLS certificate is its own or
+            // Let's Encrypt, so TLS alone does not tell it from the old system)
+            Some(ca) => bia_pki::client::request(&format!("https://{hp}/"), "GET", "/v1/pki/ca", None, bia_pki::client::ServerTrust::Ca(ca), None)
+                .map_err(|e| format!("{e:#}"))
+                .and_then(|r| if r.status == 200 && r.text().trim() == ca.trim() { Ok(()) } else { Err(format!("something else answers there (HTTP {})", r.status)) }),
             None => std::net::ToSocketAddrs::to_socket_addrs(&(h, 4791u16))
                 .map_err(|e| e.to_string())
                 .and_then(|mut a| a.next().ok_or_else(|| "no address".to_string()))

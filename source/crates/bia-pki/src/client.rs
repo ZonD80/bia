@@ -1,22 +1,24 @@
-//! A small HTTPS client for talking to another bia's web API: TOFU or a pinned CA for
-//! the server, optionally this bia's agent certificate as the client certificate.
-//! Server names are not checked against the certificate (bias are reached by LAN or
-//! public address that changes); trust comes from the peer's CA alone.
+//! A small HTTPS client for talking to another bia's web API. There is no client
+//! certificate in TLS (since 2.3.0): a request with an identity carries a `Bia`
+//! Authorization header bound to this TLS connection (signin.rs). The server's TLS
+//! certificate is not checked (it is Let's Encrypt or self-signed, and bias are reached by
+//! addresses that change): a long-lived link checks the server's `bind` against the pinned
+//! CA instead, and what a request downloads (certificates) is checked against that CA.
 use anyhow::{anyhow, bail, Context, Result};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::client::WebPkiServerVerifier;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
+use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How the server is trusted.
+/// How the server is trusted. TLS takes any certificate either way; `Ca` is the CA the
+/// caller checks `bind` and downloads against.
 pub enum ServerTrust<'a> {
-    /// Any certificate (first contact; the caller checks the CA it downloads).
+    /// First contact; the caller checks the CA it downloads.
     Any,
-    /// Only certificates issued by this CA (PEM).
+    /// This bia's CA (PEM).
     Ca(&'a str),
 }
 
@@ -84,42 +86,26 @@ pub fn origin(url: &str) -> Result<String> {
     Ok(if p == 443 { format!("https://{host}") } else { format!("https://{host}:{p}") })
 }
 
-fn client_config(trust: ServerTrust<'_>, client: Option<(&str, &str)>) -> Result<ClientConfig> {
+fn client_config() -> Result<ClientConfig> {
     crate::install_crypto_provider();
-    let verifier: Arc<dyn ServerCertVerifier> = match trust {
-        ServerTrust::Any => Arc::new(AnyServer(provider_schemes())),
-        ServerTrust::Ca(pem) => {
-            let mut roots = RootCertStore::empty();
-            for c in crate::pem_to_cert_ders(pem)? {
-                roots.add(c).map_err(|e| anyhow!("peer CA: {e}"))?;
-            }
-            let inner = WebPkiServerVerifier::builder(Arc::new(roots))
-                .build()
-                .map_err(|e| anyhow!("verifier: {e}"))?;
-            Arc::new(CaNoName(inner))
-        }
-    };
-    let b = ClientConfig::builder()
+    let mut cfg = ClientConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
         .dangerous()
-        .with_custom_certificate_verifier(verifier);
-    let mut cfg = match client {
-        Some((chain, key)) => b
-            .with_client_auth_cert(crate::pem_to_cert_ders(chain)?, crate::pem_to_key_der(key)?)
-            .map_err(|e| anyhow!("client certificate: {e}"))?,
-        None => b.with_no_client_auth(),
-    };
+        .with_custom_certificate_verifier(Arc::new(AnyServer(provider_schemes())))
+        .with_no_client_auth();
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     Ok(cfg)
 }
 
+/// This connection's channel binding (RFC 9266), 32 bytes.
+pub fn exporter(conn: &rustls::ClientConnection) -> Result<[u8; 32]> {
+    conn.export_keying_material([0u8; 32], crate::signin::EXPORTER_LABEL, None)
+        .map_err(|e| anyhow!("tls exporter: {e}"))
+}
+
 /// TCP + TLS to `url` (connect timeout 10 s, handshake done). For long-lived links.
-pub fn connect(
-    url: &str,
-    trust: ServerTrust<'_>,
-    client: Option<(&str, &str)>,
-) -> Result<(rustls::ClientConnection, TcpStream)> {
+pub fn connect(url: &str) -> Result<(rustls::ClientConnection, TcpStream)> {
     let (host, port) = split_url(url)?;
-    let (mut conn, mut tcp) = open(&host, port, client_config(trust, client)?)?;
+    let (mut conn, mut tcp) = open(&host, port, client_config()?)?;
     while conn.is_handshaking() {
         conn.complete_io(&mut tcp).map_err(|e| anyhow!("tls with {host}:{port}: {e}"))?;
     }
@@ -171,16 +157,30 @@ pub fn request_raw(
     method: &str,
     path: &str,
     body: Option<(&[u8], &str)>,
-    trust: ServerTrust<'_>,
+    _trust: ServerTrust<'_>,
     client: Option<(&str, &str)>,
 ) -> Result<Response> {
     let (host, port) = split_url(url)?;
-    let (mut conn, mut tcp) = open(&host, port, client_config(trust, client)?)?;
+    let (mut conn, mut tcp) = open(&host, port, client_config()?)?;
+    while conn.is_handshaking() {
+        conn.complete_io(&mut tcp).map_err(|e| anyhow!("tls with {host}:{port}: {e}"))?;
+    }
+    let auth = match client {
+        Some((chain, key)) => {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let h = crate::signin::request_header(chain, key, method, path, ts, &exporter(&conn)?)?;
+            format!("Authorization: {h}\r\n")
+        }
+        None => String::new(),
+    };
     let local = tcp.local_addr().ok();
     let mut tls = rustls::Stream::new(&mut conn, &mut tcp);
     let hosthdr = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
     let mut req = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {hosthdr}\r\nUser-Agent: bia-peer\r\nAccept: application/json\r\nConnection: close\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: {hosthdr}\r\nUser-Agent: bia-peer\r\nAccept: application/json\r\nConnection: close\r\n{auth}"
     );
     if let Some((b, ctype)) = body {
         req.push_str(&format!("Content-Type: {ctype}\r\nContent-Length: {}\r\n", b.len()));
@@ -281,47 +281,6 @@ impl ServerCertVerifier for AnyServer {
     }
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.clone()
-    }
-}
-
-/// The peer's CA must have issued the server certificate; the name in it does not matter.
-#[derive(Debug)]
-struct CaNoName(Arc<WebPkiServerVerifier>);
-
-impl ServerCertVerifier for CaNoName {
-    fn verify_server_cert(
-        &self,
-        end: &CertificateDer<'_>,
-        inter: &[CertificateDer<'_>],
-        name: &ServerName<'_>,
-        ocsp: &[u8],
-        now: UnixTime,
-    ) -> std::result::Result<ServerCertVerified, rustls::Error> {
-        match self.0.verify_server_cert(end, inter, name, ocsp, now) {
-            Err(rustls::Error::InvalidCertificate(
-                CertificateError::NotValidForName | CertificateError::NotValidForNameContext { .. },
-            )) => Ok(ServerCertVerified::assertion()),
-            other => other,
-        }
-    }
-    fn verify_tls12_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        self.0.verify_tls12_signature(m, c, d)
-    }
-    fn verify_tls13_signature(
-        &self,
-        m: &[u8],
-        c: &CertificateDer<'_>,
-        d: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, rustls::Error> {
-        self.0.verify_tls13_signature(m, c, d)
-    }
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.0.supported_verify_schemes()
     }
 }
 

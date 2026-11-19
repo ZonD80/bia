@@ -76,6 +76,18 @@
                 <data android:pathPattern=".*\\..*\\..*\\.biaconfig" />
             </intent-filter>
         </activity>
+        <!-- a browser's file picker on bia's sign-in page: this app hands it a saved bia's .biaconfig -->
+        <activity
+            android:name=".PickKeyActivity"
+            android:exported="true"
+            android:label="bia keys">
+            <intent-filter>
+                <action android:name="android.intent.action.GET_CONTENT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.OPENABLE" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
         <!-- bia's key for the share sheet (to send it to a computer) -->
         <provider
             android:name="androidx.core.content.FileProvider"

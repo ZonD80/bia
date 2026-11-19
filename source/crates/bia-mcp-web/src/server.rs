@@ -12,7 +12,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 const INDEX: &str = include_str!("../web/index.html");
 const APP_JS: &str = include_str!("../web/app.js");
@@ -22,6 +22,9 @@ const EMOJI_JS: &str = include_str!("../web/emoji.js");
 const PKI_JS: &str = include_str!("../web/pki.js");
 const MD_JS: &str = include_str!("../web/md.js");
 const LINK_JS: &str = include_str!("../web/link.js");
+const KEYS_JS: &str = include_str!("../web/keys.js");
+/// node-forge 1.3.1 (BSD-3-Clause), only for reading .p12 files on the no-key page.
+const FORGE_JS: &str = include_str!("../web/vendor/forge.min.js");
 const ICON: &str = include_str!("../web/icon.svg");
 const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../web/icon-512.png");
@@ -109,7 +112,22 @@ pub struct Web {
     pub port: u16,
     files: PathBuf,
     pub(crate) pki: Pki,
-    tls: Mutex<Arc<rustls::ServerConfig>>,
+    /// TLS settings per address certificate (None: bia's own); rebuilt after any change.
+    tls: Mutex<TlsCache>,
+    /// The redirect listener holds port 80, so it answers ACME challenges.
+    http80: std::sync::atomic::AtomicBool,
+    /// Wakes the certificate thread (a hostname or address was just added).
+    acme_poke: (Mutex<bool>, std::sync::Condvar),
+}
+
+/// Built TLS settings and which addresses have a certificate; kept a minute so expiry
+/// and new files are noticed without reading them per connection.
+#[derive(Default)]
+struct TlsCache {
+    built: Option<Instant>,
+    configs: HashMap<Option<IpAddr>, Arc<rustls::ServerConfig>>,
+    have: Vec<IpAddr>,
+    declared: Vec<IpAddr>,
 }
 
 /// One parsed request (body not yet read).
@@ -204,7 +222,7 @@ fn write_bind_error(files: &Path, msg: &str) {
         "port": 0,
         "error": msg,
         "urls": [],
-        "auth": "mtls",
+        "auth": "bia-sign",
     });
     if let Ok(b) = serde_json::to_vec_pretty(&body) {
         let _ = std::fs::write(dir.join("web.json"), b);
@@ -240,6 +258,8 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/pki.js"
             | "/md.js"
             | "/link.js"
+            | "/keys.js"
+            | "/vendor/forge.min.js"
             | "/icon.svg"
             | "/icon-192.png"
             | "/icon-512.png"
@@ -268,7 +288,7 @@ fn is_public(method: &str, path: &str) -> bool {
             true
         }
         // a bia deploy app redeeming the one-time key grant of a link bia sent (bia_mcp::apps)
-        ("GET", p) if p.strip_prefix("/v1/pki/link/").is_some_and(bia_mcp::apps::valid_token) => true,
+        ("POST", p) if p.strip_prefix("/v1/pki/link/").is_some_and(bia_mcp::apps::valid_token) => true,
         // Certificate requests from peers without a cert: file one, then poll / collect by UUID.
         ("POST", "/v1/pki/requests") => true,
         ("GET", p) => request_route(p).is_some_and(|(_, action)| matches!(action, "" | "cert")),
@@ -319,9 +339,8 @@ impl Web {
         let pki = Pki::load_or_create(&files).map_err(|e| format!("pki: {e:#}"))?;
         let ips = lan_ips();
         let _ = pki.ensure_server_sans(&ips);
-        let tls = pki
-            .server_config()
-            .map_err(|e| format!("tls config: {e:#}"))?;
+        // bia's own certificate must load: it is the fallback for every address
+        pki.server_config().map_err(|e| format!("tls config: {e:#}"))?;
 
         let (listener, port, mut warn) = match TcpListener::bind(("0.0.0.0", preferred)) {
             Ok(l) => (l, preferred, None),
@@ -355,13 +374,16 @@ impl Web {
             port,
             files,
             pki,
-            tls: Mutex::new(tls),
+            tls: Mutex::new(TlsCache::default()),
+            http80: std::sync::atomic::AtomicBool::new(false),
+            acme_poke: (Mutex::new(false), std::sync::Condvar::new()),
         });
         web.publish();
         if http_port > 0 {
             match TcpListener::bind(("0.0.0.0", http_port)) {
                 Ok(http_l) => {
                     let https_port = port;
+                    web.http80.store(http_port == 80, std::sync::atomic::Ordering::SeqCst);
                     let _ = std::thread::Builder::new()
                         .name("web-http-redir".into())
                         .spawn(move || {
@@ -407,9 +429,7 @@ impl Web {
                     }
                     let ips = lan_ips();
                     if w.pki.ensure_server_sans(&ips).unwrap_or(false) {
-                        if let Ok(cfg) = w.pki.server_config() {
-                            *w.tls.lock().unwrap() = cfg;
-                        }
+                        w.reset_tls();
                         w.con.log("  web: server certificate reissued");
                     }
                     let cur = w.origins().join("\n");
@@ -434,6 +454,25 @@ impl Web {
                     std::thread::sleep(Duration::from_secs(6 * 3600));
                 }
             });
+        // Publicly trusted certificates for public addresses and root's hostnames.
+        if crate::acme::enabled() {
+            let w = web.clone();
+            let _ = std::thread::Builder::new()
+                .name("web-acme".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    loop {
+                        w.acme_pass(None);
+                        let (lock, cv) = &w.acme_poke;
+                        let poked = lock.lock().unwrap();
+                        let mut poked = cv
+                            .wait_timeout_while(poked, Duration::from_secs(600), |p| !*p)
+                            .unwrap()
+                            .0;
+                        *poked = false;
+                    }
+                });
+        }
         // Peers this bia asked for a certificate (web_peer_connect): check until their
         // root decides, then tell the model.
         let w = web.clone();
@@ -481,6 +520,113 @@ impl Web {
         self.publish();
     }
 
+    /// Forget the built TLS settings: the next connections load certificates again.
+    pub fn reset_tls(&self) {
+        *self.tls.lock().unwrap() = TlsCache::default();
+    }
+
+    /// TLS settings for a connection from `peer` that arrived on `local`.
+    fn tls_for_conn(&self, local: IpAddr, peer: IpAddr) -> Option<Arc<rustls::ServerConfig>> {
+        let mut c = self.tls.lock().unwrap();
+        if c.built.is_none_or(|b| b.elapsed() > Duration::from_secs(60)) {
+            let wanted = self.acme_wanted();
+            *c = TlsCache {
+                built: Some(Instant::now()),
+                configs: HashMap::new(),
+                have: wanted
+                    .iter()
+                    .filter_map(|n| match n {
+                        crate::acme::Name::Ip(i) if crate::acme::load(&self.files, n).is_some() => Some(*i),
+                        _ => None,
+                    })
+                    .collect(),
+                declared: crate::acme::declared_ips(&self.files),
+            };
+        }
+        let have = |i: &IpAddr| c.have.contains(i);
+        let ip = crate::acme::ip_for(local, peer, &have, &c.declared);
+        if let Some(cfg) = c.configs.get(&ip) {
+            return Some(cfg.clone());
+        }
+        let cfg = self.tls_for(ip)?;
+        c.configs.insert(ip, cfg.clone());
+        Some(cfg)
+    }
+
+    /// TLS settings for a connection that gets address certificate `ip` (None: bia's own).
+    fn tls_for(&self, ip: Option<IpAddr>) -> Option<Arc<rustls::ServerConfig>> {
+        let own = self.pki.own_certified_key().ok()?;
+        let hosts = crate::acme::hostnames(&self.files)
+            .into_iter()
+            .filter_map(|h| {
+                let k = crate::acme::load(&self.files, &crate::acme::Name::Host(h.clone()))?;
+                Some((h, k))
+            })
+            .collect();
+        let ip_key = ip.and_then(|i| crate::acme::load(&self.files, &crate::acme::Name::Ip(i)));
+        let pick = crate::acme::Pick { hosts, ip: ip_key, own };
+        self.pki.server_config_with(Arc::new(pick)).ok()
+    }
+
+    /// Public addresses on this machine's interfaces.
+    fn public_ips(&self) -> Vec<IpAddr> {
+        lan_ips().into_iter().filter(crate::acme::is_public).collect()
+    }
+
+    /// Every name that should have a publicly trusted certificate.
+    pub fn acme_wanted(&self) -> Vec<crate::acme::Name> {
+        crate::acme::wanted(&self.files, &self.public_ips())
+    }
+
+    /// One certificate pass (`only`: just that name, now, whatever its state). Returns
+    /// what happened to `only`, for a tool's answer.
+    pub fn acme_pass(&self, only: Option<&crate::acme::Name>) -> Option<Result<(), String>> {
+        let wanted = self.acme_wanted();
+        let port80 = self.http80.load(std::sync::atomic::Ordering::SeqCst);
+        let pass = crate::acme::pass(&self.files, &wanted, port80, only);
+        crate::acme::prune(&self.files, &wanted);
+        if !pass.issued.is_empty() {
+            self.reset_tls();
+            self.publish();
+            for n in &pass.issued {
+                let m = crate::acme::read_meta(&self.files, n);
+                self.con.log(&format!(
+                    "  web: Let's Encrypt certificate for {} until {}",
+                    n.shown(),
+                    crate::acme::fmt_time(m.not_after)
+                ));
+            }
+        }
+        for (n, e) in &pass.tell {
+            self.con.log(&format!("  web: no Let's Encrypt certificate for {}: {e}", n.shown()));
+            self.con.push_inbound(crate::bus::Inbound {
+                identity: crate::bus::ID_SYSTEM.into(),
+                channel: crate::bus::CH_WEB.into(),
+                id: crate::bus::mint_msg_id(),
+                text: format!(
+                    "[web certificate] Let's Encrypt gave no certificate for {name}: {e}. Browsers opening https://{name} see a certificate warning until this works; bia keeps trying by itself. Usual causes: port 80 is closed by a firewall or the provider, or the name points somewhere else. Tell root.",
+                    name = n.shown()
+                ),
+            });
+        }
+        let only = only?;
+        let m = crate::acme::read_meta(&self.files, only);
+        Some(if pass.issued.contains(only) {
+            Ok(())
+        } else if m.fails > 0 {
+            Err(m.error)
+        } else {
+            Err("nothing was done".into())
+        })
+    }
+
+    /// Wake the certificate thread now.
+    pub fn acme_poke(&self) {
+        let (lock, cv) = &self.acme_poke;
+        *lock.lock().unwrap() = true;
+        cv.notify_all();
+    }
+
     /// Issue a client cert and return the first HTTPS pickup URL.
     pub fn issue_pickup(&self, identity: &str, role: &str, trust: &str) -> Result<String, String> {
         let (token, _) = self
@@ -498,7 +644,14 @@ impl Web {
     }
 
     fn origins(&self) -> Vec<String> {
-        crate::listen::https_origins(self.port)
+        // root's hostnames with a working certificate first: no warning there
+        let mut out: Vec<String> = crate::acme::hostnames(&self.files)
+            .into_iter()
+            .filter(|h| crate::acme::load(&self.files, &crate::acme::Name::Host(h.clone())).is_some())
+            .map(|h| if self.port == 443 { format!("https://{h}") } else { format!("https://{h}:{}", self.port) })
+            .collect();
+        out.extend(crate::listen::https_origins(self.port));
+        out
     }
 
     pub fn ca_sha256(&self) -> String {
@@ -513,11 +666,19 @@ impl Web {
             "urls": self.origins(),
             "ca": "/v1/pki/ca",
             "ca_sha256": self.ca_sha256(),
-            "auth": "mtls",
+            "auth": "bia-sign",
         });
         if let Ok(b) = serde_json::to_vec_pretty(&body) {
             let _ = std::fs::write(dir.join("web.json"), b);
             unsafe { libc::sync() };
+        }
+    }
+
+    /// The web addresses for the console, with the root setup code while root is not set up.
+    pub fn console_line(&self) -> String {
+        match self.pki.setup_code() {
+            Some(code) => format!("{}  root setup code: {code}", self.info_line()),
+            None => self.info_line(),
         }
     }
 
@@ -540,7 +701,13 @@ impl Web {
             .map(|a| a.ip().to_string())
             .unwrap_or_default();
         let _ = tcp.set_read_timeout(Some(Duration::from_secs(300)));
-        let cfg = self.tls.lock().unwrap().clone();
+        // which address certificate: the one this connection arrived on, or (a port forward
+        // from the internet) a declared public address's
+        let cfg = match (tcp.local_addr(), tcp.peer_addr()) {
+            (Ok(l), Ok(p)) => self.tls_for_conn(l.ip(), p.ip()),
+            _ => self.tls_for(None),
+        };
+        let Some(cfg) = cfg else { return };
         let mut conn = match ServerConnection::new(cfg) {
             Ok(c) => c,
             Err(_) => return,
@@ -550,13 +717,13 @@ impl Web {
                 return;
             }
         }
-        // The handshake takes any certificate; the CA, expiry, revocation and (for a
-        // certificate bound to some networks) the source address are checked here.
+        // No client certificates in TLS: who is talking is proved per request (a `Bia`
+        // Authorization header bound to this connection, or a browser's session cookie) or
+        // inside /ws. The channel binding of this connection:
         let peer_ip = bia_pki::parse_ip(&peer).ok();
-        let (client, problem) = match self.pki.check_client_from(conn.peer_certificates(), peer_ip) {
-            Ok(c) => (c, None),
-            Err(p) => (None, Some(p)),
-        };
+        let exporter = conn
+            .export_keying_material([0u8; 32], bia_pki::signin::EXPORTER_LABEL, None)
+            .unwrap_or([0u8; 32]);
 
         let Ok(tls) = SharedTls::new(conn, tcp) else {
             return;
@@ -571,6 +738,7 @@ impl Web {
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or("").to_string();
         let target = parts.next().unwrap_or("/").to_string();
+        let raw_target = target.clone();
         let (path, query) = match target.split_once('?') {
             Some((p, q)) => (p.to_string(), q.to_string()),
             None => (target, String::new()),
@@ -597,6 +765,91 @@ impl Web {
             headers,
         };
 
+        // ---- the web bus: anyone's live session; sign-in happens inside ----
+        if req.method == "GET" && req.path == "/ws" {
+            let Some(links) = crate::link::links() else {
+                respond(&mut stream, 503, "text/plain", b"the web bus is not running", None);
+                return;
+            };
+            if links.admit(&peer).is_err() {
+                respond(&mut stream, 429, "text/plain", b"too many connections; try later", None);
+                return;
+            }
+            let Some(key) = req.header("sec-websocket-key") else {
+                respond(&mut stream, 400, "text/plain", b"not a websocket request", None);
+                return;
+            };
+            let _ = stream.write_all(ws_accept(key).as_bytes());
+            let _ = stream.flush();
+            crate::link::set_sndbuf_shared(&stream);
+            links.accept(stream, reader, exporter, &peer);
+            return;
+        }
+
+        // a page signs in with the key it keeps and gets the session cookie
+        if req.method == "GET" && req.path == "/v1/auth/challenge" {
+            let ca = self.ca_sha256();
+            respond_json(&mut stream, json!({"nonce": crate::session::nonce(), "ca_sha256": ca}));
+            return;
+        }
+        if req.method == "POST" && req.path == "/v1/auth/signin" {
+            let mut body = vec![0u8; (req.content_length() as usize).min(64 * 1024)];
+            let _ = reader.read_exact(&mut body);
+            if !crate::session::same_origin(req.header("origin"), req.header("host"), "POST", false) {
+                respond(&mut stream, 403, "text/plain", b"wrong origin", None);
+                return;
+            }
+            let auth = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+            let nonce = auth["nonce"].as_str().unwrap_or("").to_string();
+            if !crate::session::take_nonce(&nonce) {
+                respond(&mut stream, 401, "text/plain", b"unknown or used nonce: GET /v1/auth/challenge first", None);
+                return;
+            }
+            // cookies are for browsers; another bia or bia-bridge signs each request
+            match crate::link::verify_auth(&self.pki, &auth, &nonce, &[], &peer) {
+                Ok(id) if id.role == "agent" => respond(&mut stream, 403, "text/plain", b"agents sign each request (Authorization: Bia)", None),
+                Ok(id) => {
+                    let me = json!({"identity": id.identity, "root": id.trust == "root", "serial": id.serial_hint, "not_after": id.not_after});
+                    let token = crate::session::start(&id);
+                    respond(&mut stream, 200, "application/json", me.to_string().as_bytes(), Some(&crate::session::set_cookie(&token)));
+                }
+                Err(kind) => respond(&mut stream, 401, "text/plain", format!("sign-in refused ({kind})").as_bytes(), None),
+            }
+            return;
+        }
+        if req.method == "POST" && req.path == "/v1/auth/logout" {
+            if let Some(t) = req.header("cookie").and_then(crate::session::from_cookie_header) {
+                crate::session::end(t);
+            }
+            respond(&mut stream, 204, "text/plain", b"", Some(&crate::session::clear_cookie()));
+            return;
+        }
+
+        // who sent this request: a signed header (scripts, bias, bia-bridge) or a session
+        let websocket = req.header("upgrade").is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
+        let (client, problem) = match req.header("authorization").filter(|h| h.starts_with("Bia ")) {
+            Some(h) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                match self.pki.verify_request(h, &req.method, &raw_target, &exporter, now, peer_ip) {
+                    Ok(id) => (Some(id), None),
+                    Err(p) => (None, Some(p)),
+                }
+            }
+            None => match req.header("cookie").and_then(crate::session::from_cookie_header).and_then(crate::session::lookup) {
+                Some(id) if self.pki.is_revoked(&id.serial_hint) => {
+                    crate::session::end_serial(&id.serial_hint);
+                    (None, Some(bia_pki::CertProblem { kind: "revoked", identity: id.identity }))
+                }
+                Some(id) if !crate::session::same_origin(req.header("origin"), req.header("host"), &req.method, websocket) => {
+                    (None, Some(bia_pki::CertProblem { kind: "origin", identity: id.identity }))
+                }
+                other => (other, None),
+            },
+        };
+
         if is_public(&req.method, &req.path) {
             let mut body = vec![];
             if req.content_length() > 0 {
@@ -605,6 +858,12 @@ impl Web {
             }
             self.public(&req, &body, &peer, &mut stream, problem.as_ref());
             return;
+        }
+        if client.is_none() && req.content_length() > 0 {
+            // read what was sent before refusing: closing with unread data resets the
+            // connection and the client never sees the answer
+            let n = req.content_length().min(MAX_BODY as u64);
+            let _ = std::io::copy(&mut (&mut reader).take(n), &mut std::io::sink());
         }
         if let (None, Some(p)) = (&client, &problem) {
             // A page load goes to the start page, which explains the rejected certificate.
@@ -616,10 +875,7 @@ impl Web {
                 redirect(&mut stream, "/");
                 return;
             }
-            let msg = format!(
-                "client certificate \"{}\" rejected ({}); quit the browser or use a private window to choose another",
-                p.identity, p.kind
-            );
+            let msg = format!("sign-in of \"{}\" refused ({})", p.identity, p.kind);
             respond(&mut stream, 401, "text/plain", msg.as_bytes(), None);
             return;
         }
@@ -644,27 +900,6 @@ impl Web {
         // the peer link of bias before 1.9: they talk on /ws now
         if req.method == "GET" && req.path == "/ws/peer" {
             respond(&mut stream, 410, "text/plain", b"this bia speaks the web bus protocol 2 on /ws; update to bia 1.9 or newer", None);
-            return;
-        }
-
-        // ---- the web bus: anyone's live session (a person, bia-bridge, another bia) ----
-        if req.method == "GET" && req.path == "/ws" {
-            let Some(links) = crate::link::links() else {
-                respond(&mut stream, 503, "text/plain", b"the web bus is not running", None);
-                return;
-            };
-            if links.admit(&peer).is_err() {
-                respond(&mut stream, 429, "text/plain", b"too many connections; try later", None);
-                return;
-            }
-            let Some(key) = req.header("sec-websocket-key") else {
-                respond(&mut stream, 400, "text/plain", b"not a websocket request", None);
-                return;
-            };
-            let _ = stream.write_all(ws_accept(key).as_bytes());
-            let _ = stream.flush();
-            crate::link::set_sndbuf_shared(&stream);
-            links.accept(stream, reader, &id, &peer, root);
             return;
         }
 
@@ -753,6 +988,8 @@ impl Web {
             ("GET", "/pki.js") => asset(stream, "text/javascript; charset=utf-8", PKI_JS),
             ("GET", "/md.js") => asset(stream, "text/javascript; charset=utf-8", MD_JS),
             ("GET", "/link.js") => asset(stream, "text/javascript; charset=utf-8", LINK_JS),
+            ("GET", "/keys.js") => asset(stream, "text/javascript; charset=utf-8", KEYS_JS),
+            ("GET", "/vendor/forge.min.js") => asset(stream, "text/javascript; charset=utf-8", FORGE_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
             ("GET", "/icon.svg") => asset(stream, "image/svg+xml", ICON),
             // browsers that ask for it unprompted: bia's own picture when it chose one
@@ -772,7 +1009,13 @@ impl Web {
             }
             ("GET", "/manifest.webmanifest") => asset(stream, "application/manifest+json", &manifest_named(self.pki.chosen_name().as_deref(), &crate::icon::rev())),
             ("GET", "/sw.js") => asset(stream, "text/javascript; charset=utf-8", SW_JS),
-            ("GET", "/v1/bridge") => respond_json(stream, crate::bridge::list()),
+            // signed by the CA: on an address whose TLS certificate cannot be checked, the
+            // list (and through its sha256s, the files) still can
+            ("GET", "/v1/bridge") => {
+                let body = serde_json::to_vec_pretty(&crate::bridge::list()).unwrap_or_default();
+                let sig = self.pki.sign_der(&body).map(|s| format!("Bia-Signature: {s}")).ok();
+                respond(stream, 200, "application/json", &body, sig.as_deref())
+            }
             ("GET", p) if p.starts_with("/bridge/") => match crate::bridge::file(&p["/bridge/".len()..]) {
                 Some(f) => {
                     let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -800,6 +1043,8 @@ impl Web {
                 stream,
                 json!({
                     "root_issued": self.pki.has_active_identity("root"),
+                    // setting root up takes the code shown on this machine's console
+                    "needs_code": !self.pki.has_active_identity("root"),
                     "issue": "/v1/pki/bootstrap/root",
                     "ca": "/v1/pki/ca",
                     "ca_sha256": self.ca_sha256(),
@@ -809,7 +1054,7 @@ impl Web {
                     "cert_problem": problem.map(|p| json!({"kind": p.kind, "identity": p.identity})),
                 }),
             ),
-            ("POST", "/v1/pki/bootstrap/root") => self.serve_bootstrap_root(stream),
+            ("POST", "/v1/pki/bootstrap/root") => self.serve_bootstrap_root(stream, body),
             ("POST", "/v1/pki/requests") => self.request_create(stream, body, peer),
             ("GET", "/v1/pki/agent") => match self.pki.agent_csr() {
                 Ok(csr) => respond_json(
@@ -828,7 +1073,7 @@ impl Web {
                 Some((id, _)) => self.request_status(stream, id),
                 None => respond(stream, 404, "text/plain", b"not found", None),
             },
-            ("GET", p) if p.starts_with("/v1/pki/link/") => self.serve_link_key(stream, p.trim_start_matches("/v1/pki/link/"), peer),
+            ("POST", p) if p.starts_with("/v1/pki/link/") => self.serve_link_key(stream, p.trim_start_matches("/v1/pki/link/"), body, peer),
             ("GET", p) => {
                 let token = p.trim_start_matches("/v1/pki/pickup/");
                 self.serve_pickup(stream, token);
@@ -921,6 +1166,19 @@ impl Web {
                     .unwrap_or("")
                     .to_string();
                 self.renew_client(stream, id, &csr)
+            }
+            // another key for the same identity (a browser that imported a .biaconfig or .p12
+            // makes its own); the caller's certificate stays valid
+            ("POST", "/v1/pki/enroll") => {
+                let csr = json_body().get("csr").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                match self.pki.enroll_csr(id, &csr) {
+                    Ok((pem, meta)) => {
+                        self.con.log(&format!("  web: {} enrolled another key → {}", id.identity, meta.serial));
+                        respond(stream, 200, "application/x-pem-file", pem.as_bytes(),
+                            Some(&format!("X-Bia-Serial: {}\r\nX-Bia-Not-After: {}", meta.serial, meta.not_after)));
+                    }
+                    Err(e) => respond(stream, 400, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
+                }
             }
             ("GET", "/v1/peers") => {
                 let peers: Vec<Value> = self
@@ -1104,7 +1362,10 @@ impl Web {
                 let v = json_body();
                 let serial = v.get("serial").and_then(|x| x.as_str()).unwrap_or("");
                 match self.pki.revoke(serial) {
-                    Ok(found) => respond_json(stream, json!({"revoked": found})),
+                    Ok(found) => {
+                        crate::session::end_serial(serial);
+                        respond_json(stream, json!({"revoked": found}))
+                    }
                     Err(e) => respond(
                         stream,
                         400,
@@ -1542,19 +1803,30 @@ impl Web {
 
     /// The key a link bia sent brings: a new certificate (key made here, a .p12) for the
     /// identity and trust the link was minted for, once. The phone pinned this bia's CA first.
-    fn serve_link_key(&self, stream: &mut dyn Write, token: &str, peer: &str) {
+    /// A link's one-time key grant: the browser's CSR (`{csr}`) gets a certificate for the
+    /// identity the link was sent to. The key was made in the browser; nothing is made here.
+    fn serve_link_key(&self, stream: &mut dyn Write, token: &str, body: &[u8], peer: &str) {
+        let csr = serde_json::from_slice::<Value>(body).ok().and_then(|v| v["csr"].as_str().map(str::to_string));
+        let Some(csr) = csr else {
+            respond(stream, 400, "text/plain; charset=utf-8", b"send {\"csr\": \"<PEM>\"}", None);
+            return;
+        };
+        if let Err(e) = bia_pki::check_csr(&csr) {
+            respond(stream, 400, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None);
+            return;
+        }
         let Some(g) = bia_mcp::apps::take_token(&self.files, token) else {
             respond(stream, 404, "text/plain; charset=utf-8", b"this link's key was already used or has lapsed: ask bia for a new link", None);
             return;
         };
-        match self.pki.issue(&g.identity, "user", &g.trust) {
-            Ok((bytes, meta)) => {
+        match self.pki.issue_csr(&g.identity, "user", &g.trust, &csr) {
+            Ok((pem, meta)) => {
                 self.con.log(&format!(
-                    "  web: a phone at {peer} took the key of a link: {} (trust {}, serial {})",
+                    "  web: a browser at {peer} signed up with a link: {} (trust {}, serial {})",
                     meta.identity, g.trust, meta.serial
                 ));
-                let extra = format!("Content-Disposition: attachment; filename=\"{}.p12\"", meta.identity);
-                respond(stream, 200, "application/x-pkcs12", &bytes, Some(&extra));
+                let extra = format!("X-Bia-Identity: {}\r\nX-Bia-Serial: {}\r\nX-Bia-Not-After: {}", meta.identity, meta.serial, meta.not_after);
+                respond(stream, 200, "application/x-pem-file", pem.as_bytes(), Some(&extra));
             }
             Err(e) => respond(stream, 500, "text/plain; charset=utf-8", format!("{e:#}").as_bytes(), None),
         }
@@ -1571,7 +1843,7 @@ impl Web {
     }
 
     /// First-time only: mint identity=root (user, trust=root) PKCS#12 when none is active.
-    fn serve_bootstrap_root(&self, stream: &mut dyn Write) {
+    fn serve_bootstrap_root(&self, stream: &mut dyn Write, body: &[u8]) {
         if self.pki.has_active_identity("root") {
             respond(
                 stream,
@@ -1582,8 +1854,29 @@ impl Web {
             );
             return;
         }
+        // the code from this machine's console: whoever reaches the page first is not root by that
+        static TRIES: Mutex<(u32, Option<Instant>)> = Mutex::new((0, None));
+        {
+            let mut t = TRIES.lock().unwrap();
+            if t.1.is_some_and(|until| Instant::now() < until) {
+                respond(stream, 429, "text/plain; charset=utf-8", b"too many wrong codes; wait a minute", None);
+                return;
+            }
+            let code = serde_json::from_slice::<Value>(body).ok().and_then(|v| v["code"].as_str().map(str::to_string)).unwrap_or_default();
+            if !self.pki.check_setup_code(&code) {
+                t.0 += 1;
+                if t.0 >= 5 {
+                    t.1 = Some(Instant::now() + Duration::from_secs(60 << (t.0 - 5).min(6)));
+                }
+                self.con.log("  web: a wrong root setup code was tried");
+                respond(stream, 403, "text/plain; charset=utf-8", b"that is not the setup code shown on bia's screen", None);
+                return;
+            }
+            *t = (0, None);
+        }
         match self.pki.issue("root", "user", "root") {
             Ok((bytes, meta)) => {
+                let _ = self.pki.setup_code(); // root exists now: the code goes
                 self.con.log(&format!(
                     "  web: bootstrap issued root client cert (serial {})",
                     meta.serial
@@ -2278,6 +2571,7 @@ fn http_redirect(mut stream: TcpStream, https_port: u16) {
     if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
         return;
     }
+    let path = request_line.split_whitespace().nth(1).unwrap_or("/").to_string();
     let mut host = String::from("localhost");
     loop {
         let mut l = String::new();
@@ -2293,6 +2587,13 @@ fn http_redirect(mut stream: TcpStream, https_port: u16) {
                 host = v.trim().to_string();
             }
         }
+    }
+    if crate::acme::is_challenge_path(&path) {
+        match crate::acme::http01(&path) {
+            Some(k) => respond(&mut stream, 200, "text/plain", k.as_bytes(), None),
+            None => respond(&mut stream, 404, "text/plain", b"", None),
+        }
+        return;
     }
     let host_only = host
         .rsplit_once(':')

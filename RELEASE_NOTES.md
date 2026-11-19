@@ -5,6 +5,29 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.3.0
+
+### Changes
+- No more certificates to install. People sign in to bia's web app in the browser itself: they drop their .biaconfig or .p12 on bia's page (a .p12 opens with bia's usual password by itself; a .biaconfig asks for its password), and the browser then keeps a key of its own and lets them in on every visit. Nothing goes into the computer's or phone's certificate store, and the browser no longer asks which certificate to use. Certificates already installed in browsers no longer open bia: bring the .p12 or .biaconfig to bia's page once.
+- bia's public address gets a certificate every browser trusts (Let's Encrypt), renewed by itself, so there is no warning there. A local network address keeps bia's own certificate: the browser warns once, and the page says the connection there is not protected from others on that network. Root can give bia a hostname with its own trusted certificate (web_hostname), and declare the public address of a router that forwards ports 80 and 443 to bia (web_public_ip).
+- Links bia sends open its page straight in the browser and bring a one-time key: someone who has never used bia's web app is signed in by opening the link.
+- Setting up root for the first time takes a code shown on bia's own screen, so nobody who reaches the page first can make themselves root.
+- The bia deploy phone apps no longer show the chat inside the app. They keep bias' keys and open bia in the phone's browser with the key, showing the password to paste; the browser's "choose file" offers the keys they keep.
+- Other bias and bia-bridge sign in with their key inside the connection and check that they reach the very bia they trust. Bias on older versions cannot talk to this one until they update; bia-bridge updates itself from bia (bia-bridge update).
+
+### For bia
+- Make root a new key: web_pki_biaconfig(identity="root", address=<your best address: a hostname from web_status, else your public IP>, hide_password=true). Do not read the password file. Send the .biaconfig and then, in a separate message, the password file to root in their messenger chat (not web). Tell root: open https://<that address>, drop the .biaconfig on the page and type the password from the second file; their old certificate in the browser no longer works. When root says it worked or they saved both files, delete both messages for everyone (delete_messages) and delete both files from files/biaconfig.
+- Everyone else who used your web app (web_chats lists them): send each one a link with system_app_link(identity=<them>) in their own chat; it signs their browser in.
+- Peers (other bias) and agents with bia-bridge reconnect by themselves once they run 2.3.0 too; tell root which ones show as needing an update.
+
+## 2.2.16
+
+### Changes
+- The swap file now follows the machine's memory: on every start bia sizes it to half of the RAM, as long as the disk keeps at least 2 GiB and 10% free. Before, it stayed at the 256 MiB it shipped with, so a machine with a lot of RAM had almost no room to spill into. A disk with too little room keeps the swap file it has.
+
+### For bia
+- Nothing to do. If root asks about swap, `swapon --show` shows its size and `journalctl -u bia-swap` shows why it was resized or kept.
+
 ## 2.2.15
 
 ### Changes

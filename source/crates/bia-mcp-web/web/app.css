@@ -516,3 +516,8 @@ a.btn { text-decoration: none; }
 .callbox .call-btn.hang { background: #e5484d; color: #fff; }
 .callbox .call-btn.accept { background: #30a46c; color: #fff; }
 @media (max-width: 600px) { .callbox { left: 8px; right: 8px; bottom: 8px; width: auto; } }
+.dropzone { border: 2px dashed var(--line2); border-radius: 14px; padding: 22px 16px; margin: 12px 0; text-align: center; display: flex; flex-direction: column; gap: 6px; align-items: center; color: var(--dim2); }
+.dropzone.over { border-color: var(--acc-btn); background: var(--side); }
+.dropzone .muted { font-size: 13px; }
+.pwask { margin: 8px 0; }
+.pwask .row { gap: 8px; }

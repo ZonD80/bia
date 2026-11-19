@@ -7,7 +7,7 @@ before approving). Serial output goes to $LE/a.log and $LE/b.log. Phases:
   b:     asked to get access to bia-a's API and say hello -> POST /v1/pki/requests
   a:     request shows on the console; root waits DELAY, then tells bia to approve it
          with the code word as the approval message for bia-b
-  b:     its polling sees approved -> collects the cert -> sends a chat message (mTLS)
+  b:     its polling sees approved -> collects the cert -> sends a chat message (bia-bridge)
   a:     gets the message from identity bia-b on the web bus and answers
   b:     reports bia-a's answer and the approval message, which must contain the code word
 then the bia-to-bia peer link (agents alpha = bia-a, beta = bia-b):
@@ -15,7 +15,7 @@ then the bia-to-bia peer link (agents alpha = bia-a, beta = bia-b):
   both:  [web open] notices: the link opened by itself, each is an identity on the other's web chat
   a<->b: root gives beta a code word; alpha asks beta for it over the link and reports it
   b:     /reboot (systemd stops bia): alpha hears "beta is rebooting" at once (bye), then back
-  b:     hard reset (no goodbye): alpha reports the link lost after ~30 s, then back
+  b:     paused (no goodbye): alpha reports the link lost after the grace, then back once it runs again
 """
 import os, re, secrets, shutil, subprocess, sys, time
 
@@ -86,7 +86,10 @@ print(f"{stamp()} [b] got the code word {code} from bia-a's approval", flush=Tru
 
 # ---- renewal, browser path: web/pki.js against bia-a's real /v1/pki/renew ----
 print(f"{stamp()} [host] browser renewal (web/pki.js) against bia-a", flush=True)
-r = subprocess.run(["node", f"{ROOT}/tests/e2e/peer-e2e-renew.js", f"https://127.0.0.1:{WEB_FWD}", f"{LE}/renew"],
+setup = re.findall(r"root setup code: ([a-z2-9]{4}-[a-z2-9]{4})", a.text())
+if not setup:
+    die("bia-a's console shows no root setup code", a)
+r = subprocess.run(["node", f"{ROOT}/tests/e2e/peer-e2e-renew.js", f"https://127.0.0.1:{WEB_FWD}", f"{LE}/renew", setup[-1]],
                    capture_output=True, text=True, timeout=300)
 print(r.stdout + r.stderr, flush=True)
 if r.returncode != 0:
@@ -100,13 +103,8 @@ if sys.platform == "darwin" and shutil.which("swiftc"):
     if r.returncode != 0:
         die("macOS would not import a .p12", a)
 
-# ---- renewal, agent path: bia-b follows the skill (new key + CSR) ----
-b.send("Renew your client certificate for bia-a now, as its skill describes: make a new key and CSR yourself, "
-       "POST the CSR to /v1/pki/renew with your current certificate, then switch to the new certificate and key and "
-       "check https://10.77.0.2/v1/whoami with them. Tell me the new serial. Do it without asking me.")
-a.expect("bia-b renews over CSR", r"renewed cert for bia-b", 900)
-b.expect("bia-b reports the renewal", r"[0-9a-f]{16}", 600)
-time.sleep(20)
+# ---- renewal, agent path: bia-bridge and other bias renew by themselves (30 days before
+# expiry, a request signed with their key); nothing for the model to do by hand ----
 
 # ---- the live peer link between the two bias ----
 a.send("Root here. Connect to the other bia at https://10.77.0.3 for mutual trust (web_peer_add), "
@@ -141,19 +139,21 @@ time.sleep(5)
 a.send("Root here. Tell beta on web (say with identity beta, channel web) that alpha says good morning. Do not wait for an answer.")
 b.expect("beta up again", READY, 900, fail=r"Kernel panic")
 b.expect("beta sees alpha connected after its reboot", r"\[web open\] alpha connected", 600)
-b.expect("what alpha said during the reboot reaches beta", r"alpha@web .*good morning", 600)
+b.expect("what alpha said during the reboot reaches beta", r"(?i)alpha@web .*good morning", 600)
 
-print(f"{stamp()} [b] hard reset: no goodbye, alpha must notice by itself", flush=True)
+# Gone without a goodbye: beta's VM is paused (it falls silent mid-link, like a cut cable or a
+# hang; a hard reset reboots this VM within the grace, so it would never count as gone).
+print(f"{stamp()} [b] paused: no goodbye, alpha must notice by itself", flush=True)
 time.sleep(30)
-b.mon("system_reset")
+b.mon("stop")
 t_rst = time.time()
 a.expect("alpha hears beta left", r"\[web closed\] beta left", 240)
 lost_after = time.time() - t_rst
-print(f"{stamp()} [a] beta's absence reported {lost_after:.0f} s after the reset", flush=True)
+print(f"{stamp()} [a] beta's absence reported {lost_after:.0f} s after it fell silent", flush=True)
 if lost_after < 60:
-    die(f"absence reported too early ({lost_after:.0f} s; a dead link takes 30 s, then 60 s of grace)", a)
-b.expect("beta up again after the reset", READY, 900, fail=r"Kernel panic")
-a.expect("alpha: beta back after the reset", r"\[web open\] beta connected .*back after", 600)
+    die(f"absence reported too early ({lost_after:.0f} s; a dead link takes 15 s, then 60 s of grace)", a)
+b.mon("cont")
+a.expect("alpha: beta back after the pause", r"\[web open\] beta connected .*back after", 600)
 
 for v in (a, b):
     v.send("/poweroff")

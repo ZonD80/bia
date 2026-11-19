@@ -100,7 +100,7 @@ def check():
             crt = f"{pki}/issued/{q['serial']}.crt"
             pub = ut.sh("openssl", "x509", "-in", crt, "-pubkey", "-noout", capture=True, check=False)
             match = []
-            for dp, dirs, fs in os.walk(f"{b.root}/home/bia"):
+            for dp, dirs, fs in (w for top in (f"{b.root}/home/bia", f"{b.root}/root") for w in os.walk(top)):
                 dirs[:] = [d for d in dirs if d not in ("MCPs", "model", ".cache", "chrome")]
                 for f in fs:
                     path = os.path.join(dp, f)
@@ -111,34 +111,15 @@ def check():
                         continue
                     if pub and ut.sh("openssl", "pkey", "-in", path, "-pubout", capture=True, check=False) == pub:
                         match.append(path[len(b.root):])
-            # bia-b may replace that key with its renewed one; the renewal check below covers it then
-            first_revoked = json.load(open(meta)).get("revoked") if os.path.exists(meta) else False
-            want(bool(match) or first_revoked, f"bia-b holds the private key for the issued cert {match or '(replaced at renewal)'}")
-        # renewal: bia-b's first cert revoked, a second one active for a new key only bia-b has
+            want(bool(match), f"bia-b holds the private key for the issued cert {match}")
+        # bia-b keeps the one certificate it asked for (bia-bridge and bias renew by themselves,
+        # 30 days before expiry, so nothing renews it during the test)
         issued = []
         for n in os.listdir(f"{pki}/issued"):
             if n.endswith(".json"):
                 issued.append(json.load(open(f"{pki}/issued/{n}")))
-        bb = sorted([m for m in issued if m["identity"] == "bia-b"], key=lambda m: m["created"])
-        want(len(bb) == 2 and bb[0]["revoked"] and not bb[1]["revoked"],
-             f"bia-b renewed: {[(m['serial'], 'revoked' if m['revoked'] else 'active') for m in bb]}")
-        if len(bb) == 2:
-            newpub = ut.sh("openssl", "x509", "-in", f"{pki}/issued/{bb[1]['serial']}.crt", "-pubkey", "-noout", capture=True, check=False)
-            oldpub = ut.sh("openssl", "x509", "-in", f"{pki}/issued/{bb[0]['serial']}.crt", "-pubkey", "-noout", capture=True, check=False)
-            want(newpub != oldpub, "the renewed cert is for a new key")
-            found = []
-            for dp, dirs, fs in os.walk(f"{b.root}/home/bia"):
-                dirs[:] = [d for d in dirs if d not in ("MCPs", "model", ".cache", "chrome")]
-                for f in fs:
-                    path = os.path.join(dp, f)
-                    try:
-                        if os.path.getsize(path) > 20000 or b"PRIVATE KEY" not in open(path, "rb").read():
-                            continue
-                    except OSError:
-                        continue
-                    if ut.sh("openssl", "pkey", "-in", path, "-pubout", capture=True, check=False) == newpub:
-                        found.append(path[len(b.root):])
-            want(bool(found), f"bia-b holds the key for its renewed cert {found}")
+        bb = [m for m in issued if m["identity"] == "bia-b"]
+        want(len(bb) == 1 and not bb[0]["revoked"], f"bia-b has one active certificate: {[(m['serial'], 'revoked' if m['revoked'] else 'active') for m in bb]}")
         # renewal can land in the same second as the first cert: the revoked one is the older
         roots = sorted([m for m in issued if m["identity"] == "root"], key=lambda m: (m["created"], not m["revoked"]))
         want(len(roots) == 2 and roots[0]["revoked"] and not roots[1]["revoked"],
@@ -169,15 +150,17 @@ def check():
         want(not os.path.isdir(f"{a.root}/home/bia/files/state/web/bia"), "nothing written under web/bia")
         # the peer link: both sides keep the peer, the link state and the talk
         for img, me, other in ((a, "alpha", "beta"), (b, "beta", "alpha")):
-            st = f"{img.root}/home/bia/files/state/peers/{other}"
-            link = json.load(open(f"{st}/link.json")) if os.path.exists(f"{st}/link.json") else {}
-            want(link.get("greeted") and link.get("want"), f"{me}: link with {other} was up and is wanted ({ {k: link.get(k) for k in ('greeted', 'want', 'banned_by')} })")
+            state = f"{img.root}/home/bia/files/state"
+            lf = f"{state}/links/{other}.json"
+            link = json.load(open(lf)) if os.path.exists(lf) else {}
+            want(link.get("last_up") and link.get("want") and not link.get("banned_by"), f"{me}: link with {other} was up and is wanted ({ {k: link.get(k) for k in ('last_up', 'want', 'banned_by')} })")
             peer = f"{img.root}/home/bia/files/state/pki/peers/{other}/peer.json"
             want(os.path.exists(peer) and json.load(open(peer)).get("status") == "active", f"{me}: {other} is an active peer")
-            lines = open(f"{st}/chat.jsonl").read().splitlines() if os.path.exists(f"{st}/chat.jsonl") else []
-            froms = {json.loads(l).get("from") for l in lines}
-            want({"me", other} <= froms, f"{me}: the peer chat has messages both ways ({sorted(froms)})")
-            want(os.stat(f"{st}/link.json").st_uid == 1000 if os.path.exists(f"{st}/link.json") else False, f"{me}: link.json belongs to bia")
+            cf = f"{state}/web/{other}/main.json"
+            msgs = json.load(open(cf)) if os.path.exists(cf) else []
+            froms = {m.get("from") for m in (msgs if isinstance(msgs, list) else msgs.get("messages", []))}
+            want({"bia", other} <= froms, f"{me}: the web chat with {other} has messages both ways ({sorted(froms)})")
+            want(os.stat(lf).st_uid == 1000 if os.path.exists(lf) else False, f"{me}: the link state belongs to bia")
     if errs:
         sys.exit(f"CHECK peer: {len(errs)} failure(s)")
     print("CHECK peer: all good")

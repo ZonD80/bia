@@ -57,7 +57,7 @@ unit() {
   # the telegram MCP links libntgcalls at run time (built by builders/build.sh)
   builder 'L=$(dirname "$(find /cache/ntgcalls-dylib-* -name "libntgcalls.so*" 2>/dev/null | head -1)" 2>/dev/null);
            export NTGCALLS_LIB_DIR=/cache/ntgcalls-dylib-'"$ARCH"' NTGCALLS_DYLIB=1 LD_LIBRARY_PATH=${L:-};
-           cargo test --workspace 2>&1 | grep -E "^test |^test result|panicked|^error" ; exit ${PIPESTATUS[0]}'
+           cargo test --workspace --no-fail-fast 2>&1 | grep -E "^test |^test result|panicked|^error" ; exit ${PIPESTATUS[0]}'
 }
 
 web_mcp() {
@@ -94,7 +94,7 @@ max_mcp() {
 biaconfig() {
   builder 'cargo build -q -p bia-mcp-chrome -p bia-mcp-web' || return 1
   docker run --rm --platform "$PLATFORM" -v "$ROOT":/work:ro -v "bia-cache-$ARCH":/cache -w /work debian:trixie-slim bash -c \
-    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 libnss3-tools openssl ca-certificates curl util-linux procps >/dev/null && \
+    "apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends python3 python3-cryptography libnss3-tools openssl ca-certificates curl util-linux procps >/dev/null && \
      python3 -I tests/integration/biaconfig-e2e.py /cache/target-$ARCH-test/debug/bia-mcp-web /cache/target-$ARCH-test/debug/bia-mcp-chrome source/flash/MCPs/chrome"
 }
 
@@ -171,6 +171,7 @@ for stage in "$@"; do
       run release-publish bash tests/integration/release-publish-test.sh
       run web-markdown node tests/integration/web-md-test.js
       run web-link node tests/integration/web-link-test.js
+      run web-keys bash -c 'd=$(mktemp -d) && python3 -I tests/integration/web-keys-fixtures.py "$d" && node tests/integration/web-keys-test.js "$d"'
       # the web app in headless Chrome, on this host (skips when there is no Chrome here)
       run web-app bash -c 'cargo build -q -p bia-mcp-web && python3 -I tests/integration/web-app-e2e.py target/debug/bia-mcp-web'
       run update-internet-stage env ARCH="$ARCH" tests/integration/update-net-test.sh ;;

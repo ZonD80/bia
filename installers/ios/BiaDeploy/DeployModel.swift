@@ -227,7 +227,25 @@ final class DeployModel: ObservableObject {
     }
 
     // ---- bia's keys kept on this phone ----
-    @Published var saved: [SavedBia] = savedBias()
+    @Published var saved: [SavedBia] = savedBias() { didSet { publishKeys() } }
+
+    /// Every saved bia as a .biaconfig in Documents, where Files and any browser's file picker
+    /// find it (On My iPhone → bia deploy); files of bias no longer here go.
+    func publishKeys() {
+        let list = saved.map { ($0.folder, $0.host, $0.name) }
+        Task.detached(priority: .utility) {
+            let dir = browserKeysDir()
+            var keep = Set<String>()
+            for (folder, host, name) in list {
+                if let k = try? browserKey(folder: folder, host: host, name: name, outDir: dir.path) {
+                    keep.insert(URL(fileURLWithPath: k.path).lastPathComponent)
+                }
+            }
+            for f in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] where f.hasSuffix(".biaconfig") && !keep.contains(f) {
+                try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
+            }
+        }
+    }
 
     func openKeys() {
         saved = savedBias()
@@ -406,15 +424,6 @@ final class DeployModel: ObservableObject {
         step = .login; plan = nil; facts = nil; done = nil; up = nil; upError = nil
         keySaved = false; rebooting = false; progress = ""; fraction = nil
         secret = landSecret()
-    }
-
-    /// iOS takes bia's key as a configuration profile, offered from inside the app.
-    func installProfile(folder: String, host: String? = nil) {
-        work("preparing bia's key…") {
-            let name = "bia \(host ?? self.cleanHost)"
-            let url = try await Task.detached { try serveProfile(folder: folder, name: name) }.value
-            if let u = URL(string: url) { presentSafari(u) }
-        }
     }
 }
 

@@ -43,12 +43,9 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
-	<false/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
+	<true/>
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

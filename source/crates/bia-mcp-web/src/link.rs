@@ -12,7 +12,7 @@
 use crate::bus::{mint_msg_id, Bus, Inbound, ID_SYSTEM};
 use crate::linkproto::*;
 use crate::tlspipe::SharedTls;
-use bia_pki::{client, ClientId, Pki};
+use bia_pki::{client, Pki};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -700,29 +700,74 @@ impl Links {
         Ok(())
     }
 
-    /// Someone opened `/ws` here (server thread, after `101`): run the session.
+    /// Someone opened `/ws` here (server thread, after `101`): sign them in, then run the
+    /// session. `exporter` is this TLS connection's channel binding.
     pub fn accept(
         self: &Arc<Self>,
         tls: SharedTls,
-        reader: BufReader<SharedTls>,
-        id: &ClientId,
+        mut reader: BufReader<SharedTls>,
+        exporter: [u8; 32],
         ip: &str,
-        root: bool,
     ) {
+        let refuse = |code: &str| {
+            let mut t = tls.clone();
+            let _ = t.write_all(&encode_frame(1, bye_frame(code, "").to_string().as_bytes(), None));
+            let _ = t.flush();
+            tls.shutdown();
+        };
+        let _ = tls.set_read_timeout(Some(Duration::from_secs(30)));
+        let frame = |reader: &mut BufReader<SharedTls>| -> Option<Value> {
+            match crate::server::ws_recv_max(reader, MAX_FRAME) {
+                Ok((1, b)) => serde_json::from_slice::<Value>(&b).ok(),
+                _ => None,
+            }
+        };
+        // the client's hello first, then our challenge, then its auth
+        let Some(hello) = frame(&mut reader).filter(|v| v["t"] == "hello") else {
+            tls.shutdown();
+            return;
+        };
+        if hello["proto"].as_u64() != Some(PROTO) {
+            refuse("proto");
+            return;
+        }
+        let Ok(pki) = self.pki() else {
+            refuse("busy");
+            return;
+        };
+        let nonce = bia_pki::signin::nonce();
+        let Ok(bind) = pki.sign_bind(&nonce, &exporter) else {
+            refuse("busy");
+            return;
+        };
+        {
+            let mut t = tls.clone();
+            let ch = json!({"t": "challenge", "proto": PROTO, "nonce": nonce, "bind": bind});
+            if t.write_all(&encode_frame(1, ch.to_string().as_bytes(), None)).and_then(|_| t.flush()).is_err() {
+                tls.shutdown();
+                return;
+            }
+        }
+        let Some(auth) = frame(&mut reader).filter(|v| v["t"] == "auth") else {
+            refuse("auth");
+            return;
+        };
+        let id = match verify_auth(&pki, &auth, &nonce, &exporter, ip) {
+            Ok(id) => id,
+            Err(kind) => {
+                self.bus.log(&format!("  web: sign-in from {ip} refused ({kind})"));
+                refuse(if kind == "revoked" { "revoked" } else { "auth" });
+                return;
+            }
+        };
+        let root = id.trust == "root";
         let busy = {
             let inner = self.inner.lock().unwrap();
             inner.rt.values().filter(|r| r.link.is_some()).count() >= MAX_LINKS
                 && !inner.rt.get(&id.identity).is_some_and(|r| r.link.is_some())
         };
         if busy || self.closing.load(Ordering::Relaxed) {
-            let mut t = tls.clone();
-            let _ = t.write_all(&encode_frame(
-                1,
-                bye_frame("busy", "").to_string().as_bytes(),
-                None,
-            ));
-            let _ = t.flush();
-            tls.shutdown();
+            refuse("busy");
             return;
         }
         self.run_link(
@@ -731,6 +776,7 @@ impl Links {
             tls,
             Box::new(reader),
             ip.to_string(),
+            Some(hello),
         );
     }
 
@@ -740,9 +786,9 @@ impl Links {
         let pki = self.pki()?;
         let p = pki.peer(name).ok_or_else(|| format!("no peer {name}"))?;
         let (ca, cert, key) = pki.peer_tls(name).map_err(|e| format!("{e:#}"))?;
-        let (conn, tcp) =
-            client::connect(&p.url, client::ServerTrust::Ca(&ca), Some((&cert, &key)))
-                .map_err(|e| format!("{e:#}"))?;
+        let (conn, tcp) = client::connect(&p.url).map_err(|e| format!("{e:#}"))?;
+        let exporter = client::exporter(&conn).map_err(|e| format!("{e:#}"))?;
+        let signin = Signin { ca, cert, key, exporter };
         set_sndbuf(&tcp);
         let ip = tcp
             .peer_addr()
@@ -791,10 +837,12 @@ impl Links {
             tls.shutdown();
             let body = String::from_utf8_lossy(&body);
             return Err(match code {
-                // a 1.8 bia: its chat socket refuses a peer certificate
-                403 if body.contains("only for the live link") => "OLD".into(),
-                404 => "OLD".into(),
-                403 | 401 => "NOTPEER".into(),
+                // a bia before 2.3 wants a TLS client certificate (401/403); a 1.8 one has
+                // no /ws for bias (404). A newer bia signs in inside the socket.
+                401 | 403 | 404 => {
+                    let _ = body;
+                    "OLD".into()
+                }
                 other => format!("{} answered HTTP {other}", p.url),
             });
         }
@@ -811,7 +859,7 @@ impl Links {
         let name = name.to_string();
         let _ = std::thread::Builder::new()
             .name(format!("link-{name}"))
-            .spawn(move || me.run_link(name, Side::Client { me_there }, tls, Box::new(reader), ip));
+            .spawn(move || me.run_link(name, Side::Client { me_there, signin }, tls, Box::new(reader), ip, None));
         Ok(())
     }
 
@@ -885,6 +933,8 @@ impl Links {
         tls: SharedTls,
         mut reader: Box<dyn Read + Send>,
         ip: String,
+        // the client's hello, already read while it signed in (server side)
+        first: Option<Value>,
     ) {
         let _ = tls.set_read_timeout(Some(DEAD_AFTER));
         let _ = tls.set_nodelay(true);
@@ -898,9 +948,9 @@ impl Links {
             q: Mutex::new(Wq::default()),
             cv: Condvar::new(),
         });
-        let (root, serial, me_there) = match &side {
-            Side::Server { root, serial } => (*root, serial.clone(), String::new()),
-            Side::Client { me_there } => (false, String::new(), me_there.clone()),
+        let (root, serial, me_there, signin) = match side {
+            Side::Server { root, serial } => (root, serial, String::new(), None),
+            Side::Client { me_there, signin } => (false, String::new(), me_there, Some(signin)),
         };
         let link = Arc::new(Link {
             id,
@@ -959,16 +1009,38 @@ impl Links {
             // nobody here asked for the link just now
             w.json(&json!({"t": "hello", "proto": PROTO, "name": link.me_there, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance, "rx": rx, "redial": !asked}));
         }
-        let registered = match crate::server::ws_recv_max(&mut reader, MAX_FRAME) {
-            Ok((1, b)) => match serde_json::from_slice::<Value>(&b) {
-                Ok(v) if v["t"] == "hello" => self.register(&link, &v),
+        // the other side's hello: the client's came while it signed in; a server first
+        // challenges this bia, which checks the server's bind and answers with auth
+        let mut first = first;
+        let mut challenged = false;
+        let registered = loop {
+            let v = match first.take() {
+                Some(v) => Ok(v),
+                None => match crate::server::ws_recv_max(&mut reader, MAX_FRAME) {
+                    Ok((1, b)) => serde_json::from_slice::<Value>(&b).map_err(|_| ()),
+                    _ => Err(()),
+                },
+            };
+            match v {
+                Ok(v) if v["t"] == "challenge" && dialed && !challenged => {
+                    challenged = true;
+                    let answer = signin.as_ref().ok_or_else(|| "no sign-in".to_string()).and_then(|s| s.answer(&v));
+                    match answer {
+                        Ok(a) => w.json(&a),
+                        Err(e) => {
+                            self.bus.log(&format!("  link {name}: {e}"));
+                            link.silent_close("auth");
+                            break Err(());
+                        }
+                    }
+                }
+                Ok(v) if v["t"] == "hello" => break self.register(&link, &v),
                 Ok(v) if v["t"] == "bye" => {
                     link.heard_bye(&v);
-                    Err(())
+                    break Err(());
                 }
-                _ => Err(()),
-            },
-            _ => Err(()),
+                _ => break Err(()),
+            }
         };
         if registered.is_ok() {
             loop {
@@ -2016,10 +2088,27 @@ impl Links {
 
 /// Which end of the link this bia is.
 enum Side {
-    /// Someone opened `/ws` here.
+    /// Someone opened `/ws` here and signed in.
     Server { root: bool, serial: String },
-    /// This bia dialed another bia, which knows it as `me_there`.
-    Client { me_there: String },
+    /// This bia dialed another bia, which knows it as `me_there`, and signs in there.
+    Client { me_there: String, signin: Signin },
+}
+
+/// What a dialing bia needs to sign in at a peer: the peer's CA (to check its `bind`),
+/// our certificate and key there, and this connection's channel binding.
+pub struct Signin {
+    pub ca: String,
+    pub cert: String,
+    pub key: String,
+    pub exporter: [u8; 32],
+}
+
+impl Signin {
+    /// The `auth` answer to a server's `challenge`, after checking the server's `bind`.
+    fn answer(&self, challenge: &Value) -> Result<Value, String> {
+        bia_pki::signin::answer_challenge(&self.ca, &self.cert, &self.key, &self.exporter, challenge)
+            .map_err(|e| format!("{e:#}"))
+    }
 }
 
 fn out_frame(o: &Out) -> Value {
@@ -2303,5 +2392,36 @@ mod tests {
             assert!(!bring_up(&mut rt, now));
             assert!(!rt.st.want && rt.st.closed && rt.next_dial.is_none());
         }
+    }
+}
+
+/// Check a client's `auth` frame. A certificate with role `agent` (another bia,
+/// bia-bridge) must bind its signature to this TLS connection; a browser cannot read the
+/// exporter and signs without it.
+pub fn verify_auth(pki: &bia_pki::Pki, auth: &Value, nonce: &str, exporter: &[u8], ip: &str) -> Result<bia_pki::ClientId, &'static str> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let chain: Vec<Vec<u8>> = auth["chain"]
+        .as_array()
+        .ok_or("invalid")?
+        .iter()
+        .map(|c| c.as_str().and_then(|s| b64.decode(s).ok()))
+        .collect::<Option<Vec<_>>>()
+        .filter(|c| !c.is_empty())
+        .ok_or("invalid")?;
+    let ts = auth["ts"].as_i64().ok_or("invalid")?;
+    let sig = auth["sig"].as_str().and_then(|s| b64.decode(s).ok()).ok_or("invalid")?;
+    let now = now_secs() as i64;
+    let peer = bia_pki::parse_ip(ip).ok();
+    match pki.verify_auth(&chain, nonce, ts, exporter, &sig, now, peer) {
+        Ok(id) => Ok(id),
+        Err(p) if p.kind == "signature" => {
+            let id = pki.verify_auth(&chain, nonce, ts, &[], &sig, now, peer).map_err(|p| p.kind)?;
+            if id.role == "agent" {
+                return Err("unbound");
+            }
+            Ok(id)
+        }
+        Err(p) => Err(p.kind),
     }
 }

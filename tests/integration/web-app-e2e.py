@@ -1,10 +1,10 @@
 """End-to-end: the web app (web/app.js + web/link.js) in a real headless Chrome against a real
 bia-mcp-web, driven over the DevTools protocol.
 
-A browser without a person cannot pick a client certificate, so a small local proxy holds root's
-certificate: Chrome opens http://127.0.0.1:<proxy> (a secure context, like any localhost) and the
-proxy speaks mutual TLS to the web MCP on 8443. Checks: the app connects with protocol 2 and loads
-the chat, a message both ways, a file from the page (hashed in the page, pulled by bia) and a photo
+Chrome opens https://127.0.0.1:8443 (bia's own certificate, accepted with a flag). Checks: the
+no-key page takes root's .p12 (password 12345678 tried by itself), the browser enrolls a
+non-extractable key of its own and signs in; a new tab is in at once with it; the app connects with
+protocol 3 and loads the chat, a message both ways, a file from the page (hashed in the page, pulled by bia) and a photo
 from bia (pulled by the page, shown as a blob), a second tab refused while the first is open and
 taking over once it closes, and a message written while bia is down that survives a reload and
 reaches bia once it is back.
@@ -23,7 +23,7 @@ if not chrome:
 root = tempfile.mkdtemp(prefix="bia-webapp-e2e-")
 files = f"{root}/bia"
 os.makedirs(files)
-PROXY, CDP = 9461, 9462
+CDP = 9462
 failed = []
 
 
@@ -93,54 +93,20 @@ class Mcp:
 web = Mcp()
 nov = ssl.create_default_context(); nov.check_hostname = False; nov.verify_mode = ssl.CERT_NONE
 c = http.client.HTTPSConnection("127.0.0.1", 8443, context=nov, timeout=10)
-c.request("POST", "/v1/pki/bootstrap/root")
+for _ in range(40):
+    if os.path.exists(f"{files}/state/pki/setup-code"): break
+    time.sleep(0.05)
+c.request("POST", "/v1/pki/bootstrap/root", body=json.dumps({"code": open(f"{files}/state/pki/setup-code").read().strip()}), headers={"Content-Type": "application/json"})
 p12 = c.getresponse().read()
 open(f"{root}/root.p12", "wb").write(p12)
 subprocess.run(["openssl", "pkcs12", "-in", f"{root}/root.p12", "-passin", "pass:12345678", "-nodes", "-out", f"{root}/root.pem"], check=True, capture_output=True)
-mtls = ssl.create_default_context(); mtls.check_hostname = False; mtls.verify_mode = ssl.CERT_NONE
-mtls.load_cert_chain(f"{root}/root.pem")
-
-
-# ---- the proxy: plain on 127.0.0.1:PROXY, mutual TLS to the web MCP
-def pipe(a, b):
-    try:
-        while True:
-            d = a.recv(65536)
-            if not d:
-                break
-            b.sendall(d)
-    except OSError:
-        pass
-    for s in (a, b):
-        try:
-            s.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-
-
-def proxy():
-    ls = socket.socket()
-    ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    ls.bind(("127.0.0.1", PROXY))
-    ls.listen(64)
-    while True:
-        cl, _ = ls.accept()
-        try:
-            up = mtls.wrap_socket(socket.create_connection(("127.0.0.1", 8443), timeout=10), server_hostname="127.0.0.1")
-            up.settimeout(None)
-        except OSError:
-            cl.close()
-            continue
-        threading.Thread(target=pipe, args=(cl, up), daemon=True).start()
-        threading.Thread(target=pipe, args=(up, cl), daemon=True).start()
-
-
-threading.Thread(target=proxy, daemon=True).start()
-
 # ---- Chrome over the DevTools protocol
 prof = f"{root}/chrome"
 cr = subprocess.Popen([chrome, "--headless=new", f"--remote-debugging-port={CDP}", f"--user-data-dir={prof}", "--no-first-run",
-                       "--no-default-browser-check", "--disable-gpu", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       "--no-default-browser-check", "--disable-gpu", "--ignore-certificate-errors", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# a Chrome left over from an aborted run would keep the port (and its profile): never leave one
+import atexit
+atexit.register(lambda: cr.poll() is None and cr.kill())
 for _ in range(100):
     try:
         ver = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/version").read())
@@ -211,7 +177,7 @@ class Cdp:
 
 
 cdp = Cdp(ver["webSocketDebuggerUrl"])
-APP = f"http://127.0.0.1:{PROXY}/"
+APP = "https://127.0.0.1:8443/"
 
 
 class Tab:
@@ -251,13 +217,22 @@ class Tab:
 
 LOADED = "typeof S !== 'undefined' && S.wsOk && S.cache.get('main') && !S.cache.get('main').loading"
 
-# ---- the app connects with protocol 2 and loads the chat
+# ---- no key yet: the no-key page takes root's .p12; the browser enrolls a key of its own
 t1 = Tab()
-check(t1.until(LOADED, 30) is not None, "the app connects (protocol 2) and loads the chat")
+check(t1.until("!document.getElementById('boot').hidden && !!document.querySelector('#boot input[type=file]')", 20) is not None, "a browser without a key gets the no-key page")
+doc = cdp.call("DOM.getDocument", {}, t1.sess)
+node = cdp.call("DOM.querySelector", {"nodeId": doc["root"]["nodeId"], "selector": "#boot input[type=file]"}, t1.sess)["nodeId"]
+cdp.call("DOM.setFileInputFiles", {"nodeId": node, "files": [f"{root}/root.p12"]}, t1.sess)
+check(t1.until(LOADED, 40) is not None, "root's .p12 opens by itself (12345678) and the app connects (protocol 3)")
+rec = t1.js("BiaKeys.current().then(r => r && {identity: r.identity, serial: r.serial, extractable: r.key.extractable, alg: r.key.algorithm.name})")
+boot_serial = subprocess.run(["openssl", "x509", "-noout", "-serial"], input=open(f"{root}/root.pem", "rb").read(), capture_output=True).stdout.decode().split("=")[-1].strip().lower()
+check(rec and rec["identity"] == "root" and rec["extractable"] is False and rec["alg"] == "ECDSA", f"the browser keeps a non-extractable key of its own: {rec}")
+check(rec and rec["serial"] and not boot_serial.endswith(rec["serial"].lower()) and rec["serial"].lower() not in boot_serial, f"with its own certificate, not the imported one ({rec and rec['serial']} vs {boot_serial})")
+check(t1.js("document.cookie.includes('bia_s')") is False, "the session cookie is out of the page's reach (HttpOnly)")
 if os.environ.get("DEBUG"):
     print(t1.js("JSON.stringify({wsOk: S.wsOk, cur: S.cur, route: S.route, st: S.linkState, cache: [...S.cache.keys()], c: S.cache.get('main') && {loading: S.cache.get('main').loading, n: S.cache.get('main').list.length}, w: innerWidth, hash: location.hash, err: window.__err})"))
 check(web.inbound(lambda n: n["identity"] == "system" and n["message"].startswith("[web open] root connected")) is not None, "bia hears root connected")
-check(t1.js("S.link.hello.proto") == 2 and t1.js("document.querySelectorAll('#chatList .citem').length") == 1, "one chat in the list")
+check(t1.js("S.link.hello.proto") == 3 and t1.js("document.querySelectorAll('#chatList .citem').length") == 1, "one chat in the list")
 t1.js("go('chat/main')")
 check(t1.until("!!document.querySelector('#msgsIn') && S.cur === 'main'", 10) is not None, "the chat opens")
 
@@ -425,6 +400,62 @@ check(t3.until(LOADED, 30) is not None and t3.until("!(S.pending.get('main') || 
 web.tool("send", identity="root", channel="web", text="welcome back")
 t3.js("go('chat/main')")
 check(t3.until("document.querySelector('#msgsIn') && document.querySelector('#msgsIn').textContent.includes('welcome back')", 15) is not None, "and gets bia's messages live")
+
+# ---- bia cloud's first access: the .biaconfig in the link, the password typed in the page
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from webbus import Cred, request
+st, b = request(8443, "POST", "/v1/pki/biaconfig", {"identity": "erin", "address": "127.0.0.1:8443", "name": "Cloud bia"}, cred=Cred(f"{root}/root.pem"))
+made = json.loads(b) if st == 200 else {}
+check(st == 200 and made.get("password"), f"root makes a .biaconfig for erin ({st})")
+blob = base64.urlsafe_b64encode(base64.b64decode(made.get("file", ""))).rstrip(b"=").decode()
+ctx = cdp.call("Target.createBrowserContext")["browserContextId"]  # empty storage, like another browser
+t4 = Tab.__new__(Tab)
+t4.target = cdp.call("Target.createTarget", {"url": APP + "#biaconfig=" + blob, "browserContextId": ctx})["targetId"]
+t4.sess = cdp.call("Target.attachToTarget", {"targetId": t4.target, "flatten": True})["sessionId"]
+check(t4.until("!!document.querySelector('.pwask input')", 20) is not None, "the link opens the page, which asks for the password")
+check(t4.js("location.hash") == "", "the file is gone from the address bar at once")
+t4.js("document.querySelector('.pwask input').value = 'not it'; document.querySelector('.pwask .btn').click(); 1")
+check(t4.until("document.querySelector('.pwask p') && document.querySelector('.pwask p').textContent.includes('does not open')", 20) is not None, "a wrong password is told")
+t4.js(f"document.querySelector('.pwask input').value = {json.dumps(made.get('password', ''))}; document.querySelector('.pwask .btn').click(); 1")
+check(t4.until(LOADED, 40) is not None and t4.js("S.me.identity") == "erin", "the right one signs erin in")
+rec = t4.js("BiaKeys.current().then(r => r && {identity: r.identity, extractable: r.key.extractable})")
+check(rec == {"identity": "erin", "extractable": False}, f"with a key of this browser's own: {rec}")
+t4.close()
+
+# ---- a bia deploy app opens the browser with the .p12 in the link (here frank's, bia's default password)
+st, b = request(8443, "POST", "/v1/pki/issue", {"identity": "frank", "role": "user", "trust": "normal"}, cred=Cred(f"{root}/root.pem"))
+st2, frank_p12 = request(8443, "GET", json.loads(b)["path"]) if st == 200 else (st, b"")
+check(st2 == 200 and len(frank_p12) > 500, f"a .p12 for frank ({st}/{st2})")
+ctx2 = cdp.call("Target.createBrowserContext")["browserContextId"]
+t5 = Tab.__new__(Tab)
+link = APP + "#p12=" + base64.urlsafe_b64encode(frank_p12).rstrip(b"=").decode() + "&settings"
+t5.target = cdp.call("Target.createTarget", {"url": link, "browserContextId": ctx2})["targetId"]
+t5.sess = cdp.call("Target.attachToTarget", {"targetId": t5.target, "flatten": True})["sessionId"]
+check(t5.until(LOADED, 40) is not None and t5.js("S.me.identity") == "frank", "a #p12= link signs frank in by itself (12345678)")
+check(t5.js("location.hash") == "#settings", f"the key leaves the address, the page part stays: {t5.js('location.hash')!r}")
+t5.close()
+
+# ---- a link bia sent with a one-time key (system_app_link): a new browser signs up with it
+tok = os.urandom(16).hex()
+os.makedirs(f"{files}/state/applink", exist_ok=True)
+json.dump({"identity": "gina", "trust": "normal", "created": int(time.time())}, open(f"{files}/state/applink/{tok}.json", "w"))
+ctx3 = cdp.call("Target.createBrowserContext")["browserContextId"]
+def fresh(url):
+    t = Tab.__new__(Tab)
+    t.target = cdp.call("Target.createTarget", {"url": url, "browserContextId": ctx3})["targetId"]
+    t.sess = cdp.call("Target.attachToTarget", {"targetId": t.target, "flatten": True})["sessionId"]
+    return t
+t6 = fresh(APP + "#enroll=" + tok)
+check(t6.until(LOADED, 40) is not None and t6.js("S.me.identity") == "gina", "a link with a key signs a new browser up as the person it was sent to")
+check(t6.js("location.hash") == "" and not os.path.exists(f"{files}/state/applink/{tok}.json"), "the token leaves the address and works only once")
+rec = t6.js("BiaKeys.current().then(r => r && {identity: r.identity, extractable: r.key.extractable})")
+check(rec == {"identity": "gina", "extractable": False}, f"with a key made in the browser: {rec}")
+t6.close()
+ctx4 = cdp.call("Target.createBrowserContext")["browserContextId"]
+ctx3 = ctx4
+t7 = fresh(APP + "#enroll=" + tok)
+check(t7.until("!document.getElementById('boot').hidden && document.body.innerText.includes('already used or has lapsed')", 20) is not None, "the same link in another browser says it was used")
+t7.close()
 
 for t in (t3,):
     t.close()

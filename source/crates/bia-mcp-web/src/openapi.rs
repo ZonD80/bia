@@ -13,14 +13,22 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
         "info": {
             "title": "bia web",
             "version": env!("CARGO_PKG_VERSION"),
-            "description": "HTTPS console and machine API. Auth is mTLS with certificates issued by this agent CA. Bootstrap (no client cert): download CA from /v1/pki/ca, pick up one-time PKCS#12 after root issues a cert."
+            "description": "HTTPS console and machine API. Clients sign in with a key certified by this agent CA: a signed `Authorization: Bia …` header per request (bound to the TLS connection), or a browser session cookie from POST /v1/auth/signin. See /skills/web-console/SKILL.md (Sign-in). No client certificates in TLS."
         },
         "servers": [{"url": format!("https://0.0.0.0:{port}")}],
         "components": {
             "securitySchemes": {
-                "mtls": {
-                    "type": "mutualTLS",
-                    "description": "Client certificate issued by this agent CA (CN = identity)."
+                "biaSign": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "Authorization",
+                    "description": "`Bia chain=<cert DER, base64url>, ts=<unix>, sig=<signature>` over `bia-req-v1\\n<METHOD>\\n<path?query>\\n<ts>\\n<TLS exporter, base64url>`; the certificate is issued by this agent CA (CN = identity)."
+                },
+                "biaSession": {
+                    "type": "apiKey",
+                    "in": "cookie",
+                    "name": "bia_s",
+                    "description": "Browser session from POST /v1/auth/signin (same origin only)."
                 }
             },
             "schemas": {
@@ -146,7 +154,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["pki"],
                     "summary": "All certificate requests (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "{requests: [{id, identity, role, status, created, expires_at?}]}"}}
                 }
             },
@@ -185,7 +193,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Approve a certificate request (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
                     "responses": {"200": {"description": "The request"}, "409": {"description": "Not pending"}}
                 }
@@ -194,7 +202,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Deny a certificate request (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"reason": {"type": "string"}}}}}},
                     "responses": {"200": {"description": "The request"}, "409": {"description": "Not pending"}}
@@ -204,7 +212,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Renew the caller's still-valid client certificate for a new key the caller made: send a CSR. Returns the new certificate then the CA (PEM); the old serial is revoked. No key is made on the server.",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["csr"], "properties": {"csr": {"type": "string", "description": "PEM CSR (EC P-256/P-384, Ed25519 or RSA >= 2048); subject ignored"}}}}}},
                     "responses": {"200": {"description": "PEM certificate + CA; headers X-Bia-Serial, X-Bia-Not-After"}, "400": {"description": "Missing or bad CSR"}, "403": {"description": "Certificate revoked or expired"}}
                 }
@@ -213,7 +221,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["session"],
                     "summary": "Identity from client certificate",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {
                         "200": {"description": "Client identity", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WhoAmI"}}}},
                         "401": {"description": "No valid client certificate"}
@@ -224,7 +232,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["push"],
                     "summary": "VAPID public key (base64url) for PushManager.subscribe's applicationServerKey",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "{key}"}}
                 }
             },
@@ -232,7 +240,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["push"],
                     "summary": "Store a Web Push subscription (PushSubscription.toJSON()) for the caller; bia then pushes new bia messages, calls and (root) human tasks while no tab of the caller is in front",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["endpoint", "keys"], "properties": {"endpoint": {"type": "string"}, "keys": {"type": "object", "properties": {"p256dh": {"type": "string"}, "auth": {"type": "string"}}}}}}}},
                     "responses": {"200": {"description": "{ok}"}, "400": {"description": "Error text"}}
                 }
@@ -241,7 +249,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["push"],
                     "summary": "Forget one of the caller's subscriptions",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["endpoint"], "properties": {"endpoint": {"type": "string"}}}}}},
                     "responses": {"200": {"description": "{ok, removed}"}}
                 }
@@ -250,7 +258,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["push"],
                     "summary": "The caller's subscribed browsers: id, device, service, created, expires, expired, last_ok, last_err, last_err_at, failing",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "{subs: [...]}"}}
                 }
             },
@@ -258,7 +266,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["push"],
                     "summary": "Forget some of the caller's browsers by id (from /v1/push/subs)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "string"}}}}}}},
                     "responses": {"200": {"description": "{ok, removed}"}}
                 }
@@ -267,7 +275,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["push"],
                     "summary": "Tell bia what the caller decided about notifications in this browser; bia gets a system message and acknowledges it",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["state"], "properties": {
                         "state": {"type": "string", "enum": ["granted", "denied", "dismissed", "off", "stopped", "removed"]},
                         "push": {"type": "boolean", "description": "granted: push works also with no tab open"},
@@ -280,7 +288,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["push"],
                     "summary": "Push a test notification to every subscribed browser of the caller",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "{ok, sent}"}, "502": {"description": "Push service error text"}}
                 }
             },
@@ -288,7 +296,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["root"],
                     "summary": "Agent status: model, state, context, version (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "Status"}}
                 }
             },
@@ -296,7 +304,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["pki"],
                     "summary": "Issued client certificates (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "{certs}"}}
                 }
             },
@@ -304,7 +312,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Issue a client certificate; returns one-time pickup URLs (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["identity"], "properties": {
                         "identity": {"type": "string"},
                         "role": {"type": "string", "enum": ["user", "agent"]},
@@ -317,7 +325,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Make a password-encrypted .biaconfig with a new client certificate, this bia's address and CA (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["identity"], "properties": {
                         "identity": {"type": "string"},
                         "role": {"type": "string", "enum": ["user", "agent"]},
@@ -333,7 +341,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["pki"],
                     "summary": "Revoke a client certificate by serial (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["serial"], "properties": {"serial": {"type": "string"}}}}}},
                     "responses": {"200": {"description": "{revoked}"}}
                 }
@@ -342,7 +350,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["files"],
                     "summary": "List a directory by absolute path (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "path", "in": "query", "required": true, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "{path, home, entries, error}"}}
                 }
@@ -351,7 +359,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["files"],
                     "summary": "Download a file (Range) or a folder as a streamed tar (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [
                         {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}},
                         {"name": "dl", "in": "query", "schema": {"type": "string", "enum": ["1"]}}
@@ -363,7 +371,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["files"],
                     "summary": "Write a file from the raw body; parent folders are created (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [
                         {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}},
                         {"name": "overwrite", "in": "query", "schema": {"type": "string", "enum": ["1"]}}
@@ -375,7 +383,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["files"],
                     "summary": "mkdir, touch, rename, move, copy, delete, chmod, du (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["op"], "properties": {
                         "op": {"type": "string"},
                         "path": {"type": "string"},
@@ -390,7 +398,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["files"],
                     "summary": "Legacy: list under /home/bia/files (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "path", "in": "query", "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "Directory listing"}}
                 }
@@ -399,7 +407,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["files"],
                     "summary": "Legacy: download under /home/bia/files (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "path", "in": "query", "required": true, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "File bytes"}}
                 }
@@ -408,7 +416,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["hitl"],
                     "summary": "List pending human tasks",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "Tasks"}}
                 }
             },
@@ -416,7 +424,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["hitl"],
                     "summary": "Get one human task",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "Task"}}
                 }
@@ -425,7 +433,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "post": {
                     "tags": ["hitl"],
                     "summary": "Complete a human task",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
                     "responses": {"200": {"description": "ok"}}
                 }
@@ -434,7 +442,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["chat"],
                     "summary": "The web bus (protocol 2): your one chat with bia, for people, other bias and agents alike. Client hello {proto: 2, instance, rx} first; then m {seq, m} / gone {seq, ids} from rx on, live changes, actions with cid → ack (send, edit, delete, react, pin, read, button, vote, close_poll, mute, hist, search), files pulled by the receiver (fget / binary chunks [sha256 32][offset u64][data] / fack / fdone), ping every 5 s (silent 15 s: closed), bye. One live session per identity (a second gets bye duplicate_key). See SKILL.md.",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}, "429": {"description": "too many handshakes from this address"}}
                 }
             },
@@ -449,7 +457,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["chat"],
                     "summary": "Live voice call with bia on your web chat (?ring=<id> to answer bia's call). Binary 16 kHz mono s16le frames in; JSON {t:played|mute|hangup} in; bia's speech as binary [gen u32][rate u32][s16le] plus JSON ready/say/say_end/stop/caption/end out.",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
             },
@@ -457,7 +465,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["root"],
                     "summary": "Live agent console (raw bytes, status header included); {t:line,v} types a console line (empty interrupts the model), {t:resize} (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
             },
@@ -465,7 +473,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["root"],
                     "summary": "Root login shell on a PTY (binary frames; {t:resize} as text) (root)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
             },
@@ -473,7 +481,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["display"],
                     "summary": "Viewer of display :0 on noVNC's core, for mouse and touch (VNC stays on 127.0.0.1:5900)",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"200": {"description": "The viewer page"}}
                 }
             },
@@ -481,7 +489,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
                 "get": {
                     "tags": ["display"],
                     "summary": "WebSocket bridge to localhost VNC",
-                    "security": [{"mtls": []}],
+                    "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}}
                 }
             }
@@ -502,7 +510,7 @@ pub fn discovery(port: u16, ca_sha256: &str) -> Value {
         "pickup": "/v1/pki/pickup/{token}",
         "request": "/v1/pki/requests",
         "console_ws": "/ws",
-        "auth": "mtls",
+        "auth": "bia-sign",
         "buses": ["console", "web", "telegram", "whatsapp"],
         "chat_ws": "/ws",
         "chat_protocol": 2,

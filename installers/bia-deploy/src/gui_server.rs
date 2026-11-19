@@ -158,8 +158,8 @@ impl Server {
                 self.step = Step::Installed;
                 self.done = Some(Done { folder: Some(PathBuf::from("/tmp")), ca_pem: String::new(), ca_sha256: "4f1c9a0e7b2d…".into(), agent_name: "bia-4f1c".into() });
                 self.trusted = Some(trust::Report {
-                    done: vec!["root's certificate is in your login keychain".into(), "bia's certificate authority is trusted".into()],
-                    todo: vec!["Firefox keeps its own certificates: import bia-root.p12 there if you use it".into()],
+                    done: vec!["bia opened in your browser with root's key: type the password abcd-efgh-jkmn-pqrs on its page".into()],
+                    todo: vec![],
                 });
                 self.up = Some(Ok(()));
             }
@@ -282,15 +282,18 @@ impl FlashApp {
                 }
             };
             let _ = tx.send(Msg::Ran(Ok(done.clone())));
-            if let Some(dir) = &done.folder {
-                if let Ok(r) = trust::install(dir, &format!("bia {}", d.host)) {
-                    let _ = tx.send(Msg::Trusted(r));
-                }
-            }
             let ca = (!land).then_some(done.ca_pem.as_str());
             let r = remote::wait_up(&d.host, ca, Duration::from_secs(25 * 60), &mut |t| {
                 let _ = tx.send(Msg::Tick(t));
             });
+            // once bia answers: its page in this computer's browser, with root's key
+            if r.is_ok() {
+                if let Some(dir) = &done.folder {
+                    if let Ok(t) = trust::install(dir, &d.host, true) {
+                        let _ = tx.send(Msg::Trusted(t));
+                    }
+                }
+            }
             let _ = tx.send(Msg::Up(r.map_err(|e| format!("{e:#}"))));
         });
     }

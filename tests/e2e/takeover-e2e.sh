@@ -8,7 +8,7 @@
 #                                     www/; it runs takeover.sh unattended with a config (./fmm.json
 #                                     keys, setup instructions). The driver downloads root.p12 from
 #                                     the gate page, lets it reboot, watches the rescue write bia,
-#                                     then checks bia over mTLS with that certificate
+#                                     then signs in to bia with that key and checks it
 #   tests/e2e/takeover-e2e.sh all     images + run
 #
 # LAND=1: the takeover ends in land mode (--land with a land secret); a second VM (fly.img,

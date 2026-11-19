@@ -362,6 +362,8 @@ for port, want in ((8446, ":8446"), (0, ":8444")):
             break
         time.sleep(0.25)
     check(url.endswith(want), f"alex dials fred at its new address: {url}")
+    # the next move is announced only to a connected alex: wait until the link is back up
+    check(settle_up(alex, fred, 60), f"the link is back up on {want}")
     alex.say("fred", f"after the move to {want}")
     check(fred.msg("alex", f"after the move to {want}", 60) is not None, f"the link is back on {want}")
 

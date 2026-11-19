@@ -45,20 +45,25 @@ fn console_urls() -> Vec<String> {
         .and_then(|x| x.as_u64())
         .filter(|n| *n > 0 && *n <= 65535)
         .map(|n| n as u16);
-    if let Some(port) = port {
-        let live = crate::listen::https_origins(port);
-        if !live.is_empty() {
-            return live;
-        }
-    }
-    v.get("urls")
+    let published: Vec<String> = v
+        .get("urls")
         .and_then(|x| x.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    // root's hostnames (with their trusted certificates) as the web MCP published them, then
+    // the addresses this machine has right now
+    let mut out: Vec<String> = published
+        .iter()
+        .filter(|u| {
+            let host = u.trim_start_matches("https://").split(['/', ':']).next().unwrap_or("");
+            host.parse::<std::net::IpAddr>().is_err() && !host.starts_with('[')
         })
-        .unwrap_or_default()
+        .cloned()
+        .collect();
+    let live = port.map(crate::listen::https_origins).unwrap_or_default();
+    out.extend(if live.is_empty() { published } else { live });
+    out.dedup();
+    out
 }
 
 fn with_path(url: &str, path: &str) -> String {
@@ -132,7 +137,7 @@ pub fn share(ctx: &Ctx, args: Value) -> Result<String, String> {
     let links: Vec<String> = {
         let u = console_urls();
         if u.is_empty() {
-            vec![format!("/dl/{id} (web console, mTLS)")]
+            vec![format!("/dl/{id} (web console)")]
         } else {
             u.into_iter()
                 .map(|u| with_path(&u, &format!("/dl/{id}")))
@@ -149,42 +154,20 @@ pub fn share(ctx: &Ctx, args: Value) -> Result<String, String> {
             out.push(u.clone());
         }
     }
-    let phone = app_link(&format!("/dl/{id}"), &recipient(&args)?)
-        .map(|l| {
-            format!(
-                "\n[{name} on a phone]({l})\n(the phone link opens the file in the bia deploy app. {}. {}.)",
-                bia_mcp::apps::stores(),
-                bia_mcp::apps::NO_KEY
-            )
-        })
+    let keyed = app_link(&format!("/dl/{id}"), &recipient(&args)?)
+        .map(|l| format!("\n[{name}, with a key for a new browser]({l})\n({}.)", bia_mcp::apps::NO_KEY))
         .unwrap_or_default();
     Ok(format!(
-        "send these download links to the user with say, unchanged (recipient needs a client cert):\n{}{phone}",
+        "send these download links to the user with say, unchanged (a browser signed in to bia opens them):\n{}{keyed}",
         out.join("\n")
     ))
 }
 
-/// This bia's CA id as the phone apps compute it (sha256 of the CA certificate's DER).
-fn ca_id() -> Option<String> {
-    use base64::Engine;
-    use sha2::{Digest, Sha256};
-    let pem = fs::read_to_string(files_dir().join("state").join("pki").join("ca.crt")).ok()?;
-    let body: String = pem
-        .lines()
-        .skip_while(|l| !l.starts_with("-----BEGIN CERTIFICATE"))
-        .skip(1)
-        .take_while(|l| !l.starts_with("-----END"))
-        .collect();
-    let der = base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()?;
-    Some(bia_mcp::apps::ca_id(&Sha256::digest(&der)))
-}
-
-/// The bia deploy app link to `path` on this bia for `to` (identity, trust), if its CA exists.
-/// It carries a single-use key grant for them: a phone without the key gets one from it.
+/// The link to `path` on this bia for `to` (identity, trust), at its best address. It carries
+/// a single-use key grant for them: a browser without a key makes one with it.
 pub(crate) fn app_link(path: &str, to: &(String, String)) -> Option<String> {
-    let ca = ca_id()?;
     let token = bia_mcp::apps::mint_token(&files_dir(), &to.0, &to.1);
-    bia_mcp::apps::open_link(&ca, &console_urls(), path, token.as_deref())
+    bia_mcp::apps::page_link(&console_urls(), path, token.as_deref())
 }
 
 pub(crate) fn root() -> (String, String) {
@@ -215,8 +198,7 @@ fn recipient(args: &Value) -> Result<(String, String), String> {
 pub(crate) fn app_line(path: &str) -> Option<String> {
     let link = app_link(path, &root())?;
     Some(format!(
-        "on a phone: {link} (opens it in the bia deploy app with bia's key; without the app the page offers it. {}. {}.)",
-        bia_mcp::apps::stores(),
+        "link: {link} (opens it in the browser; {}.)",
         bia_mcp::apps::NO_KEY
     ))
 }
@@ -228,13 +210,10 @@ pub fn app_link_tool(_: &Ctx, args: Value) -> Result<String, String> {
     if !path.starts_with('/') || path.contains("://") {
         return Err("path is a page of bia's web app such as / or /hitl/<id>".into());
     }
-    let link = app_link(path, &recipient(&args)?).ok_or("bia's web certificate authority is not made yet: enable mcp/web first")?;
-    let web: Vec<String> = console_urls().into_iter().map(|u| with_path(&u, path)).collect();
+    let link = app_link(path, &recipient(&args)?).ok_or("bia's web app has no address yet: enable mcp/web first")?;
     Ok(format!(
-        "send with say, unchanged: {link}\nIt opens in the bia deploy app on a phone that holds bia's key; without the app the page offers it. {}. {}.{}",
-        bia_mcp::apps::stores(),
+        "send with say, unchanged: {link}\nIt opens bia's page in their browser and signs them in. {}.",
         bia_mcp::apps::NO_KEY,
-        if web.is_empty() { String::new() } else { format!("\nOn a computer with bia's certificate: {}", web.join(" ")) }
     ))
 }
 
@@ -242,7 +221,7 @@ pub fn app_link_tool(_: &Ctx, args: Value) -> Result<String, String> {
 pub(crate) fn task_links(id: &str) -> Vec<String> {
     let u = console_urls();
     if u.is_empty() {
-        vec![format!("/hitl/{id} (web console, mTLS)")]
+        vec![format!("/hitl/{id} (web console)")]
     } else {
         u.into_iter()
             .map(|u| with_path(&u, &format!("/hitl/{id}")))

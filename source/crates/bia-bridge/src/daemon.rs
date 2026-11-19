@@ -522,15 +522,23 @@ fn run_link(d: &Arc<Daemon>, p: &Profile) -> Result<Option<String>> {
     let _ = ws.tls.set_read_timeout(Some(Duration::from_secs(15)));
     let conn = Arc::new(Conn { tls: ws.tls.clone(), w: Mutex::new(()) });
     let lf = d.lf.lock().unwrap().clone();
-    conn.json(&json!({"t": "hello", "proto": 2, "name": p.identity, "ver": env!("CARGO_PKG_VERSION"), "instance": lf.instance, "rx": lf.rx}))?;
+    conn.json(&json!({"t": "hello", "proto": 3, "name": p.identity, "ver": env!("CARGO_PKG_VERSION"), "instance": lf.instance, "rx": lf.rx}))?;
     let (op, b) = ws.recv()?;
-    let hello: Value = if op == 1 { serde_json::from_slice(&b)? } else { bail!("no hello") };
+    let mut hello: Value = if op == 1 { serde_json::from_slice(&b)? } else { bail!("no hello") };
+    if hello["t"] == "challenge" {
+        // the bia proves it holds the CA we pinned, then we sign in with our key
+        let (ca, cert, key) = p.creds()?;
+        let auth = bia_pki::signin::answer_challenge(&ca, &cert, &key, &ws.exporter, &hello)?;
+        conn.json(&auth)?;
+        let (op, b) = ws.recv()?;
+        hello = if op == 1 { serde_json::from_slice(&b)? } else { bail!("no hello") };
+    }
     if hello["t"] == "bye" {
         moved(d, &hello);
         return Ok(hello["reason"].as_str().map(str::to_string));
     }
-    if hello["t"] != "hello" || hello["proto"] != 2 {
-        bail!("the bia speaks an older protocol: it must update (to bia 1.9 or newer), or use an older bia-bridge");
+    if hello["t"] != "hello" || hello["proto"] != 3 {
+        bail!("the bia speaks an older protocol: it must update (to bia 2.3 or newer), or use an older bia-bridge");
     }
     *d.bia_version.lock().unwrap() = hello["ver"].as_str().unwrap_or("").to_string();
     if lf.rx.is_none() {

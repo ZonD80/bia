@@ -16,7 +16,7 @@ import java.io.File
  */
 fun DeployModel.demo(scene: String, filesDir: File) {
     val host = "203.0.113.10"
-    if (scene in listOf("chat", "call", "attach")) {
+    if (scene == "chat") {
         val demo = "localhost:18443"
         chat = ChatTarget(demo, File(filesDir, "servers/$demo").absolutePath, "/?demo=$scene", shown = host)
         return

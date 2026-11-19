@@ -156,11 +156,13 @@ pub fn urlenc(s: &str) -> String {
 pub struct Ws {
     pub tls: SharedTls,
     pub reader: BufReader<SharedTls>,
+    /// This connection's channel binding: the bia signs it (`bind`), and so do we.
+    pub exporter: [u8; 32],
 }
 
 pub fn ws_connect(p: &Profile) -> Result<Ws> {
-    let (ca, cert, key) = p.creds()?;
-    let (conn, tcp) = client::connect(&p.url, ServerTrust::Ca(&ca), Some((&cert, &key)))?;
+    let (conn, tcp) = client::connect(&p.url)?;
+    let exporter = client::exporter(&conn)?;
     let (host, port) = client::split_url(&p.url)?;
     let tls = SharedTls::new(conn, tcp)?;
     let k = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, rnd::<16>());
@@ -183,7 +185,7 @@ pub fn ws_connect(p: &Profile) -> Result<Ws> {
     if !status.contains(" 101 ") {
         bail!("the bia refused the link: {}", status.trim());
     }
-    Ok(Ws { tls, reader })
+    Ok(Ws { tls, reader, exporter })
 }
 
 fn rnd<const N: usize>() -> [u8; N] {

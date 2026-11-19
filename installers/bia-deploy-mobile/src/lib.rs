@@ -537,6 +537,37 @@ pub fn biaconfig_export(folder: String, host: String, name: String, password: St
     Ok(path.display().to_string())
 }
 
+/// What a browser gets from this phone for one bia: the .biaconfig file (for its file picker),
+/// the same file for the link (`#biaconfig=` + `hash`), and the password the person types on
+/// bia's page. The password is made once per bia and kept in its folder, so the file in the
+/// picker and the link always open with the one the app shows.
+#[derive(uniffi::Record)]
+pub struct BrowserKey {
+    pub path: String,
+    pub password: String,
+    /// base64url of the file, for `https://<bia>/#biaconfig=<hash>`
+    pub hash: String,
+}
+
+const BROWSER_PASSWORD: &str = "browser.password";
+
+#[uniffi::export]
+pub fn browser_key(folder: String, host: String, name: String, out_dir: String) -> R<BrowserKey> {
+    use base64::Engine;
+    let pw_file = Path::new(&folder).join(BROWSER_PASSWORD);
+    let password = match std::fs::read_to_string(&pw_file).ok().map(|p| p.trim().to_string()).filter(|p| biaconfig::check_password(p).is_ok()) {
+        Some(p) => p,
+        None => {
+            let p = biaconfig::generate_password().map_err(|e| failed(format!("{e:#}")))?;
+            std::fs::write(&pw_file, &p).map_err(failed)?;
+            p
+        }
+    };
+    let path = biaconfig_export(folder, host, name, password.clone(), out_dir)?;
+    let bytes = std::fs::read(&path).map_err(failed)?;
+    Ok(BrowserKey { path, password, hash: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes) })
+}
+
 /// A .biaconfig kept on this phone: its key and CA, for the chat and to pass on. The CA is only
 /// trusted for that address, in this app. Saved keys show the first address.
 #[uniffi::export]

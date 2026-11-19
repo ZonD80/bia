@@ -194,9 +194,10 @@ pub fn call_hangup(_: &Ctx, args: Value) -> Result<String, String> {
 pub fn status(_: &Ctx, _: Value) -> Result<String, String> {
     match crate::WEB.get() {
         Some(w) => Ok(format!(
-            "{}\nCA fingerprint (sha256): {}\nAccess needs a client certificate from this machine's CA (web_pki_issue when root asks).",
+            "{}\nCA fingerprint (sha256): {}\nTo get in, a person opens an address and brings a .p12 or .biaconfig, or pastes a pickup link (web_pki_issue / web_pki_biaconfig when root asks); the browser then keeps a key of its own.\n{}",
             w.info_line(),
-            w.ca_sha256()
+            w.ca_sha256(),
+            cert_lines(w)
         )),
         None => {
             let st = std::fs::read_to_string(crate::files_dir().join("state").join("web.json"))
@@ -405,4 +406,145 @@ mod tests {
         assert!(ib.text.contains("ping"), "{}", ib.text);
         assert!(ib.id.starts_with('b'));
     }
+}
+
+/// Server certificates: which addresses browsers trust without a warning.
+fn cert_lines(w: &crate::server::Web) -> String {
+    let files = crate::files_dir();
+    let names = w.acme_wanted();
+    let mut out = String::from("Server certificates:");
+    if names.is_empty() {
+        out.push_str(" no public address or hostname, so browsers see bia's own certificate and warn once (web_hostname or web_public_ip when root wants a trusted one).");
+    }
+    for n in &names {
+        out.push_str("\n- ");
+        out.push_str(&crate::acme::describe(&files, n));
+    }
+    if !crate::acme::enabled() {
+        out.push_str("\n(Let's Encrypt is turned off here: BIA_ACME=0)");
+    }
+    out
+}
+
+/// The answer after a first certificate try for `n`.
+fn tried(w: &crate::server::Web, n: &crate::acme::Name) -> String {
+    let files = crate::files_dir();
+    if !crate::acme::enabled() {
+        return "Saved, but Let's Encrypt is turned off on this machine (BIA_ACME=0).".into();
+    }
+    let shown = n.shown();
+    match w.acme_pass(Some(n)) {
+        Some(Ok(())) => {
+            let m = crate::acme::read_meta(&files, n);
+            format!(
+                "https://{shown} now has a Let's Encrypt certificate (until {}); bia renews it by itself. Browsers open it without a warning.",
+                crate::acme::fmt_time(m.not_after)
+            )
+        }
+        Some(Err(e)) => {
+            let m = crate::acme::read_meta(&files, n);
+            format!(
+                "Saved, but Let's Encrypt gave no certificate yet: {e}. bia tries again by itself (next at {}). Port 80 of {shown} must be reachable from the internet. Tell root.",
+                crate::acme::fmt_time(m.next_try)
+            )
+        }
+        None => "Saved.".into(),
+    }
+}
+
+fn web() -> Result<&'static std::sync::Arc<crate::server::Web>, String> {
+    crate::WEB.get().ok_or_else(|| "web server is not listening".to_string())
+}
+
+/// The tool: root's hostnames with their own Let's Encrypt certificates.
+pub fn hostname(_: &Ctx, args: Value) -> Result<String, String> {
+    let w = web()?;
+    let files = crate::files_dir();
+    let mut names = crate::acme::hostnames(&files);
+    if let Some(h) = args.get("remove").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+        let h = crate::acme::check_hostname(h)?;
+        if !names.contains(&h) {
+            return Err(format!("{h} is not one of this bia's hostnames"));
+        }
+        names.retain(|n| n != &h);
+        crate::acme::set_hostnames(&files, &names)?;
+        crate::acme::remove(&files, &crate::acme::Name::Host(h.clone()));
+        w.reset_tls();
+        w.refresh();
+        return Ok(format!("{h} is no longer served with its own certificate."));
+    }
+    if let Some(h) = args.get("add").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+        let h = crate::acme::check_hostname(h)?;
+        let found: Vec<std::net::IpAddr> = std::net::ToSocketAddrs::to_socket_addrs(&(h.as_str(), 443))
+            .map_err(|e| format!("{h} does not resolve ({e}): root must point its A record at this bia first"))?
+            .map(|a| a.ip())
+            .collect();
+        let mut ours: Vec<std::net::IpAddr> = w
+            .acme_wanted()
+            .into_iter()
+            .filter_map(|n| match n {
+                crate::acme::Name::Ip(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        ours.sort();
+        if !found.iter().any(|i| ours.contains(i)) {
+            let shown = |v: &[std::net::IpAddr]| v.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+            return Err(format!(
+                "{h} points at {}, but this bia's public addresses are {}. Fix the DNS record; if this bia sits behind a router that forwards ports 80 and 443 to it, add the router's public address with web_public_ip first.",
+                shown(&found),
+                if ours.is_empty() { "none known".into() } else { shown(&ours) }
+            ));
+        }
+        if !names.contains(&h) {
+            names.push(h.clone());
+            crate::acme::set_hostnames(&files, &names)?;
+        }
+        return Ok(tried(w, &crate::acme::Name::Host(h)));
+    }
+    if names.is_empty() {
+        return Ok("No hostnames. web_hostname(add=\"bia.example.com\") once the name's A record points at this bia.".into());
+    }
+    Ok(names
+        .iter()
+        .map(|h| crate::acme::describe(&files, &crate::acme::Name::Host(h.clone())))
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+/// The tool: public addresses of a bia behind NAT (a router forwards ports 80 and 443).
+pub fn public_ip(_: &Ctx, args: Value) -> Result<String, String> {
+    let w = web()?;
+    let files = crate::files_dir();
+    let mut ips = crate::acme::declared_ips(&files);
+    let parse = |s: &str| -> Result<std::net::IpAddr, String> {
+        let ip: std::net::IpAddr = s.trim().parse().map_err(|_| format!("{s:?} is not an IP address"))?;
+        if !crate::acme::is_public(&ip) {
+            return Err(format!("{ip} is a private address: only addresses the internet reaches get a Let's Encrypt certificate"));
+        }
+        Ok(ip)
+    };
+    if let Some(s) = args.get("remove").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+        let ip = parse(s)?;
+        if !ips.contains(&ip) {
+            return Err(format!("{ip} was not added with web_public_ip"));
+        }
+        ips.retain(|i| *i != ip);
+        crate::acme::set_declared_ips(&files, &ips)?;
+        if !w.acme_wanted().contains(&crate::acme::Name::Ip(ip)) {
+            crate::acme::remove(&files, &crate::acme::Name::Ip(ip));
+        }
+        w.reset_tls();
+        w.refresh();
+        return Ok(format!("{ip} removed."));
+    }
+    if let Some(s) = args.get("add").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+        let ip = parse(s)?;
+        if !ips.contains(&ip) {
+            ips.push(ip);
+            crate::acme::set_declared_ips(&files, &ips)?;
+        }
+        return Ok(tried(w, &crate::acme::Name::Ip(ip)));
+    }
+    Ok(cert_lines(w))
 }

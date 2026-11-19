@@ -206,7 +206,7 @@ enum Cmd {
         /// Skip the model check here.
         #[arg(long)]
         no_test: bool,
-        /// Do not import the certificate into this computer.
+        /// Do not open bia in this computer's browser with root's key.
         #[arg(long)]
         no_trust: bool,
         /// Do not wait for bia to answer after the reboot.
@@ -881,10 +881,9 @@ fn server(a: ServerArgs) -> Result<()> {
         Progress::Rebooting => eprintln!("== the server reboots into bia's installer now"),
     })?;
     drop(s);
-    if let Some(dir) = &done.folder {
-        eprintln!("   CA fingerprint (SHA-256): {}", done.ca_sha256);
-        if !a.no_trust {
-            let r = remote::trust::install(dir, &format!("bia {}", login.host))?;
+    let hand_over = |open: bool| -> Result<()> {
+        if let Some(dir) = &done.folder {
+            let r = remote::trust::install(dir, &login.host, open)?;
             for l in &r.done {
                 eprintln!("   ok: {l}");
             }
@@ -892,14 +891,21 @@ fn server(a: ServerArgs) -> Result<()> {
                 eprintln!("   to do: {l}");
             }
         }
+        Ok(())
+    };
+    if let Some(_dir) = &done.folder {
+        eprintln!("   CA fingerprint (SHA-256): {}", done.ca_sha256);
     }
     if a.no_wait {
-        return Ok(());
+        return hand_over(false);
     }
     eprintln!("== waiting for bia to start at {} (a few minutes)…", login.host);
     remote::wait_up(&login.host, Some(done.ca_pem.as_str()).filter(|c| !c.is_empty()), std::time::Duration::from_secs(25 * 60), &mut |_| {})?;
     match &agent {
-        Agent::New { .. } => eprintln!("== bia is up: https://{}/", login.host),
+        Agent::New { .. } => {
+            eprintln!("== bia is up: https://{}/", login.host);
+            hand_over(!a.no_trust)?;
+        }
         Agent::Land { secret } => eprintln!("== bia waits for a flight at {}: tell one of your bias to fly there with land secret {secret}", login.host),
     }
     Ok(())

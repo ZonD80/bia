@@ -55,7 +55,7 @@ pub fn issue(ctx: &Ctx, args: Value) -> Result<String, String> {
         ))
     } else {
         Ok(format!(
-            "issued cert for {identity} (serial {}). One-time download (deleted after GET; .p12 password 12345678):\n{}",
+            "issued cert for {identity} (serial {}). Send them this one-time pickup link; they paste it on the sign-in page of the web app (or open it to save the .p12, password 12345678). It works once:\n{}",
             meta.serial,
             urls.join("\n")
         ))
@@ -201,19 +201,39 @@ pub fn biaconfig(ctx: &Ctx, args: Value) -> Result<String, String> {
     let tail: String = m.serial.chars().take(8).collect();
     let path = dir.join(format!("{safe}-{tail}.{}", file::EXTENSION));
     std::fs::write(&path, &m.sealed).map_err(|e| format!("{}: {e}", path.display()))?;
-    {
+    // the password in a file of its own: it travels as an attachment and never through the model
+    let hide = args.get("hide_password").and_then(Value::as_bool).unwrap_or(false) && m.generated;
+    let pw_path = dir.join(format!("{safe}-{tail}-password.txt"));
+    if hide {
+        std::fs::write(&pw_path, format!("{}\n", m.password)).map_err(|e| format!("{}: {e}", pw_path.display()))?;
+    }
+    for p in [&path, &pw_path] {
+        if !p.exists() {
+            continue;
+        }
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
         // the agent is root: bia's own backups and say(files=…) must still read it
         if let Ok(owner) = std::fs::metadata(files_dir()) {
             let _ = std::os::unix::fs::chown(&dir, Some(owner.uid()), Some(owner.gid()));
-            let _ = std::os::unix::fs::chown(&path, Some(owner.uid()), Some(owner.gid()));
+            let _ = std::os::unix::fs::chown(p, Some(owner.uid()), Some(owner.gid()));
         }
     }
     ctx.log(format!("issued {} cert for {} in a .biaconfig (role={} trust={})", m.serial, m.identity, m.role, m.trust));
+    if hide {
+        return Ok(format!(
+            "{}, serial {}, for {}: {} Its password is in {} — do not read that file, so the password never passes through you. Send the two files as attachments in TWO separate messages, file first (say(files=[…]) each), to {} in their own chat. They open bia's address in a browser and drop the .biaconfig on the sign-in page, then type the password. When they say they saved both, delete both messages for everyone (delete_messages) and delete both files here. web_pki_revoke(serial) ends this key at any time.",
+            path.display(),
+            m.serial,
+            m.addresses.join(", "),
+            if m.added { "The server certificate names these addresses within seconds." } else { "" },
+            pw_path.display(),
+            m.identity,
+        ));
+    }
     let password_line = if m.generated { format!("password {}", m.password) } else { "the password you were given".to_string() };
     Ok(format!(
-        "{}, serial {}, for {}: {} Encrypted with {password_line}. Send the file with say(files=[…]) and tell the password another way, never in the same chat: whoever has both is {} on this machine. web_pki_revoke(serial) ends it at any time. Delete the file once it has arrived. On a phone it opens in the bia deploy app ({}).",
+        "{}, serial {}, for {}: {} Encrypted with {password_line}. Send the file with say(files=[…]) and tell the password another way, never in the same chat: whoever has both is {} on this machine. web_pki_revoke(serial) ends it at any time. Delete the file once it has arrived. It is opened by dropping it on bia's sign-in page in a browser, or kept in the bia deploy app ({}).",
         path.display(),
         m.serial,
         m.addresses.join(", "),
@@ -258,6 +278,7 @@ pub fn revoke(ctx: &Ctx, args: Value) -> Result<String, String> {
     let serial = bia_mcp::arg_str(&args, "serial")?.trim().to_string();
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     if pki.revoke(&serial).map_err(|e| format!("{e:#}"))? {
+        crate::session::end_serial(&serial);
         ctx.log(format!("revoked client cert {serial}"));
         Ok(format!("revoked {serial}"))
     } else {

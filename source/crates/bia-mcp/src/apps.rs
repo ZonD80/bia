@@ -1,19 +1,16 @@
-//! The bia deploy phone apps: where to get them, and links that open bia's web pages inside them.
+//! Links that open bia's web pages for a person, with a key if they have none yet.
 //!
-//! An app link is `https://ownbia.com/open#ca=<id>&at=<host[:port]>,…&go=<path>&t=<token>`. Messengers make it
-//! clickable (a custom scheme they would not). On a phone with the app it opens there (universal
-//! link / App Link); the app picks its saved bia whose CA matches `ca` and loads `go` on it with
-//! that bia's key. Without the app, ownbia.com/open offers the stores and the direct links. The
-//! fragment never reaches ownbia.com's server.
+//! A link is `https://<bia's address><path>#enroll=<token>`: bia's own page, at its best
+//! address (a hostname with a trusted certificate first, then a public address). The fragment
+//! never reaches any server's logs. A browser that already has a key for this bia signs in
+//! as usual and ignores the token. One without signs up with it: it makes its own key and sends
+//! a CSR to `POST /v1/pki/link/<token>`, which certifies it for the identity the link was sent
+//! to, once (files/state/applink/<token>.json: identity and trust). Links with a key go only
+//! to people bia knows (root, or addressbook contacts, with their trust), in their own chats.
 //!
-//! `t` lets a phone without that bia's key get one: a single-use grant minted here
-//! (files/state/applink/<token>.json: the identity the link was sent to and its trust). The
-//! web MCP redeems it at `GET /v1/pki/link/<token>` by issuing a new certificate for that
-//! identity (a key made there, a .p12), and forgets the token. Links go only to people bia
-//! knows (root, or addressbook contacts, with their trust), in their own chats. `ca` (128 bits
-//! of the CA's hash) lets the phone pin bia's CA before it has any key.
+//! The bia deploy phone apps hold bias' keys and open them in the browser; they are where a
+//! phone gets a key without a link.
 
-pub const OPEN_BASE: &str = "https://ownbia.com/open";
 pub const ANDROID: &str = "https://play.google.com/store/apps/details?id=biadeploy.android";
 pub const IPHONE: &str = "https://apps.apple.com/app/bia-deploy/id6827948196";
 
@@ -22,17 +19,11 @@ pub fn stores() -> String {
     format!("bia deploy is the phone app: Android {ANDROID}, iPhone {IPHONE}")
 }
 
-/// What the person does when the app has no key for this bia, in words for the model.
-pub const NO_KEY: &str = "The link also brings a one-time key for that person (a new certificate when first opened on a phone without one), so send it only to them, in their own chat. That key lapses after 10 minutes (enough to install the app); if they say the app found no key, make them a new link";
+/// What the key in a link means, in words for the model.
+pub const NO_KEY: &str = "The link also brings a one-time key for that person (a browser without one makes its own when the link is first opened), so send it only to them, in their own chat. That key lapses after 10 minutes; if they say the page asked for a key, make them a new link";
 
-/// A link's key grant is redeemable this long: time to install the app and open the link.
+/// A link's key grant is redeemable this long.
 pub const TOKEN_TTL_SECS: u64 = 10 * 60;
-
-/// Id of a CA as the apps compute it: the first 32 hex digits (128 bits) of sha256 of the CA
-/// certificate's DER (the caller hashes; this crate has no digest).
-pub fn ca_id(sha256: &[u8]) -> String {
-    sha256.iter().take(16).map(|b| format!("{b:02x}")).collect()
-}
 
 pub fn tokens_dir(files: &std::path::Path) -> std::path::PathBuf {
     files.join("state").join("applink")
@@ -108,7 +99,7 @@ pub fn take_token(files: &std::path::Path, t: &str) -> Option<Grant> {
 fn enc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
-        let keep = b.is_ascii_alphanumeric() || b"-._~:/".contains(&b);
+        let keep = b.is_ascii_alphanumeric() || b"-._~:/?=&".contains(&b);
         if keep {
             out.push(b as char);
         } else {
@@ -118,35 +109,43 @@ fn enc(s: &str) -> String {
     out
 }
 
-/// `host[:port]` of an origin like `https://203.0.113.5:8443/`.
+/// `host` of an origin like `https://203.0.113.5:8443/` (no port, no brackets).
 fn host_of(origin: &str) -> Option<String> {
     let rest = origin.split_once("://").map(|(_, r)| r).unwrap_or(origin);
-    let host = rest.split(['/', '?', '#']).next()?.trim();
-    (!host.is_empty()).then(|| host.to_string())
+    let hostport = rest.split(['/', '?', '#']).next()?.trim();
+    let host = if let Some(v6) = hostport.strip_prefix('[') {
+        v6.split(']').next()?.to_string()
+    } else {
+        hostport.rsplit_once(':').map(|(h, _)| h).unwrap_or(hostport).to_string()
+    };
+    (!host.is_empty()).then_some(host)
 }
 
-/// The app link to `path` (for example `/hitl/ab12cd34`) on the bia with CA `ca` (from
-/// [`ca_id`]) at `origins`, with key grant `token` if any. Loopback addresses mean nothing
-/// on a phone and are left out.
-pub fn open_link(ca: &str, origins: &[String], path: &str, token: Option<&str>) -> Option<String> {
-    if ca.is_empty() || !path.starts_with('/') {
+/// How good an address is for a link: a hostname (trusted certificate), a public IP, a
+/// private one; loopback never.
+fn rank(origin: &str) -> Option<u8> {
+    let h = host_of(origin)?;
+    match h.parse::<std::net::IpAddr>() {
+        Err(_) if h == "localhost" => None,
+        Err(_) => Some(0),
+        Ok(ip) if ip.is_loopback() => None,
+        Ok(std::net::IpAddr::V4(v4)) if v4.is_private() || v4.is_link_local() || (v4.octets()[0] == 100 && (v4.octets()[1] & 0xc0) == 64) => Some(2),
+        Ok(std::net::IpAddr::V6(v6)) if (v6.segments()[0] & 0xfe00) == 0xfc00 || (v6.segments()[0] & 0xffc0) == 0xfe80 => Some(2),
+        Ok(_) => Some(1),
+    }
+}
+
+/// The link to `path` (for example `/hitl/ab12cd34`) on this bia at the best of `origins`,
+/// with key grant `token` if any.
+pub fn page_link(origins: &[String], path: &str, token: Option<&str>) -> Option<String> {
+    if !path.starts_with('/') {
         return None;
     }
-    let at: Vec<String> = origins
-        .iter()
-        .filter_map(|o| host_of(o))
-        .filter(|h| !h.starts_with("127.") && !h.starts_with("[::1]") && !h.starts_with("localhost"))
-        .map(|h| enc(&h))
-        .collect();
-    let mut link = format!("{OPEN_BASE}#ca={}", enc(ca));
-    if !at.is_empty() {
-        link.push_str("&at=");
-        link.push_str(&at.join(","));
-    }
-    link.push_str("&go=");
-    link.push_str(&enc(path));
+    let best = origins.iter().filter_map(|o| Some((rank(o)?, o))).min_by_key(|(r, _)| *r)?.1;
+    let mut link = format!("{}{}", best.trim_end_matches('/'), enc(path));
     if let Some(t) = token.filter(|t| valid_token(t)) {
-        link.push_str("&t=");
+        link.push(if link.contains('#') { '&' } else { '#' });
+        link.push_str("enroll=");
         link.push_str(t);
     }
     Some(link)
@@ -157,32 +156,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn link_has_ca_addresses_and_path() {
+    fn a_link_goes_to_the_best_address() {
         let o = vec![
             "https://127.0.0.1:8443".to_string(),
-            "https://203.0.113.5:8443".to_string(),
             "https://192.168.1.5:8443/".to_string(),
+            "https://203.0.113.5:8443".to_string(),
             "https://[2001:db8::1]:8443".to_string(),
         ];
         assert_eq!(
-            open_link("0123456789abcdef", &o, "/hitl/ab12cd34", Some(&"ab".repeat(16))).unwrap(),
-            format!("https://ownbia.com/open#ca=0123456789abcdef&at=203.0.113.5:8443,192.168.1.5:8443,%5B2001:db8::1%5D:8443&go=/hitl/ab12cd34&t={}", "ab".repeat(16))
+            page_link(&o, "/hitl/ab12cd34", Some(&"ab".repeat(16))).unwrap(),
+            format!("https://203.0.113.5:8443/hitl/ab12cd34#enroll={}", "ab".repeat(16))
         );
-    }
-
-    #[test]
-    fn link_without_addresses_still_names_the_bia() {
-        assert_eq!(
-            open_link("0123456789abcdef", &[], "/dl/x y", Some("short")).unwrap(),
-            "https://ownbia.com/open#ca=0123456789abcdef&go=/dl/x%20y"
-        );
-        assert!(open_link("", &[], "/dl/x", None).is_none());
-        assert!(open_link("ab", &[], "dl/x", None).is_none());
-    }
-
-    #[test]
-    fn ca_id_is_32_hex() {
-        assert_eq!(ca_id(&[0xab; 32]), "ab".repeat(16));
+        let mut with_name = o.clone();
+        with_name.push("https://bia.example.com".into());
+        assert_eq!(page_link(&with_name, "/", None).unwrap(), "https://bia.example.com/");
+        assert_eq!(page_link(&o[..2], "/dl/x y", Some("short")).unwrap(), "https://192.168.1.5:8443/dl/x%20y");
+        assert!(page_link(&o[..1], "/", None).is_none(), "loopback means nothing elsewhere");
+        assert!(page_link(&o, "dl/x", None).is_none());
     }
 
     #[test]

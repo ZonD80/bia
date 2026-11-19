@@ -39,8 +39,6 @@ targets:
         # .biaconfig files open here (merged with the generated keys below)
         # bia is dialled by bare IP with its own CA: ATS refuses that (-9880) and has no per-address
         # exception. Web views only; ChatView checks this bia's CA itself on every connection.
-        NSAppTransportSecurity:
-          NSAllowsArbitraryLoadsInWebContent: true
         CFBundleDocumentTypes:
           - CFBundleTypeName: bia config
             LSHandlerRank: Owner
@@ -52,7 +50,10 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension: [biaconfig]
               public.mime-type: [application/x-biaconfig]
-        LSSupportsOpeningDocumentsInPlace: false
+        # the keys this app keeps, as .biaconfig files in Documents: Files and every browser's
+        # file picker show them (On My iPhone → bia deploy)
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: biadeploy.ios

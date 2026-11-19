@@ -214,16 +214,17 @@ fn page(tok: &str, ca_sha: &str, ca_name: &str, suggested: &str) -> String {
 <title>bia takeover</title>
 <style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#222}}code{{background:#f2f2f2;padding:.1rem .3rem;border-radius:4px;word-break:break-all}}a.b,button.b{{display:inline-block;margin:.3rem .5rem .3rem 0;padding:.6rem 1rem;background:#2d6cdf;color:#fff;border:0;border-radius:8px;font:inherit;text-decoration:none;cursor:pointer}}input{{font:inherit;font-family:ui-monospace,monospace;padding:.5rem;border:1px solid #bbb;border-radius:8px;width:15rem;max-width:100%;box-sizing:border-box}}</style>
 <h1>Your key to bia</h1>
-<p>This machine is about to become a bia. Afterwards the only way in is its web app on HTTPS, with this certificate.
+<p>This machine is about to become a bia. Afterwards the only way in is its web app on HTTPS, with this key.
 It comes as two files; one is enough, and the takeover continues once a file was downloaded.
-To have both, download one right after the other.</p>
-<h2>For a browser</h2>
+To have both, download one right after the other. Keep it safe: it opens bia.</p>
+<h2>Plain: bia-root.p12</h2>
 <p><a class="b" href="/{tok}/root.p12">Download bia-root.p12</a></p>
-<p>Import <b>bia-root.p12</b> into your browser or system (password <code>12345678</code>). It also holds bia's
-certificate authority, <b>{ca_name}</b>; trust it so your browser knows bia without warnings.</p>
-<h2>For the bia deploy app</h2>
-<p>A <b>.biaconfig</b> holds the same certificate and this server's address, encrypted with the password below
-(at least {min} characters; change it if you like). Write the password down: the app on your phone asks for it when it opens the file.</p>
+<p>When bia is up, open its address in a browser and drop <b>bia-root.p12</b> on the page: it opens with bia's
+usual password (<code>12345678</code>) and the browser keeps a key of its own from then on. Nothing to install.
+Its certificate authority is <b>{ca_name}</b>.</p>
+<h2>With a password: .biaconfig</h2>
+<p>A <b>.biaconfig</b> holds the same key and this server's address, encrypted with the password below
+(at least {min} characters; change it if you like). Write the password down: bia's page and the bia deploy app ask for it when they open the file.</p>
 <form method="post" action="/{tok}/root.biaconfig">
 <input name="password" value="{suggested}" minlength="{min}" required autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Password for the .biaconfig">
 <button class="b">Download .biaconfig</button>
@@ -241,10 +242,11 @@ certificate authority, <b>{ca_name}</b>; trust it so your browser knows bia with
 mod tests {
     use super::*;
 
-    /// One HTTPS request to the gate, trusting only the new bia's CA.
-    fn ask(port: u16, ca_pem: &str, request: &str) -> (String, Vec<u8>) {
+    /// One HTTPS request to the gate, trusting only the new bia's own (self-signed) server
+    /// certificate, `server_pem`.
+    fn ask(port: u16, server_pem: &str, request: &str) -> (String, Vec<u8>) {
         let mut roots = rustls::RootCertStore::empty();
-        for c in bia_pki::pem_to_cert_ders(ca_pem).unwrap() {
+        for c in bia_pki::pem_to_cert_ders(server_pem).unwrap() {
             roots.add(c).unwrap();
         }
         let cfg = rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
@@ -273,13 +275,14 @@ mod tests {
         .unwrap();
         let p12 = seeded.root_p12.clone().unwrap();
         let ca_pem = std::fs::read_to_string(seeded.dir.join("ca.crt")).unwrap();
+        let server_pem = std::fs::read_to_string(seeded.dir.join("server.crt")).unwrap();
         let reach = Reach { addresses: vec!["bia.example".into(), ip.to_string()], ca_pem: ca_pem.clone() };
         let g = start(&files, 0, p12.clone(), seeded.ca_sha256.clone(), reach).unwrap();
         let at = format!("/{}/root.biaconfig", g.token);
-        let post = |form: &str| ask(g.port, &ca_pem, &format!("POST {at} HTTP/1.1\r\nHost: 203.0.113.7:{}\r\nContent-Length: {}\r\n\r\n{form}", g.port, form.len()));
+        let post = |form: &str| ask(g.port, &server_pem, &format!("POST {at} HTTP/1.1\r\nHost: 203.0.113.7:{}\r\nContent-Length: {}\r\n\r\n{form}", g.port, form.len()));
 
         // the page offers both files and a password nobody had to invent
-        let (head, body) = ask(g.port, &ca_pem, &format!("GET /{}/ HTTP/1.1\r\nHost: x\r\n\r\n", g.token));
+        let (head, body) = ask(g.port, &server_pem, &format!("GET /{}/ HTTP/1.1\r\nHost: x\r\n\r\n", g.token));
         let html = String::from_utf8_lossy(&body).into_owned();
         assert!(head.starts_with("HTTP/1.1 200"), "{head}");
         assert!(html.contains("root.p12") && html.contains("root.biaconfig"), "{html}");
@@ -288,8 +291,8 @@ mod tests {
         // refused: nothing counts as downloaded
         assert!(post("password=short").0.starts_with("HTTP/1.1 400"));
         assert!(post("other=1").0.starts_with("HTTP/1.1 400"));
-        assert!(ask(g.port, &ca_pem, &format!("GET {at} HTTP/1.1\r\nHost: x\r\n\r\n")).0.starts_with("HTTP/1.1 405"));
-        assert!(ask(g.port, &ca_pem, "POST /wrong/root.biaconfig HTTP/1.1\r\nHost: x\r\n\r\n").0.starts_with("HTTP/1.1 404"));
+        assert!(ask(g.port, &server_pem, &format!("GET {at} HTTP/1.1\r\nHost: x\r\n\r\n")).0.starts_with("HTTP/1.1 405"));
+        assert!(ask(g.port, &server_pem, "POST /wrong/root.biaconfig HTTP/1.1\r\nHost: x\r\n\r\n").0.starts_with("HTTP/1.1 404"));
         assert!(!g.downloaded.load(Ordering::SeqCst));
 
         let (head, file) = post("password=correct+horse%21");
@@ -306,7 +309,7 @@ mod tests {
         assert_eq!(biaconfig::details(&c).unwrap().identity, "root");
         assert!(g.downloaded.load(Ordering::SeqCst) && !g.both.load(Ordering::SeqCst));
 
-        let (_, got) = ask(g.port, &ca_pem, &format!("GET /{}/root.p12 HTTP/1.1\r\nHost: x\r\n\r\n", g.token));
+        let (_, got) = ask(g.port, &server_pem, &format!("GET /{}/root.p12 HTTP/1.1\r\nHost: x\r\n\r\n", g.token));
         assert_eq!(got, p12);
         assert!(g.both.load(Ordering::SeqCst));
         let _ = std::fs::remove_dir_all(&files);

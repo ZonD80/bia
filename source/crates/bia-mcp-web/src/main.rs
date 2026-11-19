@@ -1,11 +1,13 @@
 #![recursion_limit = "512"]
-//! MCP: the web bus. An HTTPS + mTLS server (client certificates from this machine's CA) with
+//! MCP: the web bus. An HTTPS server (Let's Encrypt or its own certificate; clients sign in with
+//! keys certified by this machine's CA, see bia_pki::signin) with
 //! Telegram-style chats, voice calls, files, a root shell, the screen, human tasks and
 //! certificate admin. For the agent it is a bus like telegram or whatsapp: everyone's messages
 //! (people, other bias, outside agents) arrive as `identity|web|…` inbound envelopes, and the
 //! agent answers with these tools. Every session is the web bus protocol on `/ws` (`link.rs`).
 //! Apart from root's console mirror (`/ws/term`, relayed from the agent's socket) it has
 //! nothing to do with the agent's console.
+mod acme;
 mod bridge;
 mod bus;
 mod call;
@@ -23,6 +25,7 @@ mod pki;
 mod pty;
 mod push;
 mod server;
+mod session;
 #[allow(dead_code)]
 #[path = "../../tlspipe.rs"]
 mod tlspipe;
@@ -127,8 +130,14 @@ fn main() {
             obj(target(), &["identity"]), tools::call_cancel)
         .tool("call_hangup", "End the web call bia is in, or stop ringing. Say goodbye with say first: if bia is still speaking, the call ends as soon as that has played.",
             obj(target(), &["identity"]), tools::call_hangup)
-        .tool("status", "HTTPS addresses of this web server, the public CA download path and its fingerprint. Access needs a client certificate (web_pki_issue when root asks).",
+        .tool("status", "HTTPS addresses of this web server, its server certificates (Let's Encrypt or its own), the CA fingerprint. A person signs in by opening an address and bringing a .p12 or .biaconfig (web_pki_issue / web_pki_biaconfig when root asks).",
             obj(json!({}), &[]), tools::status)
+        .tool("hostname", "Serve the web app at a hostname with its own Let's Encrypt certificate (only when root asks): add=<name> once its A record points here, remove=<name>, none = list.",
+            obj(json!({"add": {"type": "string", "description": "hostname to add, e.g. bia.example.com"},
+                       "remove": {"type": "string", "description": "hostname to remove"}}), &[]), tools::hostname)
+        .tool("public_ip", "Declare the public IP of a router that forwards ports 80 and 443 to this bia (only when root asks), so it gets a Let's Encrypt certificate: add=<ip>, remove=<ip>, none = list.",
+            obj(json!({"add": {"type": "string", "description": "public IPv4 or IPv6 address"},
+                       "remove": {"type": "string", "description": "address to remove"}}), &[]), tools::public_ip)
         .tool("port", "Move the HTTPS web app to another port (only when root asks): port=<1-65535>, 0 = back to 443. Applies after the MCP restarts.",
             obj(json!({"port": {"type": "integer", "description": "the new HTTPS port; 0 forgets the saved one"}}), &["port"]), tools::port)
         .tool("icon", "Give the web app this bia's own icon (only when root asks): home-screen app icon, browser tab, notifications and bia's picture in the chat. path = a square PNG, JPEG or WebP, 512x512 or larger (absolute, or relative to the files folder); path=\"default\" brings the built-in one back.",
@@ -136,7 +145,7 @@ fn main() {
                        "background": {"type": "string", "description": "colour behind a transparent picture on iPhone home screens, default #ffffff"}}), &["path"]), icon::tool)
         .tool(
             "pki_issue",
-            "Issue a client certificate (only when root asks). identity is the CN (e.g. root or a contact id). role is user or agent. trust is root or normal. Returns a one-time HTTPS PKCS#12 pickup URL (password 12345678); the file is deleted after download.",
+            "Issue a client certificate (only when root asks). identity is the CN (e.g. root or a contact id). role is user or agent. trust is root or normal. Returns a one-time pickup link: the person pastes it on the web app's sign-in page (or opens it to save the .p12, password 12345678) and is in; it works once.",
             obj(json!({
                 "identity": {"type": "string"},
                 "role": {"type": "string", "description": "user or agent (default user)"},
@@ -147,13 +156,14 @@ fn main() {
         )
         .tool(
             "pki_biaconfig",
-            "Make a .biaconfig (only when root asks): a new client certificate with this bia's address and CA, in one password-encrypted file that the bia deploy apps and chrome_cert_import open. identity is the CN, role user or agent, trust root or normal (default root for identity=root, else normal). address is how the other side reaches this bia, put first (it is added to the server certificate); without it, the addresses this machine knows. Without password one is generated. The file can be revoked by its serial (web_pki_revoke).",
+            "Make a .biaconfig (only when root asks, or a release step says so): a new client certificate with this bia's address and CA, in one password-encrypted file; a browser opens it on bia's sign-in page, and the bia deploy apps and chrome_cert_import too. hide_password=true puts the generated password in a file next to it instead of in this answer. identity is the CN, role user or agent, trust root or normal (default root for identity=root, else normal). address is how the other side reaches this bia, put first (it is added to the server certificate); without it, the addresses this machine knows. Without password one is generated. The file can be revoked by its serial (web_pki_revoke).",
             obj(json!({
                 "identity": {"type": "string"},
                 "address": {"type": "string", "description": "host or IP, with :port if not this bia's port"},
                 "addresses": {"type": "array", "items": {"type": "string"}, "description": "more addresses"},
                 "name": {"type": "string", "description": "what to call this bia in the app (default: its own name)"},
                 "password": {"type": "string", "description": "at least 10 characters; leave out to have a strong one generated"},
+                "hide_password": {"type": "boolean", "description": "the generated password goes into a file to send as an attachment, never into this answer"},
                 "role": {"type": "string", "description": "user or agent (default user)"},
                 "trust": {"type": "string", "description": "root or normal"},
                 "from": {"type": "array", "items": {"type": "string"}, "description": "optional: addresses or networks (CIDR) the certificate works from"}
@@ -209,7 +219,7 @@ fn main() {
                     if let Some(w) = warn {
                         b.log(&w);
                     }
-                    b.log(&w.info_line());
+                    b.log(&w.console_line());
                     let _ = WEB.set(w);
                 }
                 Err(e) => b.log(&format!("web server not started: {e}")),

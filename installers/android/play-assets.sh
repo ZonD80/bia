@@ -4,8 +4,8 @@
 #   feature-1024x500.png  feature graphic (rendered with headless Chrome, like tools/make-og.sh)
 #   phone/, tablet7/, tablet10/  screenshots: each AVD boots headless, the debug build opens
 #                         every wizard step with made-up data (Demo.kt, debug builds only); the chat
-#                         scenes (chat, call, attach) show bia's real web app with a made-up
-#                         conversation from installers/demo-chat/server.py (adb reverse)
+#                         scene shows how the app opens a saved bia in the browser, with keys from
+#                         installers/demo-chat/server.py (adb reverse)
 #
 # AVDs (PHONE_AVD, TABLET7_AVD, TABLET10_AVD; 9:16 portrait): losdias-play-phone (1080×1920),
 # losdias-play-tablet7 (1080×1920), losdias-play-tablet10 (1440×2560). ONLY=graphics or
@@ -22,8 +22,8 @@ ADB="$SDK/platform-tools/adb"
 EMU="$SDK/emulator/emulator"
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 APP=biadeploy.android
-SCENES=(keys brain name login newkey confirm running installed chat call attach)
-CHAT_SCENES=" chat call attach "
+SCENES=(keys brain name login newkey confirm running installed chat)
+CHAT_SCENES=" chat "
 DEMO_PORT=18443
 
 die() {

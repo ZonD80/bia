@@ -1,0 +1,64 @@
+#!/bin/bash
+# Size /swapfile to half of the RAM, when the root filesystem has room for it.
+#
+# The image ships a 256 MiB swap file (builders/rootfs.sh; bia-land and bia-migrate make
+# their own). On every boot, after bia-grow has grown the root filesystem, this makes it
+# RAM/2 (rounded down to MiB) if that leaves at least MIN_FREE free, counting the space
+# the old file gives back. A machine with too little room keeps the file it has; a file
+# larger than wanted (less RAM now, a disk moved to another machine) is shrunk. Nothing is
+# done when the size is already right, so a normal boot only reads two numbers.
+#
+#   bia-swap        (bia-swap.service, after bia-grow, before the agent)
+# BIA_SWAP_FILE, BIA_SWAP_RAM_KB, BIA_SWAP_DRY=1 for tests.
+set -euo pipefail
+
+SWAP=${BIA_SWAP_FILE:-/swapfile}
+MIN_FREE_MB=${BIA_SWAP_MIN_FREE_MB:-2048}   # free space the root keeps after the swap file
+MIN_PCT=10                                  # … and at least this share of the filesystem
+TOL_MB=16                                   # sizes this close count as right
+
+ram_kb=${BIA_SWAP_RAM_KB:-$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)}
+want_mb=$(( ram_kb / 1024 / 2 ))
+have_mb=0
+[ -f "$SWAP" ] && have_mb=$(( $(stat -c %s "$SWAP") / 1048576 ))
+
+if [ "$want_mb" -lt 64 ]; then
+  echo "bia-swap: RAM ${ram_kb} kB, half is under 64 MiB; keeping ${have_mb} MiB"
+  exit 0
+fi
+diff=$(( want_mb > have_mb ? want_mb - have_mb : have_mb - want_mb ))
+if [ "$diff" -le "$TOL_MB" ]; then
+  echo "bia-swap: ${SWAP} is ${have_mb} MiB, half the RAM: nothing to do"
+  exit 0
+fi
+
+dir=$(dirname "$SWAP")
+read -r size_kb avail_kb < <(df -Pk "$dir" | awk 'NR==2 {print $2, $4}')
+size_mb=$(( size_kb / 1024 ))
+avail_mb=$(( avail_kb / 1024 ))
+keep_mb=$(( size_mb * MIN_PCT / 100 ))
+[ "$keep_mb" -lt "$MIN_FREE_MB" ] && keep_mb=$MIN_FREE_MB
+# what would be free after swapping the old file for the new one
+after_mb=$(( avail_mb + have_mb - want_mb ))
+if [ "$want_mb" -gt "$have_mb" ] && [ "$after_mb" -lt "$keep_mb" ]; then
+  echo "bia-swap: ${want_mb} MiB (half the RAM) would leave ${after_mb} MiB free on ${dir}, under ${keep_mb} MiB; keeping ${have_mb} MiB"
+  exit 0
+fi
+echo "bia-swap: ${SWAP} ${have_mb} MiB -> ${want_mb} MiB (half of $(( ram_kb / 1024 )) MiB RAM; ${after_mb} MiB stay free)"
+[ "${BIA_SWAP_DRY:-0}" = 1 ] && exit 0
+
+if grep -q "^${SWAP} " /proc/swaps; then
+  # swapoff moves its pages back into RAM; if they do not fit, keep the old file
+  swapoff "$SWAP" || { echo "bia-swap: swapoff failed (memory in use); keeping ${have_mb} MiB"; exit 0; }
+fi
+rm -f "$SWAP"
+# Fully allocated (swapon refuses files with holes): fallocate on ext4, dd elsewhere.
+if ! fallocate -l "${want_mb}M" "$SWAP" 2>/dev/null; then
+  rm -f "$SWAP"
+  dd if=/dev/zero of="$SWAP" bs=1M count="$want_mb" status=none || {
+    # out of room after all: the image's size is the fallback
+    rm -f "$SWAP"; dd if=/dev/zero of="$SWAP" bs=1M count=256 status=none; }
+fi
+chmod 600 "$SWAP"
+mkswap "$SWAP" >/dev/null
+swapon "$SWAP" || echo "bia-swap: swapon ${SWAP} failed"

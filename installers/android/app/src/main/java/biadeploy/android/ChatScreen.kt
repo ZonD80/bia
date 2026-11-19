@@ -1,248 +1,167 @@
 package biadeploy.android
 
-import android.Manifest
-import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.net.http.SslCertificate
-import android.net.http.SslError
-import android.util.Base64
-import android.view.ViewGroup
-import android.webkit.ClientCertRequest
-import android.webkit.JavascriptInterface
-import android.webkit.PermissionRequest
-import android.webkit.SslErrorHandler
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import java.io.ByteArrayInputStream
+import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import java.io.File
-import java.security.KeyStore
-import java.security.PrivateKey
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
-import uniffi.bia_deploy_mobile.p12Password
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import uniffi.bia_deploy_mobile.BrowserKey
+import uniffi.bia_deploy_mobile.browserKey
+import uniffi.bia_deploy_mobile.savedBias
 
 /**
- * One bia this phone holds the key of. `host` is what is dialled, a port included; `shown` is the
- * address the title shows, when not `host` (store screenshots: the demo chat runs on localhost).
+ * One bia this phone holds the key of. `host` is what is dialled, a port included; `path` the
+ * page of bia's web app to open (/ is the chat, a link from bia names another); `shown` the
+ * address the title shows, when not `host`; `name` what a person calls it.
  */
-data class ChatTarget(val host: String, val folder: String, val path: String = "/", val shown: String? = null) {
+data class ChatTarget(val host: String, val folder: String, val path: String = "/", val shown: String? = null, val name: String = "") {
     private val bracketed get() = host.startsWith("[")
     private val ipv6 get() = !bracketed && host.count { it == ':' } > 1
-    /** The address without a port, as requests report it. */
-    val name get() = if (bracketed) host.substringAfter('[').substringBefore(']') else if (ipv6) host else host.substringBefore(':')
-    /** The page of bia's web app to open: / is the chat, a link from bia names another. */
-    val url get() = (if (ipv6) "https://[$host]" else "https://$host") + (if (path.startsWith("/")) path else "/")
-    fun isHere(h: String?) = h?.trim('[', ']') == name
+    val origin get() = if (ipv6) "https://[$host]" else "https://$host"
+    val url get() = origin + (if (path.startsWith("/")) path else "/")
+
+    /** bia's page in the browser with this phone's key in the link: the page opens it with the
+     *  password the person types and keeps a key of its own. */
+    fun link(hash: String) = url + (if ("#" in url) "&" else "#") + "biaconfig=" + hash
 }
 
-/** bia's own CA and root's certificate, as kept in its folder on this phone. */
-private class ChatKeys(folder: String) {
-    val ca: X509Certificate = File(folder, "ca.crt").inputStream().use {
-        CertificateFactory.getInstance("X.509").generateCertificate(it) as X509Certificate
-    }
-    val key: PrivateKey
-    val chain: Array<X509Certificate>
+/** Where the files for browsers go (the FileProvider's `share/`). */
+private fun keysDir(context: Context) = File(context.cacheDir, "share").apply { mkdirs() }
 
-    init {
-        val store = KeyStore.getInstance("PKCS12")
-        val password = p12Password().toCharArray()
-        File(folder, "bia-root.p12").inputStream().use { store.load(it, password) }
-        val alias = store.aliases().toList().first { store.isKeyEntry(it) }
-        key = store.getKey(alias, password) as PrivateKey
-        chain = store.getCertificateChain(alias).map { it as X509Certificate }.toTypedArray()
-    }
-
-    /** A server certificate this bia's CA signed: bia's CA is in no public store, and only for it. */
-    fun signedByCa(cert: SslCertificate): Boolean = runCatching {
-        val der = SslCertificate.saveState(cert).getByteArray("x509-certificate")!!
-        val x = CertificateFactory.getInstance("X.509").generateCertificate(ByteArrayInputStream(der)) as X509Certificate
-        x.checkValidity()
-        x.verify(ca.publicKey)
-    }.isSuccess
+private fun copyPassword(context: Context, password: String) {
+    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cb.setPrimaryClip(ClipData.newPlainText("bia password", password))
 }
 
-/** Files on bia's page are blobs, which the system's download manager cannot fetch: the page hands them over. */
-private const val SAVE_BLOBS = """
-(function () {
-  if (window.__biaSaves) return; window.__biaSaves = true;
-  document.addEventListener('click', function (e) {
-    var a = e.target && e.target.closest && e.target.closest('a[download]');
-    if (!a || !a.href.startsWith('blob:')) return;
-    e.preventDefault(); e.stopPropagation();
-    fetch(a.href).then(function (r) { return r.blob(); }).then(function (b) {
-      var f = new FileReader();
-      f.onload = function () { BiaApp.save(a.download || 'file', f.result.split(',')[1]); };
-      f.readAsDataURL(b);
-    });
-  }, true);
-})();
-"""
+@Composable
+private fun Big(text: String, onClick: () -> Unit) {
+    Button(onClick, shape = RoundedCornerShape(22.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+        modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
+}
 
-/** bia's web app inside this app: root's key and bia's CA come from this phone, nothing to install. */
-@SuppressLint("SetJavaScriptEnabled")
+/** bia lives in the browser: this phone hands it the key. The page opens it with a password this
+ *  app shows and copies; the browser then keeps a key of its own. */
 @Composable
 fun ChatScreen(target: ChatTarget, onMoved: (Int) -> Unit = {}, onClose: () -> Unit) {
     val context = LocalContext.current
-    val keys = remember(target) { runCatching { ChatKeys(target.folder) } }
-    val failed = keys.exceptionOrNull()
-    var web by remember { mutableStateOf<WebView?>(null) }
-    var problem by remember { mutableStateOf(failed?.let { "This phone cannot read bia's key: ${it.message}" }) }
-
-    var fileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
-    val pickFiles = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        fileCallback?.onReceiveValue(uris.toTypedArray())
-        fileCallback = null
+    var key by remember { mutableStateOf<BrowserKey?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+    BackHandler { onClose() }
+    LaunchedEffect(target) {
+        runCatching { withContext(Dispatchers.IO) { browserKey(target.folder, target.host, target.name, keysDir(context).absolutePath) } }
+            .onSuccess { key = it; copyPassword(context, it.password) }
+            .onFailure { problem = "This phone cannot read bia's key: ${it.message}" }
     }
-    var micRequest by remember { mutableStateOf<PermissionRequest?>(null) }
-    val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        micRequest?.let { if (ok) it.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE)) else it.deny() }
-        micRequest = null
-    }
-    var pending by remember { mutableStateOf<ByteArray?>(null) }
-    val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
-        val data = pending
-        pending = null
-        if (uri != null && data != null) runCatching { context.contentResolver.openOutputStream(uri)!!.use { it.write(data) } }
-    }
-
-    BackHandler {
-        val w = web
-        if (w != null && w.canGoBack()) w.goBack() else onClose()
-    }
-    DisposableEffect(target) {
-        onDispose { web?.destroy() }
-    }
-
-    val background = MaterialTheme.colorScheme.background
-    // its own background: the status bar's icons suit the app's colors, whatever the page is doing
-    Surface(Modifier.fillMaxSize(), color = background) {
-    Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClose) { Text("‹  Close") }
-            Text("bia at ${target.shown ?: target.host}", Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            TextButton({ problem = null; web?.reload() }) { Text("Reload") }
-        }
-        problem?.let { Text(it, Modifier.fillMaxWidth().padding(16.dp)) }
-        val k = keys.getOrNull() ?: return@Column
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    setBackgroundColor(background.toArgb())
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.allowFileAccess = false
-                    settings.allowContentAccess = true
-                    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
-                    addJavascriptInterface(object {
-                        @JavascriptInterface
-                        fun save(name: String, base64: String) {
-                            post {
-                                pending = Base64.decode(base64, Base64.DEFAULT)
-                                saveFile.launch(name)
-                            }
-                        }
-
-                        /** bia's page says its web app answers on another port from now on. */
-                        @JavascriptInterface
-                        fun moved(port: Int) {
-                            post { onMoved(port) }
-                        }
-                    }, "BiaApp")
-                    webViewClient = chatClient(target, k, ctx, onProblem = { problem = it })
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onShowFileChooser(view: WebView, callback: ValueCallback<Array<Uri>>, params: FileChooserParams): Boolean {
-                            fileCallback?.onReceiveValue(null)
-                            fileCallback = callback
-                            pickFiles.launch(arrayOf("*/*"))
-                            return true
-                        }
-
-                        override fun onPermissionRequest(request: PermissionRequest) {
-                            val ours = target.isHere(request.origin.host)
-                            if (!ours || PermissionRequest.RESOURCE_AUDIO_CAPTURE !in request.resources) {
-                                request.deny()
-                            } else if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                request.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                            } else {
-                                micRequest = request
-                                askMic.launch(Manifest.permission.RECORD_AUDIO)
-                            }
-                        }
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row { TextButton(onClose) { Text("‹  Close") } }
+            Text("bia at ${target.shown ?: target.host}", fontWeight = FontWeight.SemiBold)
+            Text("bia opens in your browser", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("This phone gives the browser bia's key. On bia's page, paste this password (it is copied already). After that the browser keeps a key of its own and lets you in by itself.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val k = key
+            when {
+                k != null -> {
+                    SelectionContainer { Text(k.password, fontFamily = FontFamily.Monospace, fontSize = 20.sp, modifier = Modifier.padding(vertical = 6.dp)) }
+                    TextButton({ copyPassword(context, k.password); Toast.makeText(context, "Password copied", Toast.LENGTH_SHORT).show() }) { Text("Copy password") }
+                    Big("Open in browser") {
+                        copyPassword(context, k.password)
+                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(target.link(k.hash)))) }
+                            .onFailure { problem = "No browser here: ${it.message}" }
                     }
-                    web = this
-                    loadUrl(target.url)
+                    Text("Another browser, or this one later: on bia's sign-in page choose the file, pick bia deploy as where it comes from, then this bia. It opens with the same password.",
+                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            },
-        )
-    }
+                problem == null -> CircularProgressIndicator()
+            }
+            problem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
     }
 }
 
-private fun chatClient(target: ChatTarget, keys: ChatKeys, context: Context, onProblem: (String) -> Unit) = object : WebViewClient() {
-    override fun onReceivedClientCertRequest(view: WebView, request: ClientCertRequest) {
-        if (target.isHere(request.host)) request.proceed(keys.key, keys.chain) else request.cancel()
-    }
-
-    override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) {
-        // Only "not a public CA", only this bia's address, and only what this bia's CA signed.
-        val otherFault = listOf(SslError.SSL_IDMISMATCH, SslError.SSL_DATE_INVALID, SslError.SSL_EXPIRED, SslError.SSL_NOTYETVALID, SslError.SSL_INVALID).any { error.hasError(it) }
-        val here = target.isHere(runCatching { Uri.parse(error.url).host }.getOrNull())
-        if (here && !otherFault && keys.signedByCa(error.certificate)) {
-            handler.proceed()
-        } else {
-            handler.cancel()
-            onProblem("bia's certificate does not match the key on this phone, so the chat stayed closed.")
+/**
+ * The browser's file picker ("choose the file" on bia's sign-in page) offers this app: the person
+ * picks a saved bia and the page gets its .biaconfig. The password is copied for pasting there.
+ */
+class PickKeyActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setResult(Activity.RESULT_CANCELED)
+        setContent {
+            BiaTheme {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Which bia's key?", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text("bia's page gets its .biaconfig; its password is copied for you to paste there.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        val bias = remember { savedBias() }
+                        if (bias.isEmpty()) Text("This phone holds no bia's key yet.")
+                        bias.forEach { b ->
+                            HorizontalDivider()
+                            Column(Modifier.fillMaxWidth().clickable { pick(b.folder, b.host, b.name) }.padding(vertical = 10.dp)) {
+                                Text(b.name.ifEmpty { b.host }, fontWeight = FontWeight.SemiBold)
+                                if (b.name.isNotEmpty()) Text(b.host, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        TextButton({ finish() }) { Text("Cancel") }
+                    }
+                }
+            }
         }
     }
 
-    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-        if (target.isHere(request.url.host)) return false
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
-        return true
-    }
-
-    override fun onPageFinished(view: WebView, url: String?) {
-        view.evaluateJavascript(SAVE_BLOBS, null)
-    }
-
-    override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
-        if (request.isForMainFrame) onProblem("bia did not answer at ${target.host}: ${error.description}. Reload tries again.")
+    private fun pick(folder: String, host: String, name: String) {
+        val k = runCatching { browserKey(folder, host, name, keysDir(this).absolutePath) }.getOrElse {
+            Toast.makeText(this, "This phone cannot read bia's key: ${it.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+        copyPassword(this, k.password)
+        Toast.makeText(this, "Password copied: paste it on bia's page", Toast.LENGTH_LONG).show()
+        val uri = FileProvider.getUriForFile(this, "$packageName.share", File(k.path))
+        setResult(Activity.RESULT_OK, Intent().setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        finish()
     }
 }

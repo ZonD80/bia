@@ -18,7 +18,7 @@
 //!   `frefuse {fid, reason}`, and from the sender `fcancel {fid}`.
 use std::time::{Duration, Instant};
 
-pub const PROTO: u64 = 2;
+pub const PROTO: u64 = 3;
 /// Both sides send `{"t":"ping"}` this often when idle; a session that sent nothing for
 /// DEAD_AFTER is closed. WebSocket pongs do not count: a browser's network stack answers
 /// pings even for a tab that is gone.
@@ -63,6 +63,7 @@ pub fn bye_why(code: &str) -> &'static str {
         "revoked" => "this bia no longer trusts your certificate",
         "busy" => "this bia has too many links open now, try again later",
         "proto" => "this bia speaks another version of the link protocol",
+        "auth" => "this bia did not accept your sign-in (certificate, key or clock)",
         "duplicate" => "another link with you replaced this one",
         "duplicate_key" => "another machine with your key is already connected",
         "disconnect" => "this bia closed the link",

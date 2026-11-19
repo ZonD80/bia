@@ -363,14 +363,19 @@ def deploy_run():
 
 
 def dream_stage(shell, get, fsget, want, cctx):
-    """DREAM: night memory work on the running bia (real brain from ./fmm.json)."""
+    """DREAM: night memory work on the running bia (real brain from ./fmm.json). `cctx` is
+    root's signed-in credentials (webbus.Cred)."""
     import datetime
+
+    tls = ssl.create_default_context()
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE
 
     def post(path, obj):
         req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}{path}", method="POST", data=json.dumps(obj).encode(),
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json", **cctx.headers()})
         try:
-            r = urllib.request.urlopen(req, context=cctx, timeout=30)
+            r = urllib.request.urlopen(req, context=tls, timeout=30)
             return r.status, r.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
@@ -428,9 +433,9 @@ def dream_stage(shell, get, fsget, want, cctx):
             else:
                 seed.append({"role": "tool", "name": r[1], "content": r[2], "call_id": f"c{i}"})
     def put(path, data):
-        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}/v1/fs/put?path={path}&overwrite=1", method="POST", data=data)
+        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}/v1/fs/put?path={path}&overwrite=1", method="POST", data=data, headers=cctx.headers())
         try:
-            return urllib.request.urlopen(req, context=cctx, timeout=30).status
+            return urllib.request.urlopen(req, context=tls, timeout=30).status
         except urllib.error.HTTPError as e:
             return e.code
 
@@ -641,14 +646,18 @@ try:
     if pem.returncode != 0:
         die("openssl cannot read root.p12: " + pem.stderr)
     open(f"{TE}/root.pem", "w").write(pem.stdout)
-    cctx = ssl.create_default_context(cafile=f"{TE}/ca.pem")
-    cctx.check_hostname = False
-    cctx.load_cert_chain(f"{TE}/root.pem")
+    # root signs in with the key from the gate, like the web app (no client certificate in TLS)
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "integration"))
+    import webbus
+    root = webbus.Cred(f"{TE}/root.pem", port=WEB_PORT)
+    nctx = webbus.noverify()
+    cctx = root  # what dream_stage takes for requests as root
 
-    def get(path, ctx=cctx, method="GET"):
-        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}{path}", method=method, data=b"{}" if method == "POST" else None)
+    def get(path, auth=True, method="GET"):
+        headers = dict(root.headers()) if auth else ({"Origin": root.origin()} if method == "POST" else {})
+        req = urllib.request.Request(f"https://127.0.0.1:{WEB_PORT}{path}", method=method, data=b"{}" if method == "POST" else None, headers=headers)
         try:
-            r = urllib.request.urlopen(req, context=ctx, timeout=20)
+            r = urllib.request.urlopen(req, context=nctx, timeout=20)
             return r.status, r.read()
         except urllib.error.HTTPError as e:
             return e.code, e.read()
@@ -656,13 +665,14 @@ try:
     end = time.time() + 20 * 60
     while True:
         try:
+            root.cookie = None
             st, body = get("/v1/whoami")
             if st == 200:
                 break
         except Exception:
             pass
         if time.time() > end:
-            die("bia's web app did not answer with root's certificate")
+            die("bia's web app did not let root sign in with the key from the gate")
         time.sleep(5)
     say("bia is up: " + body.decode()[:120])
     errs = []
@@ -672,19 +682,17 @@ try:
         if not ok:
             errs.append(msg)
 
-    want(json.loads(body).get("identity") == "root", "root's certificate from the gate works (identity root)")
-    nctx = ssl.create_default_context(cafile=f"{TE}/ca.pem")
-    nctx.check_hostname = False
-    st, _ = get("/v1/pki/bootstrap/root", ctx=nctx, method="POST")
+    want(json.loads(body).get("identity") == "root", "root's key from the gate signs in (identity root)")
+    st, _ = get("/v1/pki/bootstrap/root", auth=False, method="POST")
     want(st == 409, f"first-time root certificate route is closed (HTTP {st})")
-    st, ca_now = get("/v1/pki/ca", ctx=nctx)
+    st, ca_now = get("/v1/pki/ca", auth=False)
     want(hashlib.sha256(ssl.PEM_cert_to_DER_cert(ca_now.decode())).hexdigest() == fp, "bia serves the CA the takeover made")
     sc = subprocess.run(["openssl", "s_client", "-connect", f"127.0.0.1:{WEB_PORT}", "-showcerts"],
                         input="", capture_output=True, text=True, timeout=30)
     chain = re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", sc.stdout, re.S)
-    want(len(chain) == 2 and hashlib.sha256(ssl.PEM_cert_to_DER_cert(chain[1])).hexdigest() == fp,
-         f"the web app sends the full chain: server certificate, then the CA ({len(chain)} certificate(s))")
-    st, agent = get("/v1/pki/agent", ctx=nctx)
+    want(len(chain) == 1 and hashlib.sha256(ssl.PEM_cert_to_DER_cert(chain[0])).hexdigest() != fp,
+         f"a private address gets bia's own self-signed certificate, not the CA ({len(chain)} certificate(s))")
+    st, agent = get("/v1/pki/agent", auth=False)
     want(st == 200 and json.loads(agent).get("name") == ("te-bia" if not DEPLOY else json.loads(agent).get("name") or "?"),
          "agent name from the config, agent CSR published")
 
@@ -723,10 +731,11 @@ try:
 
     def shell(line, timeout=180):
         """Type line into root's shell (/ws/shell); its output and exit status."""
-        s = cctx.wrap_socket(socket.create_connection(("127.0.0.1", WEB_PORT), timeout=30))
+        s = nctx.wrap_socket(socket.create_connection(("127.0.0.1", WEB_PORT), timeout=30))
         key = base64.b64encode(os.urandom(16)).decode()
-        s.sendall(f"GET /ws/shell?rows=50&cols=400 HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
+        auth = "".join(f"{k}: {v}\r\n" for k, v in root.headers().items())
+        s.sendall(f"GET /ws/shell?rows=50&cols=400 HTTP/1.1\r\nHost: 127.0.0.1:{WEB_PORT}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n{auth}\r\n".encode())
         buf = b""
         while b"\r\n\r\n" not in buf:
             c = s.recv(4096)
@@ -783,27 +792,13 @@ try:
     # web presence: the model hears when root's web app opens and closes, once each, not
     # for a second tab or a quick reconnect (bia-mcp-web bus.rs web_opened/web_closed)
     def ws_chat():
-        s = cctx.wrap_socket(socket.create_connection(("127.0.0.1", WEB_PORT), timeout=30))
-        key = base64.b64encode(os.urandom(16)).decode()
-        s.sendall(f"GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
-        head = b""
-        while b"\r\n\r\n" not in head:
-            c = s.recv(4096)
-            if not c:
-                die("/ws closed during the handshake")
-            head += c
-        if b" 101 " not in head.split(b"\r\n")[0]:
-            die("/ws: " + head.decode(errors="replace")[:200])
-        return s
+        """A web app tab: signs in on /ws and keeps pinging (a second one for root is refused)."""
+        return webbus.Session(WEB_PORT, root, rx=None)
 
-    def ws_close(s):
-        mask = os.urandom(4)
-        try:
-            s.sendall(bytes([0x88, 0x80]) + mask)
-            s.close()
-        except OSError:
-            pass
+    def ws_close(t):
+        """The tab goes away without a goodbye (a dropped connection)."""
+        t.closed = True  # stops its pings
+        t.ws.close()
 
     def conversation():
         st, b = fsget("/home/bia/files/state/conversation.json")
@@ -818,7 +813,7 @@ try:
         return False
 
     tab1 = ws_chat()
-    want(wait_conv(r"\[web open\] root opened the web app", 240), "the model hears that root opened the web app")
+    want(wait_conv(r"\[web open\] root connected to their web chat", 240), "the model hears that root opened the web app")
     tab2 = ws_chat()          # a second tab
     time.sleep(3)
     ws_close(tab1)            # one of two tabs closes
@@ -831,7 +826,7 @@ try:
     want(len(re.findall(r"\[web open\] root", conv)) == 1 and "[web closed] root" not in conv,
          "a second tab and a quick reconnect are not reported")
     ws_close(tab3)            # closed for good
-    want(wait_conv(r"\[web closed\] root closed the web app", 240), "the model hears that root closed the web app (after the grace)")
+    want(wait_conv(r"\[web closed\] root left their web chat", 240), "the model hears that root closed the web app (after the grace)")
     conv = conversation()
     want(len(re.findall(r"\[web open\] root", conv)) == 1 and len(re.findall(r"\[web closed\] root", conv)) == 1,
          "exactly one open and one close notice")

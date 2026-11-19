@@ -1,0 +1,19 @@
+[Unit]
+Description=Size the swap file to half of the RAM when the disk has room
+# after bia-grow: on a first boot the root filesystem is only as large as the OS until then
+After=local-fs.target bia-grow.service swap.target
+Before=bia-update.service bia.service
+Conflicts=shutdown.target
+ConditionPathExists=/usr/local/sbin/bia-swap
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/bia-swap
+# making a large file on a slow USB stick takes a while
+TimeoutStartSec=15min
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

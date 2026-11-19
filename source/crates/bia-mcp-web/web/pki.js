@@ -82,9 +82,10 @@ const BiaPki = (() => {
   const pemCerts = text => [...text.matchAll(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g)]
     .map(m => Uint8Array.from(atob(m[1].replace(/\s+/g, '')), c => c.charCodeAt(0)));
 
-  /** New P-256 key pair and a PKCS#10 CSR for it. The server ignores the subject. */
-  async function makeCsr(cn) {
-    const key = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  /** New P-256 key pair and a PKCS#10 CSR for it. The server ignores the subject.
+   *  `extractable: false` keeps the private key inside the browser for good (sign-in keys). */
+  async function makeCsr(cn, { extractable = true } = {}) {
+    const key = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, extractable, ['sign', 'verify']);
     const spki = new Uint8Array(await subtle.exportKey('spki', key.publicKey));
     const name = seq(set(seq(oid(OID.cn), utf8(cn || 'bia'))));
     const info = seq(int(0), name, spki, Uint8Array.of(0xa0, 0x00));

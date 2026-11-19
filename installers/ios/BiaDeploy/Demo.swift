@@ -9,7 +9,7 @@ import Foundation
 extension DeployModel {
     func demo(_ scene: String, appDir: URL) {
         let host = "203.0.113.10"
-        if ["chat", "call", "attach"].contains(scene) {
+        if scene == "chat" {
             let demo = "localhost:18443"
             chat = ChatTarget(host: demo, folder: appDir.appendingPathComponent("servers/\(demo)").path, path: "/?demo=\(scene)", shown: host)
             return

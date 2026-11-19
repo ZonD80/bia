@@ -613,61 +613,21 @@ mod tests {
         (crate::pem_to_cert_ders(&chain).unwrap(), key, meta.serial)
     }
 
-    /// TLS handshake in memory between `server` and a client presenting `cert`.
+    /// What a server checks for a client that signs in with `cert` (no TLS client
+    /// certificates since 2.3.0; the chain comes in the sign-in).
+    struct Seen(Option<Vec<rustls::pki_types::CertificateDer<'static>>>);
+
+    impl Seen {
+        fn peer_certificates(&self) -> Option<&[rustls::pki_types::CertificateDer<'static>]> {
+            self.0.as_deref()
+        }
+    }
+
     fn handshake(
-        server: &Pki,
-        cert: Option<(
-            Vec<rustls::pki_types::CertificateDer<'static>>,
-            &rcgen::KeyPair,
-        )>,
-    ) -> rustls::ServerConnection {
-        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
-        crate::install_crypto_provider();
-        let ip: std::net::IpAddr = "127.0.0.1".parse().unwrap();
-        server.ensure_server_sans(&[ip]).unwrap();
-        let mut roots = rustls::RootCertStore::empty();
-        for c in crate::pem_to_cert_ders(&server.ca_pem().unwrap()).unwrap() {
-            roots.add(c).unwrap();
-        }
-        let b = rustls::ClientConfig::builder().with_root_certificates(roots);
-        let cfg = match cert {
-            Some((chain, key)) => {
-                let der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
-                b.with_client_auth_cert(chain, der).unwrap()
-            }
-            None => b.with_no_client_auth(),
-        };
-        let mut c = rustls::ClientConnection::new(
-            std::sync::Arc::new(cfg),
-            ServerName::IpAddress(ip.into()),
-        )
-        .unwrap();
-        let mut s = rustls::ServerConnection::new(server.server_config().unwrap()).unwrap();
-        for _ in 0..20 {
-            let mut buf = vec![];
-            while c.wants_write() {
-                c.write_tls(&mut buf).unwrap();
-            }
-            if !buf.is_empty() {
-                s.read_tls(&mut buf.as_slice()).unwrap();
-                s.process_new_packets()
-                    .expect("server accepts the handshake");
-            }
-            let mut buf = vec![];
-            while s.wants_write() {
-                s.write_tls(&mut buf).unwrap();
-            }
-            if !buf.is_empty() {
-                c.read_tls(&mut buf.as_slice()).unwrap();
-                c.process_new_packets()
-                    .expect("client accepts the handshake");
-            }
-            if !c.is_handshaking() && !s.is_handshaking() && !c.wants_write() {
-                break;
-            }
-        }
-        assert!(!s.is_handshaking(), "handshake did not finish");
-        s
+        _server: &Pki,
+        cert: Option<(Vec<rustls::pki_types::CertificateDer<'static>>, &rcgen::KeyPair)>,
+    ) -> Seen {
+        Seen(cert.map(|(c, _)| c))
     }
 
     #[test]
@@ -705,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_client_cert_passes_tls_and_is_refused_by_check_client() {
+    fn foreign_client_cert_is_refused_by_check_client() {
         let (a, dir_a) = temp_pki("cc-a");
         let (b, dir_b) = temp_pki("cc-b");
 
@@ -714,7 +674,7 @@ mod tests {
         let id = a.check_client(s.peer_certificates()).unwrap().unwrap();
         assert_eq!(id.identity, "alice");
 
-        // another bia's certificate: handshake succeeds, check_client says why and whose it is
+        // another bia's certificate: check_client says why and whose it is
         let (foreign, foreign_key, _) = client_of(&b, "bob");
         let s = handshake(&a, Some((foreign, &foreign_key)));
         let p = a.check_client(s.peer_certificates()).unwrap_err();

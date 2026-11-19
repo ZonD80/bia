@@ -569,12 +569,15 @@ mod tests {
                         break;
                     }
                 }
-                let who = b.check_client_from(conn.peer_certificates(), Some(peer));
+                let exporter = conn
+                    .export_keying_material([0u8; 32], crate::signin::EXPORTER_LABEL, None)
+                    .unwrap();
                 let mut tls = rustls::StreamOwned::new(conn, tcp);
                 let mut rd = BufReader::new(&mut tls);
                 let mut line = String::new();
                 rd.read_line(&mut line).unwrap();
                 let mut len = 0;
+                let mut auth = String::new();
                 loop {
                     let mut h = String::new();
                     rd.read_line(&mut h).unwrap();
@@ -584,11 +587,16 @@ mod tests {
                     if let Some(v) = h.to_ascii_lowercase().strip_prefix("content-length:") {
                         len = v.trim().parse().unwrap();
                     }
+                    if h.to_ascii_lowercase().starts_with("authorization:") {
+                        auth = h.split_once(':').unwrap().1.trim().to_string();
+                    }
                 }
                 let mut body = vec![0u8; len];
                 rd.read_exact(&mut body).unwrap();
                 let mut parts = line.split_whitespace();
                 let (m, path) = (parts.next().unwrap().to_string(), parts.next().unwrap().to_string());
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+                let who = b.verify_request(&auth, &m, &path, &exporter, now, Some(peer));
                 let (code, out) = match (m.as_str(), path.as_str()) {
                     ("GET", "/v1/pki/ca") => (200, b.ca_pem().unwrap()),
                     ("GET", "/v1/pki/agent") => (200, json!({"name": b.agent_name(), "csr": b.agent_csr().unwrap()}).to_string()),
@@ -604,7 +612,7 @@ mod tests {
                         }
                     }
                     ("GET", "/whoami") => match &who {
-                        Ok(Some(id)) => (200, id.identity.clone()),
+                        Ok(id) => (200, id.identity.clone()),
                         _ => (401, "no".into()),
                     },
                     ("GET", p) if p.ends_with("/cert") => {
@@ -642,9 +650,13 @@ mod tests {
         let (ca, cert, key) = a.peer_tls(&b_name).unwrap();
         let r = client::request(&url, "GET", "/whoami", None, ServerTrust::Ca(&ca), Some((&cert, &key))).unwrap();
         assert_eq!((r.status, r.text()), (200, a.agent_name()));
-        // the link connects with the same files
-        let (conn, _tcp) = client::connect(&url, ServerTrust::Ca(&ca), Some((&cert, &key))).unwrap();
+        // without the identity: refused
+        let r = client::request(&url, "GET", "/whoami", None, ServerTrust::Ca(&ca), None).unwrap();
+        assert_eq!(r.status, 401);
+        // the link connects (TLS 1.3, so there is a channel binding)
+        let (conn, _tcp) = client::connect(&url).unwrap();
         assert!(!conn.is_handshaking());
+        assert!(client::exporter(&conn).is_ok());
         // B keeps A as a peer with the address A saw itself at
         let back = b_check.peer(&a.agent_name()).unwrap();
         assert_eq!(back.url, "https://127.0.0.1:8443");

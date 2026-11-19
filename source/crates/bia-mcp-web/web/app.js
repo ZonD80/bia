@@ -400,43 +400,118 @@ const chatTitle = id => (S.chats.get(id) || {}).title || (id === 'main' ? 'bia' 
 const isMine = m => m.from !== 'bia';
 
 // ======================================================================
-// start: client certificate or onboarding
+// start: this browser's key (keys.js) or the no-key page
 // ======================================================================
+async function whoami() {
+  try { const r = await fetch('/v1/whoami', { credentials: 'same-origin', cache: 'no-store' }); if (r.ok) return r.json(); } catch {}
+  return null;
+}
+
 (async function boot() {
-  let who = null;
-  try { const r = await fetch('/v1/whoami', { credentials: 'include' }); if (r.ok) who = await r.json(); } catch {}
+  // bia cloud's first access: the .biaconfig comes in the link, the password is typed here
+  const fromLink = BiaKeys.fromHash();
+  if (fromLink) { showBoot({ file: fromLink, name: 'the link' }); return; }
+  // a link bia sent may carry a one-time key for a browser that has none
+  const token = BiaKeys.enrollToken();
+  let who = await whoami(), problem = null;
+  if (!who) {
+    try {
+      if (await BiaKeys.current()) { await BiaKeys.signin(); who = await whoami(); }
+    } catch (e) { problem = e; }
+  }
+  if (!who && token) {
+    try { await BiaKeys.enrollWithToken(token); who = await whoami(); problem = null; }
+    catch (e) { problem = e; }
+  }
   if (who && who.identity) start(who);
-  else showBoot();
+  else showBoot({ problem });
 })();
 
-async function showBoot() {
+// The PKCS#12 reader is big and only this page needs it.
+let forgeLoading = null;
+function loadForge() {
+  if (window.forge) return Promise.resolve();
+  return forgeLoading = forgeLoading || new Promise((ok, no) => {
+    const s = document.createElement('script');
+    s.src = '/vendor/forge.min.js';
+    s.onload = ok; s.onerror = () => { forgeLoading = null; no(new Error('could not load the .p12 reader')); };
+    document.head.appendChild(s);
+  });
+}
+
+// An address only the local network reaches: the certificate there is bia's own.
+function onLanAddress() {
+  const host = location.hostname.replace(/^\[|\]$/g, '');
+  return /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|127\.)/.test(host)
+    || /^(fe80:|fc|fd|::1$)/i.test(host) || host === 'localhost';
+}
+
+async function showBoot({ problem = null, file = null, name = '' } = {}) {
   const box = $('#boot');
   box.hidden = false;
   let info = { root_issued: true, ca_sha256: '' };
   try { info = await GET('/v1/pki/bootstrap'); } catch {}
   const err = h('div', { class: 'err-line' });
+  const status = h('p', { class: 'muted' });
   const fp = (info.ca_sha256 || '').toUpperCase().match(/.{1,2}/g);
-  let p12 = null;
 
-  const issueBtn = h('button', { class: 'btn' }, ic('key'), 'Issue root certificate');
-  const dlBtn = h('button', { class: 'btn', hidden: true }, ic('download'), 'Download root.p12');
-  issueBtn.onclick = async () => {
-    err.textContent = ''; issueBtn.disabled = true;
+  // a password asked in the page itself (no browser dialog)
+  const pwBox = h('div', { class: 'pwask', hidden: true });
+  const askPassword = (kind, wrong) => new Promise(done => {
+    const input = h('input', { class: 'input', type: 'password', autocomplete: 'off', placeholder: `Password of the ${kind} file` });
+    const ok = h('button', { class: 'btn' }, 'Open');
+    const cancel = h('button', { class: 'btn ghost' }, 'Cancel');
+    const finish = v => { pwBox.hidden = true; set(pwBox); done(v); };
+    ok.onclick = () => finish(input.value);
+    cancel.onclick = () => finish(null);
+    input.onkeydown = e => { if (e.key === 'Enter') finish(input.value); };
+    set(pwBox, h('p', null, wrong ? 'That password does not open it. Try again:' : `This ${kind} file is locked with a password:`),
+      h('div', { class: 'row' }, input, ok, cancel));
+    pwBox.hidden = false;
+    input.focus();
+  });
+
+  const why = e => ({
+    other_ca: 'This file belongs to another bia, not to this one.',
+    expired: 'The certificate in this file has expired. Ask root for a new one.',
+    revoked: 'The certificate in this file was revoked on this bia. Ask root for a new one.',
+    wrong_source: 'This certificate only works from another network address.',
+    clock: 'This computer\'s clock is off by more than five minutes. Fix the time and try again.',
+    link: 'The key in this link was already used or has lapsed (links work once, for 10 minutes). Ask bia for a new link.',
+  }[e && e.kind] || (e && e.message) || String(e));
+
+  async function bring(bytes, what) {
+    err.textContent = '';
+    set(status, `Opening ${what}…`);
     try {
-      const r = await fetch('/v1/pki/bootstrap/root', { method: 'POST' });
-      if (r.status === 409) { err.textContent = 'A root certificate was already issued. Use a pickup link from the machine.'; return; }
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      p12 = await r.blob();
-      issueBtn.hidden = true; dlBtn.hidden = false;
-      certStep.classList.add('done');
-      saveBlob(p12, 'root.p12');
-    } catch (e) { err.textContent = 'Could not issue: ' + e.message; }
-    finally { issueBtn.disabled = false; }
-  };
-  dlBtn.onclick = () => p12 && saveBlob(p12, 'root.p12');
+      await loadForge(); // also for the .p12 inside a .biaconfig
+      const who = await BiaKeys.importFile(bytes, askPassword);
+      if (!who) { set(status); return false; }
+      set(status, `Signed in as ${who.identity}. This browser now has a key of its own.`);
+      box.hidden = true;
+      start(await whoami() || who);
+      return true;
+    } catch (e) { set(status); err.textContent = why(e); return false; }
+  }
 
+  // drop or pick a .biaconfig / .p12
+  const picker = h('input', { type: 'file', accept: '.biaconfig,.p12,.pfx,application/x-pkcs12,application/x-biaconfig', hidden: true });
+  picker.onchange = async () => { const f = picker.files[0]; picker.value = ''; if (f) bring(new Uint8Array(await f.arrayBuffer()), f.name); };
+  const drop = h('div', { class: 'dropzone' }, ic('key'),
+    h('div', null, h('b', null, 'Drop your .biaconfig or .p12 here')),
+    h('div', { class: 'muted' }, 'or ', h('a', { href: '#', onclick: e => { e.preventDefault(); picker.click(); } }, 'choose the file'), '. It is opened in this page; the key in it is never sent anywhere.'),
+    picker);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = async e => {
+    e.preventDefault(); drop.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f) bring(new Uint8Array(await f.arrayBuffer()), f.name);
+  };
+
+  // a one-time pickup link root sent: the .p12 comes straight into this browser
   const pickIn = h('input', { class: 'input', placeholder: 'https://…/v1/pki/pickup/… or token' });
-  const pickBtn = h('button', { class: 'btn ghost' }, 'Get certificate');
+  const pickBtn = h('button', { class: 'btn ghost' }, 'Use link');
   pickBtn.onclick = async () => {
     err.textContent = '';
     const v = pickIn.value.trim();
@@ -444,27 +519,28 @@ async function showBoot() {
     if (!tok || !/^[A-Za-z0-9_-]+$/.test(tok)) { err.textContent = 'Paste the pickup link bia gave you.'; return; }
     try {
       const r = await fetch('/v1/pki/pickup/' + tok);
-      if (!r.ok) throw new Error(r.status === 404 ? 'link expired or already used' : 'HTTP ' + r.status);
-      saveBlob(await r.blob(), filenameOf(r, 'bia.p12'));
-      certStep.classList.add('done');
+      if (!r.ok) throw new Error(r.status === 404 ? 'the link expired or was already used' : 'HTTP ' + r.status);
+      bring(new Uint8Array(await r.arrayBuffer()), 'the pickup link');
     } catch (e) { err.textContent = 'Pickup failed: ' + e.message; }
   };
 
-  // "bia-5a3f2c agent CA" since 2.1.0; older bias all share "bia agent CA"
-  const caName = info.ca_name || 'bia agent CA';
-  // The browser presented a certificate this machine refused (another bia's, expired, revoked).
-  const bad = info.cert_problem;
-  const why = bad && ({
-    other_ca: 'was issued by another bia, not by this machine',
-    expired: 'has expired',
-    revoked: 'was revoked on this machine',
-    wrong_source: 'only works from another address than this browser’s',
-  }[bad.kind] || 'is not valid here');
-  const problemStep = bad ? h('div', { class: 'step problem' },
-    h('h2', null, ic('shield'), 'Wrong certificate selected'),
-    h('p', null, `The certificate “${bad.identity || 'unnamed'}” you picked ${why}.`),
-    h('p', null, 'Your browser remembers that choice for this site until it is fully restarted. Quit it completely (Chrome on macOS: ⌘Q; elsewhere close every window) or open this page in a private / Incognito window, then pick a certificate issued by this bia — its CA fingerprint is in step 2.'),
-    bad.kind === 'other_ca' ? h('p', null, `This bia's CA is “${caName}”. Bias set up before 2.1.0 all name theirs “bia agent CA”, so certificates of other machines are offered too; newer certificates also name the bia that issued them (“Identity: root · Fred”). Removing the ones you no longer use from your keychain or certificate store avoids picking them again.`) : null) : null;
+  // first-time setup: root's key is made here, brought into this browser, and saved once
+  const codeIn = h('input', { class: 'input', placeholder: 'Setup code from bia\'s screen', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  const issueBtn = h('button', { class: 'btn' }, ic('key'), 'Set up root');
+  issueBtn.onclick = async () => {
+    err.textContent = ''; issueBtn.disabled = true;
+    try {
+      const r = await fetch('/v1/pki/bootstrap/root', { method: 'POST', body: JSON.stringify({ code: codeIn.value.trim() }), headers: { 'Content-Type': 'application/json' } });
+      if (r.status === 409) { err.textContent = 'Root was already set up. Bring root\'s .biaconfig or .p12 here.'; return; }
+      if (r.status === 403 || r.status === 429) { err.textContent = await r.text(); return; }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      // the only copy outside this browser: root keeps it (password 12345678)
+      saveBlob(new Blob([bytes], { type: 'application/x-pkcs12' }), 'bia-root.p12');
+      await bring(bytes, 'root\'s new key');
+    } catch (e) { err.textContent = 'Could not set up root: ' + e.message; }
+    finally { issueBtn.disabled = false; }
+  };
 
   const agentsStep = h('div', { class: 'step agents' },
     h('h2', null, ic('info'), 'AI agent? Read AGENTS.md first'),
@@ -472,44 +548,35 @@ async function showBoot() {
       h('a', { href: '/AGENTS.md', target: '_blank' }, '/AGENTS.md'),
       ' says how to get it from this bia and ask its owner for access.'));
 
-  const certStep = h('div', { class: 'step' },
-    h('h2', null, h('span', { class: 'num' }, '1'), 'Get your certificate'),
+  const keyStep = h('div', { class: 'step' },
+    h('h2', null, ic('key'), 'Sign in with your key'),
     info.root_issued
-      ? h('p', null, 'Access needs a personal client certificate. Ask root (or bia on the machine: /pki issue <name>) for a one-time pickup link, valid 15 minutes.')
-      : h('p', null, 'First-time setup: no root certificate exists yet. Issue it here — the file stays only in this tab until you download it. Its password is 12345678.'),
-    !info.root_issued ? h('div', { class: 'actions' }, issueBtn, dlBtn) : null,
+      ? h('p', null, 'Bring the .biaconfig or .p12 file root gave you, or paste a pickup link. This browser then makes a key of its own and keeps it, so next time you are in at once.')
+      : h('p', null, 'First-time setup: nobody has a key for this bia yet. Type the setup code bia shows on its own screen (its web line on the console), then set up root: bia makes root\'s key, this browser keeps a key of its own, and bia-root.p12 is saved as root\'s spare (password 12345678). Keep it safe: it opens this bia.'),
+    !info.root_issued ? h('div', { class: 'row', style: 'gap:8px' }, codeIn, issueBtn) : null,
+    drop, pwBox, status,
     h('div', { class: 'row', style: 'margin-top:10px' }, pickIn, pickBtn));
 
-  const importStep = h('div', { class: 'step' },
-    h('h2', null, h('span', { class: 'num' }, '2'), 'Import it, trust bia, reload'),
-    h('p', null, `Import the .p12 file into your browser or OS (password 12345678). It also holds this machine’s certificate authority, “${caName}”: trust it, so your browser recognises this machine without warnings. Check first that its fingerprint matches the one shown on the machine (/web on its console). Then reload this page and pick your certificate when asked.`),
-    fp ? h('div', { class: 'fp' }, 'SHA-256 ' + fp.join(':')) : null,
-    h('div', { class: 'actions' },
-      h('a', { class: 'btn ghost', href: '/v1/pki/ca?format=der', download: 'bia-ca.cer' }, ic('download'), 'Download CA certificate')),
-    h('p', { class: 'muted', style: 'font-size:13px' }, 'The CA alone gives no access: it only lets this browser or app recognise this machine. Install it to trust bia before you have a .p12, or where only the CA is needed.'),
-    howto('How to import and trust', [
-      ['macOS', `Double-click the .p12 → login keychain → password 12345678. In Keychain Access double-click “${caName}” → Trust → “Always Trust”. Chrome and Safari use both.`],
-      ['Windows', `Double-click the .p12 → Current User → password 12345678 → automatic store; confirm the security warning that installs “${caName}”.`],
-      ['Linux (Chrome)', `chrome://settings/certificates → Your certificates → Import the .p12; then Authorities → “${caName}” → Edit → trust it for websites.`],
-      ['Firefox', `Settings → Privacy & Security → Certificates → View Certificates → Your Certificates → Import; then Authorities → “${caName}” → Edit Trust → identify websites.`],
-      ['iPhone / iPad', `Open the .p12 in Safari → Settings → Profile Downloaded → Install; then Settings → General → About → Certificate Trust Settings → enable “${caName}”.`],
-      ['Android', `Settings → Security → Encryption & credentials → Install a certificate → VPN & app user certificate → the .p12 (it installs “${caName}” too).`],
-    ]),
-    h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => location.reload() }, ic('refresh'), 'Reload')));
+  const lanStep = onLanAddress() ? h('div', { class: 'step' },
+    h('h2', null, ic('shield'), 'A local address'),
+    h('p', null, 'On this network address the browser cannot check that it talks to this bia (it warned you about the certificate). Someone on the same network could listen in. Use bia\'s public address or hostname when you can.'),
+    fp ? h('div', { class: 'fp' }, 'bia\'s identity: SHA-256 ' + fp.join(':')) : null) : null;
+
+  const problemStep = problem && problem.kind !== 'nokey' ? h('div', { class: 'step problem' },
+    h('h2', null, ic('shield'), 'This browser\'s key did not work'),
+    h('p', null, why(problem)),
+    h('div', { class: 'actions' }, h('button', { class: 'btn ghost', onclick: async () => { await BiaKeys.forget(); location.reload(); } }, 'Forget it'))) : null;
 
   set(box, h('div', { class: 'wrap' },
     biaImg({ class: 'logo' }),
     h('h1', null, 'bia'),
-    h('div', { class: 'sub' }, 'This machine talks to you over HTTPS with client certificates. Two steps to get in.'),
-    agentsStep, problemStep, certStep, importStep, err,
+    h('div', { class: 'sub' }, 'Sign in with the key you were given.'),
+    agentsStep, problemStep, keyStep, lanStep, err,
     h('p', { class: 'muted', style: 'text-align:center;font-size:13px' },
       h('a', { href: '/openapi.yaml', target: '_blank' }, 'OpenAPI'), ' · ',
       h('a', { href: '/AGENTS.md', target: '_blank' }, 'AGENTS.md'), ' · ',
       h('a', { href: '/.well-known/bia.json', target: '_blank' }, 'Discovery'))));
-}
-function howto(title, rows) {
-  return h('details', { class: 'howto' }, h('summary', null, title),
-    h('ul', null, rows.map(([k, v]) => h('li', null, h('b', null, k + ': '), v))));
+  if (file) bring(file, name || 'the file');
 }
 
 async function start(who) {
@@ -522,6 +589,8 @@ async function start(who) {
   route();
   if (S.root) { pollTasks(); setInterval(pollTasks, 4000); pollStatus(); setInterval(pollStatus, 5000); pollQr(); setInterval(pollQr, 3000); }
   if (who.days_left !== undefined && who.days_left < 30) toast(`Your certificate expires in ${who.days_left} days — renew it in Settings`, true);
+  // the session cookie lasts an hour: sign in again with this browser's key well before
+  setInterval(() => BiaKeys.signin().catch(() => {}), 25 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRead(); updateTitle(); sendActive(); });
   window.addEventListener('focus', () => { maybeRead(); sendActive(); });
   // focus moving into an iframe (display, task pages) blurs the window but keeps the tab in front
@@ -568,6 +637,9 @@ function connect() {
   S.link = BiaLink.create({
     identity: S.me.identity,
     onHello, onFrame: onEvent, onReset, onUpload, onOutbox,
+    // sign in on the socket with this browser's key
+    auth: async ch => { const rec = await BiaKeys.current(); return rec ? BiaKeys.auth(rec, ch.nonce, (await BiaKeys.challenge()).ca_sha256) : null; },
+    onSignedOut: () => { toast('bia no longer accepts this browser\'s key', true); setTimeout(() => location.reload(), 3000); },
     onState: st => { S.linkState = st; S.wsOk = st === 'online'; setConn(); },
     onMoved: (url, port) => {
       S.movedTo = url;
@@ -582,7 +654,7 @@ function connect() {
         title: 'bia moved its web app',
         body: h('div', {}, h('p', {}, 'It now answers on another port, so this address stopped working:'),
           h('p', {}, h('a', { href: url }, url.replace(/^(https:\/\/[^/]+).*/, '$1'))),
-          h('p', { class: 'muted' }, 'It is ready there in a few seconds. The browser asks for your certificate again; a saved bookmark or home-screen app needs the new address.')),
+          h('p', { class: 'muted' }, 'It is ready there in a few seconds. A new address is a new site for the browser: bring your .biaconfig or .p12 there once. A saved bookmark or home-screen app needs the new address.')),
         buttons: [{ text: 'Later', value: false }, { text: 'Open it', primary: true, cls: 'primary', onClick: () => { location.href = url; } }],
       });
     },
@@ -3047,14 +3119,17 @@ async function loadPeers() {
   } catch (e) { set(box, e.message); }
 }
 async function renewCert() {
-  if (!await confirmBox({ title: 'Renew certificate?', body: 'This browser makes a new key, sends bia only a signing request, and saves a new .p12 (password 12345678). The key never leaves this computer. The current certificate is revoked right away, so import the new one before reloading.' }, 'Renew')) return;
+  if (!await confirmBox({ title: 'Renew certificate?', body: 'This browser makes a new key, sends bia only a signing request and keeps the new certificate. The key never leaves this browser. The current certificate is revoked right away.' }, 'Renew')) return;
   try {
-    const { csr, key } = await BiaPki.makeCsr(S.me.identity);
+    const { csr, key } = await BiaPki.makeCsr(S.me.identity, { extractable: false });
     const r = await http('POST', '/v1/pki/renew', { csr }, true);
     if (!r.ok) throw new Error(await r.text());
-    const der = await BiaPki.p12(key, await r.text(), `${S.me.identity} (bia)`);
-    saveBlob(new Blob([der], { type: 'application/x-pkcs12' }), `${S.me.identity}-bia.p12`);
-    modal({ title: 'New certificate downloaded', body: h('p', null, `Import the .p12 into your browser or OS (password ${BiaPki.PASSWORD}), remove the old one, then reload this page.`), buttons: [{ text: 'Reload now', primary: true, onClick: () => location.reload() }, { text: 'Later', value: 0 }] });
+    const chain = BiaPki.pemCerts(await r.text()).map(BiaKeys.b64u);
+    const old = await BiaKeys.current();
+    await BiaKeys.save(Object.assign({}, old || {}, { key: key.privateKey, chain, identity: S.me.identity, serial: r.headers.get('X-Bia-Serial') || '', not_after: Number(r.headers.get('X-Bia-Not-After') || 0) }));
+    await BiaKeys.signin();
+    toast('Renewed: this browser signs in with its new key');
+    setTimeout(() => location.reload(), 1200);
   } catch (e) { toast(e.message, true); }
 }
 

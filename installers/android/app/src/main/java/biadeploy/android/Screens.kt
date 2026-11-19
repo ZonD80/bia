@@ -1,11 +1,9 @@
 package biadeploy.android
 
 import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import android.security.KeyChain
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,7 +45,7 @@ import uniffi.bia_deploy_mobile.p12Password
 import java.io.File
 
 /** bia's blue, as in the desktop app: what buttons are filled with, under white text. */
-private val Accent = Color(0xFF265CA0)
+internal val Accent = Color(0xFF265CA0)
 private val Good = Color(0xFF28A046)
 
 @Composable
@@ -456,7 +454,7 @@ private fun InstalledStep(m: DeployModel) {
                 }
                 if (m.land) Text("It waits at $host for your bia. Tell your bia: fly to $host with land secret ${m.secret}")
                 else {
-                    d.folder?.let { folder -> Primary("Open bia's chat") { m.chat = ChatTarget(host, folder) } }
+                    d.folder?.let { folder -> Primary("Open bia in browser") { m.chat = ChatTarget(host, folder) } }
                     TextButton({ open(context, url) }) { Text("Open in a browser instead") }
                 }
             }
@@ -486,11 +484,6 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
         confirmButton = { TextButton({ removing = false; m.forget(folder) }) { Text("Remove", color = MaterialTheme.colorScheme.error) } },
         dismissButton = { TextButton({ removing = false }) { Text("Cancel") } },
     )
-    var caSaved by remember { mutableStateOf(false) }
-    val saveCa = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-x509-ca-cert")) { uri ->
-        uri ?: return@rememberLauncherForActivityResult
-        runCatching { context.contentResolver.openOutputStream(uri)!!.use { it.write(File(folder, "ca.crt").readBytes()) } }.onSuccess { caSaved = true }
-    }
     val saveP12 = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-pkcs12")) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         runCatching { context.contentResolver.openOutputStream(uri)!!.use { it.write(File(folder, "bia-root.p12").readBytes()) } }
@@ -501,10 +494,8 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
             Title(name.ifEmpty { "bia at $host" })
             if (name.isNotEmpty()) Weak(host)
             Weak("key saved " + java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM).format(java.util.Date(savedAt.toLong() * 1000)))
-            Primary("Open chat") { m.chat = ChatTarget(host, folder) }
-            Weak("For a browser:")
+            Primary("Open in browser") { m.chat = ChatTarget(host, folder, name = name) }
             Buttons {
-                OutlinedButton({ installKey(context, folder, host) }) { Text("Install") }
                 OutlinedButton({ share(context, folder, host) }) { Text("Share…") }
                 OutlinedButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
             }
@@ -515,34 +506,17 @@ private fun KeyCard(m: DeployModel, folder: String, host: String, savedAt: ULong
     }
     Card {
         Title("bia's key")
-        Text("bia-$host.p12 is root's certificate: the only way into this bia. Keep a copy somewhere safe (password ${p12Password()}).")
-        Weak("bia's chat in this app uses it by itself. The steps below are for a browser on this phone.")
-        Text("1. Install it, so the browser can show it to bia:", fontWeight = FontWeight.SemiBold)
-        OutlinedButton({ installKey(context, folder, host) }) { Text("Install bia's key") }
-        Text("2. Trust bia's certificate authority, so the browser opens bia without a warning:", fontWeight = FontWeight.SemiBold)
-        Weak("Android lets apps only hand it over: save it, then in Settings › Security › Encryption & credentials › Install a certificate › CA certificate, pick the saved file.")
-        Buttons {
-            OutlinedButton({ saveCa.launch("bia-$host-ca.crt") }) { Text(if (caSaved) "Saved ✔" else "Save it") }
-            OutlinedButton({
-                try { context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS)) } catch (_: ActivityNotFoundException) {}
-            }) { Text("Open Settings") }
-        }
+        Text("bia-$host.p12 is root's key: the only way into this bia. Keep a copy somewhere safe (password ${p12Password()}).")
+        Weak("Open in browser hands it to your browser with a password this app shows; the browser then keeps a key of its own. Nothing to install.")
+        Primary("Open in browser") { m.chat = ChatTarget(host, folder) }
         Buttons {
             OutlinedButton({ share(context, folder, host) }) { Text("Share bia's key…") }
             OutlinedButton({ saveP12.launch("bia-$host.p12") }) { Text("Save a copy…") }
         }
-        Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); it asks for the password above when it is installed.")
+        Weak("Share sends bia-$host.p12 to a computer or another phone (mail, Nearby Share, a chat to yourself); there, drop it on bia's page in a browser. A browser's \"choose file\" on this phone also offers bia deploy, which hands it bia's key.")
         OutlinedButton({ exporting = true }) { Text("Share as .biaconfig…") }
-        Weak("A .biaconfig also carries bia's address and is locked with its own password: another bia app opens it and gets the chat.")
+        Weak("A .biaconfig also carries bia's address and is locked with its own password: bia's page and another bia app open it.")
     }
-}
-
-/** bia's key into Android's credential store, for the browser to show to bia. */
-private fun installKey(context: android.content.Context, folder: String, host: String) {
-    val i = KeyChain.createInstallIntent()
-        .putExtra(KeyChain.EXTRA_PKCS12, File(folder, "bia-root.p12").readBytes())
-        .putExtra(KeyChain.EXTRA_NAME, "bia $host")
-    runCatching { context.startActivity(i) }
 }
 
 /** bia's key (and its CA) to the share sheet: copies named after the host, from the cache. */

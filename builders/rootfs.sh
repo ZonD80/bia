@@ -150,6 +150,7 @@ echo "== systemd enable"
 in_chroot systemctl enable bia-esp-id.service
 in_chroot systemctl enable bia-hostname.service
 in_chroot systemctl enable bia-grow.service
+in_chroot systemctl enable bia-swap.service
 in_chroot systemctl enable bia-seed.service
 in_chroot systemctl enable bia-net.service
 in_chroot systemctl enable bia-net-fallback.service
