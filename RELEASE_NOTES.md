@@ -5,12 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
-## 2.3.1
+## 2.3.2
 
 ### Changes
 - bia now hears every time a key is made without it: a browser making its own key after a .biaconfig or .p12 is dropped on bia's page, someone signing up with a link bia sent, a key being renewed, or root being set up. Before, these new certificates appeared in bia's list unannounced, and bia could take a person's own browser for an intruder.
 - bia's list of certificates (and web Settings → Certificates) shows where each such certificate came from: which file or certificate it was made with, the browser and the address.
 - Revoking a certificate now says which browser keys were made with it and still work, so "remove this key" can mean the file, the browser, or both, as the person wants.
+- Revoking a certificate now closes everything open with it at once: its chat, and any open root shell, console, screen view or call. Before, the chat closed within half a minute and an open shell or screen stayed open.
+- Renewing a key no longer cuts its connection, including the link between two bias that renew the certificate they hold from each other; before, a renewal could look like lost trust and stop that link for good.
 
 ### For bia
 - A `[web key]` notice about a new certificate needs no reply; act only if that person says they did not do it.

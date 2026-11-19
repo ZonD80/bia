@@ -930,8 +930,19 @@ impl Pki {
             csr_pem,
             &from,
         )?;
+        // the new one is a renewal of the old: a live link signed in with the old one is not
+        // cut as "revoked" (the web MCP's sweep checks this), it moves on its next connection
+        let _ = self.annotate(&meta.serial, "renewal", &current.serial_hint, "");
         let _ = self.revoke(&current.serial_hint);
         Ok((pem, meta))
+    }
+
+    /// Whether `serial` was replaced by a renewal (not revoked to take access away).
+    pub fn renewed(&self, serial: &str) -> bool {
+        self.list_issued()
+            .unwrap_or_default()
+            .iter()
+            .any(|m| m.via == "renewal" && !m.parent.is_empty() && (m.parent == serial || serial.starts_with(&m.parent)))
     }
 
     /// Another certificate for `current`'s identity, role, trust and networks on a new key

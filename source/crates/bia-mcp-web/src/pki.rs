@@ -284,16 +284,17 @@ pub fn revoke(ctx: &Ctx, args: Value) -> Result<String, String> {
     let serial = bia_mcp::arg_str(&args, "serial")?.trim().to_string();
     let pki = Pki::load_or_create(&files_dir()).map_err(|e| format!("pki: {e:#}"))?;
     if pki.revoke(&serial).map_err(|e| format!("{e:#}"))? {
-        crate::session::end_serial(&serial);
+        let cut = crate::session::revoked(&serial);
         ctx.log(format!("revoked client cert {serial}"));
+        let closed = if cut > 0 { format!(" and closed {cut} open connection(s) signed in with it") } else { String::new() };
         // browsers that imported this certificate's file made keys of their own: they still work
         let kids = pki.children(&serial);
         if kids.is_empty() {
-            return Ok(format!("revoked {serial}"));
+            return Ok(format!("revoked {serial}{closed}"));
         }
         let list: Vec<String> = kids.iter().map(|k| format!("{} ({})", k.serial, k.device)).collect();
         Ok(format!(
-            "revoked {serial}. Browser keys made with it still work: {}. If the person wanted all of this access gone, revoke those too; if they only meant the file, leave them.",
+            "revoked {serial}{closed}. Browser keys made with it still work: {}. If the person wanted all of this access gone, revoke those too; if they only meant the file, leave them.",
             list.join(", ")
         ))
     } else {

@@ -343,4 +343,20 @@ mod tests {
         assert!(!files.join("state/pki/setup-code").exists());
         let _ = std::fs::remove_dir_all(&files);
     }
+
+    #[test]
+    fn a_renewal_is_told_from_a_revocation() {
+        let files = tmp("renewed");
+        let pki = Pki::load_or_create(&files).unwrap();
+        let (_, csr) = crate::new_key_csr("ann").unwrap();
+        let (_, m1) = pki.issue_csr("ann", "user", "normal", &csr).unwrap();
+        let cur = crate::ClientId { identity: "ann".into(), role: "user".into(), trust: "normal".into(), serial_hint: m1.serial.clone(), not_after: m1.not_after as i64 };
+        let (_, csr2) = crate::new_key_csr("ann").unwrap();
+        let (_, m2) = pki.renew_csr(&cur, &csr2).unwrap();
+        assert!(pki.is_revoked(&m1.serial) && pki.renewed(&m1.serial), "renewed, so its live link may stay");
+        let m2 = pki.issued_meta(&m2.serial).unwrap();
+        assert_eq!((m2.via.as_str(), m2.parent.as_str()), ("renewal", m1.serial.as_str()));
+        assert!(pki.revoke(&m2.serial).unwrap() && !pki.renewed(&m2.serial), "revoked on purpose: everything goes");
+        let _ = std::fs::remove_dir_all(&files);
+    }
 }

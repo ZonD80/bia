@@ -273,6 +273,33 @@ check(f is not None, f"and a rename: {f}")
 sa = Session(8443, alice, rx=None)
 check(sa.hello is not None and sa.hello.get("called") == "Milo", f"a new session gets the name in hello: {sa.hello and sa.hello.get('called')!r}")
 
+# revoking a certificate closes everything open with it, at once: its chat session and its shell
+import socket as _sock
+sh = noverify().wrap_socket(_sock.create_connection(("127.0.0.1", 8443), timeout=10), server_hostname="127.0.0.1")
+hdrs = "".join(f"{k}: {v}\r\n" for k, v in alice.headers().items())
+sh.sendall(f"GET /ws/shell?rows=20&cols=80 HTTP/1.1\r\nHost: 127.0.0.1:8443\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\nSec-WebSocket-Version: 13\r\n{hdrs}\r\n".encode())
+head = sh.recv(4096)
+check(b" 101 " in head.split(b"\r\n")[0], f"alice opens root's shell ({head[:30]!r})")
+s_, b_ = req("GET", "/v1/whoami", ctx=alice)
+alice_serial = json.loads(b_)["serial"]
+t0 = time.time()
+txt, err = tool("pki_revoke", serial=alice_serial)
+check(not err and "closed 2 open connection" in txt, f"revoke closes her connections: {txt[:120]}")
+check(sa.wait(lambda f: False, 3) is None and sa.bye == "revoked", f"her chat session is told and closed: {sa.bye}")
+sh.settimeout(3)
+gone = False
+try:
+    while True:
+        d = sh.recv(65536)
+        if not d:
+            gone = True
+            break
+except (OSError, _sock.timeout) as e:
+    gone = not isinstance(e, _sock.timeout)
+check(gone and time.time() - t0 < 5, f"her shell is cut at once ({time.time() - t0:.1f} s)")
+s_, _ = req("GET", "/v1/whoami", ctx=alice)
+check(s_ == 401, f"and her cookie no longer works ({s_})")
+
 # root has the web app moved to another port: whoever is connected is told where it went
 import socket
 with socket.socket() as sk:

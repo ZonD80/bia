@@ -80,7 +80,54 @@ pub fn end(token: &str) {
 /// End every session of a revoked certificate.
 pub fn end_serial(serial: &str) {
     let mut s = store().lock().unwrap();
-    s.sessions.retain(|_, (id, _)| id.serial_hint != serial);
+    s.sessions.retain(|_, (id, _)| !same_serial(&id.serial_hint, serial));
+}
+
+fn same_serial(a: &str, b: &str) -> bool {
+    !a.is_empty() && !b.is_empty() && (a == b || a.starts_with(b) || b.starts_with(a))
+}
+
+type Closer = Box<dyn Fn() + Send>;
+
+/// Open websockets a session opened (root's shell and console, the screen, a call): closed
+/// when their certificate is revoked. serial → (id, closer).
+fn sockets() -> &'static Mutex<Vec<(String, u64, Closer)>> {
+    static S: OnceLock<Mutex<Vec<(String, u64, Closer)>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Keeps a websocket in the list while it is open.
+pub struct Watched(u64);
+
+impl Drop for Watched {
+    fn drop(&mut self) {
+        sockets().lock().unwrap().retain(|(_, id, _)| *id != self.0);
+    }
+}
+
+/// Watch a websocket signed in with `serial`; `close` cuts it.
+pub fn watch(serial: &str, close: impl Fn() + Send + 'static) -> Watched {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    sockets().lock().unwrap().push((serial.to_string(), id, Box::new(close)));
+    Watched(id)
+}
+
+/// A certificate was revoked: its sessions end and everything open with it closes at once
+/// (cookie websockets here, its link on /ws). How many were cut.
+pub fn revoked(serial: &str) -> usize {
+    end_serial(serial);
+    let mut n = 0;
+    for (s, _, close) in sockets().lock().unwrap().iter() {
+        if same_serial(s, serial) {
+            close();
+            n += 1;
+        }
+    }
+    if let Some(links) = crate::link::links() {
+        n += links.close_serial(serial);
+    }
+    n
 }
 
 /// The `bia_s` value in a Cookie header.

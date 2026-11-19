@@ -957,6 +957,11 @@ impl Web {
             let _ = stream.write_all(ws_accept(key).as_bytes());
             let _ = stream.flush();
             let _ = stream.set_read_timeout(None);
+            // cut at once if its certificate is revoked while it is open
+            let _watched = {
+                let s = stream.clone();
+                crate::session::watch(&id.serial_hint, move || s.shutdown())
+            };
             match req.path.as_str() {
                 "/ws/term" => ws_term(stream, reader, &req),
                 "/ws/shell" => ws_shell(stream, reader, &req),
@@ -1401,8 +1406,8 @@ impl Web {
                 let serial = v.get("serial").and_then(|x| x.as_str()).unwrap_or("");
                 match self.pki.revoke(serial) {
                     Ok(found) => {
-                        crate::session::end_serial(serial);
-                        respond_json(stream, json!({"revoked": found}))
+                        let cut = crate::session::revoked(serial);
+                        respond_json(stream, json!({"revoked": found, "closed": cut}))
                     }
                     Err(e) => respond(
                         stream,

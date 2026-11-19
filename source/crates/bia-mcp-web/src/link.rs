@@ -1765,7 +1765,8 @@ impl Links {
                     .collect();
                 for l in links {
                     let ok = pki.issued_meta(&l.serial).is_none_or(|m| {
-                        !m.revoked && (m.not_after == 0 || m.not_after > now_secs())
+                        // a renewed certificate's link stays: it moves to the new one next time
+                        (!m.revoked || pki.renewed(&m.serial)) && (m.not_after == 0 || m.not_after > now_secs())
                     });
                     if !ok {
                         l.close("revoked");
@@ -2004,6 +2005,23 @@ impl Links {
             }
         }
         Ok(format!("stopped {} file(s) of {message_id}; {name} gets the message without them", hit.len()))
+    }
+
+    /// Close at once every link signed in here with certificate `serial` (it was revoked).
+    pub fn close_serial(&self, serial: &str) -> usize {
+        let links: Vec<Arc<Link>> = self
+            .inner
+            .lock()
+            .unwrap()
+            .rt
+            .values()
+            .filter_map(|r| r.link.clone())
+            .filter(|l| !l.dialed && !l.serial.is_empty() && (l.serial == serial || l.serial.starts_with(serial) || serial.starts_with(&l.serial)))
+            .collect();
+        for l in &links {
+            l.close("revoked");
+        }
+        links.len()
     }
 
     /// Forget a peer's link state (the trust part is done by the caller).
