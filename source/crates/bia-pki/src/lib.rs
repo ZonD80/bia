@@ -81,6 +81,17 @@ pub struct IssuedMeta {
     /// Networks the certificate works from (empty = anywhere). Checked per connection.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub from: Vec<String>,
+    /// How it came to be when bia's model did not issue it: "browser key" (a browser
+    /// enrolled its own key after a .biaconfig/.p12 was dropped on bia's page), "link",
+    /// "renewal", "root setup". Empty for certificates the model or root issued.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub via: String,
+    /// The certificate it was made with (the imported file's, or the renewed one).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
+    /// Where: the browser and address it was made from ("Chrome on Mac, 79.117.213.250").
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device: String,
 }
 
 pub struct Pki {
@@ -649,6 +660,9 @@ impl Pki {
             not_after: not_after.unix_timestamp().max(0) as u64,
             revoked: false,
             from: from.iter().map(|c| c.to_string()).collect(),
+            via: String::new(),
+            parent: String::new(),
+            device: String::new(),
         };
         let meta_path = self.dir.join("issued").join(format!("{serial}.json"));
         fs::write(
@@ -711,6 +725,27 @@ impl Pki {
         ids.sort();
         ids.dedup();
         ids
+    }
+
+    /// Record how certificate `serial` came to be (see [`IssuedMeta::via`]).
+    pub fn annotate(&self, serial: &str, via: &str, parent: &str, device: &str) -> Result<()> {
+        let serial = sanitize_serial(serial)?;
+        let p = self.dir.join("issued").join(format!("{serial}.json"));
+        let mut m: IssuedMeta = serde_json::from_slice(&fs::read(&p)?)?;
+        m.via = via.to_string();
+        m.parent = parent.to_string();
+        m.device = device.chars().take(120).collect();
+        fs::write(&p, serde_json::to_vec_pretty(&m)?)?;
+        Ok(())
+    }
+
+    /// Certificates still valid that were made with `serial` (browsers that imported it).
+    pub fn children(&self, serial: &str) -> Vec<IssuedMeta> {
+        self.list_issued()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| !m.revoked && !m.parent.is_empty() && (m.parent == serial || serial.starts_with(&m.parent)))
+            .collect()
     }
 
     pub fn revoke(&self, serial: &str) -> Result<bool> {

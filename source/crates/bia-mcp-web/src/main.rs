@@ -170,7 +170,7 @@ fn main() {
             }), &["identity"]),
             pki::biaconfig,
         )
-        .tool("pki_list", "Client certificates this machine has issued.", obj(json!({}), &[]), pki::list)
+        .tool("pki_list", "Client certificates this machine has issued, with where self-made ones came from (a browser's own key from a file, a link, a renewal).", obj(json!({}), &[]), pki::list)
         .tool("pki_revoke", "Revoke an issued client certificate by serial (from web_pki_list).",
             obj(json!({"serial": {"type": "string"}}), &["serial"]), pki::revoke)
         .tool("pki_requests", "Certificate requests other agents filed (pending, approved, denied).", obj(json!({}), &[]), pki::requests)

@@ -256,8 +256,13 @@ pub fn list(_: &Ctx, _: Value) -> Result<String, String> {
         } else {
             String::new()
         };
+        let origin = match (m.via.as_str(), m.parent.is_empty()) {
+            ("", _) => String::new(),
+            (via, true) => format!("  [{via}: {}]", m.device),
+            (via, false) => format!("  [{via} from {}: {}]", m.parent.chars().take(8).collect::<String>(), m.device),
+        };
         lines.push(format!(
-            "{}  {}  role={}  trust={}{}{}{}",
+            "{}  {}  role={}  trust={}{}{}{}{}",
             m.serial,
             m.identity,
             m.role,
@@ -268,7 +273,8 @@ pub fn list(_: &Ctx, _: Value) -> Result<String, String> {
                 String::new()
             } else {
                 format!("  only from {}", m.from.join(","))
-            }
+            },
+            origin
         ));
     }
     Ok(lines.join("\n"))
@@ -280,7 +286,16 @@ pub fn revoke(ctx: &Ctx, args: Value) -> Result<String, String> {
     if pki.revoke(&serial).map_err(|e| format!("{e:#}"))? {
         crate::session::end_serial(&serial);
         ctx.log(format!("revoked client cert {serial}"));
-        Ok(format!("revoked {serial}"))
+        // browsers that imported this certificate's file made keys of their own: they still work
+        let kids = pki.children(&serial);
+        if kids.is_empty() {
+            return Ok(format!("revoked {serial}"));
+        }
+        let list: Vec<String> = kids.iter().map(|k| format!("{} ({})", k.serial, k.device)).collect();
+        Ok(format!(
+            "revoked {serial}. Browser keys made with it still work: {}. If the person wanted all of this access gone, revoke those too; if they only meant the file, leave them.",
+            list.join(", ")
+        ))
     } else {
         Err(format!("no cert with serial {serial}"))
     }

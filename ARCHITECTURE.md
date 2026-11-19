@@ -412,7 +412,11 @@ enrolls it (`POST /v1/pki/enroll {csr}` with that session), which issues a certi
 the same identity, role, trust and networks **without** revoking the imported one. The
 imported key is then forgotten. So every browser has its own key, listed in Settings →
 Certificates and revocable alone; a `.biaconfig` or `.p12` is for import and safekeeping.
-Renew (Settings) replaces the browser's key and certificate in place. A WKWebView cannot
+Renew (Settings) replaces the browser's key and certificate in place. Every certificate issued without the
+model (a browser's own key, a link, a renewal, root setup) is recorded with how it came to be
+(`IssuedMeta.via`, `parent`, `device`: shown by `web_pki_list` and Settings) and announced to the
+model as a `system|web` `[web key]` notice; revoking a certificate lists the browser keys made
+with it, which stay valid. A WKWebView cannot
 keep a CryptoKey in IndexedDB, which is why the phone apps do not show bia themselves.
 
 *The bia deploy apps* keep bias' keys (`servers/<host>/bia-root.p12`, `ca.crt`) and open

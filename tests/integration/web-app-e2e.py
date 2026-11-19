@@ -229,6 +229,13 @@ boot_serial = subprocess.run(["openssl", "x509", "-noout", "-serial"], input=ope
 check(rec and rec["identity"] == "root" and rec["extractable"] is False and rec["alg"] == "ECDSA", f"the browser keeps a non-extractable key of its own: {rec}")
 check(rec and rec["serial"] and not boot_serial.endswith(rec["serial"].lower()) and rec["serial"].lower() not in boot_serial, f"with its own certificate, not the imported one ({rec and rec['serial']} vs {boot_serial})")
 check(t1.js("document.cookie.includes('bia_s')") is False, "the session cookie is out of the page's reach (HttpOnly)")
+n = web.inbound(lambda n: n["identity"] == "system" and n["message"].startswith("[web key] root's browser"), 10)
+check(n is not None and rec and rec["serial"][:8] in n["message"] and "HeadlessChrome" in n["message"] or (n is not None and "Chrome" in n["message"]),
+      f"the model hears that root's browser made a key of its own: {n and n['message'][:160]}")
+root_browser = rec["serial"] if rec else ""
+listed, _ = web.tool("pki_list")
+row = next((l for l in listed.splitlines() if rec and l.startswith(rec["serial"])), "")
+check("[browser key from" in row and "127.0.0.1" in row, f"pki_list shows where it came from: {row}")
 if os.environ.get("DEBUG"):
     print(t1.js("JSON.stringify({wsOk: S.wsOk, cur: S.cur, route: S.route, st: S.linkState, cache: [...S.cache.keys()], c: S.cache.get('main') && {loading: S.cache.get('main').loading, n: S.cache.get('main').list.length}, w: innerWidth, hash: location.hash, err: window.__err})"))
 check(web.inbound(lambda n: n["identity"] == "system" and n["message"].startswith("[web open] root connected")) is not None, "bia hears root connected")
@@ -456,6 +463,14 @@ ctx3 = ctx4
 t7 = fresh(APP + "#enroll=" + tok)
 check(t7.until("!document.getElementById('boot').hidden && document.body.innerText.includes('already used or has lapsed')", 20) is not None, "the same link in another browser says it was used")
 t7.close()
+
+# revoking the file's certificate says which browser keys were made with it (they still work)
+import re as _re
+lines = web.tool("pki_list")[0].splitlines()
+par = next((m.group(1) for l in lines if root_browser and l.startswith(root_browser) for m in [_re.search(r"\[browser key from (\w+)", l)] if m), "")
+boot = next((l.split()[0] for l in lines if par and l.startswith(par)), "")
+txt, err = web.tool("pki_revoke", serial=boot) if boot else ("no root file certificate", True)
+check(not err and "Browser keys made with it still work" in txt, f"revoking root's file names the browser key still working: {txt[:200]}")
 
 for t in (t3,):
     t.close()

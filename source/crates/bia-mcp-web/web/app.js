@@ -3051,7 +3051,9 @@ async function loadCerts() {
     set(box, h('table', { class: 'certs' },
       h('thead', null, h('tr', null, h('th', null, 'Identity'), h('th', null, 'Role'), h('th', null, 'Expires'), h('th', null, 'Status'), h('th'))),
       h('tbody', null, j.certs.map(c => h('tr', null,
-        h('td', null, h('b', null, c.identity), c.current ? h('span', { class: 'tag acc', style: 'margin-left:6px' }, 'this browser') : null, h('div', { class: 'muted mono', style: 'font-size:11px' }, c.serial)),
+        h('td', null, h('b', null, c.identity), c.current ? h('span', { class: 'tag acc', style: 'margin-left:6px' }, 'this browser') : null, h('div', { class: 'muted mono', style: 'font-size:11px' }, c.serial),
+          // where a certificate bia did not issue by hand came from
+          c.via ? h('div', { class: 'muted', style: 'font-size:11px' }, c.via + (c.parent ? ' from ' + c.parent.slice(0, 8) : '') + (c.device ? ' · ' + c.device : '')) : null),
         h('td', null, `${c.role} · ${c.trust}`),
         h('td', null, c.not_after ? new Date(c.not_after * 1000).toLocaleDateString() : '—'),
         h('td', null, c.revoked ? h('span', { class: 'tag bad' }, 'revoked') : c.expired ? h('span', { class: 'tag bad' }, 'expired') : h('span', { class: 'tag ok' }, 'active')),

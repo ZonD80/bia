@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.3.1
+
+### Changes
+- bia now hears every time a key is made without it: a browser making its own key after a .biaconfig or .p12 is dropped on bia's page, someone signing up with a link bia sent, a key being renewed, or root being set up. Before, these new certificates appeared in bia's list unannounced, and bia could take a person's own browser for an intruder.
+- bia's list of certificates (and web Settings → Certificates) shows where each such certificate came from: which file or certificate it was made with, the browser and the address.
+- Revoking a certificate now says which browser keys were made with it and still work, so "remove this key" can mean the file, the browser, or both, as the person wants.
+
+### For bia
+- A `[web key]` notice about a new certificate needs no reply; act only if that person says they did not do it.
+- Certificates made in 2.3.0 by a browser, a link or a renewal carry no record of where they came from. Before revoking one you did not issue, ask its owner (root for root's): it is most likely their own browser. web_pki_list shows the origin for every certificate made from now on.
+
 ## 2.3.0
 
 ### Changes

@@ -137,6 +137,8 @@ struct Req {
     query: String,
     qs: HashMap<String, String>,
     headers: HashMap<String, String>,
+    /// The client's address.
+    peer: String,
 }
 
 impl Req {
@@ -620,6 +622,37 @@ impl Web {
         })
     }
 
+    /// A certificate bia's model did not issue (a browser's own key, a link, a renewal, root
+    /// setup): record how it came to be, and tell the model, so a new entry in the CA's list is
+    /// never a mystery. No reply is owed; the model acts only if the person did not do it.
+    fn key_made(&self, meta: &bia_pki::IssuedMeta, via: &str, parent: &str, req: &Req) {
+        let device = format!(
+            "{}, {}",
+            crate::push::device_of(req.header("user-agent").unwrap_or("")),
+            req.peer
+        );
+        let _ = self.pki.annotate(&meta.serial, via, parent, &device);
+        let short = |s: &str| s.chars().take(8).collect::<String>();
+        let (who, serial) = (meta.identity.as_str(), short(&meta.serial));
+        let what = match via {
+            "browser key" => format!(
+                "{who}'s browser ({device}) made a key of its own with certificate {}: new certificate {serial}. That is how a browser signs in once a .biaconfig or .p12 is dropped on your page; the file's certificate stays valid too",
+                short(parent)
+            ),
+            "renewal" => format!("{who} renewed their key ({device}): certificate {serial} replaces {}, which is revoked", short(parent)),
+            "link" => format!("{who} opened a link you sent with a key ({device}): their browser made a key of its own, certificate {serial}"),
+            _ => format!("root was set up from this machine's setup code ({device}): certificate {serial}"),
+        };
+        self.con.push_inbound(crate::bus::Inbound {
+            identity: crate::bus::ID_SYSTEM.into(),
+            channel: crate::bus::CH_WEB.into(),
+            id: crate::bus::mint_msg_id(),
+            text: format!(
+                "[web key] {what}. Nothing to do and no reply needed. Only if {who} says they did not do this: web_pki_revoke({serial}). web_pki_list shows each certificate with where it came from."
+            ),
+        });
+    }
+
     /// Wake the certificate thread now.
     pub fn acme_poke(&self) {
         let (lock, cv) = &self.acme_poke;
@@ -763,6 +796,7 @@ impl Web {
             path,
             query,
             headers,
+            peer: peer.clone(),
         };
 
         // ---- the web bus: anyone's live session; sign-in happens inside ----
@@ -1054,7 +1088,7 @@ impl Web {
                     "cert_problem": problem.map(|p| json!({"kind": p.kind, "identity": p.identity})),
                 }),
             ),
-            ("POST", "/v1/pki/bootstrap/root") => self.serve_bootstrap_root(stream, body),
+            ("POST", "/v1/pki/bootstrap/root") => self.serve_bootstrap_root(stream, body, req),
             ("POST", "/v1/pki/requests") => self.request_create(stream, body, peer),
             ("GET", "/v1/pki/agent") => match self.pki.agent_csr() {
                 Ok(csr) => respond_json(
@@ -1073,7 +1107,7 @@ impl Web {
                 Some((id, _)) => self.request_status(stream, id),
                 None => respond(stream, 404, "text/plain", b"not found", None),
             },
-            ("POST", p) if p.starts_with("/v1/pki/link/") => self.serve_link_key(stream, p.trim_start_matches("/v1/pki/link/"), body, peer),
+            ("POST", p) if p.starts_with("/v1/pki/link/") => self.serve_link_key(stream, p.trim_start_matches("/v1/pki/link/"), body, req),
             ("GET", p) => {
                 let token = p.trim_start_matches("/v1/pki/pickup/");
                 self.serve_pickup(stream, token);
@@ -1165,7 +1199,7 @@ impl Web {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                self.renew_client(stream, id, &csr)
+                self.renew_client(stream, id, &csr, req)
             }
             // another key for the same identity (a browser that imported a .biaconfig or .p12
             // makes its own); the caller's certificate stays valid
@@ -1174,6 +1208,7 @@ impl Web {
                 match self.pki.enroll_csr(id, &csr) {
                     Ok((pem, meta)) => {
                         self.con.log(&format!("  web: {} enrolled another key → {}", id.identity, meta.serial));
+                        self.key_made(&meta, "browser key", &id.serial_hint, req);
                         respond(stream, 200, "application/x-pem-file", pem.as_bytes(),
                             Some(&format!("X-Bia-Serial: {}\r\nX-Bia-Not-After: {}", meta.serial, meta.not_after)));
                     }
@@ -1225,6 +1260,9 @@ impl Web {
                             "trust": m.trust,
                             "created": m.created,
                             "not_after": m.not_after,
+                            "via": m.via,
+                            "parent": m.parent,
+                            "device": m.device,
                             "revoked": m.revoked,
                             "expired": m.not_after > 0 && m.not_after <= now,
                             "current": mine,
@@ -1488,7 +1526,7 @@ impl Web {
     }
 
     /// Renewal takes a CSR for a key the holder made; the answer is PEM (new cert + CA).
-    fn renew_client(&self, stream: &mut dyn Write, id: &ClientId, csr: &str) {
+    fn renew_client(&self, stream: &mut dyn Write, id: &ClientId, csr: &str, req: &Req) {
         // another bia's certificate: renewed so that its peer record keeps the new serial
         // (removing the peer revokes the one it holds)
         if self.pki.is_peer_cert(id).is_some() {
@@ -1507,6 +1545,7 @@ impl Web {
                     "  web: renewed cert for {} → {}",
                     id.identity, meta.serial
                 ));
+                self.key_made(&meta, "renewal", &id.serial_hint, req);
                 let name = format!("{}-bia.crt", meta.identity);
                 respond(
                     stream,
@@ -1805,7 +1844,8 @@ impl Web {
     /// identity and trust the link was minted for, once. The phone pinned this bia's CA first.
     /// A link's one-time key grant: the browser's CSR (`{csr}`) gets a certificate for the
     /// identity the link was sent to. The key was made in the browser; nothing is made here.
-    fn serve_link_key(&self, stream: &mut dyn Write, token: &str, body: &[u8], peer: &str) {
+    fn serve_link_key(&self, stream: &mut dyn Write, token: &str, body: &[u8], req: &Req) {
+        let peer = req.peer.as_str();
         let csr = serde_json::from_slice::<Value>(body).ok().and_then(|v| v["csr"].as_str().map(str::to_string));
         let Some(csr) = csr else {
             respond(stream, 400, "text/plain; charset=utf-8", b"send {\"csr\": \"<PEM>\"}", None);
@@ -1825,6 +1865,7 @@ impl Web {
                     "  web: a browser at {peer} signed up with a link: {} (trust {}, serial {})",
                     meta.identity, g.trust, meta.serial
                 ));
+                self.key_made(&meta, "link", "", req);
                 let extra = format!("X-Bia-Identity: {}\r\nX-Bia-Serial: {}\r\nX-Bia-Not-After: {}", meta.identity, meta.serial, meta.not_after);
                 respond(stream, 200, "application/x-pem-file", pem.as_bytes(), Some(&extra));
             }
@@ -1843,7 +1884,7 @@ impl Web {
     }
 
     /// First-time only: mint identity=root (user, trust=root) PKCS#12 when none is active.
-    fn serve_bootstrap_root(&self, stream: &mut dyn Write, body: &[u8]) {
+    fn serve_bootstrap_root(&self, stream: &mut dyn Write, body: &[u8], req: &Req) {
         if self.pki.has_active_identity("root") {
             respond(
                 stream,
@@ -1877,6 +1918,7 @@ impl Web {
         match self.pki.issue("root", "user", "root") {
             Ok((bytes, meta)) => {
                 let _ = self.pki.setup_code(); // root exists now: the code goes
+                self.key_made(&meta, "root setup", "", req);
                 self.con.log(&format!(
                     "  web: bootstrap issued root client cert (serial {})",
                     meta.serial
