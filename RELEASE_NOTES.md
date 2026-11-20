@@ -5,6 +5,21 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.3.3
+
+### Changes
+- Port 80 is used whatever port bia's web app is on: http:// links lead to bia's https address (with its port), and Let's Encrypt can check bia's address and renew its certificate even when the web app runs on 8443 or another port.
+- Port 80 can send browsers somewhere else instead, such as another website or service on this computer; bia's own web app stays on its HTTPS port (new tool web_http).
+- When another program already holds port 80, bia's web app still starts, and bia is told what that means (no http:// redirect, and its address certificate can't be renewed until port 80 is free).
+- The sign-in page shows bia's own name instead of plain "bia".
+- In the chat, the date labels at the top no longer pile up on each other when scrolling: the newer day replaces the older one.
+- bia's first greeting gives its web address simply ("reach me here at all times"), with nothing about certificates.
+
+### For bia
+- A `[web] Plain HTTP port 80 could not be taken` notice: tell root once which program holds port 80 (it is in the notice). Root decides: free the port, or keep the other program and have it pass /.well-known/acme-challenge/ on to you; when it is free, web_http(retry=true).
+- Only when root asks: web_http(redirect="https://…") to send http:// elsewhere, web_http(redirect="") back to your own address. web_status shows the port 80 state.
+- A certificate's "serial" in bia (file names in pki/issued, a peer's issued_serial, web_pki_list, notices) is the first 16 hex digits of its SHA-256 fingerprint, everywhere; the X.509 serial number openssl prints is a different, random number. When comparing certificates with another bia, compare these fingerprint serials. If you noted a serial mismatch or a needed migration of issued_serial, there is none: remove that note.
+
 ## 2.3.2
 
 ### Changes

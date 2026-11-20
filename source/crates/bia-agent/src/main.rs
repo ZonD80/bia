@@ -962,9 +962,11 @@ fn welcome(web: Option<String>, cloud: bool, me: &me::Me) -> String {
     } else {
         bia_speech::langs::name(&code)
     };
-    let web = match web {
-        Some(w) if w.contains("https://") => format!("the web app ({w}): from a phone or computer on the same network, the first visit lets them take the root certificate, then they get chats with you, files, the screen and voice there"),
-        _ => "the web app: once you are on a network its address shows at the top of the screen; the first visit lets them take the root certificate, then they get chats with you, files, the screen and voice there".into(),
+    // where they reach you: the first web address (no certificate to take since 2.3: public addresses have Let's Encrypt)
+    let url = web.as_deref().and_then(|w| w.split_whitespace().find(|p| p.starts_with("https://"))).map(str::to_string);
+    let web = match url {
+        Some(u) => format!("they can reach you at {u} at all times (chats with you, files, the screen and voice), or give you separate social accounts — or you can try to register them on your own"),
+        None => "they can reach you on the web at all times, at the address shown at the top of the screen once you are on a network (chats with you, files, the screen and voice), or give you separate social accounts — or you can try to register them on your own".into(),
     };
     let brain = if cloud {
         String::new()
@@ -1146,7 +1148,7 @@ mod welcome_tests {
     #[test]
     fn welcome_names_the_topics() {
         let w = super::welcome(
-            Some("web: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca".into()),
+            Some("web: https://10.0.0.5/ https://[fd00::5]/".into()),
             false,
             &crate::me::Me::default(),
         );
@@ -1168,8 +1170,10 @@ mod welcome_tests {
         ] {
             assert!(w.contains(want), "missing {want:?} in {w}");
         }
-        let w = super::welcome(Some("web: (no network yet)  CA at /v1/pki/ca".into()), true, &crate::me::Me::default());
+        let w = super::welcome(Some("web: (no network yet)".into()), true, &crate::me::Me::default());
         assert!(w.contains("once you are on a network") && !w.contains("ChatGPT plan"));
+        let w = super::welcome(Some("web: https://10.0.0.5/ https://[fd00::5]/".into()), true, &crate::me::Me::default());
+        assert!(w.contains("reach you at https://10.0.0.5/ at all times") && !w.contains("certificate") && !w.contains("pki/ca"));
         // named in bia deploy: it introduces itself and does not ask
         let fred = crate::me::Me { name: "Fred".into(), gender: "male".into() };
         let w = super::welcome(None, true, &fred);

@@ -50,12 +50,8 @@ pub fn info_line(files: &Path) -> String {
                 format!(" ({})", l.error)
             }
         ),
-        Some(l) if l.urls.is_empty() => "web: (no network yet)  CA at /v1/pki/ca".into(),
-        Some(l) => format!(
-            "web: {}  CA {}/v1/pki/ca",
-            l.urls.join(" "),
-            l.urls[0].trim_end_matches('/')
-        ),
+        Some(l) if l.urls.is_empty() => "web: (no network yet)".into(),
+        Some(l) => format!("web: {}", l.urls.join(" ")),
     }
 }
 
@@ -104,7 +100,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             info_line(&dir),
-            "web: https://10.0.0.5/  CA https://10.0.0.5/v1/pki/ca"
+            "web: https://10.0.0.5/"
         );
         std::fs::write(
             dir.join("state/web.json"),

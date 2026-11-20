@@ -315,7 +315,7 @@ does not name the person, so a reply always carries the identity:
 `say(channel="web")` without one uses whoever last wrote on web, and the MCP refuses
 an unknown identity or `bia` itself. The agent loads the MCP at boot when `[web] enabled` and passes
 `BIA_WEB_PORT` / `BIA_WEB_HTTP_PORT` (443/80, dev 8443/0; a port root chose with `web_port`,
-kept in `files/state/web/port.json`, wins and applies at the MCP's next start; off 443 there is no HTTP redirect, port 80 stays free); the MCP publishes its
+kept in `files/state/web/port.json`, wins and applies at the MCP's next start; port 80 is taken whatever the HTTPS port, for ACME checks and the redirect; when it is busy the web app runs anyway and the agent gets a `[web] Plain HTTP …` inbound; `web_http` sets where http:// goes, kept in `files/state/web/http.json`, default bia's own https address with its port); the MCP publishes its
 address in `files/state/web.json`.
 
 HTTPS on :443 (HTTP :80 redirects, except `/.well-known/acme-challenge/`), rustls + ring.

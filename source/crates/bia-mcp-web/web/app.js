@@ -37,6 +37,8 @@ const $ = (s, el = document) => el.querySelector(s);
   fit();
 })();
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+// bia's own name: the server titles the page "<name> · bia" once it has one; plain "bia" otherwise
+const BIA_NAME = ((document.title.match(/^(.+?) · bia\b/) || [])[1] || '').trim() || 'bia';
 
 function h(tag, props, ...kids) {
   const el = document.createElement(tag);
@@ -396,7 +398,7 @@ function applyPrefs() {
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', applyPrefs);
 applyPrefs();
 
-const chatTitle = id => (S.chats.get(id) || {}).title || (id === 'main' ? 'bia' : id);
+const chatTitle = id => (S.chats.get(id) || {}).title || (id === 'main' ? BIA_NAME : id);
 const isMine = m => m.from !== 'bia';
 
 // ======================================================================
@@ -567,9 +569,10 @@ async function showBoot({ problem = null, file = null, name = '' } = {}) {
     h('p', null, why(problem)),
     h('div', { class: 'actions' }, h('button', { class: 'btn ghost', onclick: async () => { await BiaKeys.forget(); location.reload(); } }, 'Forget it'))) : null;
 
+  const title = h('h1', null, BIA_NAME);
   set(box, h('div', { class: 'wrap' },
     biaImg({ class: 'logo' }),
-    h('h1', null, 'bia'),
+    title,
     h('div', { class: 'sub' }, 'Sign in with the key you were given.'),
     agentsStep, problemStep, keyStep, lanStep, err,
     h('p', { class: 'muted', style: 'text-align:center;font-size:13px' },
@@ -632,7 +635,7 @@ function loadMain() {
 
 function connect() {
   S.ready = new Promise(r => { S.readyResolve = r; });
-  S.chats.set('main', { id: 'main', title: 'bia', muted: false, unread: 0, last: null, pinned: [] });
+  S.chats.set('main', { id: 'main', title: BIA_NAME, muted: false, unread: 0, last: null, pinned: [] });
   S.order = ['main'];
   S.link = BiaLink.create({
     identity: S.me.identity,
@@ -1172,7 +1175,7 @@ function renderChatList() {
     let prev;
     if (typing) prev = h('span', { class: 'cprev typing' }, 'typing…');
     else if (last) prev = h('span', { class: 'cprev' }, isMine(last) ? h('b', null, 'You: ') : null, last.service ? last.text : snippet(last));
-    else prev = h('span', { class: 'cprev' }, id === 'main' ? 'Your conversation with bia' : 'No messages yet');
+    else prev = h('span', { class: 'cprev' }, id === 'main' ? `Your conversation with ${BIA_NAME}` : 'No messages yet');
     const item = h('div', { class: 'citem' + (id === active ? ' active' : ''), onclick: () => go('chat/' + id) },
       h('div', { class: 'avatar ' + (id === 'main' ? '' : colorOf(id)) }, id === 'main' ? biaImg({ style: 'width:100%;height:100%;border-radius:50%;object-fit:cover' }) : initials(c.title)),
       h('div', { class: 'cbody' },
@@ -1427,7 +1430,7 @@ function renderMessages(opts = {}) {
   if (c.moreBefore) frag.appendChild(h('div', { class: 'loading-more', id: 'moreBefore' }, ' '));
   if (!c.list.length && !c.moreBefore) {
     frag.appendChild(h('div', { class: 'service', style: 'margin-top:30vh' },
-      S.cur === 'main' ? 'Say hi to bia. Messages, files, voice notes — everything goes here.' : 'No messages here yet'));
+      S.cur === 'main' ? `Say hi to ${BIA_NAME}. Messages, files, voice notes — everything goes here.` : 'No messages here yet'));
   }
   c.list.forEach((m, i) => {
     const g = groupInfo(c.list, i);
@@ -1443,6 +1446,7 @@ function renderMessages(opts = {}) {
     if (el) sc.scrollTop += el.getBoundingClientRect().top - anchor.top;
   }
   renderJump();
+  stackDays();
 }
 function firstVisibleRow() {
   const sc = $('#msgs'), top = sc.getBoundingClientRect().top;
@@ -1470,6 +1474,7 @@ function appendRow(m) {
   if (atBottom || isMine(m)) scrollBottom(true);
   else { S.jumpUnread = (S.jumpUnread || 0) + 1; renderJump(); }
   maybeRead();
+  stackDays();
 }
 
 function rerenderRow(id) {
@@ -1550,7 +1555,25 @@ function renderJump() {
   if (show && S.jumpUnread) b.appendChild(h('span', { class: 'badge' }, S.jumpUnread));
 }
 
+// Every day label is sticky in one list, so the ones scrolled past would all stay stuck on top of each
+// other: a label hides once the next one reaches it (the newer day takes its place).
+let daysFrame = 0;
+function stackDays() {
+  if (daysFrame) return;
+  daysFrame = requestAnimationFrame(() => {
+    daysFrame = 0;
+    const seps = $$('.daysep', $('#msgsIn') || document);
+    let next = null;
+    for (let i = seps.length - 1; i >= 0; i--) {
+      const r = seps[i].getBoundingClientRect();
+      seps[i].classList.toggle('covered', !!next && next.top < r.bottom + 4);
+      next = r;
+    }
+  });
+}
+
 async function onMsgsScroll() {
+  stackDays();
   const s = $('#msgs');
   const c = S.cache.get(S.cur);
   renderJump();

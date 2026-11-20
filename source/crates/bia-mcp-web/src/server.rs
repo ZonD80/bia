@@ -116,6 +116,11 @@ pub struct Web {
     tls: Mutex<TlsCache>,
     /// The redirect listener holds port 80, so it answers ACME challenges.
     http80: std::sync::atomic::AtomicBool,
+    /// The plain-HTTP port (80; 0 = none, dev runs) and why it could not be taken ("" = held or none).
+    http_port: u16,
+    http_error: Mutex<String>,
+    /// Where plain HTTP sends browsers (web_http); bia's own https address when empty.
+    http_redirect: Mutex<HttpRedirect>,
     /// Wakes the certificate thread (a hostname or address was just added).
     acme_poke: (Mutex<bool>, std::sync::Condvar),
 }
@@ -371,6 +376,7 @@ impl Web {
             }
         };
         crate::bus::ensure_inbox(&files);
+        let http_redirect = Mutex::new(HttpRedirect::load(&files));
         let web = Arc::new(Web {
             con,
             port,
@@ -378,30 +384,20 @@ impl Web {
             pki,
             tls: Mutex::new(TlsCache::default()),
             http80: std::sync::atomic::AtomicBool::new(false),
+            http_redirect,
+            http_port,
+            http_error: Mutex::new(String::new()),
             acme_poke: (Mutex::new(false), std::sync::Condvar::new()),
         });
         web.publish();
-        if http_port > 0 {
-            match TcpListener::bind(("0.0.0.0", http_port)) {
-                Ok(http_l) => {
-                    let https_port = port;
-                    web.http80.store(http_port == 80, std::sync::atomic::Ordering::SeqCst);
-                    let _ = std::thread::Builder::new()
-                        .name("web-http-redir".into())
-                        .spawn(move || {
-                            for stream in http_l.incoming().flatten() {
-                                http_redirect(stream, https_port);
-                            }
-                        });
-                }
-                Err(e) => {
-                    let msg = format!("http redirect port {http_port}: {e}");
-                    warn = Some(match warn {
-                        Some(w) => format!("{w}; {msg}"),
-                        None => msg,
-                    });
-                }
-            }
+        // plain HTTP (whatever the HTTPS port): redirects, and proves addresses to Let's Encrypt.
+        // Taken by another program: the web app runs anyway, and bia hears why.
+        if let Err(msg) = web.bind_http() {
+            warn = Some(match warn {
+                Some(w) => format!("{w}; {msg}"),
+                None => msg.clone(),
+            });
+            web.tell_http_failed(&msg);
         }
         let w = web.clone();
         std::thread::Builder::new()
@@ -653,6 +649,67 @@ impl Web {
         });
     }
 
+    /// Take the plain-HTTP port (again). Ok when held now (or there is none to take).
+    pub fn bind_http(self: &Arc<Self>) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        if self.http_port == 0 || self.http80.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match TcpListener::bind(("0.0.0.0", self.http_port)) {
+            Ok(l) => {
+                self.http80.store(true, Ordering::SeqCst);
+                self.http_error.lock().unwrap().clear();
+                let w = self.clone();
+                let _ = std::thread::Builder::new().name("web-http".into()).spawn(move || {
+                    for stream in l.incoming().flatten() {
+                        http_redirect(stream, &w);
+                    }
+                });
+                Ok(())
+            }
+            Err(e) => {
+                let who = crate::listen::describe_port(&self.files, self.http_port);
+                let msg = format!("port {} could not be taken ({who}; {e})", self.http_port);
+                *self.http_error.lock().unwrap() = msg.clone();
+                Err(msg)
+            }
+        }
+    }
+
+    /// Plain HTTP's state, one line each (web_http, web_status).
+    pub fn http_lines(&self) -> String {
+        let held = self.http80.load(std::sync::atomic::Ordering::SeqCst);
+        let to = self.http_redirect.lock().unwrap().describe(self.port);
+        match (self.http_port, held) {
+            (0, _) => "plain HTTP: off on this run (no port 80)".into(),
+            (p, true) => format!("plain HTTP: port {p} held; http:// goes to {to}; Let's Encrypt checks are answered here"),
+            (p, false) => format!(
+                "plain HTTP: port {p} NOT held — {}. http:// links don't redirect, and Let's Encrypt can't renew address certificates until port {p} answers its checks (web_http retry=true takes it once it is free)",
+                self.http_error.lock().unwrap()
+            ),
+        }
+    }
+
+    /// Set where plain HTTP sends browsers: `url` "" = bia's own https address. → the new state.
+    pub fn set_http_redirect(&self, url: &str, keep_path: bool) -> Result<String, String> {
+        let r = HttpRedirect::new(url, keep_path)?;
+        r.save(&self.files)?;
+        *self.http_redirect.lock().unwrap() = r;
+        Ok(self.http_lines())
+    }
+
+    fn tell_http_failed(&self, msg: &str) {
+        self.con.push_inbound(crate::bus::Inbound {
+            identity: crate::bus::ID_SYSTEM.into(),
+            channel: crate::bus::CH_WEB.into(),
+            id: crate::bus::mint_msg_id(),
+            text: format!(
+                "[web] Plain HTTP {msg}. The web app itself works as usual on its https:// address (port {}). Only two things are missing: http:// links don't redirect, and Let's Encrypt can't renew the address certificates while port {} is taken (it checks the address over it; they last about a week). If another program on this computer should own port {}, tell root it must pass /.well-known/acme-challenge/ on to you or leave the port to you; once it is free, web_http(retry=true).",
+                self.port, self.http_port, self.http_port
+            ),
+        });
+    }
+
     /// Wake the certificate thread now.
     pub fn acme_poke(&self) {
         let (lock, cv) = &self.acme_poke;
@@ -717,14 +774,11 @@ impl Web {
 
     pub fn info_line(&self) -> String {
         let origins = self.origins();
+        // no CA here: since 2.3 public addresses have Let's Encrypt certificates, nobody installs ours
         if origins.is_empty() {
-            "web: (no network yet)  CA at /v1/pki/ca".into()
+            "web: (no network yet)".into()
         } else {
-            format!(
-                "web: {}  CA {}/v1/pki/ca",
-                origins.join(" "),
-                origins[0].trim_end_matches('/')
-            )
+            format!("web: {}", origins.join(" "))
         }
     }
 
@@ -2608,7 +2662,82 @@ fn lan_ips() -> Vec<IpAddr> {
         .collect()
 }
 
-fn http_redirect(mut stream: TcpStream, https_port: u16) {
+/// Where plain HTTP sends browsers (state/web/http.json): bia's own https address by default,
+/// or another URL (another service on this computer, a website), with or without the path.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HttpRedirect {
+    pub url: String,
+    pub keep_path: bool,
+}
+
+impl HttpRedirect {
+    fn file(files: &Path) -> PathBuf {
+        files.join("state").join("web").join("http.json")
+    }
+
+    pub fn load(files: &Path) -> HttpRedirect {
+        let v: Option<serde_json::Value> = bia_mcp::statefile::read(&Self::file(files));
+        let v = v.unwrap_or_default();
+        HttpRedirect {
+            url: v["redirect"].as_str().unwrap_or("").to_string(),
+            keep_path: v["keep_path"].as_bool().unwrap_or(true),
+        }
+    }
+
+    pub fn new(url: &str, keep_path: bool) -> Result<HttpRedirect, String> {
+        let url = url.trim();
+        if url.is_empty() || url == "default" {
+            return Ok(HttpRedirect { url: String::new(), keep_path: true });
+        }
+        let rest = url
+            .strip_prefix("https://")
+            .or_else(|| url.strip_prefix("http://"))
+            .ok_or("redirect: an http:// or https:// URL, or \"\" for bia's own address")?;
+        let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if host.is_empty() || url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err("redirect: a full URL with a host, e.g. https://example.com/".into());
+        }
+        Ok(HttpRedirect { url: url.to_string(), keep_path })
+    }
+
+    fn save(&self, files: &Path) -> Result<(), String> {
+        let path = Self::file(files);
+        if self.url.is_empty() {
+            return bia_mcp::statefile::remove(&path).map_err(|e| format!("{}: {e}", path.display()));
+        }
+        if let Some(d) = path.parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
+        bia_mcp::statefile::write_json(&path, &serde_json::json!({"redirect": self.url, "keep_path": self.keep_path}))
+            .map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// The Location for a request to `host` (as the browser sent it) and `path`.
+    pub fn location(&self, host: &str, path: &str, https_port: u16) -> String {
+        if self.url.is_empty() {
+            let host_only = host
+                .rsplit_once(':')
+                .filter(|(h, p)| !h.is_empty() && !h.contains(']') && p.chars().all(|c| c.is_ascii_digit()))
+                .map(|(h, _)| h.to_string())
+                .unwrap_or_else(|| host.to_string());
+            return if https_port == 443 { format!("https://{host_only}/") } else { format!("https://{host_only}:{https_port}/") };
+        }
+        if self.keep_path && path.starts_with('/') && path != "/" {
+            return format!("{}{path}", self.url.trim_end_matches('/'));
+        }
+        self.url.clone()
+    }
+
+    fn describe(&self, https_port: u16) -> String {
+        if self.url.is_empty() {
+            let at = if https_port == 443 { String::new() } else { format!(":{https_port}") };
+            return format!("bia's own https://<address>{at}/ (default)");
+        }
+        format!("{}{}", self.url, if self.keep_path { " (keeping the path)" } else { "" })
+    }
+}
+
+fn http_redirect(mut stream: TcpStream, web: &Web) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let Ok(clone) = stream.try_clone() else {
         return;
@@ -2642,16 +2771,7 @@ fn http_redirect(mut stream: TcpStream, https_port: u16) {
         }
         return;
     }
-    let host_only = host
-        .rsplit_once(':')
-        .filter(|(h, p)| !h.is_empty() && !h.contains(']') && p.chars().all(|c| c.is_ascii_digit()))
-        .map(|(h, _)| h.to_string())
-        .unwrap_or(host);
-    let loc = if https_port == 443 {
-        format!("https://{host_only}/")
-    } else {
-        format!("https://{host_only}:{https_port}/")
-    };
+    let loc = web.http_redirect.lock().unwrap().location(&host, &path, web.port);
     respond(
         &mut stream,
         301,
@@ -3300,5 +3420,47 @@ mod agents_md_tests {
         assert!(t.contains("https://<this address>") && !t.contains("evil"));
         assert!(std::str::from_utf8(NO_CERT).unwrap().contains("/AGENTS.md"));
         assert!(INDEX.contains("href=\"/AGENTS.md\"") && INDEX.contains("id=\"for-agents\""));
+    }
+}
+
+#[cfg(test)]
+mod http_redirect_tests {
+    use super::HttpRedirect;
+
+    #[test]
+    fn default_goes_to_bias_own_https_address() {
+        let r = HttpRedirect::default();
+        assert_eq!(r.location("10.0.0.5", "/x", 443), "https://10.0.0.5/");
+        assert_eq!(r.location("10.0.0.5:80", "/", 8443), "https://10.0.0.5:8443/");
+        assert_eq!(r.location("[fd00::5]", "/", 8443), "https://[fd00::5]:8443/");
+    }
+
+    #[test]
+    fn another_url_with_or_without_the_path() {
+        let r = HttpRedirect::new("https://example.com/", true).unwrap();
+        assert_eq!(r.location("10.0.0.5", "/blog?a=1", 8443), "https://example.com/blog?a=1");
+        assert_eq!(r.location("10.0.0.5", "/", 8443), "https://example.com/");
+        let r = HttpRedirect::new("http://127.0.0.1:3000/app", false).unwrap();
+        assert_eq!(r.location("h", "/blog", 443), "http://127.0.0.1:3000/app");
+    }
+
+    #[test]
+    fn bad_urls_are_refused_and_empty_means_default() {
+        assert!(HttpRedirect::new("example.com", true).is_err());
+        assert!(HttpRedirect::new("https:///x", true).is_err());
+        assert!(HttpRedirect::new("https://a b/", true).is_err());
+        assert_eq!(HttpRedirect::new("", false).unwrap(), HttpRedirect { url: String::new(), keep_path: true });
+        assert_eq!(HttpRedirect::new("default", false).unwrap().url, "");
+    }
+
+    #[test]
+    fn saved_and_loaded() {
+        let dir = std::env::temp_dir().join(format!("bia-http-redirect-{}", std::process::id()));
+        let r = HttpRedirect::new("https://example.com", false).unwrap();
+        r.save(&dir).unwrap();
+        assert_eq!(HttpRedirect::load(&dir), r);
+        HttpRedirect::default().save(&dir).unwrap();
+        assert_eq!(HttpRedirect::load(&dir).url, "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

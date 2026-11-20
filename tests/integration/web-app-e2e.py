@@ -22,7 +22,9 @@ if not chrome:
     sys.exit(0)
 root = tempfile.mkdtemp(prefix="bia-webapp-e2e-")
 files = f"{root}/bia"
-os.makedirs(files)
+os.makedirs(f"{files}/state")
+with open(f"{files}/state/self.json", "w") as f:
+    json.dump({"name": "Milo"}, f)  # a named bia: the no-key page shows its name
 CDP = 9462
 failed = []
 
@@ -220,6 +222,8 @@ LOADED = "typeof S !== 'undefined' && S.wsOk && S.cache.get('main') && !S.cache.
 # ---- no key yet: the no-key page takes root's .p12; the browser enrolls a key of its own
 t1 = Tab()
 check(t1.until("!document.getElementById('boot').hidden && !!document.querySelector('#boot input[type=file]')", 20) is not None, "a browser without a key gets the no-key page")
+check(t1.until("document.querySelector('#boot h1') && document.querySelector('#boot h1').textContent === 'Milo'", 10) is not None,
+      "the no-key page shows the bia's name instead of plain bia")
 doc = cdp.call("DOM.getDocument", {}, t1.sess)
 node = cdp.call("DOM.querySelector", {"nodeId": doc["root"]["nodeId"], "selector": "#boot input[type=file]"}, t1.sess)["nodeId"]
 cdp.call("DOM.setFileInputFiles", {"nodeId": node, "files": [f"{root}/root.p12"]}, t1.sess)
@@ -348,7 +352,7 @@ t1.js("INSTALL.ev = null; renderSettings(); 1")
 check(t1.js("!!document.querySelector('#installCard')") is False, "…and nothing in Settings without the browser's dialog")
 ua(UA_ANDROID)
 a = json.loads(t1.js(ASK))
-check(a["shown"] and "Install bia on this phone" in a["text"] and a["text"].endswith("How"), f"Android's browser gets the banner: {a}")
+check(a["shown"] and "Install Milo on this phone" in a["text"] and a["text"].endswith("How"), f"Android's browser gets the banner: {a}")
 shot("android-settings")
 t1.js("go('')"); shot("android-banner"); t1.js("go('settings')")
 card = t1.js("document.querySelector('#installCard').textContent")
@@ -407,6 +411,32 @@ check(t3.until(LOADED, 30) is not None and t3.until("!(S.pending.get('main') || 
 web.tool("send", identity="root", channel="web", text="welcome back")
 t3.js("go('chat/main')")
 check(t3.until("document.querySelector('#msgsIn') && document.querySelector('#msgsIn').textContent.includes('welcome back')", 15) is not None, "and gets bia's messages live")
+
+# a named bia: its name in the chat list and the chat header, not plain "bia"
+names = json.loads(t3.js("JSON.stringify({ list: (document.querySelector('#chatList') || {}).textContent || '', head: (document.querySelector('#chatHead') || {}).textContent || '' })"))
+check(names["list"].startswith("Milo") and names["head"].startswith("Milo"), f"the chat list and header show the bia's name: {names}")
+
+# day labels are sticky in one list: only the newest one scrolled past may show (they used to pile up on top)
+DAYS = """(async () => {
+  const box = document.querySelector('#msgsIn'), sc = document.querySelector('#msgs'), tail = document.querySelector('#tail');
+  for (const d of ['Monday, November 16', 'Wednesday, November 18', 'Yesterday']) {
+    box.insertBefore(h('div', { class: 'daysep test-day' }, d), tail);
+    box.insertBefore(h('div', { class: 'test-day', style: 'height:900px' }), tail);
+  }
+  sc.scrollTop = sc.scrollHeight;
+  onMsgsScroll();
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const seen = [...box.querySelectorAll('.daysep.test-day')].filter(e => getComputedStyle(e).visibility !== 'hidden').map(e => e.textContent);
+  sc.scrollTop = sc.scrollHeight - 900 - sc.clientHeight - 300;  // back up into "Wednesday"
+  onMsgsScroll();
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const up = [...box.querySelectorAll('.daysep.test-day')].filter(e => getComputedStyle(e).visibility !== 'hidden' && e.getBoundingClientRect().top < sc.getBoundingClientRect().top + 40).map(e => e.textContent);
+  box.querySelectorAll('.test-day').forEach(e => e.remove());
+  return JSON.stringify({ seen, up });
+})()"""
+d = json.loads(t3.js(DAYS))
+check(d["seen"] == ["Yesterday"], f"stuck day labels don't pile up: only the newest shows {d['seen']}")
+check(d["up"] == ["Wednesday, November 18"], f"scrolling back shows the earlier day again {d['up']}")
 
 # ---- bia cloud's first access: the .biaconfig in the link, the password typed in the page
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

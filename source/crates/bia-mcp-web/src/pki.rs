@@ -249,7 +249,8 @@ pub fn list(_: &Ctx, _: Value) -> Result<String, String> {
     if list.is_empty() {
         return Ok("(no client certificates issued)".into());
     }
-    let mut lines = Vec::new();
+    // bia's "serial" is not the X.509 serial number (that one is random): two bias comparing them must use this
+    let mut lines = vec!["(serial = first 16 hex digits of the certificate's SHA-256 fingerprint: its file issued/<serial>.crt, a peer's issued_serial and the [web key] notices all use it; it is not the X.509 serial number that openssl -serial prints)".to_string()];
     for m in list {
         let exp = if m.not_after > 0 {
             format!("  not_after={}", m.not_after)

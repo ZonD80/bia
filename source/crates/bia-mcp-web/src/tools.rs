@@ -194,8 +194,9 @@ pub fn call_hangup(_: &Ctx, args: Value) -> Result<String, String> {
 pub fn status(_: &Ctx, _: Value) -> Result<String, String> {
     match crate::WEB.get() {
         Some(w) => Ok(format!(
-            "{}\nCA fingerprint (sha256): {}\nTo get in, a person opens an address and brings a .p12 or .biaconfig, or pastes a pickup link (web_pki_issue / web_pki_biaconfig when root asks); the browser then keeps a key of its own.\n{}",
+            "{}\n{}\nCA fingerprint (sha256): {}\nTo get in, a person opens an address and brings a .p12 or .biaconfig, or pastes a pickup link (web_pki_issue / web_pki_biaconfig when root asks); the browser then keeps a key of its own.\n{}",
             w.info_line(),
+            w.http_lines(),
             w.ca_sha256(),
             cert_lines(w)
         )),
@@ -250,8 +251,30 @@ fn set_port(files: &std::path::Path, port: u64, http: u16, now: u16) -> Result<S
     }
     let at = if port == 443 { String::new() } else { format!(":{port}") };
     Ok(format!(
-        "Saved: the web app answers on port {port} (https://<address>{at}/) once this MCP restarts. First tell root the new address and that a firewall in front of this machine must let TCP {port} in, then discover(path=\"mcp/web\", restart=true). Everyone connected is told the new port as the restart cuts them off: an open web app shows the new address, a bia deploy app with the chat open, bia-bridge and other bias follow by themselves. Off port 443 nothing answers on port 80 any more (no redirect from http://), so the address needs https:// and the port. Whoever is not connected at that moment keeps the old port: a bia deploy app needs a new .biaconfig (web_pki_biaconfig), an offline bia or bia-bridge the new URL."
+        "Saved: the web app answers on port {port} (https://<address>{at}/) once this MCP restarts. First tell root the new address and that a firewall in front of this machine must let TCP {port} in, then discover(path=\"mcp/web\", restart=true). Everyone connected is told the new port as the restart cuts them off: an open web app shows the new address, a bia deploy app with the chat open, bia-bridge and other bias follow by themselves. Port 80 keeps sending http:// to the new address (https://<address>{at}/) and answering Let's Encrypt. Whoever is not connected at that moment keeps the old port: a bia deploy app needs a new .biaconfig (web_pki_biaconfig), an offline bia or bia-bridge the new URL."
     ))
+}
+
+/// The tool: where plain HTTP (port 80) sends browsers, and taking the port again.
+pub fn http(_: &Ctx, args: Value) -> Result<String, String> {
+    let w = crate::WEB.get().ok_or("the web server is not running")?;
+    let mut out = vec![];
+    if args.get("retry").and_then(Value::as_bool) == Some(true) {
+        match w.bind_http() {
+            Ok(()) => {
+                out.push("The plain-HTTP port is held now.".to_string());
+                w.acme_poke(); // certificates waiting for port 80 are tried now
+            }
+            Err(e) => out.push(format!("Still not: {e}.")),
+        }
+    }
+    if let Some(r) = args.get("redirect").and_then(Value::as_str) {
+        let keep = args.get("keep_path").and_then(Value::as_bool).unwrap_or(true);
+        w.set_http_redirect(r, keep)?;
+        out.push("Saved; it applies at once.".into());
+    }
+    out.push(w.http_lines());
+    Ok(out.join("\n"))
 }
 
 /// The port web_port chose while this process runs (0: it was not called).
