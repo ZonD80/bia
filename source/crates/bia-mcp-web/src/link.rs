@@ -1,5 +1,7 @@
-//! The web bus: one live WebSocket session per identity (a person's web app, bia-bridge,
-//! another bia), whoever opened it. See ARCHITECTURE.md ("The web bus protocol") and
+//! The web bus: WebSocket sessions per identity (a person's web apps, bia-bridge, another
+//! bia), whoever opened them. A person or an agent may have several at once (tabs,
+//! devices): every change goes to all of them, so they stay in step. Another bia has one
+//! link (a second machine with its key is a copy, and refused). See ARCHITECTURE.md ("The web bus protocol") and
 //! `linkproto.rs`.
 //!
 //! As the server (someone opened `GET /ws` here) this side sends the identity's chat as it
@@ -345,20 +347,43 @@ impl Link {
 struct Rt {
     st: LinkState,
     loaded: bool,
-    link: Option<Arc<Link>>,
+    /// The live sessions, oldest first: one for another bia, any number (up to
+    /// MAX_SESSIONS) for a person or an agent.
+    links: Vec<Arc<Link>>,
     dialing: bool,
     attempts: u32,
     next_dial: Option<Instant>,
     last_err: String,
     err_at: Option<Instant>,
-    /// Files being pulled from this identity: fid → size.
-    pulls: HashMap<String, u64>,
+    /// Files being pulled from this identity: fid → what and from which session.
+    pulls: HashMap<String, Pull>,
+    /// Which page (session instance) sent a message's file: it is pulled from there first.
+    file_from: HashMap<String, String>,
+    /// Sessions (instances) that said they do not have a file.
+    tried: HashMap<String, Vec<String>>,
     rate: VecDeque<Instant>,
     /// Second sessions refused while this live one talks: since when, and whether told.
     dup_since: Option<Instant>,
     dup_told: bool,
     /// m/gone frames applied since the state was last saved (client side).
     unsaved: u32,
+}
+
+/// One file being pulled: its size and the session it comes over.
+#[derive(Clone, Copy)]
+struct Pull {
+    size: u64,
+    link: u64,
+}
+
+impl Rt {
+    /// The newest session.
+    fn link(&self) -> Option<Arc<Link>> {
+        self.links.last().cloned()
+    }
+    fn find(&self, id: u64) -> Option<Arc<Link>> {
+        self.links.iter().find(|l| l.id == id).cloned()
+    }
 }
 
 #[derive(Default)]
@@ -455,23 +480,24 @@ pub fn shutdown_reason(files: &Path) -> String {
 
 // ---- what the chat store and the tools ask ----
 
-/// A frame for the identity's live session (server side). Toward a bia this bia dialed,
-/// only the typing indicator goes (our changes travel as actions there).
+/// A frame for every live session of the identity (server side). Toward a bia this bia
+/// dialed, only the typing indicator goes (our changes travel as actions there).
 pub fn emit(identity: &str, v: Value) {
     let Some(l) = links() else { return };
-    let link = l.inner.lock().unwrap().rt.get(identity).and_then(|r| r.link.clone());
-    let Some(link) = link else { return };
-    if !link.dialed {
-        link.w.json(&v);
-    } else if v["t"] == "typing" {
-        link.w.json(&json!({"t": "typing", "on": v["on"]}));
+    let all = l.inner.lock().unwrap().rt.get(identity).map(|r| r.links.clone()).unwrap_or_default();
+    for link in all {
+        if !link.dialed {
+            link.w.json(&v);
+        } else if v["t"] == "typing" {
+            link.w.json(&json!({"t": "typing", "on": v["on"]}));
+        }
     }
 }
 
 /// A frame for every session that came to this bia (web apps, bridges, bias that dialed in).
 pub fn broadcast(v: &Value) {
     let Some(l) = links() else { return };
-    let all: Vec<Arc<Link>> = l.inner.lock().unwrap().rt.values().filter_map(|r| r.link.clone()).collect();
+    let all: Vec<Arc<Link>> = l.inner.lock().unwrap().rt.values().flat_map(|r| r.links.clone()).collect();
     for link in all.iter().filter(|k| !k.dialed) {
         link.w.json(v);
     }
@@ -485,7 +511,7 @@ pub fn online(identity: &str) -> bool {
             .unwrap()
             .rt
             .get(identity)
-            .is_some_and(|r| r.link.is_some())
+            .is_some_and(|r| !r.links.is_empty())
     })
 }
 
@@ -497,8 +523,7 @@ pub fn active(identity: &str) -> bool {
             .unwrap()
             .rt
             .get(identity)
-            .and_then(|r| r.link.as_ref())
-            .is_some_and(|k| k.active.load(Ordering::Relaxed))
+            .is_some_and(|r| r.links.iter().any(|k| k.active.load(Ordering::Relaxed)))
     })
 }
 
@@ -669,11 +694,11 @@ impl Links {
         let message = action["t"] == "send";
         let o = Out { cid: format!("o{}", hex(&rnd_bytes::<6>())), rev, action };
         rt.st.outbox.push(o.clone());
-        if message && rt.link.is_none() {
+        if message && rt.links.is_empty() {
             bring_up(rt, Instant::now());
         }
         self.save_state(name, &rt.st);
-        if let Some(l) = rt.link.as_ref().filter(|l| l.dialed) {
+        if let Some(l) = rt.links.iter().find(|l| l.dialed) {
             l.w.json(&out_frame(&o));
         }
         drop(inner);
@@ -763,8 +788,8 @@ impl Links {
         let root = id.trust == "root";
         let busy = {
             let inner = self.inner.lock().unwrap();
-            inner.rt.values().filter(|r| r.link.is_some()).count() >= MAX_LINKS
-                && !inner.rt.get(&id.identity).is_some_and(|r| r.link.is_some())
+            inner.rt.values().map(|r| r.links.len()).sum::<usize>() >= MAX_LINKS
+                && !inner.rt.get(&id.identity).is_some_and(|r| !r.links.is_empty())
         };
         if busy || self.closing.load(Ordering::Relaxed) {
             refuse("busy");
@@ -1137,7 +1162,28 @@ impl Links {
             link.close_why("disconnect", &why);
             return Err(());
         }
-        if let Some(old) = rt.link.clone() {
+        if !link.dialed && !is_peer {
+            // a person or an agent: another tab or device joins the ones open. The same page
+            // again (a reconnect) replaces its stale session; past MAX_SESSIONS the one heard
+            // from least recently goes.
+            let mut gone: Vec<Arc<Link>> = vec![];
+            rt.links.retain(|o| {
+                let same = !o.dialed && *o.instance.lock().unwrap() == instance;
+                if same {
+                    gone.push(o.clone());
+                }
+                !same
+            });
+            while rt.links.len() >= MAX_SESSIONS {
+                let i = (0..rt.links.len())
+                    .min_by_key(|&i| *rt.links[i].last_rx.lock().unwrap())
+                    .unwrap_or(0);
+                gone.push(rt.links.remove(i));
+            }
+            for o in gone {
+                o.silent_close("duplicate");
+            }
+        } else if let Some(old) = rt.link() {
             let old_instance = old.instance.lock().unwrap().clone();
             if old_instance == instance {
                 if old.dialed != link.dialed {
@@ -1183,7 +1229,12 @@ impl Links {
             }
         }
         let rt = self.rt(&mut inner, name);
-        rt.link = Some(link.clone());
+        if link.dialed || is_peer {
+            // another bia: this link replaces whatever was there
+            rt.links.clear();
+        }
+        rt.links.push(link.clone());
+        let sessions = rt.links.iter().filter(|l| !l.dialed).count();
         rt.dup_since = None;
         rt.dup_told = false;
         rt.dialing = false;
@@ -1218,7 +1269,9 @@ impl Links {
                                // what root called this bia ("" while unnamed): the web app's title
                                "called": self.pki().ok().and_then(|p| p.chosen_name()).unwrap_or_default(),
                                // its own web app icon ("" = the built-in one)
-                               "icon": crate::icon::rev()});
+                               "icon": crate::icon::rev(),
+                               // live sessions of this identity, this one included
+                               "sessions": sessions});
             if let Some(o) = crate::chat::hello_info(name).as_object() {
                 for (k, v) in o {
                     h[k] = v.clone();
@@ -1236,6 +1289,9 @@ impl Links {
                 },
                 None => {}
             }
+        }
+        if !link.dialed && sessions > 1 {
+            self.tell_sessions(name, Some(link.id));
         }
         self.bus.web_opened(name, &link.ip);
         self.changed.notify_all();
@@ -1328,13 +1384,21 @@ impl Links {
         let mut inner = self.inner.lock().unwrap();
         let is_peer = inner.peers.contains_key(&name);
         let rt = self.rt(&mut inner, &name);
-        let current = rt.link.as_ref().map(|l| l.id) == Some(link.id);
+        let was = rt.links.len();
+        rt.links.retain(|l| l.id != link.id);
+        let removed = rt.links.len() != was;
+        // the identity's last session went (for another bia: its one link)
+        let current = removed && rt.links.is_empty();
+        // files coming over it are asked again over another session (or the next one); it
+        // may have been replaced already (a reconnect of the same page)
+        let pulls = rt.pulls.len();
+        rt.pulls.retain(|_, p| p.link != link.id);
+        let repull = rt.pulls.len() != pulls && !rt.links.is_empty();
         if current {
-            rt.link = None;
-            rt.pulls.clear();
             rt.st.last_down = now_secs();
             rt.unsaved = 0;
         }
+        let others = removed && !rt.links.is_empty() && !link.dialed;
         let theirs = link.their_bye.lock().unwrap().clone();
         let why = link.their_why.lock().unwrap().clone();
         let ours = link.our_bye.lock().unwrap().clone();
@@ -1376,7 +1440,30 @@ impl Links {
         if let Some(t) = tell {
             self.tell(&name, &t);
         }
+        if others {
+            self.tell_sessions(&name, None);
+        }
+        if repull {
+            self.pump(&name);
+        }
         self.changed.notify_all();
+    }
+
+    /// The identity's sessions learn how many are open now (`sessions {n}`), all but `skip`
+    /// (which had it in its hello).
+    fn tell_sessions(&self, name: &str, skip: Option<u64>) {
+        let all: Vec<Arc<Link>> = self
+            .inner
+            .lock()
+            .unwrap()
+            .rt
+            .get(name)
+            .map(|r| r.links.iter().filter(|l| !l.dialed).cloned().collect())
+            .unwrap_or_default();
+        let f = json!({"t": "sessions", "n": all.len()});
+        for l in all.iter().filter(|l| Some(l.id) != skip) {
+            l.w.json(&f);
+        }
     }
 
     // ---- frames ----
@@ -1419,6 +1506,16 @@ impl Links {
                 };
                 link.w.json(&ack);
                 if v["t"] == "send" {
+                    // its files are pulled from this page first (another tab may not have them)
+                    let instance = link.instance.lock().unwrap().clone();
+                    let mut inner = self.inner.lock().unwrap();
+                    let rt = self.rt(&mut inner, name);
+                    for f in v["files"].as_array().into_iter().flatten() {
+                        if let Some(fid) = f["fid"].as_str() {
+                            rt.file_from.entry(fid.to_ascii_lowercase()).or_insert_with(|| instance.clone());
+                        }
+                    }
+                    drop(inner);
                     self.pump(name);
                 }
             }
@@ -1533,11 +1630,34 @@ impl Links {
             "fdone" => link.w.drop_job(&fid),
             "frefuse" => {
                 link.w.drop_job(&fid);
-                // a file we were pulling that the sender cannot give
-                let pulling = self.inner.lock().unwrap().rt.get(name).is_some_and(|r| r.pulls.contains_key(&fid));
-                if pulling {
-                    let why = v["reason"].as_str().unwrap_or("the sender refused it").to_string();
-                    self.settle(name, &fid, None, &why);
+                // a file we were pulling over this session that it cannot give: another
+                // session of the identity may have it (the page that sent it, which may come
+                // back); only when none is left to ask does the message go without it
+                let give_up = {
+                    let mut inner = self.inner.lock().unwrap();
+                    let rt = self.rt(&mut inner, name);
+                    if rt.pulls.get(&fid).is_some_and(|p| p.link == link.id) {
+                        rt.pulls.remove(&fid);
+                        let instance = link.instance.lock().unwrap().clone();
+                        let tried = rt.tried.entry(fid.clone()).or_default();
+                        if !tried.contains(&instance) {
+                            tried.push(instance);
+                        }
+                        let tried = tried.clone();
+                        let untried_live = rt.links.iter().any(|l| !tried.contains(&*l.instance.lock().unwrap()));
+                        let owner_away = rt.file_from.get(&fid).is_some_and(|o| !tried.contains(o));
+                        Some(!untried_live && !owner_away)
+                    } else {
+                        None
+                    }
+                };
+                match give_up {
+                    Some(true) => {
+                        let why = v["reason"].as_str().unwrap_or("the sender refused it").to_string();
+                        self.settle(name, &fid, None, &why);
+                    }
+                    Some(false) => self.pump(name),
+                    None => {}
                 }
             }
             "fcancel" => self.settle(name, &fid, None, "the sender cancelled it"),
@@ -1556,7 +1676,9 @@ impl Links {
             let mut inner = self.inner.lock().unwrap();
             let total: usize = inner.rt.values().map(|r| r.pulls.len()).sum();
             let rt = self.rt(&mut inner, name);
-            let Some(link) = rt.link.clone() else { return };
+            if rt.links.is_empty() {
+                return;
+            }
             let mut pulling = total;
             for (fid, _fname, size) in want {
                 if rt.pulls.contains_key(&fid) {
@@ -1571,7 +1693,19 @@ impl Links {
                 if rt.pulls.len() >= PULLS_PER_LINK || pulling >= PULLS_TOTAL {
                     continue;
                 }
-                rt.pulls.insert(fid.clone(), size);
+                // the page that sent it, else the newest session that has not refused it
+                let tried = rt.tried.get(&fid).cloned().unwrap_or_default();
+                let owner = rt.file_from.get(&fid).cloned();
+                let live: Vec<&Arc<Link>> = rt.links.iter().filter(|l| !tried.contains(&*l.instance.lock().unwrap())).collect();
+                let Some(link) = live
+                    .iter()
+                    .find(|l| owner.as_deref() == Some(l.instance.lock().unwrap().as_str()))
+                    .or(live.last())
+                    .map(|l| (*l).clone())
+                else {
+                    continue;
+                };
+                rt.pulls.insert(fid.clone(), Pull { size, link: link.id });
                 pulling += 1;
                 if size == 0 {
                     // nothing to pull: an empty file is complete
@@ -1589,7 +1723,8 @@ impl Links {
                 let part = self.part_path(name, &fid);
                 self.finish_pull(name, &fid, &part);
             } else {
-                if let Some(l) = self.inner.lock().unwrap().rt.get(name).and_then(|r| r.link.clone()) {
+                let all = self.inner.lock().unwrap().rt.get(name).map(|r| r.links.clone()).unwrap_or_default();
+                for l in all {
                     l.w.json(&json!({"t": "frefuse", "fid": fid, "reason": why}));
                 }
                 self.settle(name, &fid, None, &why);
@@ -1602,7 +1737,16 @@ impl Links {
         let Some((fid, off, data)) = parse_chunk(b) else {
             return;
         };
-        let Some(size) = self.inner.lock().unwrap().rt.get(name).and_then(|r| r.pulls.get(&fid).copied()) else {
+        let Some(size) = self
+            .inner
+            .lock()
+            .unwrap()
+            .rt
+            .get(name)
+            .and_then(|r| r.pulls.get(&fid).copied())
+            .filter(|p| p.link == link.id)
+            .map(|p| p.size)
+        else {
             return;
         };
         let part = self.part_path(name, &fid);
@@ -1639,7 +1783,13 @@ impl Links {
 
     /// A pull is complete: check the hash, move it into the inbox.
     fn finish_pull(self: &Arc<Self>, name: &str, fid: &str, part: &Path) {
-        let link = self.inner.lock().unwrap().rt.get(name).and_then(|r| r.link.clone());
+        let link = self
+            .inner
+            .lock()
+            .unwrap()
+            .rt
+            .get(name)
+            .and_then(|r| r.pulls.get(fid).and_then(|p| r.find(p.link)).or_else(|| r.link()));
         let sum = crate::chat::sha256_file(part).unwrap_or_default();
         if sum != fid {
             let _ = fs::remove_file(part);
@@ -1666,6 +1816,8 @@ impl Links {
             let mut inner = self.inner.lock().unwrap();
             if let Some(rt) = inner.rt.get_mut(name) {
                 rt.pulls.remove(fid);
+                rt.file_from.remove(fid);
+                rt.tried.remove(fid);
             }
         }
         match part {
@@ -1705,7 +1857,7 @@ impl Links {
                 .rt
                 .iter_mut()
                 .filter(|(k, _)| before.contains(*k) && !now.contains(k))
-                .filter_map(|(_, r)| r.link.take())
+                .flat_map(|(_, r)| std::mem::take(&mut r.links))
                 .collect();
             drop(inner);
             for l in gone {
@@ -1721,7 +1873,7 @@ impl Links {
             for name in names {
                 let has_url = inner.peers.get(&name).is_some_and(|u| !u.is_empty());
                 let rt = self.rt(&mut inner, &name);
-                if rt.link.is_some() || !has_url {
+                if !rt.links.is_empty() || !has_url {
                     continue;
                 }
                 let can = rt.st.want && rt.st.banned_by.is_empty() && !rt.dialing;
@@ -1745,7 +1897,7 @@ impl Links {
             .unwrap()
             .rt
             .values()
-            .filter_map(|r| r.link.clone())
+            .flat_map(|r| r.links.clone())
             .filter(|l| l.last_rx.lock().unwrap().elapsed() > DEAD_AFTER)
             .collect();
         for l in silent {
@@ -1760,7 +1912,7 @@ impl Links {
                     .unwrap()
                     .rt
                     .values()
-                    .filter_map(|r| r.link.clone())
+                    .flat_map(|r| r.links.clone())
                     .filter(|l| !l.dialed && !l.serial.is_empty())
                     .collect();
                 for l in links {
@@ -1820,7 +1972,7 @@ impl Links {
             .unwrap()
             .rt
             .values()
-            .filter_map(|r| r.link.clone())
+            .flat_map(|r| r.links.clone())
             .collect();
         for l in &links {
             *l.our_bye.lock().unwrap() = Some(reason.to_string());
@@ -1878,7 +2030,7 @@ impl Links {
                     rt.st.banned_by
                 ));
             }
-            if rt.link.is_some() {
+            if !rt.links.is_empty() {
                 return Ok(format!("{name} is already connected"));
             }
             rt.st.want = true;
@@ -1893,7 +2045,7 @@ impl Links {
         let mut inner = self.inner.lock().unwrap();
         loop {
             let rt = self.rt(&mut inner, name);
-            if rt.link.is_some() {
+            if !rt.links.is_empty() {
                 return Ok(format!("connected to {name}"));
             }
             if rt.st.banned_us {
@@ -1936,14 +2088,16 @@ impl Links {
             rt.st.closed_why = why.clone();
             rt.next_dial = None;
             self.save_state(name, &rt.st);
-            rt.link.clone()
+            rt.links.clone()
         };
-        Ok(match link {
-            Some(l) => {
-                l.close_why("disconnect", &why);
+        Ok(match link.is_empty() {
+            false => {
+                for l in &link {
+                    l.close_why("disconnect", &why);
+                }
                 format!("disconnected from {name} and told it why. Neither bia brings the link back by itself, also after a restart; {name} can still ask for it again with its own web_peer_connect (web_peer_ban keeps it out). What you send meanwhile waits")
             }
-            None => format!("{name} was not connected; this bia stopped trying to reach it, and when {name} comes back by itself it is told the link is closed and why"),
+            true => format!("{name} was not connected; this bia stopped trying to reach it, and when {name} comes back by itself it is told the link is closed and why"),
         })
     }
 
@@ -1961,9 +2115,9 @@ impl Links {
             rt.st.banned_by = by.to_string();
             rt.st.want = false;
             self.save_state(name, &rt.st);
-            rt.link.clone()
+            rt.links.clone()
         };
-        if let Some(l) = link {
+        for l in link {
             l.close("banned");
         }
         Ok(format!("banned {name}: its sessions are refused until web_peer_unban; it is told when it tries"))
@@ -1991,15 +2145,16 @@ impl Links {
 
     /// Stop the files of one of our messages from going to a peer.
     pub fn cancel(&self, name: &str, message_id: &str) -> Result<String, String> {
-        let link = self.inner.lock().unwrap().rt.get(name).and_then(|r| r.link.clone());
-        let sending: Vec<String> = link.as_ref().map(|l| l.w.sending().into_iter().map(|(f, _, _)| f).collect()).unwrap_or_default();
+        let all = self.inner.lock().unwrap().rt.get(name).map(|r| r.links.clone()).unwrap_or_default();
+        let sending: Vec<String> = all.iter().flat_map(|l| l.w.sending().into_iter().map(|(f, _, _)| f)).collect();
         let fids = crate::chat::message_fids(name, message_id);
         let hit: Vec<&String> = fids.iter().filter(|f| sending.contains(f)).collect();
         if hit.is_empty() {
             return Err(format!("no file of message {message_id} is going to {name} now"));
         }
-        if let Some(l) = &link {
-            for fid in &hit {
+        for l in &all {
+            let theirs: Vec<String> = l.w.sending().into_iter().map(|(f, _, _)| f).collect();
+            for fid in hit.iter().filter(|f| theirs.contains(f)) {
                 l.w.drop_job(fid);
                 l.w.json(&json!({"t": "fcancel", "fid": fid}));
             }
@@ -2015,7 +2170,7 @@ impl Links {
             .unwrap()
             .rt
             .values()
-            .filter_map(|r| r.link.clone())
+            .flat_map(|r| r.links.clone())
             .filter(|l| !l.dialed && !l.serial.is_empty() && (l.serial == serial || l.serial.starts_with(serial) || serial.starts_with(&l.serial)))
             .collect();
         for l in &links {
@@ -2032,8 +2187,9 @@ impl Links {
             .unwrap()
             .rt
             .remove(name)
-            .and_then(|r| r.link);
-        if let Some(l) = link {
+            .map(|r| r.links)
+            .unwrap_or_default();
+        for l in link {
             l.close("revoked");
         }
         let _ = fs::remove_file(self.state_path(name));
@@ -2045,17 +2201,19 @@ impl Links {
         let mut inner = self.inner.lock().unwrap();
         let rt = self.rt(&mut inner, name);
         let st = &rt.st;
-        let link = rt.link.clone();
+        let link = rt.link();
+        let sessions = rt.links.len();
         let state = if !st.banned_by.is_empty() {
             format!("banned by {}", st.banned_by)
         } else if st.banned_us {
             "banned this bia".into()
         } else if let Some(l) = &link {
             format!(
-                "online since {} ({} {})",
+                "online since {} ({} {}{})",
                 crate::bus::rfc3339_unix(st.last_up),
                 if l.dialed { "dialed to" } else { "dialed from" },
-                l.ip
+                l.ip,
+                if sessions > 1 { format!("; {sessions} sessions open") } else { String::new() }
             )
         } else if st.cannot == "old" {
             "runs an older bia (before 1.9)".into()
@@ -2073,11 +2231,11 @@ impl Links {
             format!("offline{}", if st.want { " (connecting)" } else { "" })
         };
         let mut transfers = vec![];
-        for (fid, size) in &rt.pulls {
+        for (fid, Pull { size, .. }) in &rt.pulls {
             let have = fs::metadata(self.part_path(name, fid)).map(|m| m.len()).unwrap_or(0);
             transfers.push(format!("from {name}: {} {}% ({}/{})", &fid[..12.min(fid.len())], pct(have, *size), human_bytes(have), human_bytes(*size)));
         }
-        if let Some(l) = &link {
+        for l in &rt.links {
             for (fid, acked, end) in l.w.sending() {
                 transfers.push(format!(
                     "to {name}: {} {}% ({}/{})",
@@ -2091,6 +2249,7 @@ impl Links {
         json!({
             "name": name,
             "online": link.is_some(),
+            "sessions": sessions,
             "state": state,
             "want": st.want,
             "banned_by": st.banned_by,
@@ -2327,7 +2486,7 @@ pub fn bringing_up(identity: &str) -> bool {
         let inner = l.inner.lock().unwrap();
         inner.peers.get(identity).is_some_and(|u| !u.is_empty())
             && inner.rt.get(identity).is_some_and(|r| {
-                r.link.is_none() && r.st.want && r.st.banned_by.is_empty() && !r.st.banned_us && r.st.cannot.is_empty()
+                r.links.is_empty() && r.st.want && r.st.banned_by.is_empty() && !r.st.banned_us && r.st.cannot.is_empty()
             })
     })
 }

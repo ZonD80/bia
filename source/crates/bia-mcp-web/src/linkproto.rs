@@ -2,7 +2,9 @@
 //! decisions both ends must agree on. `link.rs` drives it; ARCHITECTURE.md ("The web bus
 //! protocol") is the full description.
 //!
-//! One WebSocket (`GET /ws`) per identity, for browsers, bia-bridge and other bias alike.
+//! One WebSocket (`GET /ws`) per session, for browsers, bia-bridge and other bias alike. A
+//! person or an agent may have several sessions at once (all get every change, and
+//! `sessions {n}` whenever their number changes); another bia has one link.
 //! Text frames are JSON `{t, …}`; binary frames are file chunks
 //! `[fid: 32 bytes sha256][offset: u64 BE][data]`.
 //!
@@ -30,6 +32,9 @@ pub const COPY_AFTER: Duration = Duration::from_secs(20);
 /// Flush time for `bye` frames at shutdown.
 pub const BYE_FLUSH: Duration = Duration::from_secs(2);
 pub const MAX_LINKS: usize = 256;
+/// Live sessions of one person or agent at once (tabs, devices); a new one beyond it
+/// replaces the one heard from least recently.
+pub const MAX_SESSIONS: usize = 8;
 /// Dials to other bias at once.
 pub const MAX_HANDSHAKES: usize = 4;
 /// Handshakes from one address per minute (several people and bias may share one NAT address).

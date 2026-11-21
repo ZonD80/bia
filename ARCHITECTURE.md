@@ -555,14 +555,20 @@ checked against the hash), and the message reaches the model only once its files
 there. Files are kept with their sha256, so any message's attachment can be fetched
 by `fid` and the browser shows media from what it pulled (blob URLs).
 
-*One live session per identity.* A second connection for an identity whose session
-was heard from within the last 15 s gets `bye {reason: "duplicate_key"}`; the web app
-then shows that the previous session is not closed yet and tries again by itself about
-30 s later. An older, silent one is replaced, and the same installation (`instance`)
-reconnecting replaces its own stale session. A browser closing its tab sends
-`bye {reason: "closed"}`, so the next tab gets in at once. Between two bias there is one
-link per pair, whoever dialed. If both dial at once, both keep the link the lower agent
-name dialed. A refused bia tries again after 16 s (its own old session may still count
+*Sessions.* A person or an agent may have several live sessions at once (tabs,
+devices, up to 8; a ninth replaces the one heard from least recently with
+`bye {reason: "duplicate"}`). Every `m`, `gone`, typing, draft and call frame goes to all of
+them, an action's `ack` to the one that sent it, so all stay in step. The server's `hello`
+carries `sessions` (how many are open, this one included) and `sessions {n}` follows
+whenever the number changes; the web app shows "open in N places" while it is 2 or more.
+The same installation (`instance`) reconnecting replaces its own stale session. A file a
+message lists is pulled from the page that sent it, else from another session; one that
+refuses (`frefuse`) is not asked again, and the message goes without the file only once
+no session is left to ask (and the sending page is not merely away). A browser closing its
+tab sends `bye {reason: "closed"}`. Between two bias there is one
+link per pair, whoever dialed: a second connection of a peer bia heard from within the
+last 15 s gets `bye {reason: "duplicate_key"}`, an older, silent one is replaced. If both
+dial at once, both keep the link the lower agent name dialed. A refused bia tries again after 16 s (its own old session may still count
 after a crash and a quick restart); refusals that go on for 20 s mean another machine
 uses the same key, and root is told at both ends.
 

@@ -3,7 +3,7 @@
 Starts the MCP like the agent does (JSON-RPC on stdin/stdout, BIA_FILES in a temp dir, HTTPS on 8443),
 takes the root certificate like a first visitor, then drives the web bus protocol (webbus.py): both
 directions of the one web chat, resent actions applied once, files both ways inside the socket, store
-and forward with catch-up from rx, one live session per identity, bans, the identity rules (never
+and forward with catch-up from rx, several live sessions per identity (in sync), bans, the identity rules (never
 bia, identity required), the removed HTTP chat API and root's console mirror.
 
   docker run --rm --platform linux/arm64 -v $PWD:/work -v bia-cache-arm64:/cache -w /work \
@@ -161,11 +161,35 @@ check(f is not None, "catch-up brings what was said while away, edited")
 f = s2.wait(lambda f: f.get("t") == "gone" and "w-file-1" in f["ids"])
 check(f is not None, "catch-up brings the deletion")
 
-# one live session per identity: a second tab is refused while the first answers
+# several sessions per identity: a second tab joins, both get every change
 s3 = Session(8443, ctx, rx=None, instance="tab-2")
-check(s3.bye == "duplicate_key" and s3.hello is None, f"a second live session is refused: bye {s3.bye}")
+check(s3.hello is not None and s3.hello.get("sessions") == 2, f"a second session is taken, its hello says 2 are open: {s3.hello and s3.hello.get('sessions')} bye {s3.bye}")
+f = s2.wait(lambda f: f.get("t") == "sessions")
+check(f is not None and f["n"] == 2, f"the first session learns there are 2 now: {f}")
 a = s2.act("send", text="still here")
 check(a and a["ok"], "the first session keeps working")
+check(s3.msg("still here") is not None, "what the first tab sends shows in the second")
+a = s3.act("send", text="from the second tab")
+check(a and a["ok"] and s2.msg("from the second tab") is not None, "and the other way round")
+tool("send", identity="root", channel="web", text="to both tabs")
+check(s2.msg("to both tabs") is not None and s3.msg("to both tabs") is not None, "bia's message reaches both")
+# a file is pulled from the tab that sent it, though another tab is newer
+d1 = os.urandom(70_000) + b"one"
+a = s2.act("send", id="w-two-1", text="file from the older tab", files=[s2.offer(d1, "older.bin")])
+ib = inbound(lambda n: n["identity"] == "root" and "file from the older tab" in n["message"], 20)
+got = ib and [l[2:].split(" (")[0] for l in ib["message"].splitlines() if l.startswith("- ")]
+check(bool(got) and open(f"{files}/{got[0]}", "rb").read() == d1, f"pulled from the tab that sent it: {got}")
+# the sending tab no longer has it but the other one does (same browser): asked there
+d2 = os.urandom(50_000) + b"two"
+fid2 = hashlib.sha256(d2).hexdigest()
+s3.offers[fid2] = d2
+a = s2.act("send", id="w-two-2", text="file only the other tab has", files=[{"fid": fid2, "name": "other.bin", "size": len(d2)}])
+ib = inbound(lambda n: n["identity"] == "root" and "file only the other tab has" in n["message"], 20)
+got = ib and [l[2:].split(" (")[0] for l in ib["message"].splitlines() if l.startswith("- ")]
+check(bool(got) and open(f"{files}/{got[0]}", "rb").read() == d2, f"a refusal moves the pull to the other tab: {got}")
+s3.close()
+f = s2.wait(lambda f: f.get("t") == "sessions" and f["n"] == 1)
+check(f is not None, "when the second tab closes, the first learns it is alone again")
 # a reload of the same tab replaces its own stale session
 s4 = Session(8443, ctx, rx=None, instance="tab-1")
 check(s4.hello is not None, "a reload (same instance) takes over")

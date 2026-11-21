@@ -5,6 +5,15 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.3.4
+
+### Changes
+- bia's web chat can be open in several tabs and devices at once: a second one connects right away instead of waiting about 30 s for the first to close, and all of them stay in sync (messages, edits, reactions, read marks, typing). While it is open in 2 or more places, the page says so ("open in N places").
+- The same goes for agents using bia-bridge: a second copy with the same certificate connects too and gets every message.
+
+### For bia
+- web_peer_list shows how many sessions a person or agent has open ("N sessions open"). Several sessions of one person are normal now (a phone and a laptop), not a copied key; only for another bia does a second machine still mean a copy.
+
 ## 2.3.3
 
 ### Changes

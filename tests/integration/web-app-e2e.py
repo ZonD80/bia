@@ -5,8 +5,8 @@ Chrome opens https://127.0.0.1:8443 (bia's own certificate, accepted with a flag
 no-key page takes root's .p12 (password 12345678 tried by itself), the browser enrolls a
 non-extractable key of its own and signs in; a new tab is in at once with it; the app connects with
 protocol 3 and loads the chat, a message both ways, a file from the page (hashed in the page, pulled by bia) and a photo
-from bia (pulled by the page, shown as a blob), a second tab refused while the first is open and
-taking over once it closes, and a message written while bia is down that survives a reload and
+from bia (pulled by the page, shown as a blob), a second tab open at the same time (both in sync,
+both showing "open in 2 places", the note gone once one closes), and a message written while bia is down that survives a reload and
 reaches bia once it is back.
 
   python3 -I tests/integration/web-app-e2e.py target/debug/bia-mcp-web [chrome]
@@ -377,23 +377,20 @@ check(json.loads(t1.js(ASK))["shown"] is False and t1.js("S.prefs.installAsked")
 ua("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
 t1.js("go('chat/main')")
 
-# ---- one live session: a second tab waits while the first is open, then takes over
+# ---- several tabs at once: both connected, in sync, and told how many are open
 t2 = Tab()
-if os.environ.get("DEBUG"):
-    time.sleep(3)
-    print("t2:", t2.js("JSON.stringify({href: location.href, ready: document.readyState, hasS: typeof S, body: document.body ? document.body.innerText.slice(0, 200) : null})"))
-    print("t1:", t1.js("JSON.stringify({wsOk: S.wsOk, st: S.linkState})"))
-check(t2.until("typeof S !== 'undefined' && S.linkState === 'blocked'", 20) is not None, "a second tab is refused while the first is open")
-check("still open" in (t2.js("document.querySelector('#connState').textContent") or ""), "…and says the other session is still open")
-check(t1.js("S.wsOk") is True, "the first tab keeps working")
+check(t2.until(LOADED, 30) is not None, "a second tab connects at once while the first is open")
+check(t1.until("S.sessions === 2", 15) is not None and t2.js("S.sessions") == 2, "both tabs know 2 are open")
+note = "document.querySelector('#sessionsNote')"
+check(t1.js(f"!{note}.hidden && {note}.textContent.includes('2 places')") is True, "the first tab shows 'Open in 2 places'")
+check(t2.js(f"!{note}.hidden") is True, "so does the second")
+t1.js("void sendMessage({text: 'typed in the first tab', files: []})")
+check(t2.until("[...(S.cache.get('main').byId || new Map()).values()].some(m => m.text === 'typed in the first tab')", 15) is not None, "a message from the first tab shows in the second")
+web.tool("send", identity="root", channel="web", text="bia to both tabs")
+for t, n in ((t1, "first"), (t2, "second")):
+    check(t.until("[...(S.cache.get('main').byId || new Map()).values()].some(m => m.text === 'bia to both tabs')", 15) is not None, f"bia's message reaches the {n} tab")
 t1.close()
-if os.environ.get("DEBUG"):
-    time.sleep(5)
-    print("targets:", [t["url"] for t in json.loads(urllib.request.urlopen(f"http://127.0.0.1:{CDP}/json/list").read())])
-    print("server after close:", web.tool("chats"))
-check(t2.until(LOADED, 60) is not None, "once the first tab is closed, the second connects by itself")
-if os.environ.get("DEBUG"):
-    print(t2.js("JSON.stringify({wsOk: S.wsOk, st: S.linkState, hello: !!S.link.hello, bye: S.link.bye, tries: S.link.tries, cache: [...S.cache.keys()]})"))
+check(t2.until(f"S.sessions === 1 && {note}.hidden", 30) is not None, "once the first tab is closed, the second is alone again and the note goes")
 
 # ---- written while bia is down, the tab closed: the next tab sends it once bia is back
 web.stop()

@@ -441,7 +441,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/ws": {
                 "get": {
                     "tags": ["chat"],
-                    "summary": "The web bus (protocol 2): your one chat with bia, for people, other bias and agents alike. Client hello {proto: 2, instance, rx} first; then m {seq, m} / gone {seq, ids} from rx on, live changes, actions with cid → ack (send, edit, delete, react, pin, read, button, vote, close_poll, mute, hist, search), files pulled by the receiver (fget / binary chunks [sha256 32][offset u64][data] / fack / fdone), ping every 5 s (silent 15 s: closed), bye. One live session per identity (a second gets bye duplicate_key). See SKILL.md.",
+                    "summary": "The web bus (protocol 2): your one chat with bia, for people, other bias and agents alike. Client hello {proto: 2, instance, rx} first; then m {seq, m} / gone {seq, ids} from rx on, live changes, actions with cid → ack (send, edit, delete, react, pin, read, button, vote, close_poll, mute, hist, search), files pulled by the receiver (fget / binary chunks [sha256 32][offset u64][data] / fack / fdone), ping every 5 s (silent 15 s: closed), bye. Several sessions per identity may be open at once (up to 8), each gets every change; hello carries sessions, then sessions {n} when it changes. See SKILL.md.",
                     "security": [{"biaSign": []}, {"biaSession": []}],
                     "responses": {"101": {"description": "Switching Protocols"}, "429": {"description": "too many handshakes from this address"}}
                 }

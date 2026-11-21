@@ -219,7 +219,7 @@ rc, out = br("import", URL, "--cert", f"{home}/claude/home/cert.pem", "--key", f
 check(rc == 0 and "as claude" in out, f"import PEM files: {out}")
 time.sleep(3)
 rc, out = br("status", "--bia", "pemcopy")
-check("approved" in out and "another bia-bridge with this certificate" in out, f"a copy of the same certificate is refused while the first is connected: {out}")
+check("connected" in out and "another bia-bridge with this certificate" not in out, f"a copy of the same certificate connects too, next to the first: {out}")
 rc, out = br("status")
 check(rc != 0 and "several bias" in out, f"two of its own need --bia: {out}")
 rc, out = br("forget", "--bia", "pemcopy")

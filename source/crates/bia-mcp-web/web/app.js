@@ -375,7 +375,7 @@ const S = {
   upProg: new Map(),       // fid → fraction of one of our files bia has pulled
   cur: null,
   route: '',
-  link: null, wsOk: false, linkState: 'connecting', hellos: 0,
+  link: null, wsOk: false, linkState: 'connecting', hellos: 0, sessions: 1,
   ready: null, readyResolve: null, loadedAt: Date.now(),
   tasks: [], taskSeen: new Set(),
   status: null,
@@ -681,6 +681,7 @@ async function hist(params) {
 
 function onHello(v) {
   S.wsOk = true;
+  S.sessions = v.sessions || 1;
   setCalled(v.called);
   setIcon(v.icon);
   const main = S.chats.get('main');
@@ -708,6 +709,7 @@ function onEvent(v) {
     case 'm': upsertMsg(v.m); return;
     case 'gone': removeMsgs(v.ids); return;
     case 'self': setCalled(v.called); setIcon(v.icon); renderInstallAsk(); return;
+    case 'sessions': S.sessions = v.n || 1; setConn(); return;
     case 'ring': showRing(Object.assign({}, v, { chat: 'main' })); return;
     case 'ring_end': if (RING.chat) stopRing(); return;
     case 'call': return;
@@ -822,6 +824,13 @@ function setConn() {
     else if (st === 'moved') set(el, 'bia moved its web app to another address. Open ', h('a', { href: S.movedTo }, S.movedTo.replace(/^(https:\/\/[^/]+).*/, '$1')), ' (it answers there in a few seconds; your browser asks for your certificate again).');
     else if (st === 'banned') set(el, 'This identity is banned on this bia.');
     else set(el, 'Connecting…');
+  }
+  // this chat open in other tabs or devices too: all of them stay in step
+  const many = $('#sessionsNote');
+  if (many) {
+    const n = S.wsOk ? (S.sessions || 1) : 1;
+    many.hidden = n < 2;
+    set(many, n === 2 ? 'Open in 2 places (this one and one more tab or device); both stay in sync.' : `Open in ${n} places (this one and ${n - 1} more tabs or devices); all stay in sync.`);
   }
   renderChatHead();
 }
@@ -1141,6 +1150,7 @@ function buildSide() {
       iconBtn('menu', 'Menu', e => sideMenu(e)),
       h('div', { class: 'search' }, ic('search'), search)),
     h('div', { id: 'connState', class: 'side-label', style: 'color:var(--warn)', hidden: true }, 'Connecting…'),
+    h('div', { id: 'sessionsNote', class: 'side-label', hidden: true }),
     h('div', { id: 'notifAsk', class: 'notif-ask', hidden: true }),
     h('div', { id: 'installAsk', class: 'notif-ask', hidden: true }),
     h('div', { class: 'side-scroll', id: 'sideScroll' },
@@ -1321,6 +1331,7 @@ function renderChatHead() {
   else if (S.typing.has(S.cur)) { sub = 'typing…'; on = true; }
   else if (S.root && S.status && /^(thinking|tool|talking|reflecting)/.test(S.status.state || '')) { sub = S.status.state.split(' ')[0] + '…'; on = true; }
   else sub = S.root && S.status && S.status.model ? `online · ${S.status.model}` : 'online';
+  if (S.wsOk && S.sessions > 1 && !on) sub += ` · open in ${S.sessions} places`;
   set(head, 
     backBtn(),
     h('div', { class: 'avatar xs ' + (S.cur === 'main' ? '' : colorOf(S.cur)) }, S.cur === 'main' ? biaImg({ style: 'width:100%;height:100%;border-radius:50%;object-fit:cover' }) : initials(c.title)),

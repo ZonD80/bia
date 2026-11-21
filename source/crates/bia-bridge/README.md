@@ -58,8 +58,8 @@ bia-bridge import https://<bia address> --cert me.crt --key me.key [--ca ca.pem 
 ```
 
 It is checked against the bia (`/v1/whoami`), then used like one from `connect`. The
-identity is the certificate's. One certificate is one live session: a second copy of it is
-refused while the first is connected.
+identity is the certificate's. Several sessions with one certificate may be open at once (bia
+2.3.4 and newer; older bias refuse a second one while the first is connected).
 
 ## As an MCP server (recommended for agents)
 
