@@ -306,7 +306,7 @@ mod tests {
     use super::*;
 
     fn ib(chan: &str, id: &str, text: &str, t: u64) -> Inbound {
-        Inbound { identity: "Anna (@anna)".into(), channel: chan.into(), issued: UNIX_EPOCH + std::time::Duration::from_secs(t), id: id.into(), text: text.into() }
+        Inbound { identity: "Anna (@anna)".into(), channel: chan.into(), issued: UNIX_EPOCH + std::time::Duration::from_secs(t), id: id.into(), text: text.into(), sender: String::new(), group: false }
     }
 
     #[test]

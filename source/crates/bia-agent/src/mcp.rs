@@ -535,6 +535,20 @@ impl Drop for McpServer {
 
 fn dispatch(sh: &Shared, v: Value) {
     if v.get("id").is_none() {
+        // group members and joins/leaves: the agent loop keeps them (groups.rs) and decides
+        // whether the model hears of it
+        if let Some(d) = members_event(&v) {
+            sh.con.push_inbound(Inbound {
+                identity: crate::tools::ID_SYSTEM.into(),
+                channel: crate::groups::CH_MEMBERS.into(),
+                issued: std::time::SystemTime::now(),
+                id: String::new(),
+                text: d.to_string(),
+                sender: String::new(),
+                group: false,
+            });
+            return;
+        }
         if let Some(ib) = inbound_from_notification(&v) {
             // ignored chats: the MCP checked the finished message against the rules
             let data = v.pointer("/params/data");
@@ -686,9 +700,19 @@ fn inbound_from_notification(v: &Value) -> Option<Inbound> {
                 .and_then(|x| x.as_str())
                 .unwrap_or("")
                 .to_string(),
+            sender: obj.get("sender").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            group: obj.get("group").and_then(|x| x.as_bool()).unwrap_or(false),
         }
         .ensure_id(),
     )
+}
+
+fn members_event(v: &Value) -> Option<&Value> {
+    if v.get("method").and_then(|m| m.as_str()) != Some("notifications/message") {
+        return None;
+    }
+    let d = v.pointer("/params/data")?;
+    matches!(d.get("t").and_then(|t| t.as_str()), Some("members" | "member")).then_some(d)
 }
 
 fn log_from_notification(v: &Value) -> Option<String> {

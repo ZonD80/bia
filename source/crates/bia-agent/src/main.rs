@@ -11,6 +11,7 @@ mod crash;
 mod cut;
 mod dream;
 mod gguf;
+mod groups;
 mod hw;
 mod ignored;
 mod jobs;
@@ -22,6 +23,7 @@ mod me;
 mod memory;
 mod outbox;
 mod provider_log;
+mod queue;
 mod release;
 mod remote;
 mod repairs;
@@ -624,11 +626,19 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         state_path,
         pending: saved_pending,
         job_ready: Vec::new(),
+        unworked: Default::default(),
+        steps_since_reflect: 0,
+        tight_reflects: 0,
+        queue_reserve: false,
+        queue_told: Default::default(),
+        queue_noticed_at: 0,
+        taken: Vec::new(),
         show_thinking: cfg.agent.show_thinking,
         remote: None,
         fmm_path,
         memory: crate::memory::Store::open(&paths.files.join("state")),
         fmm_ctx_used: 0,
+        fmm_overhead: 0,
         fmm_backups: Default::default(),
         fmm_probation: None,
     };
@@ -837,6 +847,8 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
                 },
                 setup.as_deref().unwrap_or("")
             ),
+            sender: String::new(),
+            group: false,
         }
         .ensure_id(),
     );

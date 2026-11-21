@@ -82,6 +82,34 @@ def secs(ms):
     return int((ms or 0) / 1000)
 
 
+CONTROL_OPS = {"add": "join", "joinByLink": "join", "join": "join", "remove": "leave", "leave": "leave"}
+
+
+def control_members(m):
+    """(op, user id) for each person a CONTROL attachment adds or removes (MAX puts the ids in
+    userIds or userId; joining or leaving by oneself names nobody: then it is the sender)."""
+    out = []
+    for a in m.attaches or []:
+        if enum_value(getattr(a, "type", "")) != "CONTROL":
+            continue
+        ev = str(getattr(a, "event", "") or "")
+        op = CONTROL_OPS.get(ev)
+        if not op:
+            continue
+        raw = a.model_dump(by_alias=True) if hasattr(a, "model_dump") else {}
+        ids = raw.get("userIds") or raw.get("user_ids") or []
+        if not ids and raw.get("userId"):
+            ids = [raw["userId"]]
+        if not ids and ev in ("joinByLink", "join", "leave") and m.sender:
+            ids = [m.sender]
+        for uid in ids:
+            try:
+                out.append((op, int(uid)))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 class Lru(OrderedDict):
     def __init__(self, cap):
         super().__init__()
@@ -340,6 +368,10 @@ class Bridge:
         chat = message.chat_id
         if chat is None:
             return
+        # someone added, removed, joined or left: the agent keeps who is in a group
+        for op, uid in control_members(message):
+            event("member", chat=str(chat), op=op, id=str(uid), name=await self.name_of(uid),
+                  by=str(message.sender or ""), me=uid == self.me_id())
         event("message", **await self.row(message, chat))
 
     async def on_edit(self, message, client):
@@ -641,6 +673,7 @@ class Bridge:
 
     # --- messages as the MCP reads them ---
 
+
     def attachment_rows(self, m, chat):
         out, notes, location = [], [], None
         for a in m.attaches or []:
@@ -867,6 +900,17 @@ class Bridge:
 
     async def m_resolve(self, p):
         return await self.resolve(p.get("query", ""))
+
+    async def m_members(self, p):
+        """Who is in a group, for the agent's queue ranking (bia left out; a short list of a big group)."""
+        client = self.need_client()
+        chat = await client.get_chat(as_int(p["chat"]))
+        self.chats[chat.id] = chat
+        members, _ = await client.get_chat_members(chat.id, count=24)
+        me = self.me_id()
+        rows = [{"id": str(m.contact.id), "name": full_name(m.contact)} for m in members if m.contact.id != me]
+        count = getattr(chat, "participants_count", None) or len(chat.participants or {}) or len(rows) + 1
+        return {"title": chat.title or "", "members": rows, "count": int(count)}
 
     async def m_group_info(self, p):
         client = self.need_client()

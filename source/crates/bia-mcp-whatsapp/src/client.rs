@@ -954,9 +954,14 @@ impl Wa {
     /// [`Wa::inbound`] with when it was written (WhatsApp's timestamp, Unix seconds; 0 = now).
     /// Returns what the chat's ignore rules made of it (an ignored one stays unread).
     pub fn inbound_at(&self, identity: &str, key: &str, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
+        self.inbound_by(identity, key, id, text, issued, &bia_mcp::members::From::default())
+    }
+
+    /// [`Wa::inbound_at`] with who wrote it (their id) and whether the chat is a group.
+    pub fn inbound_by(&self, identity: &str, key: &str, id: &str, text: &str, issued: i64, from: &bia_mcp::members::From) -> bia_mcp::ignore::Verdict {
         let channel = format!("whatsapp:{key}");
         match self.ctx_clone() {
-            Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
+            Some(ctx) => ctx.inbound_by(identity, &channel, id, text, issued, from),
             None => {
                 hold_inbound(identity, &channel, id, text, issued);
                 if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) }
@@ -1258,11 +1263,82 @@ impl Wa {
         ));
     }
 
+    /// Tell the agent who is in a group (bia left out; a big group only as partial). Ids are
+    /// in the same form as the people's direct chats (phone keys, LIDs resolved).
+    async fn send_members(&self, client: &Client, gid: &Jid, key: &str) {
+        let m = match client.groups().get_metadata(gid).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.log(format!("members whatsapp:{key}: {e}"));
+                return;
+            }
+        };
+        let me = client.pn().map(|j| format!("whatsapp:{}", key_of_jid(&j))).unwrap_or_default();
+        let mut members = vec![];
+        for p in m.participants.iter().take(bia_mcp::members::MAX_LISTED + 2) {
+            let k = match &p.phone_number {
+                Some(pn) => key_of_jid(pn),
+                None => key_of_jid_async(client, &p.jid).await,
+            };
+            let name = self.book.lock().unwrap().title(&k).unwrap_or_default();
+            members.push(bia_mcp::members::Member { id: format!("whatsapp:{k}"), name });
+        }
+        let count = m.size.map(|n| n as usize).unwrap_or(m.participants.len());
+        // bia is counted by the platform too
+        let others = if me.is_empty() { count } else { count.saturating_sub(1) };
+        let snap = bia_mcp::members::Snapshot::new(&format!("whatsapp:{key}"), &m.subject, members, &me, others);
+        if let Some(ctx) = self.ctx_clone() {
+            ctx.members(&snap);
+        }
+    }
+
+    /// Members added to or removed from a group: tell the agent (queue ranking).
+    async fn on_group_update(&self, client: &Client, u: &whatsapp_rust::wacore::types::events::GroupUpdate) {
+        use whatsapp_rust::wacore::stanza::groups::GroupNotificationAction as A;
+        let (op, people) = match &u.action {
+            A::Add { participants, .. } => ("join", participants),
+            A::Remove { participants, .. } => ("leave", participants),
+            _ => return,
+        };
+        let key = key_of_jid_async(client, &u.group_jid).await;
+        let channel = format!("whatsapp:{key}");
+        let me = client.pn().map(|j| key_of_jid(&j)).unwrap_or_default();
+        let by = match u.participant_pn.as_ref().or(u.participant.as_ref()) {
+            Some(j) => format!("whatsapp:{}", key_of_jid_async(client, j).await),
+            None => String::new(),
+        };
+        let Some(ctx) = self.ctx_clone() else { return };
+        for p in people {
+            let k = match &p.phone_number {
+                Some(pn) => key_of_jid(pn),
+                None => key_of_jid_async(client, &p.jid).await,
+            };
+            if k == me {
+                // bia itself: list the group again at its next message
+                bia_mcp::members::tracker().forget(&channel);
+                continue;
+            }
+            let name = p
+                .display_name
+                .clone()
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| self.book.lock().unwrap().title(&k).unwrap_or_default());
+            let who = format!("whatsapp:{k}");
+            let ev = if op == "join" {
+                bia_mcp::members::Change::join(&channel, "", &who, &name, &by)
+            } else {
+                bia_mcp::members::Change::leave(&channel, "", &who, &name, &by)
+            };
+            ctx.member_event(&ev);
+        }
+    }
+
     async fn on_event(&self, generation: u64, event: Arc<Event>, client: Arc<Client>) {
         if !self.current_generation_is(generation) {
             return;
         }
         match &*event {
+            Event::GroupUpdate(u) => self.on_group_update(&client, u).await,
             Event::PairSuccess(p) => {
                 let phone = p.id.user.to_string();
                 let mut cfg = Self::load_cfg();
@@ -2736,7 +2812,11 @@ impl Wa {
                 .and_then(|r| r);
             deliver = with_transcript(heard, &deliver, &format!("whatsapp/{rel}"));
         }
-        if self.inbound_at(&label, &key, &info.id, &deliver, ts).read() && ignoring {
+        let from = bia_mcp::members::From::new(if from_me { String::new() } else { format!("whatsapp:{sender_key}") }, chat.is_group());
+        if from.group && bia_mcp::members::tracker().due(&format!("whatsapp:{key}")) {
+            self.send_members(&client, &chat, &key).await;
+        }
+        if self.inbound_by(&label, &key, &info.id, &deliver, ts, &from).read() && ignoring {
             if let Err(e) = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await {
                 self.log(format!("mark_read chat={key}: {e}"));
             }

@@ -9,6 +9,7 @@ pub mod apps;
 pub mod ignore;
 pub mod lanes;
 pub mod md;
+pub mod members;
 pub mod share;
 pub mod statefile;
 
@@ -102,6 +103,13 @@ impl Ctx {
     /// Returns what the chat's ignore rules made of it ([`ignore::check`]): the agent keeps
     /// an ignored one from the model, and its read receipt is left unsent.
     pub fn inbound_at(&self, identity: &str, channel: &str, id: &str, message: &str, issued: i64) -> ignore::Verdict {
+        self.inbound_by(identity, channel, id, message, issued, &members::From::default())
+    }
+    /// [`Ctx::inbound_at`] with who wrote it on the platform: `from.sender` is the person's id
+    /// in channel form (`telegram:<user id>`, the same string as their direct chat with bia),
+    /// `from.group` says the chat is a group. The agent ranks the queue by them (root-trust
+    /// people, groups of only root people) and never takes a group for the person who wrote.
+    pub fn inbound_by(&self, identity: &str, channel: &str, id: &str, message: &str, issued: i64, from: &members::From) -> ignore::Verdict {
         // bia's own notices (catch-up headers, deletions) are not the chat's talk
         let verdict = if identity == "system" { ignore::Verdict::Deliver } else { ignore::check(channel, message) };
         let mut v = json!({
@@ -114,6 +122,12 @@ impl Ctx {
         if issued > 0 {
             v["issued"] = json!(issued);
         }
+        if !from.sender.is_empty() {
+            v["sender"] = json!(from.sender);
+        }
+        if from.group {
+            v["group"] = json!(true);
+        }
         match &verdict {
             ignore::Verdict::Deliver => {}
             ignore::Verdict::Ignored => v["ignored"] = json!(true),
@@ -121,6 +135,17 @@ impl Ctx {
         }
         self.note(v);
         verdict
+    }
+    /// Who is in a group (bia itself left out), for the agent's queue ranking: sent before a
+    /// group's first message reaches the agent, and again after [`members::Tracker::due`].
+    /// `complete` false: the list is partial (a big group), so the group counts as mixed.
+    pub fn members(&self, snap: &members::Snapshot) {
+        self.note(snap.to_json());
+    }
+    /// Someone joined or left a group (`op` join | leave). The agent keeps the member list
+    /// and tells the model when it changes how the group's messages rank.
+    pub fn member_event(&self, ev: &members::Change) {
+        self.note(ev.to_json());
     }
     /// Progress in percent for long operations.
     pub fn progress(&self, pct: u32, msg: impl AsRef<str>) {

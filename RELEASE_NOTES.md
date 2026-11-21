@@ -5,6 +5,22 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.4.0
+
+### Changes
+- When many messages wait at once (a busy group, everything that came while bia was off), bia takes them in by importance, as much as its memory window holds, instead of all at once. Before, a long enough queue could leave bia only summarizing its memory, turn after turn, without answering anyone.
+- The order: root, root's trusted people and groups of only them first; then other contacts; then strangers, and replies to bia or mentions of it in groups; then the rest of group talk. One busy group cannot hold back another chat.
+- bia is told how much is waiting and from where, so it can tell people who need an answer that it is busy (only bia talks to people; nothing is sent automatically).
+- A message too long for bia's memory window arrives cut, with the whole text kept in a file bia can read.
+- In groups bia now knows who wrote by their account id, and who is in the group. A group is never taken for the person who wrote in it, and Telegram names now carry the person's id.
+- bia hears of everyone who joins or leaves its groups. When someone who is not one of root's trusted people joins a group of only them, that comes first and bia decides how the group ranks; the comings and goings of other groups wait with their talk.
+
+### For bia
+- A `[queue]` notice: answer what you have first; queue_take(chat, count) brings a chat's waiting messages now; tell people in its "Started waiting" chats that you are busy only if they need an answer soon.
+- chat_level(chat, level) fixes how a chat ranks (p0 … p3, or auto); chat_levels lists the groups, their level and who in them is not a root contact.
+- `[members]` notices tell every join and leave (with the person's id); most need nothing. One about someone not a root contact joining a root group: decide. A root person: addressbook_upsert their contact with trust root and their id in channels. Otherwise keep the group at p0 with chat_level, or leave it mixed.
+- Before this, a group could be linked to the first person who wrote in it: addressbook_list, and addressbook_unlink every group channel (telegram:-…, whatsapp:…@g.us, a messenger/instagram/max group) from a person's contact.
+
 ## 2.3.4
 
 ### Changes

@@ -61,9 +61,14 @@ pub fn log(msg: &str) {
 /// A message for the model on `<platform>:<chat>`.
 /// Returns what the chat's ignore rules made of it (an ignored one stays unread).
 pub fn inbound(identity: &str, chat: &str, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
+    inbound_by(identity, chat, id, text, issued, &bia_mcp::members::From::default())
+}
+
+/// [`inbound`] with who wrote it (their id) and whether the chat is a group.
+pub fn inbound_by(identity: &str, chat: &str, id: &str, text: &str, issued: i64, from: &bia_mcp::members::From) -> bia_mcp::ignore::Verdict {
     let channel = platform().channel(chat);
     match ctx() {
-        Some(c) => c.inbound_at(identity, &channel, id, text, issued),
+        Some(c) => c.inbound_by(identity, &channel, id, text, issued, from),
         None => {
             let issued = if issued > 0 { issued } else { state::now_secs() };
             let verdict = if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) };
@@ -212,6 +217,7 @@ pub fn on_event(ev: Value) {
         "delete" => deleted(&ev),
         "reaction" => reacted(&ev),
         "chat" => note_title(s(&ev, "chat"), s(&ev, "title")),
+        "member" => member(&ev),
         "logged_out" => {
             state::update_cfg(p, |c| c.logged_in = false);
             let again = match p {
@@ -367,11 +373,71 @@ fn deliver(ev: &Value, live: bool) {
             let heard = bia_speech::transcribe_note_from(&abs, lang.as_deref());
             body = with_transcript(heard, &body);
         }
-        if inbound(&who, &chat, &id, &body, ts).read() && ignoring {
+        let from = bia_mcp::members::From::new(if sender.is_empty() { String::new() } else { platform().channel(&sender) }, b(&ev, "group"));
+        if from.group && bia_mcp::members::tracker().due(&platform().channel(&chat)) {
+            send_members(&chat);
+        }
+        if inbound_by(&who, &chat, &id, &body, ts, &from).read() && ignoring {
             mark_read(&chat, &id);
         }
         bump_last_seen(ts);
     });
+}
+
+/// Tell the agent who is in a group: the helper lists the members it knows (bia left out).
+fn send_members(chat: &str) {
+    let p = platform();
+    let res = match helper::get().call("members", json!({"chat": chat}), QUICK) {
+        Ok(r) => r,
+        Err(e) => {
+            log(&format!("{} members {chat}: {e}", p.name()));
+            return;
+        }
+    };
+    let members: Vec<bia_mcp::members::Member> = res
+        .get("members")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter(|m| !s(m, "id").is_empty())
+                .map(|m| bia_mcp::members::Member { id: p.channel(s(m, "id")), name: s(m, "name").to_string() })
+                .collect()
+        })
+        .unwrap_or_default();
+    let count = res.get("count").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let me = state::load_cfg(p).id;
+    let me = if me.is_empty() { String::new() } else { p.channel(&me) };
+    // the platform's count includes bia
+    let count = if me.is_empty() { count } else { count.saturating_sub(1) };
+    let snap = bia_mcp::members::Snapshot::new(&p.channel(chat), s(&res, "title"), members, &me, count);
+    if let Some(c) = ctx() {
+        c.members(&snap);
+    }
+}
+
+/// `{"event":"member","chat","op":"join"|"leave","id","name","by"}` from the helper.
+fn member(ev: &Value) {
+    let p = platform();
+    let (chat, id) = (s(ev, "chat"), s(ev, "id"));
+    if chat.is_empty() || id.is_empty() {
+        return;
+    }
+    let channel = p.channel(chat);
+    if b(ev, "me") {
+        // bia itself was added or removed: list the group again at its next message
+        bia_mcp::members::tracker().forget(&channel);
+        return;
+    }
+    let by = if s(ev, "by").is_empty() { String::new() } else { p.channel(s(ev, "by")) };
+    let who = p.channel(id);
+    let ch = match s(ev, "op") {
+        "join" => bia_mcp::members::Change::join(&channel, s(ev, "title"), &who, s(ev, "name"), &by),
+        "leave" => bia_mcp::members::Change::leave(&channel, s(ev, "title"), &who, s(ev, "name"), &by),
+        _ => return,
+    };
+    if let Some(c) = ctx() {
+        c.member_event(&ch);
+    }
 }
 
 /// `[voice message, 4.2s, whisper-base 1.3s] [speech ru] …` before the message's own lines.

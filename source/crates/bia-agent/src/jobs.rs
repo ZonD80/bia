@@ -368,6 +368,8 @@ pub fn inbound(id: &str, body: &str) -> Inbound {
         issued: SystemTime::now(),
         id: String::new(),
         text,
+        sender: String::new(),
+        group: false,
     }
     .ensure_id()
 }

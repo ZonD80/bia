@@ -150,6 +150,16 @@ ignore_mcp() {
   builder 'cargo build -q -p bia-mcp-meta && python3 -I tests/integration/ignore-e2e.py "$CARGO_TARGET_DIR/debug"'
 }
 
+# who wrote a message and who is in a group: the messenger MCP with a fake bia-meta, MAX's control messages
+members_mcp() {
+  builder 'cargo build -q -p bia-mcp-meta && python3 -I tests/integration/members-e2e.py "$CARGO_TARGET_DIR/debug" source/flash/MCPs/max/bia_max.py'
+}
+
+# the waiting queue: the real agent, a scripted model on a small context, a fake chat bus flooding it
+queue_agent() {
+  builder 'cargo build -q -p bia-agent && python3 -I tests/integration/queue-e2e.py "$CARGO_TARGET_DIR/debug"'
+}
+
 for stage in "$@"; do
   case $stage in
     unit)
@@ -160,6 +170,8 @@ for stage in "$@"; do
       run bia-bridge bridge
       run meta-mcp meta_mcp
       run ignore-mcp ignore_mcp
+      run members-mcp members_mcp
+      run queue-agent queue_agent
       run max-mcp max_mcp
       run screen-desktop screen_desktop
       run chrome-cert chrome_cert

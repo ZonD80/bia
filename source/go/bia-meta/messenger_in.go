@@ -138,13 +138,25 @@ func (m *messenger) handleTable(ctx context.Context, tbl *table.LSTable, initial
 		}
 		id, group, _ := m.chatOf(ctx, tt, p.ThreadKey)
 		if group {
-			m.st.PutKV(ctx, "member:"+id+":"+uid, b2s(p.IsAdmin))
+			key := "member:" + id + ":" + uid
+			// someone new in a group whose members were known: a join (not the first listing)
+			fresh := !initial && m.st.GetKV(ctx, key) == "" && len(m.st.KVPrefix(ctx, "member:"+id+":")) > 0
+			m.st.PutKV(ctx, key, b2s(p.IsAdmin))
+			if fresh {
+				emitMember(id, "join", uid, m.st.UserName(ctx, uid), uid == own)
+			}
 		}
 	}
 	for _, p := range tbl.LSRemoveParticipantFromThread {
 		id, group, _ := m.chatOf(ctx, tt, p.ThreadKey)
 		if group {
-			m.st.DelKV(ctx, "member:"+id+":"+strconv.FormatInt(p.ParticipantId, 10))
+			uid := strconv.FormatInt(p.ParticipantId, 10)
+			key := "member:" + id + ":" + uid
+			was := m.st.GetKV(ctx, key) != ""
+			m.st.DelKV(ctx, key)
+			if was && !initial {
+				emitMember(id, "leave", uid, m.st.UserName(ctx, uid), uid == own)
+			}
 		}
 	}
 

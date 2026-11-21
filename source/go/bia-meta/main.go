@@ -52,6 +52,15 @@ func (o *out) write(v any) {
 
 var stdout = &out{enc: json.NewEncoder(os.Stdout)}
 
+// emitMember tells the MCP that someone joined or left a group (the agent ranks its queue by
+// who is in a group). me: it was this account itself.
+func emitMember(chat, op, id, name string, me bool) {
+	if chat == "" || id == "" {
+		return
+	}
+	emit("member", map[string]any{"chat": chat, "op": op, "id": id, "name": name, "me": me})
+}
+
 // emit sends an unsolicited event: {"event": kind, ...fields}.
 func emit(kind string, fields map[string]any) {
 	m := make(map[string]any, len(fields)+1)

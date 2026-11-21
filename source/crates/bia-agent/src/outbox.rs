@@ -569,6 +569,8 @@ fn notice(text: &str) -> Inbound {
         issued: SystemTime::now(),
         id: String::new(),
         text: text.into(),
+        sender: String::new(),
+        group: false,
     }
     .ensure_id()
 }

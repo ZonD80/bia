@@ -619,15 +619,27 @@ func (ig *instagram) handleDelta(ctx context.Context, d *slidetypes.Delta) {
 		emit("chat_deleted", map[string]any{"chat": c.ID})
 	case *slidetypes.ParticipantJoinEvent:
 		if evt.Thread.AsIGDirectThread != nil {
+			known := len(ig.st.KVPrefix(ctx, "member:"+c.ID+":")) > 0
 			for _, u := range evt.Thread.AsIGDirectThread.Users {
 				ig.putUser(ctx, u)
 				if u.InteropMessagingUserFBID != 0 {
-					ig.st.PutKV(ctx, "member:"+c.ID+":"+strconv.FormatInt(u.InteropMessagingUserFBID, 10), "member")
+					uid := strconv.FormatInt(u.InteropMessagingUserFBID, 10)
+					key := "member:" + c.ID + ":" + uid
+					fresh := known && ig.st.GetKV(ctx, key) == ""
+					ig.st.PutKV(ctx, key, "member")
+					if fresh {
+						emitMember(c.ID, "join", uid, ig.st.UserName(ctx, uid), uid == own)
+					}
 				}
 			}
 		}
 	case *slidetypes.ParticipantLeaveEvent:
-		ig.st.DelKV(ctx, "member:"+c.ID+":"+strconv.FormatInt(evt.LeftParticipantFBID, 10))
+		uid := strconv.FormatInt(evt.LeftParticipantFBID, 10)
+		key := "member:" + c.ID + ":" + uid
+		if ig.st.GetKV(ctx, key) != "" {
+			emitMember(c.ID, "leave", uid, ig.st.UserName(ctx, uid), uid == own)
+		}
+		ig.st.DelKV(ctx, key)
 	case *slidetypes.UpdateThreadFolderEvent:
 		_ = ig.st.PutChat(ctx, &Chat{ID: c.ID, Kind: c.Kind, Folder: evt.Folder, Request: evt.Folder == "pending"})
 	}

@@ -567,14 +567,23 @@ impl Tg {
             let _ = msg.mark_read_with(client).await;
             return Ok(false);
         }
-        let identity = {
-            let uid = msg.sender_user_id().unwrap_or(0);
-            if uid != 0 {
-                user_label(client, uid).await
-            } else {
-                format!("telegram:{chat_id}")
+        let uid = msg.sender_user_id().unwrap_or(0);
+        // a join or a leave: for the agent's member list (queue ranking), not for the model
+        if let Some(action) = msg.action() {
+            if member_action(client, chat_id, uid, action).await {
+                return Ok(false);
             }
+        }
+        let identity = if uid != 0 {
+            user_label(client, uid).await
+        } else {
+            format!("telegram:{chat_id}")
         };
+        // who wrote it, by id; a group (negative chat id) is not that person
+        let from = bia_mcp::members::From::new(if uid != 0 { format!("telegram:{uid}") } else { String::new() }, chat_id < 0);
+        if from.group && bia_mcp::members::tracker().due(&format!("telegram:{chat_id}")) {
+            send_members(client, chat_id, msg.peer_id().cloned()).await;
+        }
         let mut text = msg.text().unwrap_or("").to_string();
         let mid = msg.id();
         let msg_id = mid.to_string();
@@ -587,7 +596,7 @@ impl Tg {
             }
             mark_delivered_read(client, &msg, chat_id).await;
             turn.wait().await;
-            tg.inbound_at(&identity, chat_id, &msg_id, &text, date);
+            tg.inbound_by(&identity, chat_id, &msg_id, &text, date, &from);
             texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
             return Ok(true);
         }
@@ -666,7 +675,7 @@ impl Tg {
                 .and_then(|r| r);
             text = with_transcript(heard, &text, &format!("telegram/{rel}"));
         }
-        if tg.inbound_at(&identity, chat_id, &msg_id, &text, date).read() && ignoring {
+        if tg.inbound_by(&identity, chat_id, &msg_id, &text, date, &from).read() && ignoring {
             mark_delivered_read(client, &msg, chat_id).await;
         }
         // The text as sent (no file notes), so an edit can show what it was.
@@ -681,13 +690,32 @@ impl Tg {
     /// [`Tg::inbound`] with when it was written (Telegram's date, Unix seconds; 0 = now).
     /// Returns what the chat's ignore rules made of it (an ignored one stays unread).
     pub fn inbound_at(&self, identity: &str, chat_id: i64, id: &str, text: &str, issued: i64) -> bia_mcp::ignore::Verdict {
+        self.inbound_by(identity, chat_id, id, text, issued, &bia_mcp::members::From::default())
+    }
+
+    /// [`Tg::inbound_at`] with who wrote it (their id) and whether the chat is a group.
+    pub fn inbound_by(&self, identity: &str, chat_id: i64, id: &str, text: &str, issued: i64, from: &bia_mcp::members::From) -> bia_mcp::ignore::Verdict {
         let channel = format!("telegram:{chat_id}");
         match self.ctx_clone() {
-            Some(ctx) => ctx.inbound_at(identity, &channel, id, text, issued),
+            Some(ctx) => ctx.inbound_by(identity, &channel, id, text, issued, from),
             None => {
                 hold_inbound(identity, &channel, id, text, issued);
                 if identity == "system" { bia_mcp::ignore::Verdict::Deliver } else { bia_mcp::ignore::check(&channel, text) }
             }
+        }
+    }
+
+    /// Who is in a group, for the agent (dropped before the agent is attached).
+    pub fn members(&self, snap: &bia_mcp::members::Snapshot) {
+        if let Some(ctx) = self.ctx_clone() {
+            ctx.members(snap);
+        }
+    }
+
+    /// Someone joined or left a group, for the agent.
+    pub fn member_event(&self, ev: &bia_mcp::members::Change) {
+        if let Some(ctx) = self.ctx_clone() {
+            ctx.member_event(ev);
         }
     }
 
@@ -2563,6 +2591,71 @@ fn format_reaction_summary(r: &tl::types::MessageReactions) -> String {
     parts.join(" ")
 }
 
+/// Name and id of a Telegram user as a member: (telegram:<id>, name).
+fn member_of(u: &tl::types::User) -> bia_mcp::members::Member {
+    let name = [u.first_name.as_deref(), u.last_name.as_deref()].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+    let name = match u.username.as_deref().filter(|s| !s.is_empty()) {
+        Some(un) if name.is_empty() => format!("@{un}"),
+        Some(un) => format!("{name} (@{un})"),
+        None => name,
+    };
+    bia_mcp::members::Member { id: format!("telegram:{}", u.id), name }
+}
+
+/// Tell the agent who is in a group (bia left out; a big group only as partial).
+async fn send_members(client: &Client, chat_id: i64, peer: Option<tl::enums::Peer>) {
+    let Some(peer) = peer else { return };
+    let limit = bia_mcp::members::MAX_LISTED + 2;
+    let list = match client.get_participants(peer, limit as i32).await {
+        Ok(l) => l,
+        Err(e) => {
+            Tg::global().log(format!("members telegram:{chat_id}: {e}"));
+            return;
+        }
+    };
+    let me = my_user_id(client).await.map(|i| format!("telegram:{i}")).unwrap_or_default();
+    let full = list.len() >= limit;
+    let members: Vec<bia_mcp::members::Member> = list.iter().map(|p| member_of(&p.user)).collect();
+    let snap = bia_mcp::members::Snapshot::new(&format!("telegram:{chat_id}"), "", members, &me, if full { bia_mcp::members::MAX_LISTED + 1 } else { 0 });
+    Tg::global().members(&snap);
+}
+
+/// A service message that adds or removes members: tell the agent. Returns whether it was one.
+async fn member_action(client: &Client, chat_id: i64, actor: i64, action: &tl::enums::MessageAction) -> bool {
+    use tl::enums::MessageAction as A;
+    let (op, ids): (&str, Vec<i64>) = match action {
+        A::ChatAddUser(a) => ("join", a.users.clone()),
+        A::ChatJoinedByLink(_) | A::ChatJoinedByRequest => ("join", vec![actor]),
+        A::ChatDeleteUser(a) => ("leave", vec![a.user_id]),
+        _ => return false,
+    };
+    let channel = format!("telegram:{chat_id}");
+    let me = my_user_id(client).await.unwrap_or(0);
+    let by = if actor != 0 { format!("telegram:{actor}") } else { String::new() };
+    for id in ids.into_iter().filter(|&i| i != 0) {
+        if id == me {
+            // bia itself was added or removed: list the group again at its next message
+            bia_mcp::members::tracker().forget(&channel);
+            continue;
+        }
+        let name = match client.get_users_by_id(&[id]).await.ok().and_then(|u| u.into_iter().flatten().next()) {
+            Some(u) => match &u.raw {
+                tl::enums::User::User(x) => member_of(x).name,
+                _ => String::new(),
+            },
+            None => String::new(),
+        };
+        let who = format!("telegram:{id}");
+        let ev = if op == "join" {
+            bia_mcp::members::Change::join(&channel, "", &who, &name, &by)
+        } else {
+            bia_mcp::members::Change::leave(&channel, "", &who, &name, &by)
+        };
+        Tg::global().member_event(&ev);
+    }
+    true
+}
+
 async fn user_label(client: &Client, user_id: i64) -> String {
     match client.get_users_by_id(&[user_id]).await {
         Ok(users) => users
@@ -2570,16 +2663,17 @@ async fn user_label(client: &Client, user_id: i64) -> String {
             .flatten()
             .next()
             .map(|u| {
+                // the id too: the model finds them by it (contacts, chat levels, joins)
                 let name = u.full_name();
                 if let Some(un) = u.username() {
                     if !un.is_empty() {
-                        return format!("{name} (@{un})");
+                        return format!("{name} (@{un}, {user_id})");
                     }
                 }
                 if name.is_empty() {
                     format!("user:{user_id}")
                 } else {
-                    name
+                    format!("{name} ({user_id})")
                 }
             })
             .unwrap_or_else(|| format!("user:{user_id}")),

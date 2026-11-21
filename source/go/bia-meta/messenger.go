@@ -612,6 +612,13 @@ func (m *messenger) onE2EE(gen uint64, raw any) {
 			_ = m.st.PutChat(m.rootCtx, &Chat{ID: waChatKey(evt.JID), Kind: "group", E2EE: true, WAJID: evt.JID.String(), Title: evt.Name.Name})
 			emit("chat", map[string]any{"chat": waChatKey(evt.JID), "title": evt.Name.Name, "group": true})
 		}
+		own := m.ownID()
+		for _, j := range evt.Join {
+			emitMember(waChatKey(evt.JID), "join", j.User, m.st.UserName(m.rootCtx, j.User), j.User == own)
+		}
+		for _, j := range evt.Leave {
+			emitMember(waChatKey(evt.JID), "leave", j.User, m.st.UserName(m.rootCtx, j.User), j.User == own)
+		}
 	}
 }
 

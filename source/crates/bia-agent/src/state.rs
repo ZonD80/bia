@@ -39,6 +39,10 @@ pub struct SavedPending {
     #[serde(default)]
     pub id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sender: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub group: bool,
 }
 
 fn default_root() -> String {
@@ -56,6 +60,8 @@ impl SavedPending {
             issued: UNIX_EPOCH + Duration::from_secs(self.issued),
             id: self.id.clone(),
             text: self.text.clone(),
+            sender: self.sender.clone(),
+            group: self.group,
         }
         .ensure_id()
     }
@@ -66,6 +72,8 @@ impl SavedPending {
             channel: ib.channel.clone(),
             id: ib.id.clone(),
             text: ib.text.clone(),
+            sender: ib.sender.clone(),
+            group: ib.group,
         }
     }
 }

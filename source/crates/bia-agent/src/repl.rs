@@ -245,6 +245,20 @@ pub struct Repl {
     pub pending: Vec<Inbound>,
     /// job results that arrived during a reply; delivered into the same turn
     pub job_ready: Vec<Inbound>,
+    /// history ids of messages delivered since the model's last step: a reflection never
+    /// takes them (the model would reflect on what it never answered)
+    pub unworked: std::collections::HashSet<String>,
+    /// model steps since the last reflection
+    pub steps_since_reflect: u32,
+    /// reflections in a row with at most one model step between them while messages waited
+    pub tight_reflects: u32,
+    /// the loop guard is on: queue::LOOP_RESERVE_PCT of the context stays free while messages wait
+    pub queue_reserve: bool,
+    /// chats the model was already told are waiting (this busy spell), and when it was last told
+    pub queue_told: std::collections::HashSet<String>,
+    pub queue_noticed_at: u64,
+    /// messages queue_take took: they follow the round's tool results
+    pub taken: Vec<Inbound>,
     pub show_thinking: bool,
     /// Frontier Model Mode: the remote brain, when configured and enabled
     pub remote: Option<Remote>,
@@ -252,6 +266,8 @@ pub struct Repl {
     pub memory: crate::memory::Store,
     /// last known FMM prompt+completion tokens (header ctx meter; 0 until the first remote reply)
     pub fmm_ctx_used: usize,
+    /// tokens the provider counted beyond the history at the last reply (system prompt, tools)
+    pub fmm_overhead: usize,
     pub fmm_backups: std::collections::HashMap<String, Vec<u8>>,
     /// FMM settings from before the last switch, kept until the new provider's first real
     /// reply succeeds; if that reply fails they are restored and the turn runs again.
@@ -350,6 +366,7 @@ impl Repl {
             };
             self.con.write(RESET);
             let Some(ib) = ib else { return Exit::Quit };
+            let Some(ib) = self.intake(ib) else { continue };
             if local_channel(&ib.channel) {
                 let line = ib.text.trim().to_string();
                 if line.is_empty() {
@@ -714,9 +731,27 @@ impl Repl {
     }
 
     fn compact_once(&mut self) -> bool {
+        self.compact_once_with(false)
+    }
+
+    /// Where the messages the model has not had a step with yet begin (history.len() if none).
+    fn fresh_from(&self) -> usize {
+        if self.unworked.is_empty() {
+            return self.history.len();
+        }
+        self.history
+            .iter()
+            .position(|m| self.unworked.contains(&m.id))
+            .unwrap_or(self.history.len())
+    }
+
+    /// One reflection. `want`: room is wanted for waiting messages (queue planning), so it
+    /// runs below the watermark too. Messages the model has not had a step with stay as they are.
+    fn compact_once_with(&mut self, want: bool) -> bool {
         let spine = self.spine_len();
-        let tail = self.history.len() - spine;
-        let forced = self.tools.pending_reflect.get();
+        let fresh = self.fresh_from().max(spine);
+        let tail = fresh - spine;
+        let forced = want || self.tools.pending_reflect.get();
         if !forced && !self.need_watermark() {
             return false;
         }
@@ -725,7 +760,7 @@ impl Repl {
             return self.compact_range(0, spine, true);
         }
         if tail > 0 {
-            return self.compact_range(spine, self.history.len(), false);
+            return self.compact_range(spine, fresh, false);
         }
         if spine > 0 {
             return self.compact_range(0, spine, true);
@@ -875,8 +910,299 @@ impl Repl {
         // Drop stale API usage so the next watermark check sees the compacted window.
         self.fmm_ctx_used = self.history_token_estimate();
         self.tools.pending_reflect.set(false);
+        self.note_reflection();
         self.save_state(false);
         true
+    }
+
+    /// The loop guard: reflections that keep coming with at most one model step between them
+    /// while messages wait mean the queue fills the context as fast as it is reflected; from
+    /// then on a share of it stays free until the queue is empty.
+    fn note_reflection(&mut self) {
+        if !self.pending.is_empty() && self.steps_since_reflect <= 1 {
+            self.tight_reflects += 1;
+        } else {
+            self.tight_reflects = 0;
+        }
+        self.steps_since_reflect = 0;
+        if self.tight_reflects >= 2 && !self.queue_reserve && !self.pending.is_empty() {
+            self.queue_reserve = true;
+            self.queue_noticed_at = 0; // the model hears of it with the next delivery
+            self.con.writeln(&self.con.c(
+                GRAY,
+                &format!(
+                    "  [queue: reflections keep coming while {} message(s) wait; {}% of the context stays free until the queue is empty]",
+                    self.pending.len(),
+                    crate::queue::LOOP_RESERVE_PCT
+                ),
+            ));
+        }
+    }
+
+    /// The model had a step with what was delivered.
+    fn after_step(&mut self) {
+        self.unworked.clear();
+        self.steps_since_reflect = self.steps_since_reflect.saturating_add(1);
+    }
+
+    /// Tokens the context holds now, the system prompt and tool list included.
+    fn used_tokens(&self) -> usize {
+        if self.remote.is_some() {
+            // measured at the last reply; before any, estimated from the prompt and tools
+            let overhead = if self.fmm_overhead > 0 {
+                self.fmm_overhead
+            } else {
+                (self.system.chars().count()
+                    + self
+                        .tools
+                        .prompt_specs()
+                        .iter()
+                        .map(|t| t.name.len() + t.description.len() + t.parameters.to_string().len())
+                        .sum::<usize>())
+                .div_ceil(4)
+            };
+            return self.fmm_ctx_used.max(self.history_token_estimate() + overhead);
+        }
+        self.live_tokens()
+    }
+
+    /// Room kept free for the model's own work when deciding what to deliver.
+    fn queue_reserve_tokens(&self, lim: usize) -> usize {
+        if self.queue_reserve {
+            lim * crate::queue::LOOP_RESERVE_PCT / 100
+        } else {
+            4096.min(lim / 4)
+        }
+    }
+
+    /// Tokens of what the model already worked on and is not reflected yet (between the last
+    /// reflection and the first message it has not had a step with).
+    fn worked_tail_tokens(&self) -> usize {
+        let spine = self.spine_len();
+        let fresh = self.fresh_from().max(spine);
+        self.history[spine..fresh].iter().map(|m| m.content.chars().count().div_ceil(4)).sum()
+    }
+
+    /// One reflection of what the model already worked on, to make room for waiting messages.
+    fn compact_worked(&mut self) -> bool {
+        let spine = self.spine_len();
+        let fresh = self.fresh_from().max(spine);
+        fresh > spine && self.compact_range(spine, fresh, false)
+    }
+
+    /// The queue is empty: the busy spell is over.
+    fn queue_idle(&mut self) {
+        if self.queue_reserve {
+            self.con.writeln(&self.con.c(GRAY, "  [queue: empty again; the context is used whole]"));
+        }
+        self.queue_reserve = false;
+        self.tight_reflects = 0;
+        self.queue_told.clear();
+    }
+
+    fn ranker_tiers(&self, msgs: &[Inbound]) -> Vec<crate::queue::Tier> {
+        let me = crate::me::Me::load(&self.tools.files_dir).name;
+        let rk = crate::queue::Ranker { book: &self.tools.addressbook, groups: &self.tools.chat_groups, me: &me };
+        msgs.iter().map(|ib| rk.tier(ib)).collect()
+    }
+
+    /// The waiting messages that go to the model now (queue.rs), in the order they enter the
+    /// conversation, with a `[queue]` notice last when some still wait. Not recorded yet.
+    /// Room is made first by reflecting what the model already worked on; the first message
+    /// always goes when the model has nothing new, so the queue keeps moving.
+    fn admit(&mut self) -> Vec<Inbound> {
+        if !self.pending.iter().any(|ib| console_command(ib).is_none()) {
+            self.queue_idle();
+            return vec![];
+        }
+        let lim = self.ctx_budget();
+        if lim > 0 {
+            let files = self.tools.files_dir.clone();
+            let long_dir = files.join("inbox").join("long");
+            let mut cut = vec![];
+            for ib in self.pending.iter_mut().filter(|ib| console_command(ib).is_none()) {
+                let n = ib.text.chars().count();
+                if crate::queue::cut_long(ib, lim, &long_dir, &files) {
+                    cut.push(format!("  [queue: a {n}-character message from {}@{} was cut to fit the context; whole in files/inbox/long]", ib.identity, ib.channel));
+                }
+            }
+            for l in cut {
+                self.con.writeln(&self.con.c(GRAY, &l));
+            }
+            // plan before delivering: when what waits does not fit, reflect what the model has
+            // already worked on (once, and only when that is worth a reflection); the waiting
+            // messages are still in `pending` here, so the loop guard counts them
+            let reserve = self.queue_reserve_tokens(lim);
+            let need: usize = self.pending.iter().filter(|ib| console_command(ib).is_none()).map(crate::queue::tokens).sum();
+            let free = lim.saturating_sub(self.used_tokens() + reserve);
+            if free < need.min(lim / 2) && self.worked_tail_tokens() >= lim / 8 {
+                self.compact_worked();
+            }
+        }
+        let batch = std::mem::take(&mut self.pending);
+        let (cmds, msgs): (Vec<_>, Vec<_>) = batch
+            .into_iter()
+            .partition(|ib| console_command(ib).is_some());
+        self.pending = cmds;
+        if lim == 0 {
+            return msgs;
+        }
+        let reserve = self.queue_reserve_tokens(lim);
+        let free = lim.saturating_sub(self.used_tokens() + reserve);
+        let tiers = self.ranker_tiers(&msgs);
+        let items: Vec<crate::queue::Item> = msgs
+            .iter()
+            .zip(&tiers)
+            .map(|(ib, &tier)| crate::queue::Item {
+                tier,
+                chat: ib.channel.clone(),
+                issued: crate::clock::unix(ib.issued),
+                tokens: crate::queue::tokens(ib),
+            })
+            .collect();
+        let mut picked = crate::queue::pick(&items, free);
+        if !self.unworked.is_empty() && picked.first().is_some_and(|&i| items[i].tokens > free) {
+            picked.clear();
+        }
+        let order = crate::queue::delivery_order(&items, &picked);
+        let mut slots: Vec<Option<Inbound>> = msgs.into_iter().map(Some).collect();
+        let mut out: Vec<Inbound> = order.iter().filter_map(|&i| slots[i].take()).collect();
+        let rest: Vec<(crate::queue::Tier, Inbound)> = slots
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|ib| (tiers[i], ib)))
+            .collect();
+        if rest.is_empty() {
+            self.queue_idle();
+        } else {
+            self.con.writeln(&self.con.c(
+                GRAY,
+                &format!("  [queue: {} delivered, {} wait (context {}/{} tokens)]", out.len(), rest.len(), self.used_tokens().min(lim), lim),
+            ));
+            if !out.is_empty() {
+                if let Some(n) = self.queue_notice(&rest) {
+                    out.push(n);
+                }
+            }
+        }
+        self.pending.extend(rest.into_iter().map(|(_, ib)| ib));
+        out
+    }
+
+    /// `[queue] …` for the model, when chats started waiting since it was last told or a
+    /// while has passed (queue::NOTICE_EVERY_SECS).
+    fn queue_notice(&mut self, rest: &[(crate::queue::Tier, Inbound)]) -> Option<Inbound> {
+        let refs: Vec<(crate::queue::Tier, &Inbound)> = rest.iter().map(|(t, ib)| (*t, ib)).collect();
+        let w = crate::queue::waiting(&refs);
+        let chats: std::collections::HashSet<&str> = w.iter().map(|x| x.chat.as_str()).collect();
+        self.queue_told.retain(|c| chats.contains(c.as_str()));
+        let newly: Vec<String> = w
+            .iter()
+            .filter(|x| !self.queue_told.contains(&x.chat))
+            .filter(|x| crate::tools::chat_bus(&x.chat).is_some() || crate::tools::is_web(&x.chat))
+            .map(|x| x.chat.clone())
+            .collect();
+        let now = crate::clock::unix(crate::clock::now());
+        if newly.is_empty() && now.saturating_sub(self.queue_noticed_at) < crate::queue::NOTICE_EVERY_SECS {
+            return None;
+        }
+        self.queue_told.extend(newly.iter().cloned());
+        self.queue_noticed_at = now;
+        Some(Inbound {
+            identity: ID_SYSTEM.into(),
+            channel: crate::queue::CH_QUEUE.into(),
+            issued: crate::clock::now(),
+            id: crate::console::mint_msg_id(),
+            text: crate::queue::notice(&w, &newly, now, self.queue_reserve),
+            sender: String::new(),
+            group: false,
+        })
+    }
+
+    /// queue_take: move waiting messages into the conversation now (they follow the round's
+    /// tool results), as many as fit.
+    fn take_call(&mut self, args: &serde_json::Value) -> (String, bool) {
+        let chat = args.get("chat").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(20).clamp(1, 500) as usize;
+        let lim = self.ctx_budget();
+        let taken_tokens: usize = self.taken.iter().map(crate::queue::tokens).sum();
+        let free = if lim == 0 {
+            usize::MAX
+        } else {
+            lim.saturating_sub(self.used_tokens() + self.queue_reserve_tokens(lim) + taken_tokens)
+        };
+        let idx: Vec<usize> = (0..self.pending.len())
+            .filter(|&i| console_command(&self.pending[i]).is_none())
+            .filter(|&i| chat.is_empty() || self.pending[i].channel == chat)
+            .collect();
+        if idx.is_empty() {
+            let left = self.pending.iter().filter(|ib| console_command(ib).is_none()).count();
+            return (
+                if chat.is_empty() {
+                    "nothing waits".into()
+                } else {
+                    format!("nothing waits from {chat} ({left} message(s) wait from other chats)")
+                },
+                false,
+            );
+        }
+        let cand: Vec<Inbound> = idx.iter().map(|&i| self.pending[i].clone()).collect();
+        let tiers = self.ranker_tiers(&cand);
+        let items: Vec<crate::queue::Item> = cand
+            .iter()
+            .zip(&tiers)
+            .map(|(ib, &tier)| crate::queue::Item {
+                // one chat: its own order, oldest first
+                tier: if chat.is_empty() { tier } else { 0 },
+                chat: ib.channel.clone(),
+                issued: crate::clock::unix(ib.issued),
+                tokens: crate::queue::tokens(ib),
+            })
+            .collect();
+        let mut used = 0;
+        let mut take: Vec<usize> = vec![];
+        for k in crate::queue::offer_order(&items) {
+            if take.len() >= count || used + items[k].tokens > free {
+                break;
+            }
+            used += items[k].tokens;
+            take.push(k);
+        }
+        let waiting_there = idx.len();
+        if take.is_empty() {
+            return (
+                format!(
+                    "no room in your context for them now ({waiting_there} wait{}); finish what you have, they come by themselves after the next reflection",
+                    if chat.is_empty() { String::new() } else { format!(" from {chat}") }
+                ),
+                false,
+            );
+        }
+        let chosen: std::collections::HashSet<usize> = take.iter().map(|&k| idx[k]).collect();
+        let mut keep = vec![];
+        let mut moved = vec![];
+        for (i, ib) in std::mem::take(&mut self.pending).into_iter().enumerate() {
+            if chosen.contains(&i) {
+                moved.push(ib);
+            } else {
+                keep.push(ib);
+            }
+        }
+        self.pending = keep;
+        moved.sort_by_key(|ib| ib.issued);
+        let n = moved.len();
+        self.taken.extend(moved);
+        let left = waiting_there - n;
+        let total_left = self.pending.iter().filter(|ib| console_command(ib).is_none()).count();
+        (
+            format!(
+                "took {n} of {waiting_there} waiting{} (they follow this result); {left} still wait{}{}",
+                if chat.is_empty() { String::new() } else { format!(" from {chat}") },
+                if chat.is_empty() { String::new() } else { " there".to_string() },
+                if left > 0 && n < count { " (no more room now)" } else { "" }
+            ) + &if chat.is_empty() || total_left == left { String::new() } else { format!(", {total_left} in all") },
+            false,
+        )
     }
 
     /// `None` when a slash command or a blank Enter stopped the reflection.
@@ -2037,6 +2363,8 @@ now: {now}", done.join("\n")), failed)
                 self.model_config_call(&args)
             } else if name == "memory_cut" {
                 self.cut_call(&args)
+            } else if name == "queue_take" {
+                self.take_call(&args)
             } else if name == "self_set" {
                 let (root, system) = (self.asker_root, self.asker_system);
                 self.self_call(&args, root, system)
@@ -2241,6 +2569,8 @@ now: {now}", done.join("\n")), failed)
                     self.model_config_call(&args)
                 } else if name == "memory_cut" {
                     self.cut_call(&args)
+                } else if name == "queue_take" {
+                    self.take_call(&args)
                 } else if name == "self_set" {
                     // root typed it on the console
                     self.self_call(&args, true, false)
@@ -2349,7 +2679,8 @@ now: {now}", done.join("\n")), failed)
         let queued: std::cell::RefCell<Vec<Inbound>> = std::cell::RefCell::new(vec![]);
         let t0 = std::time::Instant::now();
         let out_chars = std::cell::Cell::new(0usize);
-        let prompt_est = self.fmm_ctx_used.max(self.history_token_estimate());
+        let prompt_hist_est = self.history_token_estimate();
+        let prompt_est = self.fmm_ctx_used.max(prompt_hist_est);
         let ctx_total = self.ctx_budget();
         let guard = std::cell::RefCell::new(crate::runaway::Guard::default());
         let r = remote.generate(
@@ -2402,6 +2733,11 @@ now: {now}", done.join("\n")), failed)
         };
         let used = (input_tokens + output_tokens) as usize;
         self.fmm_ctx_used = used;
+        // what the provider counts beyond the history (system prompt, tool list): kept, so the
+        // queue still counts it after a reflection resets fmm_ctx_used to the history alone
+        if r.input_tokens > 0 {
+            self.fmm_overhead = (r.input_tokens as usize).saturating_sub(prompt_hist_est);
+        }
         let msgs = self.history.len() + 1; // include the assistant reply about to be stored
         self.con.update_status(|s| {
             s.tps = tps as f32;
@@ -2529,9 +2865,42 @@ now: {now}", done.join("\n")), failed)
         }
     }
 
+    /// First look at an arriving message: group member events are kept here (groups.rs) and
+    /// become a notice for the model only when they change how a root group ranks.
+    fn intake(&mut self, ib: Inbound) -> Option<Inbound> {
+        if ib.channel != crate::groups::CH_MEMBERS || ib.identity != ID_SYSTEM || !ib.text.starts_with('{') {
+            return Some(ib);
+        }
+        let ev: serde_json::Value = serde_json::from_str(&ib.text).ok()?;
+        let ch = ev.get("channel").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let book = &self.tools.addressbook;
+        let is_root = |id: &str| book.is_root_id(id);
+        let was_root = self.tools.chat_groups.get(&ch).is_some_and(|g| g.all_root(&is_root));
+        let changed = self.tools.chat_groups.apply(&ev)?;
+        let g = self.tools.chat_groups.get(&ch)?.clone();
+        let line = format!(
+            "  [members] {ch}: {} {}",
+            changed.op,
+            changed.who.iter().map(|(id, n)| if n.is_empty() { id.clone() } else { format!("{n} ({id})") }).collect::<Vec<_>>().join(", ")
+        );
+        self.con.writeln(&self.con.c(GRAY, line.trim_end()));
+        let (text, tier) = crate::groups::notice(&changed, &g, was_root, &is_root)?;
+        Some(Inbound {
+            identity: ID_SYSTEM.into(),
+            // members (P0) or members:p<n>: the tier it waits in (queue.rs)
+            channel: crate::groups::notice_channel(tier),
+            issued: ib.issued,
+            id: crate::console::mint_msg_id(),
+            text,
+            sender: String::new(),
+            group: false,
+        })
+    }
+
     /// Pull any waiting inbound into `job_ready` / `pending`.
     fn collect_inbound(&mut self) {
         while let Some(ib) = self.con.try_read_inbound() {
+            let Some(ib) = self.intake(ib) else { continue };
             if local_channel(&ib.channel) && ib.text.trim().is_empty() {
                 continue;
             }
@@ -2554,11 +2923,7 @@ now: {now}", done.join("\n")), failed)
 
     /// Move queued non-command messages into the conversation. Slash commands stay pending.
     fn deliver_queued(&mut self) -> usize {
-        let batch = std::mem::take(&mut self.pending);
-        let (cmds, msgs): (Vec<_>, Vec<_>) = batch
-            .into_iter()
-            .partition(|ib| console_command(ib).is_some());
-        self.pending = cmds;
+        let msgs = self.admit();
         if msgs.is_empty() {
             return 0;
         }
@@ -2580,8 +2945,13 @@ now: {now}", done.join("\n")), failed)
         // Not counted: a finished background send alone is no reason for another round.
         self.record_outbox_notes();
         self.record_ignored_note();
+        // what queue_take took this round, right after the tool results
+        let taken = std::mem::take(&mut self.taken);
+        for ib in &taken {
+            self.record_inbound(ib);
+        }
         let jobs = std::mem::take(&mut self.job_ready);
-        let n_jobs = jobs.len();
+        let n_jobs = jobs.len() + taken.len();
         for ib in &jobs {
             self.record_inbound(ib);
         }
@@ -2631,12 +3001,17 @@ now: {now}", done.join("\n")), failed)
             issued: crate::clock::now(),
             id: crate::console::mint_msg_id(),
             text: crate::unanswered::notice(&due, &jobs, now),
+            sender: String::new(),
+            group: false,
         })
     }
 
     fn record_inbound(&mut self, ib: &Inbound) {
         self.con.journal_done(&ib.id);
-        if ib.identity == ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) && ib.channel != crate::tools::CH_SCHEDULE {
+        // the agent's own notes on the queue and on group members: neither a request nor a bus
+        let note = ib.identity == ID_SYSTEM && (ib.channel == crate::queue::CH_QUEUE || crate::groups::is_notice_channel(&ib.channel));
+        if note {
+        } else if ib.identity == ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) && ib.channel != crate::tools::CH_SCHEDULE {
             self.asker_system = true;
             self.asker_root = false;
         } else if ib.identity != ID_SYSTEM {
@@ -2645,8 +3020,10 @@ now: {now}", done.join("\n")), failed)
         if ib.identity != ID_SYSTEM && !ib.channel.starts_with(crate::jobs::PREFIX) {
             // a person wrote: a new task gets a fresh round budget
             self.human_seq += 1;
+            // in a group the chat is not the person: only the sender's own id counts
             let root = ib.identity == crate::tools::ID_ROOT
-                || self.tools.addressbook.find_for(&ib.identity, &ib.channel).is_some_and(|c| c.trust == "root");
+                || self.tools.addressbook.is_root_id(&ib.sender)
+                || (!ib.group && self.tools.addressbook.find_for(&ib.identity, &ib.channel).is_some_and(|c| c.trust == "root"));
             self.asker_root = root;
             self.tools.dream.note_human(root);
         }
@@ -2658,22 +3035,28 @@ now: {now}", done.join("\n")), failed)
             &format!("{}@{} {}", ib.identity, ib.channel, ib.text),
         );
         let bus = ib.channel.split(':').next().unwrap_or(ib.channel.as_str());
-        self.tools.buses.upsert(&ib.channel, bus, "");
+        if !note {
+            self.tools.buses.upsert(&ib.channel, bus, "");
+        }
         if ib.identity != ID_SYSTEM
             && !ib.channel.starts_with(crate::jobs::PREFIX)
             && ib.channel != crate::tools::CH_SCHEDULE
         {
             self.tools.note_inbound(&ib.identity, &ib.channel);
         }
-        // web/console name the person by identity; only linked channels are remembered
+        // web/console name the person by identity; only linked channels are remembered. A
+        // group is no person: linking it would make everyone in it that contact.
         if !crate::addressbook::identity_channel(&ib.channel)
             && ib.identity != ID_SYSTEM
             && ib.channel != crate::tools::CH_SCHEDULE
+            && !ib.group
         {
             let _ =
                 self.tools
                     .addressbook
                     .remember_channel(&ib.channel, &ib.identity, &ib.identity);
+            // their platform id, where it is not the chat's (so they are known in groups)
+            self.tools.addressbook.note_sender(&ib.channel, &ib.sender);
         }
         // [speech ru] … (calls, voice messages): learn the person's language
         if ib.identity != ID_SYSTEM {
@@ -2723,6 +3106,10 @@ now: {now}", done.join("\n")), failed)
         }
         let env = envelope(&ib.identity, &ib.channel, ib.issued, &id, &ib.text);
         self.push_history(Msg::user(env));
+        // not reflected away before the model has had a step with it
+        if let Some(m) = self.history.last() {
+            self.unworked.insert(m.id.clone());
+        }
     }
 
     /// Background sends that finished since the last look ([sent o17 → …]), as one quiet
@@ -2766,7 +3153,10 @@ now: {now}", done.join("\n")), failed)
         self.push_history(Msg::user(env));
     }
 
-    fn turn(&mut self, mut messages: Vec<Inbound>) {
+    fn turn(&mut self, messages: Vec<Inbound>) {
+        // everything goes through the queue: by rank, as much as the context takes (queue.rs)
+        self.pending.extend(messages);
+        let mut messages = self.admit();
         // MCPs started in the background: attach the finished ones before the model reads
         // their job results (callable now, plus their block when it changed)
         self.tools.poll_starts(&mut messages);
@@ -2817,9 +3207,13 @@ now: {now}", done.join("\n")), failed)
             }
             if self.remote.is_some() {
                 match self.remote_step() {
-                    Ok(None) => self.fmm_probation = None,
+                    Ok(None) => {
+                        self.fmm_probation = None;
+                        self.after_step();
+                    }
                     Ok(Some(_)) => {
                         self.fmm_probation = None;
+                        self.after_step();
                         loops += 1;
                         if loops <= crate::runaway::RETRIES {
                             continue;
@@ -3007,6 +3401,7 @@ now: {now}", done.join("\n")), failed)
                 self.log("assistant", &text);
                 self.con.writeln(&self.con.c(RED, "  [stopped: the reply kept repeating]"));
                 self.push_history(Msg::assistant(crate::runaway::cut(&text), vec![]));
+                self.after_step();
                 self.system_message(&crate::runaway::notice(&tail));
                 loops += 1;
                 if loops <= crate::runaway::RETRIES {
@@ -3029,6 +3424,7 @@ now: {now}", done.join("\n")), failed)
                 c.id = format!("local_{}_{k}", self.history.len());
             }
             self.push_history(Msg::assistant(text.clone(), calls.clone()));
+            self.after_step();
             self.log("assistant", &text);
             if stats.stop == Stop::Interrupted {
                 break;
@@ -3520,6 +3916,8 @@ mod channel_tests {
             issued: std::time::SystemTime::now(),
             id: "b1".into(),
             text: text.into(),
+            sender: String::new(),
+            group: false,
         }
     }
 

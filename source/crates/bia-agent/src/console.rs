@@ -32,6 +32,11 @@ pub struct Inbound {
     /// Message id: platform id (Telegram/WhatsApp) or a locally minted `b…` id.
     pub id: String,
     pub text: String,
+    /// Who wrote it on the platform, in channel form (`telegram:<user id>`); empty when the
+    /// bus did not say (web, console, system notices).
+    pub sender: String,
+    /// The chat is a group (the chat MCP said so).
+    pub group: bool,
 }
 
 /// Human messages from the buses are journaled; system notices, console input, job
@@ -63,6 +68,8 @@ fn journal_pending(path: &std::path::Path) -> Vec<Inbound> {
                     ),
                 id: s("id"),
                 text: s("text"),
+                sender: s("sender"),
+                group: v.get("group").and_then(|x| x.as_bool()).unwrap_or(false),
             }),
             Some("done") => {
                 done.insert(s("id"));
@@ -84,6 +91,8 @@ impl Inbound {
             issued: SystemTime::now(),
             id: mint_msg_id(),
             text: text.into(),
+            sender: String::new(),
+            group: false,
         }
     }
 
@@ -509,6 +518,8 @@ impl Console {
                 "issued": ib.issued.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
                 "id": ib.id,
                 "text": ib.text,
+                "sender": ib.sender,
+                "group": ib.group,
             }));
         }
         let _ = self.tx.send(ib);
@@ -524,7 +535,7 @@ impl Console {
                 serde_json::json!({
                     "op": "in", "identity": ib.identity, "channel": ib.channel,
                     "issued": ib.issued.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-                    "id": ib.id, "text": ib.text,
+                    "id": ib.id, "text": ib.text, "sender": ib.sender, "group": ib.group,
                 })
                 .to_string()
                     + "\n"
@@ -1325,6 +1336,8 @@ mod journal_tests {
             issued: std::time::SystemTime::now(),
             id: id.into(),
             text: format!("text {id}"),
+            sender: String::new(),
+            group: false,
         };
         con.push_inbound(msg("1", "telegram:5", "alice"));
         con.push_inbound(msg("2", "web:c1", "root"));

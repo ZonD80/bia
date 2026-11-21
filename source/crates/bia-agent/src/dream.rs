@@ -1028,6 +1028,8 @@ pub fn start(d: Arc<Dream>, con: Arc<Console>) {
                     issued: crate::clock::now(),
                     id: String::new(),
                     text,
+                    sender: String::new(),
+                    group: false,
                 }
                 .ensure_id(),
             );

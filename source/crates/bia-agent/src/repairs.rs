@@ -19,6 +19,8 @@ pub fn start(state: PathBuf, con: Arc<Console>) {
                     issued: crate::clock::now(),
                     id: String::new(),
                     text,
+                    sender: String::new(),
+                    group: false,
                 }
                 .ensure_id(),
             );

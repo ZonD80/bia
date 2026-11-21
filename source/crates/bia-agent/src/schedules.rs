@@ -611,6 +611,8 @@ fn push_fired(con: &Console, ev: Fired) {
             issued,
             id: String::new(),
             text: ev.text,
+            sender: String::new(),
+            group: false,
         }
         .ensure_id(),
     );

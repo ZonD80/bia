@@ -28,6 +28,11 @@ pub struct Contact {
     /// A different language heard once; it replaces `lang` when heard again.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub lang_pending: String,
+    /// The person's own ids on the platforms (channel form, `instagram:<user id>`) where their
+    /// direct chat has a different id: learned from their direct messages, so they are found
+    /// as members and senders in groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
 }
 
 /// Channels that name the person by their identity (console: root; web: the client certificate)
@@ -100,6 +105,37 @@ impl AddressBook {
             .find(|c| c.channels.iter().any(|ch| ch == channel))
     }
 
+    /// The contact a platform user id (channel form) belongs to: their direct chat has that
+    /// id, or it was learned from their direct messages (`ids`).
+    pub fn find_by_id(&self, id: &str) -> Option<&Contact> {
+        if id.is_empty() {
+            return None;
+        }
+        self.contacts.iter().find(|c| c.channels.iter().any(|ch| ch == id) || c.ids.iter().any(|x| x == id))
+    }
+
+    /// A person with root trust: root, or a contact with trust root.
+    pub fn is_root_id(&self, id: &str) -> bool {
+        id == crate::tools::ID_ROOT || self.find_by_id(id).is_some_and(|c| c.trust == "root")
+    }
+
+    /// A direct chat's sender id differs from the chat's id (Instagram, MAX): keep it with the
+    /// chat's contact. Returns whether it was new.
+    pub fn note_sender(&mut self, channel: &str, sender: &str) -> bool {
+        if sender.is_empty() || sender == channel {
+            return false;
+        }
+        let Some(c) = self.contacts.iter_mut().find(|c| c.channels.iter().any(|ch| ch == channel)) else {
+            return false;
+        };
+        if c.ids.iter().any(|x| x == sender) {
+            return false;
+        }
+        c.ids.push(sender.to_string());
+        let _ = self.save();
+        true
+    }
+
     /// Speech in `code` was heard from this person. The first language heard is
     /// adopted; a different one replaces it when heard twice in a row. An explicitly
     /// set language is kept. Returns the new language when it changed.
@@ -131,6 +167,7 @@ impl AddressBook {
                         lang: String::new(),
                         lang_set: false,
                         lang_pending: String::new(),
+            ids: vec![],
                     });
                     self.contacts.len() - 1
                 }
@@ -259,6 +296,7 @@ impl AddressBook {
             lang: String::new(),
             lang_set: false,
             lang_pending: String::new(),
+            ids: vec![],
         };
         self.contacts.push(c.clone());
         self.save()?;
@@ -318,6 +356,7 @@ impl AddressBook {
             lang_set: lang.as_deref().is_some_and(|l| !l.is_empty()),
             lang: lang.unwrap_or_default(),
             lang_pending: String::new(),
+            ids: vec![],
         };
         self.contacts.push(c.clone());
         self.save()?;

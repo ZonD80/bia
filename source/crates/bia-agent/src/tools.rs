@@ -958,6 +958,8 @@ pub struct Tools {
     pub dream: Arc<crate::dream::Dream>,
     con: Arc<Console>,
     pub addressbook: crate::addressbook::AddressBook,
+    /// group members and chat levels (queue ranking)
+    pub chat_groups: crate::groups::Groups,
     pub buses: crate::buses::Buses,
     pub schedules: Arc<Mutex<crate::schedules::Store>>,
     pub jobs: Arc<Mutex<crate::jobs::Store>>,
@@ -1094,6 +1096,7 @@ impl Tools {
             dream,
             con,
             addressbook: crate::addressbook::AddressBook::load(&state.join("addressbook.json")),
+            chat_groups: crate::groups::Groups::load(&state.join("groups.json")),
             buses: crate::buses::Buses::load(&state.join("buses.json")),
             schedules,
             jobs: Arc::new(Mutex::new(crate::jobs::Store::load(&state))),
@@ -1313,6 +1316,18 @@ impl Tools {
                 "chat": {"type": "string"},
                 "count": {"type": "integer", "description": "how many (default 50)"}
             }), &["chat"]));
+        t.add_grouped("talk", "queue_take", "Bring waiting messages now instead of in their turn: a chat's (oldest first) or, without chat, the most important ones. Takes as many as your context has room for and says how many still wait. Use it when the [queue] notice shows a chat you must answer first.",
+            obj(json!({
+                "chat": {"type": "string", "description": "channel as the [queue] notice lists it; omit for the most important"},
+                "count": {"type": "integer", "description": "at most this many (default 20)"}
+            }), &[]));
+        t.add_grouped("talk", "chat_level", "Set how a chat's waiting messages rank when many wait (p0 first … p3 last), or auto. auto: direct chats by the contact (root trust P0, contacts P1, strangers P2); a group whose members are all root-trust contacts P0, any other group mixed (root-trust sender P1, replies to you and mentions P2, the rest P3). A fixed level holds whoever joins; you are told when someone joins a root group.",
+            obj(json!({
+                "chat": {"type": "string", "description": "channel, e.g. telegram:-1001234567890"},
+                "level": {"type": "string", "description": "auto, p0, p1, p2 or p3"},
+                "why": {"type": "string", "description": "a few words"}
+            }), &["chat", "level"]));
+        t.add_grouped("talk", "chat_levels", "Known groups: their level, member count and who in them is not a root contact.", obj(json!({}), &[]));
         t.add_grouped("calendar", "schedule_create", "Schedule a task or reminder; at without a zone is machine local time (21:00, tomorrow 09:00, monday 09:00, YYYY-MM-DD HH:MM, in 10m). body is markdown. A bare 21:00 is the next time the clock shows it; RFC 3339 with Z or +02:00 is taken as given. The result shows the due time in the machine timezone and in UTC: check it; an unparsable at is an error. cron is five crontab fields in the machine timezone too (minute hour day-of-month month day-of-week), for example 0 9 * * 1-5; it replaces at and repeat. kind is task or reminder. repeat is none, hourly, daily, weekly, monthly, yearly, weekdays, weekends, or a duration (30m, 2h). command is a program to run when the item is due, as user (default bia). If you write a script or program for command, run it first with real or sample data and confirm it works before you call schedule_create. match is a regular expression (Rust regex syntax: no look-around or back-references; case-sensitive, (?i) ignores case): if set, no system|schedule message is sent unless the program output matches. The message includes the task text and the path of that run's log. Without a command, the item arrives as a system|schedule message when due, including missed ones after boot.",
             obj(json!({
                 "title": {"type": "string"},
@@ -3475,6 +3490,12 @@ impl Tools {
             }
             "chat_unignore" => crate::ignored::unignore(&s("chat").unwrap_or_default()),
             "chat_ignored" => Ok(crate::ignored::list()),
+            "chat_level" => self.chat_groups.set_level(&s("chat").unwrap_or_default(), &s("level").unwrap_or_default(), &s("why").unwrap_or_default()),
+            "chat_levels" => {
+                let book = &self.addressbook;
+                Ok(self.chat_groups.list(&|id| book.is_root_id(id)))
+            }
+            "queue_take" => bail!("queue_take is run by the agent loop"),
             "chat_restore" => {
                 let count = args.get("count").and_then(|v| v.as_u64()).map(|n| n as usize);
                 let (text, summary) = crate::ignored::restore(&s("chat").unwrap_or_default(), count)?;
@@ -3485,6 +3506,8 @@ impl Tools {
                     issued: crate::clock::now(),
                     id: crate::console::mint_msg_id(),
                     text,
+                    sender: String::new(),
+                    group: false,
                 });
                 Ok(summary)
             }
