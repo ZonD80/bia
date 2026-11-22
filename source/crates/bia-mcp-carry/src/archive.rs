@@ -231,7 +231,8 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
             Path::new("/").join(crate::debs::STORE_REL)
         }
     };
-    let failed_names = apt_install(ctx, &packages, &debs_dir);
+    let mut apt_problems = Vec::new();
+    let failed_names = apt_install(ctx, &packages, &debs_dir, &mut apt_problems);
     let failed: Vec<String> = failed_names
         .iter()
         .map(|n| {
@@ -320,6 +321,12 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
         notice.push_str(&format!(
             " Links into /home/bia that did not come back (what they pointed to was not in the archive, or the path is taken): {}.",
             lost_links.join(", ")
+        ));
+    }
+    if !apt_problems.is_empty() {
+        notice.push_str(&format!(
+            " apt had trouble with repositories, so their packages may not have come back: {}. Fix that source's file or its Signed-By key, then run apt-get update and check that each repository shows up.",
+            apt_problems.join("; ")
         ));
     }
     if !not_kept.is_empty() {
@@ -1707,7 +1714,7 @@ fn reboot(notice: &str) -> Result<(), String> {
 /// each package that is not installed yet, plus kept dependencies that are missing, so
 /// exact versions come back even without a network; the rest install by name.
 /// Returns the names that did not install.
-fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
+fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path, apt_problems: &mut Vec<String>) -> Vec<String> {
     if pkgs.is_empty() {
         return vec![];
     }
@@ -1769,15 +1776,8 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
         dep_args.len()
     ));
     ctx.log("unfold: apt-get update");
-    // Offline (no route, no DNS) must fail, not hang the unfold; a slow link still gets time.
-    let update = run_bounded(
-        Command::new("apt-get")
-            .args(["update", "-qq", "-o", "Acquire::Retries=1", "-o", "Acquire::http::Timeout=20", "-o", "Acquire::https::Timeout=20"])
-            .env("DEBIAN_FRONTEND", "noninteractive")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null()),
-        Duration::from_secs(900),
-    );
+    let (update, problems) = apt_update(ctx);
+    apt_problems.extend(problems);
     if !update {
         if local == 0 {
             ctx.log("unfold: apt-get update failed; package names were not installed");
@@ -1829,6 +1829,119 @@ fn apt_install(ctx: &Ctx, pkgs: &[ManualPkg], debs_dir: &Path) -> Vec<String> {
 }
 
 /// Run to completion, or kill it after `limit`. True when it exited 0.
+/// `apt-get update`, bounded: offline (no route, no DNS) must fail, not hang the unfold;
+/// a slow link still gets time. Also returns what went wrong with repositories: apt exits 0
+/// when a repository's key expired or does not match, or its fetch failed (it keeps the old
+/// lists and prints a W: line), so the exit code alone hides a third-party repository that
+/// can no longer reinstall its packages.
+fn apt_update(ctx: &Ctx) -> (bool, Vec<String>) {
+    let log = std::env::temp_dir().join(format!("bia-apt-update-{}.log", std::process::id()));
+    let mut cmd = Command::new("apt-get");
+    cmd.args(["update", "-q", "-o", "Acquire::Retries=1", "-o", "Acquire::http::Timeout=20", "-o", "Acquire::https::Timeout=20"])
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .stdin(std::process::Stdio::null());
+    match File::create(&log).and_then(|f| Ok((f.try_clone()?, f))) {
+        Ok((out, err)) => {
+            cmd.stdout(out).stderr(err);
+        }
+        Err(_) => {
+            cmd.stdout(std::process::Stdio::null());
+        }
+    }
+    let ok = run_bounded(&mut cmd, Duration::from_secs(900));
+    let text = fs::read_to_string(&log).unwrap_or_default();
+    let _ = fs::remove_file(&log);
+    let problems = apt_problems(&text, &enabled_sources(Path::new("/etc/apt/sources.list.d")));
+    for p in &problems {
+        ctx.log(format!("unfold: apt: {p}"));
+    }
+    (ok, problems)
+}
+
+/// apt-get update's W:, E: and Err: lines, plus each enabled source it never named at all
+/// (its file was not read, or apt skipped it): at most 10, each cut to 300 characters.
+fn apt_problems(output: &str, uris: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in output.lines() {
+        let t = line.trim();
+        if t.starts_with("W:") || t.starts_with("E:") || t.starts_with("Err:") {
+            let t: String = t.chars().take(300).collect();
+            if !out.contains(&t) {
+                out.push(t);
+            }
+        }
+    }
+    for uri in uris {
+        let u = uri.trim_end_matches('/');
+        if !u.is_empty() && !output.contains(u) {
+            out.push(format!("{uri}: apt did not fetch it at all (check its file in /etc/apt/sources.list.d and its Signed-By key)"));
+        }
+    }
+    out.truncate(10);
+    out
+}
+
+/// The repository URIs of the enabled sources under `dir` (`*.list` deb lines and
+/// `*.sources` stanzas without `Enabled: no`), in file order, each once.
+fn enabled_sources(dir: &Path) -> Vec<String> {
+    let mut files: Vec<PathBuf> = fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.sort();
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |u: &str| {
+        if (u.starts_with("http://") || u.starts_with("https://")) && !out.iter().any(|x| x == u) {
+            out.push(u.to_string());
+        }
+    };
+    for f in files {
+        let Ok(text) = fs::read_to_string(&f) else { continue };
+        match f.extension().and_then(|x| x.to_str()) {
+            Some("list") => {
+                for line in text.lines() {
+                    let mut it = line.split_whitespace();
+                    if it.next() != Some("deb") {
+                        continue;
+                    }
+                    let mut tok = it.next().unwrap_or("");
+                    if tok.starts_with('[') {
+                        // options: [arch=amd64 signed-by=…]
+                        while !tok.ends_with(']') {
+                            match it.next() {
+                                Some(t) => tok = t,
+                                None => break,
+                            }
+                        }
+                        tok = it.next().unwrap_or("");
+                    }
+                    add(tok);
+                }
+            }
+            Some("sources") => {
+                for stanza in text.split("\n\n") {
+                    let field = |name: &str| {
+                        stanza.lines().find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.trim().eq_ignore_ascii_case(name).then(|| v.trim().to_string())
+                        })
+                    };
+                    if field("Enabled").is_some_and(|v| v.eq_ignore_ascii_case("no")) {
+                        continue;
+                    }
+                    if !field("Types").is_some_and(|t| t.split_whitespace().any(|x| x == "deb")) {
+                        continue;
+                    }
+                    for u in field("URIs").unwrap_or_default().split_whitespace() {
+                        add(u);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 fn run_bounded(cmd: &mut Command, limit: Duration) -> bool {
     let Ok(mut child) = cmd.spawn() else { return false };
     let start = std::time::Instant::now();
@@ -2707,7 +2820,7 @@ curl:
         build("biabroken", "echo broken >&2; exit 1");
         build("biagood", "true");
         let pkg = |n: &str| ManualPkg { name: n.into(), version: "1".into(), arch: "all".into(), origin: String::new() };
-        let failed = apt_install(&Ctx::console(), &[pkg("biabroken"), pkg("biachatty"), pkg("biagood")], &debs);
+        let failed = apt_install(&Ctx::console(), &[pkg("biabroken"), pkg("biachatty"), pkg("biagood")], &debs, &mut Vec::new());
         let inst = crate::debs::installed_at(Path::new("/"));
         let has = |n: &str| inst.iter().any(|(p, _, _)| p == n);
         assert_eq!(failed, ["biabroken"]);
@@ -2715,6 +2828,29 @@ curl:
         assert!(has("biagood"));
         assert!(broken_packages().is_empty(), "nothing left half-configured");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn apt_update_problems_and_silent_sources() {
+        let dir = std::env::temp_dir().join(format!("bia-carry-sources-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("google-chrome.sources"), "### THIS FILE IS AUTOMATICALLY CONFIGURED ###\nX-Repolib-Name: Google Chrome\nTypes: deb\nURIs: https://dl.google.com/linux/chrome-stable/deb/\nSuites: stable\nComponents: main\nSigned-By: /usr/share/keyrings/google-chrome.gpg\n\nTypes: deb\nURIs: https://off.example/\nSuites: x\nEnabled: no\n").unwrap();
+        fs::write(dir.join("docker.list"), "# docker\ndeb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian trixie stable\ndeb-src https://src.example/ x main\n").unwrap();
+        fs::write(dir.join("notes.txt"), "deb https://ignored.example/ x main\n").unwrap();
+        let uris = super::enabled_sources(&dir);
+        assert_eq!(uris, ["https://download.docker.com/linux/debian", "https://dl.google.com/linux/chrome-stable/deb/"]);
+        // all fetched, nothing wrong
+        let fine = "Hit:1 http://deb.debian.org/debian trixie InRelease\nHit:2 https://download.docker.com/linux/debian trixie InRelease\nHit:3 https://dl.google.com/linux/chrome-stable/deb stable InRelease\nReading package lists...\n";
+        assert!(super::apt_problems(fine, &uris).is_empty());
+        // a key that does not verify: apt exits 0 with W: lines; chrome never named at all
+        let bad = "Hit:1 http://deb.debian.org/debian trixie InRelease\nErr:2 https://download.docker.com/linux/debian trixie InRelease\n  The following signatures were invalid: EXPKEYSIG 7EA0A9C3F273FCD8\nW: An error occurred during the signature verification. The repository is not updated and the previous index files will be used.\nW: An error occurred during the signature verification. The repository is not updated and the previous index files will be used.\n";
+        let p = super::apt_problems(bad, &uris);
+        assert_eq!(p.len(), 3, "{p:?}");
+        assert!(p[0].starts_with("Err:2 https://download.docker.com"));
+        assert!(p[1].starts_with("W: An error occurred"));
+        assert!(p[2].starts_with("https://dl.google.com/linux/chrome-stable/deb/: apt did not fetch it at all"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

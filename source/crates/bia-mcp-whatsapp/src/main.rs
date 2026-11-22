@@ -318,6 +318,21 @@ fn main() {
             },
         )
         .tool(
+            "read",
+            "Read receipts for messages the model got. The agent calls this itself.",
+            json!({"type": "object", "required": ["chat_id", "ids"], "properties": {
+                "chat_id": {"type": "string", "description": "chat id"},
+                "ids": {"type": "array", "items": {"type": "string"}, "description": "message ids"},
+                "senders": {"type": "array", "items": {"type": "string"}, "description": "who wrote each one, whatsapp:<id>"}
+            }}),
+            |ctx, a| {
+                Wa::global().set_ctx(ctx.clone());
+                let list = |k: &str| -> Vec<String> { a[k].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default() };
+                Wa::global().mark_read_ids(arg_str(&a, "chat_id")?, &list("ids"), &list("senders"));
+                Ok(String::new())
+            },
+        )
+        .tool(
             "typing",
             "Show typing in a chat. You do not need to call this. It happens while you are replying.",
             json!({"type": "object", "required": ["chat_id"], "properties": {

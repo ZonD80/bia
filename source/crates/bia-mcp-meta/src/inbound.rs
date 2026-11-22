@@ -179,6 +179,19 @@ fn mark_read(chat: &str, id: &str) {
     }
 }
 
+/// Read receipts the agent sends once the model got these messages, in the background.
+pub fn mark_read_ids(chat: &str, ids: &[String]) {
+    if ids.is_empty() || !state::load_cfg(platform()).logged_in || !helper::get().running() {
+        return;
+    }
+    let (chat, ids) = (chat.to_string(), ids.to_vec());
+    let _ = std::thread::Builder::new().name("meta-read".into()).spawn(move || {
+        for id in &ids {
+            mark_read(&chat, id);
+        }
+    });
+}
+
 /// Inbound messages to the model, in order per chat.
 fn lanes() -> &'static bia_mcp::lanes::Lanes {
     static L: std::sync::LazyLock<bia_mcp::lanes::Lanes> = std::sync::LazyLock::new(Default::default);
@@ -312,12 +325,8 @@ fn deliver(ev: &Value, live: bool) {
     let ev = ev.clone();
     let _ = std::thread::Builder::new().name("meta-in".into()).spawn(move || {
         let mut turn = turn;
-        // read as soon as it arrives: downloads and transcripts take a while; an ignored
-        // chat stays unread unless the finished message wakes the model
-        let ignoring = bia_mcp::ignore::ignoring(&platform().channel(&chat));
-        if !ignoring {
-            mark_read(&chat, &id);
-        }
+        // not read here: the agent marks it read when the model gets it (`read`), so a
+        // message waiting in bia's queue, or in an ignored chat, stays unread
         let mut parts: Vec<String> = Vec::new();
         if let Some(r) = ev.get("reply").filter(|r| r.is_object()) {
             let from = if b(r, "me") { "you".to_string() } else { label(s(r, "sender"), s(r, "sender_name")) };
@@ -377,9 +386,7 @@ fn deliver(ev: &Value, live: bool) {
         if from.group && bia_mcp::members::tracker().due(&platform().channel(&chat)) {
             send_members(&chat);
         }
-        if inbound_by(&who, &chat, &id, &body, ts, &from).read() && ignoring {
-            mark_read(&chat, &id);
-        }
+        inbound_by(&who, &chat, &id, &body, ts, &from);
         bump_last_seen(ts);
     });
 }

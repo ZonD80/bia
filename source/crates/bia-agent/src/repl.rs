@@ -259,6 +259,8 @@ pub struct Repl {
     pub queue_noticed_at: u64,
     /// messages queue_take took: they follow the round's tool results
     pub taken: Vec<Inbound>,
+    /// chat messages handed to the model since the last read receipts: (channel, id, sender)
+    pub to_read: Vec<(String, String, String)>,
     pub show_thinking: bool,
     /// Frontier Model Mode: the remote brain, when configured and enabled
     pub remote: Option<Remote>,
@@ -343,6 +345,13 @@ impl Repl {
             ));
             let ib = loop {
                 let now = crate::clock::unix(crate::clock::now());
+                // a nudge already due goes first: inbound that never makes a turn (member
+                // events, empty lines) must not keep the timeout below from ever firing
+                if self.tools.unanswered.secs_until_due(now) == Some(0) {
+                    if let Some(n) = self.unanswered_due() {
+                        break Some(n);
+                    }
+                }
                 // wake now and then also for the night's work: a task closed or the calendar
                 // spine waiting since the scheduler ended the night while bia sat idle
                 let wait = self
@@ -998,6 +1007,12 @@ impl Repl {
         self.queue_reserve = false;
         self.tight_reflects = 0;
         self.queue_told.clear();
+    }
+
+    /// A group message counts as unanswered only when it is meant for bia (queue.rs).
+    fn wants_answer(&self, ib: &Inbound) -> bool {
+        let me = crate::me::Me::load(&self.tools.files_dir).name;
+        crate::queue::Ranker { book: &self.tools.addressbook, groups: &self.tools.chat_groups, me: &me }.wants_answer(ib)
     }
 
     fn ranker_tiers(&self, msgs: &[Inbound]) -> Vec<crate::queue::Tier> {
@@ -2934,8 +2949,17 @@ now: {now}", done.join("\n")), failed)
         for ib in &msgs {
             self.record_inbound(ib);
         }
+        self.flush_reads();
         self.save_state(false);
         msgs.len()
+    }
+
+    /// Read receipts for the chat messages the model just got, one call per chat.
+    fn flush_reads(&mut self) {
+        let reads = std::mem::take(&mut self.to_read);
+        if !reads.is_empty() {
+            self.tools.chat_read(&reads);
+        }
     }
 
     /// Move finished jobs (and optionally queued messages) into history. Returns how many.
@@ -2970,6 +2994,7 @@ now: {now}", done.join("\n")), failed)
             }
             None => 0,
         };
+        self.flush_reads();
         n_jobs + n_queued + n_nudge
     }
 
@@ -3096,10 +3121,15 @@ now: {now}", done.join("\n")), failed)
         if crate::tools::is_web(&ib.channel) && ib.identity != ID_SYSTEM {
             self.tools.web_read(&ib.identity, &ib.channel, &id);
         }
+        // read receipts go out when the model gets a message, not when it arrives: one that
+        // waits in the queue stays unread for its sender (sent per chat by flush_reads)
+        if ib.identity != ID_SYSTEM && !ib.id.is_empty() && crate::tools::chat_bus(&ib.channel).is_some() {
+            self.to_read.push((ib.channel.clone(), ib.id.clone(), ib.sender.clone()));
+        }
         let now = crate::clock::unix(crate::clock::now());
         if ib.channel.starts_with(crate::jobs::PREFIX) {
             self.tools.unanswered.wake(now);
-        } else if needs_answer(ib) {
+        } else if needs_answer(ib) && self.wants_answer(ib) {
             self.tools
                 .unanswered
                 .add(&id, &ib.channel, &ib.identity, now);
@@ -3188,6 +3218,7 @@ now: {now}", done.join("\n")), failed)
         // Queued traffic rides with whatever opened this turn (a job result, a console line, …).
         self.collect_inbound();
         let _ = self.deliver_queued();
+        self.flush_reads();
         let (start_marker, _) = self.format.markers();
         let mut round = 0;
         let mut seen = self.human_seq;

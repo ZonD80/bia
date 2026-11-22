@@ -133,6 +133,26 @@ pub async fn key_of_jid_async(client: &Client, jid: &Jid) -> String {
     key_of_jid(&j)
 }
 
+/// What a read receipt needs, kept from arrival until the agent says the model got the
+/// message: chat key + envelope id → (chat JID, sender JID in a group, the message's own id).
+type Unread = std::collections::HashMap<String, (Jid, Option<Jid>, String)>;
+
+fn unread() -> &'static Mutex<Unread> {
+    static U: std::sync::OnceLock<Mutex<Unread>> = std::sync::OnceLock::new();
+    U.get_or_init(Default::default)
+}
+
+/// Unread entries kept at most; ignored chats never get read, so the oldest go.
+const UNREAD_MAX: usize = 4000;
+
+fn note_unread(key: &str, env_id: &str, chat: &Jid, sender: Option<&Jid>, id: &str) {
+    let mut u = unread().lock().unwrap();
+    if u.len() >= UNREAD_MAX {
+        u.clear();
+    }
+    u.insert(format!("{key}|{env_id}"), (chat.clone(), sender.cloned(), id.to_string()));
+}
+
 fn jid_of_key(key: &str) -> Option<Jid> {
     let key = key.trim();
     if key.contains('@') {
@@ -2029,6 +2049,53 @@ impl Wa {
         })
     }
 
+    /// Read receipts the agent sends once the model got these messages (envelope ids, with
+    /// who wrote each one in channel form). One kept from arrival is sent as it came; after a
+    /// restart the chat and sender are rebuilt from the ids.
+    pub fn mark_read_ids(&self, key: &str, ids: &[String], senders: &[String]) {
+        let Ok(client) = self.client() else {
+            return;
+        };
+        let key = normalize_target(key);
+        let mut out: Vec<(Jid, Option<Jid>, String)> = Vec::new();
+        {
+            let mut u = unread().lock().unwrap();
+            for (i, id) in ids.iter().enumerate() {
+                if let Some(e) = u.remove(&format!("{key}|{id}")) {
+                    out.push(e);
+                } else if let Some(chat) = jid_of_key(&key) {
+                    let sender = if chat.is_group() {
+                        senders.get(i).and_then(|s| s.strip_prefix("whatsapp:")).and_then(jid_of_key)
+                    } else {
+                        None
+                    };
+                    if !chat.is_group() || sender.is_some() {
+                        out.push((chat, sender, id.clone()));
+                    }
+                }
+            }
+        }
+        if out.is_empty() {
+            return;
+        }
+        self.rt.spawn(async move {
+            // one receipt per chat and sender, as WhatsApp sends them
+            let mut groups: Vec<((Jid, Option<Jid>), Vec<String>)> = Vec::new();
+            for (chat, sender, id) in out {
+                match groups.iter_mut().find(|g| g.0 .0 == chat && g.0 .1 == sender) {
+                    Some(g) => g.1.push(id),
+                    None => groups.push(((chat, sender), vec![id])),
+                }
+            }
+            for ((chat, sender), ids) in groups {
+                let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+                if let Err(e) = client.mark_as_read(&chat, sender.as_ref(), &refs).await {
+                    Wa::global().log(format!("mark_read chat={chat}: {e}"));
+                }
+            }
+        });
+    }
+
     pub fn set_typing(&self, key: &str, on: bool) {
         let Ok(client) = self.client() else {
             return;
@@ -2450,20 +2517,7 @@ impl Wa {
         self.note_chat(&key, &chat, title.as_deref(), ts);
         self.hist.lock().unwrap().delete_ids(&key, &[deleted_id.clone()]);
         self.inbound_at("system", &key, &deleted_id, &format!("[deleted] {deleted_id}"), ts);
-        let read_sender = if chat.is_group() {
-            Some(&info.source.sender)
-        } else {
-            None
-        };
-        if bia_mcp::ignore::ignoring(&format!("whatsapp:{key}")) {
-            return Ok(());
-        }
-        if let Err(e) = client
-            .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
-            .await
-        {
-            self.log(format!("mark_read delete chat={key}: {e}"));
-        }
+        // a delete is a revoke, no message to read
         Ok(())
     }
 
@@ -2519,11 +2573,9 @@ impl Wa {
                 },
             );
         }
-        if !self.inbound_at(&label, &key, &info.id, &text, edited).read() {
-            return Ok(());
-        }
         let read_sender = if chat.is_group() { Some(&info.source.sender) } else { None };
-        let _ = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await;
+        note_unread(&key, &info.id, &info.source.chat, read_sender, &info.id);
+        self.inbound_at(&label, &key, &info.id, &text, edited);
         Ok(())
     }
 
@@ -2585,21 +2637,9 @@ impl Wa {
             format!("[reaction] {emoji}")
         };
         // Envelope id is the reacted-to message (what react/delete tools need).
-        if !self.inbound_at(&label, &key, &target_id, &body, ts).read() {
-            return Ok(());
-        }
-
-        let read_sender = if chat.is_group() {
-            Some(&info.source.sender)
-        } else {
-            None
-        };
-        if let Err(e) = client
-            .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
-            .await
-        {
-            self.log(format!("mark_read reaction chat={key}: {e}"));
-        }
+        let read_sender = if chat.is_group() { Some(&info.source.sender) } else { None };
+        note_unread(&key, &target_id, &info.source.chat, read_sender, &info.id);
+        self.inbound_at(&label, &key, &target_id, &body, ts);
         Ok(())
     }
 
@@ -2733,18 +2773,9 @@ impl Wa {
             return Ok(());
         }
 
-        // Read as soon as it arrives: downloading media and transcribing a voice note
-        // take a while, and the sender should not wait for them to see it was received.
-        // An ignored chat stays unread unless the finished message wakes the model.
-        let ignoring = bia_mcp::ignore::ignoring(&format!("whatsapp:{key}"));
-        if !ignoring {
-            if let Err(e) = client
-                .mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()])
-                .await
-            {
-                self.log(format!("mark_read chat={key}: {e}"));
-            }
-        }
+        // Not read here: the agent marks it read when the model gets it (`read`), so a
+        // message waiting in bia's queue, or in an ignored chat, stays unread.
+        note_unread(&key, &info.id, &info.source.chat, read_sender, &info.id);
         let mut deliver = text.clone();
         if can_choose {
             deliver.push_str("\n(to pick: whatsapp_choose with this message's id and the option numbers)");
@@ -2816,11 +2847,7 @@ impl Wa {
         if from.group && bia_mcp::members::tracker().due(&format!("whatsapp:{key}")) {
             self.send_members(&client, &chat, &key).await;
         }
-        if self.inbound_by(&label, &key, &info.id, &deliver, ts, &from).read() && ignoring {
-            if let Err(e) = client.mark_as_read(&info.source.chat, read_sender, &[info.id.as_str()]).await {
-                self.log(format!("mark_read chat={key}: {e}"));
-            }
-        }
+        self.inbound_by(&label, &key, &info.id, &deliver, ts, &from);
         Ok(())
     }
 

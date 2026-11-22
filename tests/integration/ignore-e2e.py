@@ -1,9 +1,10 @@
 """Ignored chats end to end, without a Meta account: bia-mcp-messenger over stdio with a fake
 bia-meta that sends messages in and records which ones the MCP marks read.
 
-Checks that a chat in files/state/ignore.json gets its messages flagged "ignored" and left
-unread, that a wake pattern, a reply to bia and a wake word spoken in a voice note (matched
-on the transcript) deliver them flagged "woke" and read, and that other chats are untouched.
+Checks that a chat in files/state/ignore.json gets its messages flagged "ignored", that a wake
+pattern, a reply to bia and a wake word spoken in a voice note (matched on the transcript)
+deliver them flagged "woke", and that other chats are untouched. The MCP marks none of them
+read itself: the agent does when the model gets one (`read`), so ignored ones stay unread.
 
   cargo build -p bia-mcp-meta
   python3 -I tests/integration/ignore-e2e.py <dir with bia-mcp-messenger> [<voice note .ogg> <word spoken in it>]
@@ -104,7 +105,7 @@ rpc("tools/call", {"name": "restore", "arguments": {}})
 def by_id(mid):
     return next((d for d in inbound if d.get("id") == mid), None)
 
-# voice notes are transcribed: wait for the last one (and its read mark)
+# voice notes are transcribed: wait for the last one
 for _ in range(1200):
     if by_id(last):
         break
@@ -114,16 +115,17 @@ p.kill()
 reads = [json.loads(l)["params"].get("id") for l in open(calls) if json.loads(l)["method"] == "read"]
 
 m = {k: by_id(k) for k in ["m1", "m2", "m3", "m4", "m5", "m6"]}
-check(m["m1"] and "ignored" not in m["m1"] and "woke" not in m["m1"] and "m1" in reads, "another chat: delivered as before and read")
-check(m["m2"] and m["m2"].get("ignored") is True and "m2" not in reads, "ignored chat: flagged ignored, left unread")
-check(m["m3"] and m["m3"].get("woke", "").startswith("wake pattern") and "m3" in reads, f"wake pattern: woke ({m['m3'] and m['m3'].get('woke')}) and read")
-check(m["m4"] and m["m4"].get("woke") == "a reply to you" and "m4" in reads, "reply to bia: woke and read")
+check(not reads, f"the MCP marks nothing read itself; the agent does when the model gets it ({reads})")
+check(m["m1"] and "ignored" not in m["m1"] and "woke" not in m["m1"], "another chat: delivered as before")
+check(m["m2"] and m["m2"].get("ignored") is True, "ignored chat: flagged ignored")
+check(m["m3"] and m["m3"].get("woke", "").startswith("wake pattern"), f"wake pattern: woke ({m['m3'] and m['m3'].get('woke')})")
+check(m["m4"] and m["m4"].get("woke") == "a reply to you", "reply to bia: woke")
 if not voice:
     sys.exit(1 if check.failed else 0)
 v5 = m["m5"] or {}
 check(word.lower() in v5.get("message", "").lower() and "[speech" in v5.get("message", ""), f"voice note transcribed: {v5.get('message', '')[:120]!r}")
-check(v5.get("woke") == f"wake pattern {word}" and "m5" in reads, "wake word spoken in a voice note: woke and read")
+check(v5.get("woke") == f"wake pattern {word}", "wake word spoken in a voice note: woke")
 v6 = m["m6"] or {}
-check(v6.get("ignored") is True and "[speech" in v6.get("message", "") and "m6" not in reads, "voice note without the wake word: transcribed, ignored, unread")
+check(v6.get("ignored") is True and "[speech" in v6.get("message", ""), "voice note without the wake word: transcribed, ignored")
 print("transcript:", v5.get("message", "").replace("\n", " ")[:300])
 sys.exit(1 if check.failed else 0)

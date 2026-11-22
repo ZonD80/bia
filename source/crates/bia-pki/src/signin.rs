@@ -97,7 +97,7 @@ impl Pki {
     /// The CA's signature over `bind_message` (P-256, fixed form).
     pub fn sign_bind(&self, nonce: &str, exporter: &[u8]) -> Result<String> {
         let pem = std::fs::read_to_string(self.ca_key_path()).context("read ca.key")?;
-        let kp = rcgen::KeyPair::from_pem(&pem)?;
+        let kp = crate::keys::key_pair(&pem)?;
         let rng = ring::rand::SystemRandom::new();
         let key = EcdsaKeyPair::from_pkcs8(
             &signature::ECDSA_P256_SHA256_FIXED_SIGNING,
@@ -117,7 +117,7 @@ impl Pki {
     pub fn sign_der(&self, data: &[u8]) -> Result<String> {
         use base64::Engine;
         let pem = std::fs::read_to_string(self.ca_key_path()).context("read ca.key")?;
-        let kp = rcgen::KeyPair::from_pem(&pem)?;
+        let kp = crate::keys::key_pair(&pem)?;
         let rng = ring::rand::SystemRandom::new();
         let key = EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_ASN1_SIGNING, &kp.serialize_der(), &rng)
             .map_err(|_| anyhow!("the CA key is not P-256"))?;
@@ -216,7 +216,7 @@ pub fn parse_request_header(h: &str) -> Option<(Vec<Vec<u8>>, i64, Vec<u8>)> {
 
 /// Sign `msg` with a PEM key (P-256 or P-384 in the fixed form, Ed25519, RSA), base64url.
 pub fn sign(key_pem: &str, msg: &str) -> Result<String> {
-    let kp = rcgen::KeyPair::from_pem(key_pem)?;
+    let kp = crate::keys::key_pair(key_pem)?;
     let rng = ring::rand::SystemRandom::new();
     let der = kp.serialize_der();
     if let Ok(k) = EcdsaKeyPair::from_pkcs8(&signature::ECDSA_P256_SHA256_FIXED_SIGNING, &der, &rng) {

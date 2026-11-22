@@ -782,6 +782,16 @@ pub fn serve(p: Platform) {
             inbound::set_ctx(ctx.clone());
             typing(&a)
         })
+        .tool("read", "Read receipts for messages the model got. The agent calls this itself.", obj(json!({
+            "chat_id": chat(),
+            "ids": {"type": "array", "items": {"type": "string"}, "description": "message ids"},
+            "senders": {"type": "array", "items": {"type": "string"}, "description": "who wrote each one"}
+        }), &["chat_id", "ids"]), |ctx, a| {
+            inbound::set_ctx(ctx.clone());
+            let ids: Vec<String> = a["ids"].as_array().map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+            inbound::mark_read_ids(&chat_arg(&a)?, &ids);
+            Ok(String::new())
+        })
         .tool("create_group", &format!("Create a {t} group with people (names, @usernames, profile links or ids from {n}_search). Returns its chat id.{}",
             if p == Platform::Instagram { " Instagram needs at least two other people." } else { "" }), obj(json!({
             "title": {"type": "string", "description": "the group's name"},

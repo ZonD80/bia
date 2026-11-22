@@ -594,19 +594,13 @@ impl Tg {
             if text.is_empty() {
                 return Ok(false);
             }
-            mark_delivered_read(client, &msg, chat_id).await;
             turn.wait().await;
             tg.inbound_by(&identity, chat_id, &msg_id, &text, date, &from);
             texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
             return Ok(true);
         }
-        // Read as soon as it arrives: downloading media and transcribing a voice note
-        // take a while, and the sender should not wait for them to see it was received.
-        // An ignored chat stays unread unless the finished message wakes the model.
-        let ignoring = bia_mcp::ignore::ignoring(&format!("telegram:{chat_id}"));
-        if !ignoring {
-            mark_delivered_read(client, &msg, chat_id).await;
-        }
+        // Not read here: the agent marks it read when the model gets it (the `read` tool),
+        // so a message waiting in bia's queue, or in an ignored chat, stays unread.
         let mut media = None;
         if let Some(tl::enums::MessageMedia::GeoLive(geo_live)) = msg.media() {
             // The first point of a share reaches the model; the moves come as edits.
@@ -675,9 +669,7 @@ impl Tg {
                 .and_then(|r| r);
             text = with_transcript(heard, &text, &format!("telegram/{rel}"));
         }
-        if tg.inbound_by(&identity, chat_id, &msg_id, &text, date, &from).read() && ignoring {
-            mark_delivered_read(client, &msg, chat_id).await;
-        }
+        tg.inbound_by(&identity, chat_id, &msg_id, &text, date, &from);
         // The text as sent (no file notes), so an edit can show what it was.
         texts().put(&format!("{chat_id}:{mid}"), date, msg.text().unwrap_or(""));
         Ok(true)
@@ -1617,6 +1609,22 @@ impl Tg {
         })
     }
 
+    /// Read receipts the agent sends once the model got these messages: the chat is read up
+    /// to the newest of them. Sent in the background; a failure goes to the log.
+    pub fn mark_read_ids(&self, chat_id: i64, ids: &[String]) {
+        let Some(max_id) = ids.iter().filter_map(|i| i.parse::<i32>().ok()).max() else {
+            return;
+        };
+        let Ok(client) = self.client() else {
+            return;
+        };
+        self.rt.spawn(async move {
+            if let Err(e) = read_up_to(&client, chat_id, max_id).await {
+                Tg::global().log(format!("mark_read chat={chat_id} up to {max_id}: {e}"));
+            }
+        });
+    }
+
     pub fn set_typing(&self, chat_id: i64, on: bool) {
         let Ok(client) = self.client() else {
             return;
@@ -1632,14 +1640,24 @@ impl Tg {
     }
 }
 
-async fn mark_delivered_read(
-    client: &Client,
-    msg: &ferogram::update::IncomingMessage,
-    chat_id: i64,
-) {
-    if let Err(e) = msg.mark_read_with(client).await {
-        Tg::global().log(format!("mark_read chat={chat_id}: {e}"));
-    }
+/// Mark a chat read up to `max_id` (and everything before it); later messages stay unread.
+async fn read_up_to(client: &Client, chat_id: i64, max_id: i32) -> Result<(), String> {
+    let peer = client.resolve(chat_id).await.map_err(|e| format!("resolve: {e}"))?;
+    let input = client.resolve_to_input_peer(&peer).await.map_err(|e| format!("peer: {e}"))?;
+    let res = match input {
+        tl::enums::InputPeer::Channel(c) => client
+            .invoke(&tl::functions::channels::ReadHistory {
+                channel: tl::enums::InputChannel::InputChannel(tl::types::InputChannel {
+                    channel_id: c.channel_id,
+                    access_hash: c.access_hash,
+                }),
+                max_id,
+            })
+            .await
+            .map(|_| ()),
+        peer => client.invoke(&tl::functions::messages::ReadHistory { peer, max_id }).await.map(|_| ()),
+    };
+    res.map_err(|e| e.to_string())
 }
 
 /// When bia last had every incoming message: `since`, moved to a few seconds ago whenever
@@ -1849,7 +1867,7 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
         }
         batch.reverse();
 
-        // an ignored chat neither uses up the catch-up budget nor gets marked read
+        // an ignored chat does not use up the catch-up budget
         let ignoring = bia_mcp::ignore::ignoring(&format!("telegram:{chat_id}"));
         for msg in batch {
             if delivered >= CATCHUP_MAX_TOTAL {
@@ -1875,13 +1893,7 @@ async fn deliver_unread_catchup(client: &Client) -> usize {
                 Err(e) => Tg::global().log(format!("catch-up deliver chat={chat_id}: {e}")),
             }
         }
-        // Ensure the dialog unread badge clears even if some messages were empty/skipped.
-        if ignoring {
-            continue;
-        }
-        if let Err(e) = client.mark_read(chat_id).await {
-            Tg::global().log(format!("catch-up mark_read chat={chat_id}: {e}"));
-        }
+        // no mark_read here: the agent sends read receipts as the model gets each message
     }
     if !more.is_empty() {
         more.dedup();

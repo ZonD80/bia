@@ -20,7 +20,10 @@ Checks:
 - the very long message is cut, with the whole text kept in files/inbox/long;
 - a stranger joining the root group is reported with their id; chat_level holds the group at
   p0; their leaving reports the group root again; a join to a mixed group is told too;
-- a group channel is never linked to a person in the addressbook.
+- a group channel is never linked to a person in the addressbook;
+- read receipts: each message is marked read when the model gets it (between the request before
+  and the one that shows it), never on arrival, so flood messages waiting in the queue stay
+  unread meanwhile; every delivered message is read, with who wrote it.
 
   cargo build -p bia-agent
   python3 -I tests/integration/queue-e2e.py <dir with bia-agent>
@@ -44,6 +47,8 @@ state = os.path.join(files, "state")
 os.makedirs(state)
 work = tempfile.mkdtemp(prefix="bia-queue-e2e-work-", dir=os.environ.get("QUEUE_E2E_LOGS") or None)
 reqlog = os.path.join(work, "requests.jsonl")
+readlog = os.path.join(work, "reads.jsonl")
+idlog = os.path.join(work, "ids.jsonl")
 phase2 = os.path.join(work, "phase2")
 
 # ---- the fake model ----
@@ -84,7 +89,7 @@ class LLM(BaseHTTPRequestHandler):
         usage = {"prompt_tokens": len(all_text) // 4 + 3000, "completion_tokens": 5}
         with lock:
             state_m["n"] += 1
-            rec = {"n": state_m["n"], "kind": "reflect" if reflect else "step",
+            rec = {"n": state_m["n"], "t": time.time(), "kind": "reflect" if reflect else "step",
                    "marks": sorted(set(MARK.findall(all_text))), "new_marks": sorted(set(MARK.findall(new))),
                    "queue": "[queue]" in new, "queue_text": new[new.find("[queue]"):][:1500] if "[queue]" in new else "",
                    "members": [l for l in new.splitlines() if "[members]" in l],
@@ -125,6 +130,8 @@ port = srv.server_address[1]
 FAKE = r'''#!/usr/bin/env python3
 import json, os, sys, threading, time
 FLOOD = int(os.environ["FLOOD"]); PHASE2 = os.environ["PHASE2"]
+READS = open(os.environ["READLOG"], "a", buffering=1); IDS = open(os.environ["IDLOG"], "a", buffering=1)
+import re
 lock = threading.Lock()
 def out(v):
     with lock:
@@ -137,6 +144,8 @@ def msg(chat, sender, name, text, group):
     seq[0] += 1
     d = {"t": "inbound", "identity": f"{name} ({sender.split(':')[1]})", "channel": chat, "id": str(1000 + seq[0]),
          "message": text, "issued": now - 600 + seq[0], "sender": sender}
+    mk = re.search(r"MSG-[A-Za-z0-9_-]+", text)
+    IDS.write(json.dumps({"id": d["id"], "chat": chat, "mark": mk.group(0) if mk else "", "t": time.time()}) + "\n")
     if group: d["group"] = True
     note(d)
 filler = " ".join(["talk"] * 220)
@@ -174,8 +183,12 @@ for line in sys.stdin:
     if m == "initialize":
         out({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}}, "serverInfo": {"name": "fake-telegram", "version": "0"}}})
     elif m == "tools/list":
-        out({"jsonrpc": "2.0", "id": rid, "result": {"tools": [{"name": "restore", "description": "start", "inputSchema": {"type": "object", "properties": {}}}]}})
+        out({"jsonrpc": "2.0", "id": rid, "result": {"tools": [{"name": "restore", "description": "start", "inputSchema": {"type": "object", "properties": {}}},
+                  {"name": "read", "description": "read receipts", "inputSchema": {"type": "object", "properties": {}}}]}})
     elif m == "tools/call":
+        p = req.get("params") or {}
+        if p.get("name") == "read":
+            READS.write(json.dumps({"t": time.time(), **(p.get("arguments") or {})}) + "\n")
         out({"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": "ok"}]}})
         if (req.get("params") or {}).get("name") == "restore":
             threading.Thread(target=script, daemon=True).start()
@@ -187,7 +200,7 @@ os.makedirs(mcp_dir)
 open(os.path.join(mcp_dir, "fake.py"), "w").write(FAKE)
 os.chmod(os.path.join(mcp_dir, "fake.py"), 0o755)
 json.dump({"name": "telegram", "version": "0", "description": "fake telegram for the queue test", "command": "fake.py",
-           "boot_tool": "restore", "env": {"FLOOD": str(FLOOD), "PHASE2": phase2}}, open(os.path.join(mcp_dir, "mcp.json"), "w"))
+           "boot_tool": "restore", "env": {"FLOOD": str(FLOOD), "PHASE2": phase2, "READLOG": readlog, "IDLOG": idlog}}, open(os.path.join(mcp_dir, "mcp.json"), "w"))
 
 json.dump({"provider": "openai", "api_key": "mock-key", "model": "mock", "base_url": f"http://127.0.0.1:{port}/v1",
            "enabled": True, "ctx": CTX}, open(os.path.join(state, "fmm.json"), "w"))
@@ -302,6 +315,40 @@ check(groups.get("telegram:-100", {}).get("level") == "p0", f"chat_level held th
 check(any("root (P0) again" in l for l in members), "their leaving reported the group root again")
 check(any("Newbie (telegram:77) joined Market" in l for l in members), "a join to a mixed group is told too")
 check("MSG-AFTER" in first, "messages after the joins still reach the model")
+
+# read receipts: when the model gets a message, not when it arrives
+ids = {d["id"]: d for d in (json.loads(l) for l in open(idlog))}
+reads = [json.loads(l) for l in open(readlog)] if os.path.exists(readlog) else []
+read_at, read_by = {}, {}
+for r in reads:
+    for i, mid in enumerate(r.get("ids", [])):
+        read_at.setdefault((r.get("chat_id"), mid), r["t"])
+        read_by[mid] = (r.get("senders") or [""] * 99)[i]
+by_n = {r["n"]: r for r in R}
+early, late, unread = [], [], []
+for mid, d in ids.items():
+    mk, chat = d["mark"], d["chat"].split(":", 1)[1]
+    if mk not in first:
+        continue
+    t = read_at.get((chat, mid))
+    if t is None:
+        unread.append(mk)
+        continue
+    f = first[mk]
+    prev = by_n.get(f["n"] - 1)
+    if prev and t < prev["t"]:
+        early.append(mk)
+    if t > f["t"] + 1:
+        late.append(mk)
+check(not unread, f"every message the model got was marked read ({len(unread)} not: {unread[:5]})")
+check(not early, f"no message was marked read before the model got it ({len(early)} early: {early[:5]})")
+check(not late, f"each was marked read as it went to the model ({len(late)} late: {late[:5]})")
+def model_calls_between(a, b):
+    return sum(1 for r in R if a < r["t"] < b)
+waited = [d["mark"] for d in ids.values() if d["mark"].startswith("MSG-FLOOD") and d["mark"] in first
+          and model_calls_between(d["t"], read_at.get((d["chat"].split(":", 1)[1], d["id"]), 0)) >= 3]
+check(len(waited) >= FLOOD // 3, f"flood messages that waited in the queue stayed unread meanwhile ({len(waited)} read only after 3+ model calls since they came)")
+check(read_by.get(next((i for i, d in ids.items() if d["mark"] == "MSG-ROOTMIXED"), "")) == "telegram:1", "a read receipt names who wrote the message")
 
 book = json.load(open(os.path.join(state, "addressbook.json")))
 linked = [ch for c in book.get("contacts", []) for ch in c.get("channels", []) if ch.startswith("telegram:-")]

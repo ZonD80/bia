@@ -633,6 +633,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         queue_told: Default::default(),
         queue_noticed_at: 0,
         taken: Vec::new(),
+        to_read: Vec::new(),
         show_thinking: cfg.agent.show_thinking,
         remote: None,
         fmm_path,

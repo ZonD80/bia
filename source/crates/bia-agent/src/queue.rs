@@ -77,6 +77,31 @@ impl Ranker<'_> {
         !id.is_empty() && self.book.is_root_id(id)
     }
 
+    /// A group's own rank (its fixed level, P0 when everyone in it is root, else P3);
+    /// None when the chat is not a group.
+    fn group_base(&self, ib: &Inbound) -> Option<Tier> {
+        let g = self.groups.get(&ib.channel);
+        if !ib.group && !g.is_some_and(|g| g.count > 0) {
+            return None;
+        }
+        Some(match self.groups.level_of(&ib.channel) {
+            Some(t) => t,
+            None if g.is_some_and(|g| g.all_root(&|id| self.root_id(id))) => 0,
+            None => 3,
+        })
+    }
+
+    /// Whether a person's message stays open until answered (the unanswered nudges). In a
+    /// group only what is meant for bia: a reply to it, its name, a wake pattern, or any
+    /// message in a group that ranks P0. The rest of a group's talk is not a question to it,
+    /// and nudging over it (or a "still working" sent there) would be noise.
+    pub fn wants_answer(&self, ib: &Inbound) -> bool {
+        match self.group_base(ib) {
+            None => true,
+            Some(base) => base == 0 || calls_bia(&ib.text, self.me),
+        }
+    }
+
     pub fn tier(&self, ib: &Inbound) -> Tier {
         use crate::tools::{CH_CONSOLE, CH_SCHEDULE, ID_ROOT, ID_SYSTEM};
         if ib.channel.starts_with(crate::jobs::PREFIX) || ib.channel == CH_SCHEDULE {
@@ -91,12 +116,7 @@ impl Ranker<'_> {
             return 0;
         }
         let fixed = self.groups.level_of(&ib.channel);
-        if ib.group || self.groups.get(&ib.channel).is_some_and(|g| g.count > 0) {
-            let base = match fixed {
-                Some(t) => t,
-                None if self.groups.get(&ib.channel).is_some_and(|g| g.all_root(&|id| self.root_id(id))) => 0,
-                None => 3,
-            };
+        if let Some(base) = self.group_base(ib) {
             let by_sender = if self.root_id(&ib.sender) {
                 1
             } else if calls_bia(&ib.text, self.me) {
@@ -385,6 +405,14 @@ mod tests {
         assert_eq!(rk.tier(&ib("T (8)", "telegram:-200", "telegram:8", true, "talk")), 3);
         // a group never listed counts as mixed even when its channel was linked to root
         assert_eq!(rk.tier(&ib("T (8)", "telegram:-300", "telegram:8", true, "talk")), 3);
+        // unanswered: direct chats always; in a group only what is meant for bia, or a P0 group
+        assert!(rk.wants_answer(&ib("Who (7)", "telegram:7", "telegram:7", false, "hi")));
+        assert!(rk.wants_answer(&ib("Wife (2)", "telegram:-100", "telegram:2", true, "dinner?")));
+        assert!(!rk.wants_answer(&ib("T (8)", "telegram:-200", "telegram:8", true, "talk")));
+        assert!(!rk.wants_answer(&ib("Boss (1)", "telegram:-200", "telegram:1", true, "prices")));
+        assert!(rk.wants_answer(&ib("T (8)", "telegram:-200", "telegram:8", true, "Milo, look")));
+        assert!(rk.wants_answer(&ib("T (8)", "telegram:-200", "telegram:8", true, "[reply to 5 from you: \"ok\"]\nsure?")));
+        assert!(!rk.wants_answer(&ib("T (8)", "telegram:-300", "telegram:8", true, "talk")));
         // the model's level holds, but a root sender still ranks at least P1
         groups.set_level("telegram:-200", "p2", "").unwrap();
         let rk = Ranker { book: &book, groups: &groups, me: "Milo" };

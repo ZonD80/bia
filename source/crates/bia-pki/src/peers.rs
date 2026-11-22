@@ -91,7 +91,7 @@ impl Pki {
     fn agent_key(&self) -> Result<KeyPair> {
         let p = self.agent_key_path();
         if let Ok(pem) = fs::read_to_string(&p) {
-            return KeyPair::from_pem(&pem).context("agent.key");
+            return crate::keys::key_pair(&pem).context("agent.key");
         }
         let key = KeyPair::generate()?;
         fs::write(&p, key.serialize_pem()).context("write agent.key")?;

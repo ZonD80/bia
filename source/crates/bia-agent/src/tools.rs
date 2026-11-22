@@ -26,7 +26,9 @@ const AGENT_ONLY_WEB: &[&str] = &[
 ];
 
 fn agent_only(server: &str, tool: &str) -> bool {
-    server == "web" && AGENT_ONLY_WEB.contains(&tool)
+    (server == "web" && AGENT_ONLY_WEB.contains(&tool))
+        // read receipts: sent when the model gets the message (Repl::flush_reads)
+        || (tool == "read" && CHAT_BUSES.contains(&server))
 }
 
 /// Chat-app buses served by an MCP: their channels are `<bus>:<chat>`, and sends, edits,
@@ -4130,6 +4132,29 @@ impl Tools {
         }
     }
 
+    /// Read receipts on chat-app channels for messages the model got: (channel, id, sender),
+    /// one `read` call per chat with its ids and senders in the same order. A chat whose MCP
+    /// is not running is skipped (it could not have sent them).
+    pub fn chat_read(&mut self, reads: &[(String, String, String)]) {
+        let mut chats: Vec<(&str, Vec<&str>, Vec<&str>)> = Vec::new();
+        for (channel, id, sender) in reads {
+            let i = match chats.iter().position(|c| c.0 == channel) {
+                Some(i) => i,
+                None => {
+                    chats.push((channel, Vec::new(), Vec::new()));
+                    chats.len() - 1
+                }
+            };
+            chats[i].1.push(id);
+            chats[i].2.push(sender);
+        }
+        for (channel, ids, senders) in chats {
+            let Some((bus, chat)) = chat_bus(channel) else { continue };
+            let Some(idx) = self.server_index(bus) else { continue };
+            let _ = self.mcp_invoke(idx, "read", json!({"chat_id": chat, "ids": ids, "senders": senders}), &mut |_| {});
+        }
+    }
+
     /// Web typing indicator while the model is thinking on those chats.
     pub fn set_web_typing(&mut self, chats: &[(String, String)], on: bool) {
         if self.server_index("web").is_none() {
@@ -4311,6 +4336,16 @@ pub fn human(bytes: u64) -> String {
 #[cfg(test)]
 mod web_tests {
     use super::*;
+
+    #[test]
+    fn read_receipts_are_the_agents() {
+        for bus in CHAT_BUSES {
+            assert!(agent_only(bus, "read"), "{bus}");
+            assert!(!agent_only(bus, "send"), "{bus}");
+        }
+        assert!(agent_only("web", "read"));
+        assert!(!agent_only("system", "read"));
+    }
 
     #[test]
     fn a_file_path_is_not_a_model_id() {

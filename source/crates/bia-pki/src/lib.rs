@@ -18,6 +18,7 @@ use time::{Duration, OffsetDateTime};
 pub mod biaconfig;
 pub mod client;
 pub mod signin;
+pub mod keys;
 mod net;
 mod p12;
 mod peers;
@@ -287,7 +288,7 @@ impl Pki {
     fn load_ca_issuer(&self) -> Result<(rcgen::Certificate, KeyPair, String)> {
         let ca_pem = self.ca_pem()?;
         let key_pem = fs::read_to_string(self.ca_key_path()).context("read ca.key")?;
-        let key = KeyPair::from_pem(&key_pem)?;
+        let key = keys::key_pair(&key_pem)?;
         let params = CertificateParams::from_ca_cert_pem(&ca_pem)?;
         // Reconstruct issuer handle for signed_by (same key + DN as on-disk CA).
         let issuer = params.self_signed(&key)?;
@@ -381,7 +382,7 @@ impl Pki {
         // again for every new address; apps and bias check the bia by `bind`, not by this.
         let key = fs::read_to_string(self.server_key_path())
             .ok()
-            .and_then(|p| KeyPair::from_pem(&p).ok())
+            .and_then(|p| keys::key_pair(&p).ok())
             .map_or_else(KeyPair::generate, Ok)?;
         let cert = params.self_signed(&key)?;
         fs::write(self.server_cert_path(), cert.pem()).context("write server.crt")?;

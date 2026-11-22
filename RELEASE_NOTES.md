@@ -5,6 +5,18 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.4.1
+
+### Changes
+- Read marks are real now: on Telegram, WhatsApp, Messenger, Instagram and MAX a message shows as read only when bia actually takes it in, not when it arrives. Messages still waiting in bia's queue, or in a chat bia ignores, stay unread for the sender (WhatsApp still shows them delivered).
+- Group talk no longer counts as a question for bia: bia is reminded about a group message, and may say "still working on it" there, only when it was meant for bia (a reply to bia, its name, a wake word) or the group is only root's trusted people. Before, a busy group filled bia's reminders with chatter, which made the real ones, like someone waiting on a long job, easy to miss.
+- After an update, bia checks that each software repository it added (Google Chrome, Docker…) really worked, and says which did not, instead of trusting a quiet `apt-get update`.
+- bia-bridge accepts keys made by older tools (`BEGIN EC PRIVATE KEY`, `BEGIN RSA PRIVATE KEY`); an agent imported with such a key could not sign in since 2.3.0.
+
+### For bia
+- Nothing to do for read marks: they go out by themselves as messages reach you.
+- If the boot notice says apt had trouble with a repository: fix that source's file in /etc/apt/sources.list.d or its Signed-By key, run apt-get update, check the repository shows up, and reinstall what it provides. Never symlink a key or sources file that a package rewrites (Google Chrome writes /usr/share/keyrings/google-chrome.gpg and google-chrome.sources itself on every install and update; update keeps them as real files).
+
 ## 2.4.0
 
 ### Changes

@@ -6,7 +6,8 @@ Checks that a group message carries the sender's id in channel form and the grou
 direct message carries only the id; that the group's member list (bia left out) reaches the
 agent before the group's first message and only once; that joins and leaves become member events
 with ids in channel form, and bia's own are kept back; and that MAX turns add, remove, joins
-by link and leaving into joins and leaves.
+by link and leaving into joins and leaves. Read receipts: nothing is marked read on arrival,
+only the messages the agent names in `read` (when the model got them).
 
   cargo build -p bia-mcp-meta
   python3 -I tests/integration/members-e2e.py <dir with bia-mcp-messenger> <bia_max.py>
@@ -95,6 +96,16 @@ for _ in range(400):
         break
     time.sleep(0.05)
 time.sleep(0.5)
+def helper_calls(method):
+    return [json.loads(l)["params"] for l in open(calls) if json.loads(l)["method"] == method]
+check(helper_calls("read") == [], f"nothing is marked read on arrival ({helper_calls('read')})")
+r = rpc("tools/call", {"name": "read", "arguments": {"chat_id": "t200", "ids": ["m2", "m3"], "senders": ["messenger:42", "messenger:43"]}})
+for _ in range(100):
+    if len(helper_calls("read")) >= 2:
+        break
+    time.sleep(0.05)
+got = [(c.get("chat"), c.get("id")) for c in helper_calls("read")]
+check(got == [("t200", "m2"), ("t200", "m3")], f"the agent's read marks those messages read ({got})")
 p.kill()
 
 def inbound(mid):
