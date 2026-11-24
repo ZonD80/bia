@@ -1,7 +1,7 @@
 <template>
   <figure class="sg" :class="{ 'sg--compact': compact }">
     <div class="sg__scroll">
-      <svg class="sg__svg" :viewBox="`0 0 ${W} ${H}`" role="img" :aria-label="$t('graph:aria', { people, others, clusters: circles.length - 1 })">
+      <svg class="sg__svg" :viewBox="`0 0 ${W} ${H}`" role="img" :aria-label="$t(g.keys.aria, { people, others, clusters: circles.length - 1 })">
         <!-- the circles: one soft island per cluster, with its name -->
         <g
           v-for="c in islands"
@@ -24,7 +24,7 @@
         <g
           v-for="n in nodes"
           :key="n.id"
-          :class="['sg__node', `sg__node--${n.cluster}`, `sg__node--${n.kind}`, { 'sg__node--me': n.id === 'fred', 'is-on': n.id === active, 'is-near': near.has(n.id), 'is-dim': dimNode(n) }]"
+          :class="['sg__node', `sg__node--${n.cluster}`, `sg__node--${n.kind}`, { 'sg__node--me': n.id === center, 'is-on': n.id === active, 'is-near': near.has(n.id), 'is-dim': dimNode(n) }]"
           :transform="`translate(${pos[n.id]!.x} ${pos[n.id]!.y})`"
           tabindex="0"
           role="button"
@@ -34,7 +34,7 @@
           @click="pick(n.id)"
         >
           <circle :r="radius(n)" />
-          <text v-if="n.id === 'fred'" class="sg__me" text-anchor="middle" dy="0.35em">Fred</text>
+          <text v-if="n.id === center" class="sg__me" text-anchor="middle" dy="0.35em">{{ n.name }}</text>
           <text v-else :text-anchor="pos[n.id]!.anchor" :dx="pos[n.id]!.dx" :dy="pos[n.id]!.dy">{{ n.name }}</text>
         </g>
       </svg>
@@ -58,32 +58,33 @@
         </div>
       </template>
       <ul class="sg__legend" :aria-label="$t('graph:legend')">
-        <li v-for="c in circles.filter((x) => x.id !== 'self')" :key="c.id">
+        <li v-for="c in circles.filter((x) => x.id !== 'self' && members(x.id))" :key="c.id">
           <button type="button" :class="{ 'is-on': activeCircle === c.id }" @mouseenter="pick(c.id, true)" @focus="pick(c.id, true)" @click="pick(c.id, true)">
             <i :class="['sg__dot', `sg__dot--${c.id}`]" />{{ c.title }}
           </button>
         </li>
       </ul>
-      <p class="sg__small">{{ $t('graph:small', { date: longDate(graphAsOf, locale) }) }}</p>
+      <p class="sg__small">{{ $t(g.keys.small, { date: longDate(g.asOf, locale), first: g.first ? longDate(g.first, locale) : '' }) }}</p>
     </figcaption>
   </figure>
 </template>
 
 <script setup lang="ts">
 import type { T } from '~/data/features'
-import { buildGraphCircles, buildGraphNodes, graphAsOf, graphEdges as edges, type GraphCluster, type GraphEdge, type GraphNode } from '~/data/graph'
+import { buildFredGraph, type GraphCluster, type GraphData, type GraphEdge, type GraphNode } from '~/data/graph'
 
-defineProps<{ compact?: boolean }>()
+const props = defineProps<{ compact?: boolean; graph?: GraphData }>()
 
 const t = useT() as unknown as T
 const locale = useLocale()
-const nodes = buildGraphNodes(t)
-const circles = buildGraphCircles(t)
+// Fred's graph unless another bia's is given
+const g = props.graph ?? buildFredGraph(t)
+const { nodes, edges, circles, center } = g
 
-const W = 900
-const H = 720
-// what the panel shows: a node (Fred at first) or a whole circle
-const active = ref('fred')
+const W = g.size.w
+const H = g.size.h
+// what the panel shows: a node (the bia itself at first) or a whole circle
+const active = ref(center)
 const activeCircle = ref<GraphCluster | ''>('')
 function pick(id: string, circle = false) {
   if (circle) activeCircle.value = id as GraphCluster
@@ -94,33 +95,25 @@ function pick(id: string, circle = false) {
 }
 
 const byId = Object.fromEntries(nodes.map((n) => [n.id, n])) as Record<string, GraphNode>
-const current = computed(() => byId[active.value] ?? byId.fred!)
+const current = computed(() => byId[active.value] ?? byId[center]!)
 const shownCircle = computed(() => circles.find((c) => c.id === activeCircle.value))
 const people = nodes.filter((n) => n.kind === 'person').length
-const others = nodes.filter((n) => n.kind !== 'person' && n.id !== 'fred').length
+const others = nodes.filter((n) => (n.kind === 'bia' || n.kind === 'agent') && n.id !== center).length
 const members = (c: GraphCluster) => nodes.filter((n) => n.cluster === c).length
 
-// Fred in the middle with his owner beside him; every other circle is an island around them.
+// The bia in the middle with its owner beside it; every other circle is an island around them.
 // An island's people sit on an oval, their names pointing outwards.
 type Pos = { x: number; y: number; anchor: 'start' | 'end' | 'middle'; dx: number; dy: string }
 const pos: Record<string, Pos> = {}
-const CX = 468
-const CY = 372
-pos.fred = { x: CX, y: CY, anchor: 'middle', dx: 0, dy: '0.35em' }
-pos.aleksei = { x: CX + 62, y: CY - 44, anchor: 'start', dx: 13, dy: '0.35em' }
+const CX = g.centerAt.x
+const CY = g.centerAt.y
+pos[center] = { x: CX, y: CY, anchor: 'middle', dx: 0, dy: '0.35em' }
+if (g.owner) pos[g.owner] = { x: CX + (g.ownerAt?.dx ?? 62), y: CY + (g.ownerAt?.dy ?? -44), anchor: 'start', dx: 13, dy: '0.35em' }
 
-// centre and size of each island's oval (the picture is 900 × 720); start = angle of its first name
-const PLACES: Record<Exclude<GraphCluster, 'self'>, { x: number; y: number; rx: number; ry: number; start?: number }> = {
-  friends: { x: 178, y: 372, rx: 74, ry: 212 },
-  family: { x: 468, y: 112, rx: 92, ry: 36, start: Math.PI },
-  aengix: { x: 742, y: 196, rx: 44, ry: 62 },
-  ukraine: { x: 770, y: 382, rx: 30, ry: 30, start: -Math.PI / 2 },
-  peers: { x: 736, y: 566, rx: 44, ry: 52 },
-  salsa: { x: 468, y: 624, rx: 96, ry: 30, start: Math.PI },
-}
-const islands = (Object.keys(PLACES) as (keyof typeof PLACES)[]).map((id) => {
-  const p = PLACES[id]
-  const inside = nodes.filter((n) => n.cluster === id)
+const islands = Object.keys(g.places).map((id) => {
+  const p = g.places[id]!
+  // the bia and its owner sit in the middle, not on their circles' ovals
+  const inside = nodes.filter((n) => n.cluster === id && n.id !== g.owner && n.id !== center)
   inside.forEach((n, i) => {
     // wide, flat islands (family, salsa) spread their people along the upper and lower arc
     const a = (p.start ?? -Math.PI / 2) + (2 * Math.PI * (i + 0.5)) / inside.length
@@ -147,24 +140,25 @@ const near = computed(() => {
   }
   return s
 })
-const focused = computed(() => !!activeCircle.value || active.value !== 'fred')
+const focused = computed(() => !!activeCircle.value || active.value !== center)
 const inCircle = (id: string) => byId[id]?.cluster === activeCircle.value
 const touches = (e: GraphEdge) =>
   activeCircle.value ? inCircle(e.from) || inCircle(e.to) : e.from === active.value || e.to === active.value
 const dimNode = (n: GraphNode) =>
   activeCircle.value
-    ? n.cluster !== activeCircle.value && n.id !== 'fred'
-    : active.value !== 'fred' && n.id !== active.value && !near.value.has(n.id)
+    ? n.cluster !== activeCircle.value && n.id !== center
+    : active.value !== center && n.id !== active.value && !near.value.has(n.id)
 const dimCircle = (id: GraphCluster) =>
-  activeCircle.value ? activeCircle.value !== id : active.value !== 'fred' && current.value.cluster !== id && ![...near.value].some((x) => byId[x]?.cluster === id)
-// lines from Fred carry the colour of the other end's circle; the rest is the web around him
+  activeCircle.value ? activeCircle.value !== id : active.value !== center && current.value.cluster !== id && ![...near.value].some((x) => byId[x]?.cluster === id)
+// lines from the bia carry the colour of the other end's circle; the rest is the web around it
 function edgeTone(e: GraphEdge) {
-  if (e.from !== 'fred' && e.to !== 'fred') return e.kind === 'peer' || e.kind === 'bia' ? 'peers' : 'around'
-  return byId[e.from === 'fred' ? e.to : e.from]?.cluster ?? 'friends'
+  if (e.from !== center && e.to !== center) return e.kind === 'peer' || e.kind === 'bia' ? 'peers' : 'around'
+  return byId[e.from === center ? e.to : e.from]?.cluster ?? 'friends'
 }
-const radius = (n: GraphNode) => (n.id === 'fred' ? 27 : n.id === 'aleksei' ? 9 : n.kind === 'person' ? 6 : 8)
+// the bia's own circle grows to hold its name
+const radius = (n: GraphNode) => (n.id === center ? Math.max(27, Math.round(n.name.length * 4.8)) : n.id === g.owner ? 9 : n.kind === 'person' ? 6 : 8)
 const kindLabel = (n: GraphNode) =>
-  n.id === 'fred' ? t('graph:kind_self') : n.kind === 'bia' ? t('graph:kind_bia') : n.kind === 'agent' ? t('graph:kind_agent') : n.id === 'aleksei' ? t('graph:kind_owner') : (circles.find((c) => c.id === n.cluster)?.title ?? '')
+  n.id === center ? t(g.keys.self) : n.kind === 'bia' ? t('graph:kind_bia') : n.kind === 'agent' ? t('graph:kind_agent') : n.kind === 'group' ? t('graph:kind_group') : n.id === g.owner ? t(g.keys.owner) : (circles.find((c) => c.id === n.cluster)?.title ?? '')
 const CHANNELS: Record<string, string> = {
   web: t('graph:ch_web'), telegram: 'Telegram', whatsapp: 'WhatsApp', instagram: 'Instagram', messenger: 'Messenger',
   max: 'MAX', linkedin: 'LinkedIn', calls: t('graph:ch_calls'), email: t('graph:ch_email'), peer: t('graph:ch_peer'),
@@ -186,6 +180,7 @@ const channelName = (c: string) => CHANNELS[c] ?? c
   --c-aengix: #3d6ea8;
   --c-ukraine: #2a8c82;
   --c-peers: #7a4fb0;
+  --c-outward: #8a6d3b;
 }
 .sg__svg {
   width: 100%;
@@ -204,6 +199,16 @@ const channelName = (c: string) => CHANNELS[c] ?? c
 .sg__isle--aengix, .sg__node--aengix, .sg__dot--aengix, .sg__edge--aengix { --c: var(--c-aengix); }
 .sg__isle--ukraine, .sg__node--ukraine, .sg__dot--ukraine, .sg__edge--ukraine { --c: var(--c-ukraine); }
 .sg__isle--peers, .sg__node--peers, .sg__dot--peers, .sg__edge--peers { --c: var(--c-peers); }
+.sg__isle--outward, .sg__node--outward, .sg__dot--outward, .sg__edge--outward { --c: var(--c-outward); }
+.sg__node--group circle { stroke-dasharray: 2.5 2; }
+/* Jessica's and Bobby's circles */
+.sg__isle--people, .sg__node--people, .sg__dot--people, .sg__edge--people { --c: var(--c-aengix); }
+.sg__isle--agents, .sg__node--agents, .sg__dot--agents, .sg__edge--agents { --c: var(--c-peers); }
+/* the Provisioner's circles */
+.sg__isle--operator, .sg__node--operator, .sg__dot--operator, .sg__edge--operator { --c: var(--c-aengix); }
+.sg__isle--institution, .sg__node--institution, .sg__dot--institution, .sg__edge--institution { --c: var(--c-outward); }
+/* 酸菜鱼's circles */
+.sg__isle--work, .sg__node--work, .sg__dot--work, .sg__edge--work { --c: var(--c-salsa); }
 .sg__node--self, .sg__edge--self { --c: var(--c-family); }
 
 .sg__edge { stroke: var(--c, rgba(29, 33, 38, 0.6)); stroke-width: 1.4; opacity: 0.5; transition: opacity 0.2s ease, stroke-width 0.2s ease; }

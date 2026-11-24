@@ -29,7 +29,7 @@
         <NuxtLink :to="$lp('/use-cases')">{{ $t('common:use_cases') }}</NuxtLink>
         <NuxtLink :to="$lp('/how-it-works')">{{ $t('common:how_it_works') }}</NuxtLink>
         <NuxtLink :to="$lp('/why-bia')">{{ $t('common:why_bia') }}</NuxtLink>
-        <NuxtLink :to="$lp('/fred')">{{ $t('common:freds_story') }}</NuxtLink>
+        <NuxtLink :to="$lp('/cases')">{{ $t('common:real_cases') }}</NuxtLink>
         <NuxtLink :to="$lp('/faq')">{{ $t('common:faq') }}</NuxtLink>
         <NuxtLink :to="$lp('/download')">{{ $t('common:get_bia') }}</NuxtLink>
         <NuxtLink :to="$lp('/servers')">{{ $t('common:servers_and_vms') }}</NuxtLink>

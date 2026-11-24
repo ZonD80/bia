@@ -585,6 +585,10 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
     if paths.files.join("max").join("session.db").exists() {
         start(&mut tools, "max", "session on disk");
     }
+    // bia on a phone: the bia app there links its phone line (SMS, calls)
+    if paths.files.join("phone").join("link.json").exists() {
+        start(&mut tools, "phone", "phone line linked");
+    }
     // The web bus is always up when enabled (people reach bia there before any login).
     if cfg.web.enabled {
         start(&mut tools, "web", "web app");

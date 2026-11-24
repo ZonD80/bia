@@ -539,7 +539,8 @@ files already on this machine, root only), `edit {id, text}`, `delete {ids}`,
 `react {id, emoji, on}`, `pin {id, on}`, `read {upto}`, `button {id, row, col}`,
 `vote {id, options}`, `mute {on}`, `hist {before?|after?|around?, limit}`,
 `search {q}` and `call_decline`. Not acknowledged: `active {on}` (the tab is in
-front, so no push is needed), `typing {on}`, `ack {seq}` (what the client applied),
+front, so no push is needed), `typing {on}`, `ack {seq}` (what the client applied: the
+web app, bia-bridge and a dialing bia send it, and it marks the message delivered for Web Push),
 `ping` and `bye {reason}` (the session ends at once). Both sides send `{t: "ping"}` every
 5 s when idle, and a session that sent nothing for 15 s is closed. WebSocket pongs do not
 count, because a browser's network stack answers pings even for a tab that is gone.
@@ -571,6 +572,26 @@ last 15 s gets `bye {reason: "duplicate_key"}`, an older, silent one is replaced
 dial at once, both keep the link the lower agent name dialed. A refused bia tries again after 16 s (its own old session may still count
 after a crash and a quick restart); refusals that go on for 20 s mean another machine
 uses the same key, and root is told at both ends.
+
+*Web Push.* A new bia message is pushed to the identity's subscribed browsers at once when
+it has no live session (no other channel), else only when no session acknowledged it
+(`ack {seq}` ≥ its revision) within 30 s (`push::notify_message`); a tab that has it shows its
+own notification, with the same tag a late push would use. Nothing is pushed while a tab is in
+front. Calls and human tasks are pushed as before (unless a tab is in front).
+
+*Idle links between bias.* A link between two bias that carries nothing but pings for its idle
+timeout is closed (`close_idle` in the 1 s tick). Each bia has a default (60 s,
+`state/peer-idle.json`) and per-peer settings (`LinkState.idle`), set by the model with
+`web_peer_idle(seconds, peer?)`: 0 keeps it up, otherwise 10 s to 30 days. The link metadata
+travels in both hellos (`idle`: this end's timeout; `reached`: this end has dialed the other
+before) and in `link {idle, reached}` when a setting changes; both ends then run on the same
+timeout: 0 at either end keeps it up, else the longer one. A bia that announced nothing
+(older) is never closed for idleness, since it would take the close for a network loss and
+redial. The close is skipped while anything is on its way (outbox, file transfers) and unless
+both ends can bring it back (each has dialed the other), so a bia behind NAT is not cut off.
+It says `bye {reason: "idle", idle: <seconds>, why}`; both ends then set `want=false` and
+`idle_closed` (peer_list: "closed while idle; sending opens it again"), so neither redials,
+also after a restart, and the next message from either side brings it up as below.
 
 *Bias.* Two bias set up trust as below, and each then is an identity in the other's
 CA. The bia that dials is the client: its own sends, edits, reactions and read marks

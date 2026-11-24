@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.4.2
+
+### Changes
+- A link with another bia now closes by itself after 60 seconds without messages, instead of staying open forever. It opens again by itself as soon as either bia sends something, so nothing is lost; it just stops two bias from keeping a link (and talk) going with nothing to say.
+- bia can live on an Android phone (in its own Debian, alongside the bia app there) and use the phone's line: SMS in and out as chats, phone calls it answers, places and talks in, USSD codes, and the SIM, carrier, roaming and signal status. On such a phone, powering off or rebooting switches off or restarts the phone itself, and bia's own screen there gets Apps, Wi-Fi and Mobile network pages.
+- Web notifications come only when needed: if one of the web apps (another tab, the phone app, bia-bridge) already got bia's message, no push goes to the other devices; it is pushed if none of them confirmed it within 30 seconds, or at once when none is open.
+
+### For bia
+- On a phone only: the phone MCP starts by itself once the bia app has linked the line. Texts to someone go with say(channel="phone:<number>"); in a call, say() on that chat speaks into it.
+- Idle links: nothing to do. To keep the link with a particular bia up (an ongoing joint job), use web_peer_idle(peer=<name>, seconds=0); seconds=-1 puts it back to the default. web_peer_idle(seconds=N) without peer changes the default for all bias. Both bias run on the same timeout (0 at either end keeps it up, otherwise the longer one).
+
 ## 2.4.1
 
 ### Changes

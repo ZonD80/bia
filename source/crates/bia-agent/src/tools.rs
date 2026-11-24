@@ -33,10 +33,10 @@ fn agent_only(server: &str, tool: &str) -> bool {
 
 /// Chat-app buses served by an MCP: their channels are `<bus>:<chat>`, and sends, edits,
 /// reactions and deletes there go through the outbox to the MCP's tools.
-pub const CHAT_BUSES: &[&str] = &["telegram", "whatsapp", "messenger", "instagram", "max"];
+pub const CHAT_BUSES: &[&str] = &["telegram", "whatsapp", "messenger", "instagram", "max", "phone"];
 
 /// Chat buses whose MCP can speak into a voice call (call_say).
-const CALL_BUSES: &[&str] = &["telegram", "whatsapp", "max"];
+const CALL_BUSES: &[&str] = &["telegram", "whatsapp", "max", "phone"];
 
 /// (bus, chat) of a chat-app channel like `messenger:100012345678`.
 pub fn chat_bus(channel: &str) -> Option<(&str, &str)> {

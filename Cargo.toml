@@ -9,6 +9,7 @@ members = [
     "source/crates/bia-mcp-telegram",
     "source/crates/bia-mcp-whatsapp",
     "source/crates/bia-mcp-meta",
+    "source/crates/bia-mcp-phone",
     "source/crates/bia-mcp-web",
     "source/crates/bia-mcp-secrets",
     "source/crates/bia-mcp-chrome",
@@ -24,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.4.1"
+version = "2.4.2"
 edition = "2021"
 license = "GPL-3.0-only"
 

@@ -119,6 +119,10 @@ def files_of(n):
 
 alex = Bia("alex", 8443)
 fred = Bia("fred", 8444)
+# links stay up while idle for the scenarios below; idle closing is tested near the end
+for b in (alex, fred):
+    txt, err = b.tool("peer_idle", seconds=0)
+    check(not err and "kept up while idle" in txt, f"{b.name} keeps idle links up: {txt}")
 
 # ---- trust with one approval; the link opens by itself, alex (the lower name) dials
 txt, err = alex.tool("peer_add", url="https://127.0.0.1:8444", note="alex here")
@@ -380,6 +384,36 @@ check(clone.notice("another machine using this bia's key", 60) is not None, "the
 clone.stop()
 alex.say("fred", "still you?")
 check(fred.msg("alex", "still you?") is not None, "the real fred kept its link")
+
+# ---- idle links close after the timeout both ends run on, and come back on a send
+check(settle(alex, fred, True, 60), "the link is up before the idle test")
+txt, err = alex.tool("peer_idle", seconds=3)
+check(not err and "10 s" in txt, f"too short a timeout is raised to the minimum: {txt}")
+time.sleep(13)
+check(online(alex, fred) and online(fred, alex), "0 at the other end keeps an idle link up")
+txt, err = fred.tool("peer_idle", peer="alex", seconds=12)
+check(not err and "the link with alex is closed after 12 s" in txt, f"fred sets 12 s for alex: {txt}")
+# a message starts the idle timer over
+alex.say("fred", "before the quiet")
+check(fred.msg("alex", "before the quiet", 20) is not None, "a message before the quiet")
+t0 = time.time()
+check("closes after 12 s idle" in alex.link("fred") and "closes after 12 s idle" in fred.link("alex"), f"both run on fred's longer timeout: {alex.link('fred')[:200]}")
+end = t0 + 30
+while time.time() < end and (online(alex, fred) or online(fred, alex)):
+    time.sleep(0.5)
+gone = time.time() - t0
+check(not online(alex, fred) and not online(fred, alex) and 11 <= gone <= 16, f"the quiet link closed after 12 s (pings do not count): {gone:.0f} s")
+check("closed while idle" in alex.link("fred") and "closed while idle" in fred.link("alex"), f"both ends know it closed for idleness: {alex.link('fred')[:200]} / {fred.link('alex')[:200]}")
+check(settle(alex, fred, False, 12), "…and nobody redials it")
+def wanted(a, b):
+    return json.load(open(f"{a.files}/state/links/{b.name}.json")).get("want")
+check(wanted(alex, fred) is False and wanted(fred, alex) is False, "neither end wants it after an idle close")
+txt, err = fred.say("alex", "after the idle close")
+check(not err and "bringing it up now" in txt, f"a send brings it back: {txt}")
+check(alex.msg("fred", "after the idle close", 30) is not None, "…and arrives")
+txt, err = fred.tool("peer_idle", peer="alex", seconds=-1)
+check(not err and "default again" in txt, f"back to fred's default: {txt}")
+alex.tool("peer_idle", seconds=0)
 
 # ---- removing the peer closes the link
 txt, err = alex.tool("peer_remove", peer="fred")

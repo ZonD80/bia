@@ -239,7 +239,7 @@ pub fn document(port: u16, ca_sha256: &str) -> Value {
             "/v1/push/subscribe": {
                 "post": {
                     "tags": ["push"],
-                    "summary": "Store a Web Push subscription (PushSubscription.toJSON()) for the caller; bia then pushes new bia messages, calls and (root) human tasks while no tab of the caller is in front",
+                    "summary": "Store a Web Push subscription (PushSubscription.toJSON()) for the caller; bia then pushes calls and (root) human tasks while no tab of the caller is in front, and a new bia message when no session of the caller is open or none acknowledged it (ack {seq}) within 30 s",
                     "security": [{"biaSign": []}, {"biaSession": []}],
                     "requestBody": {"content": {"application/json": {"schema": {"type": "object", "required": ["endpoint", "keys"], "properties": {"endpoint": {"type": "string"}, "keys": {"type": "object", "properties": {"p256dh": {"type": "string"}, "auth": {"type": "string"}}}}}}}},
                     "responses": {"200": {"description": "{ok}"}, "400": {"description": "Error text"}}

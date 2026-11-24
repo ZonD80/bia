@@ -4,6 +4,11 @@ const PAGES: Record<string, string[]> = {
   features: ['features'],
   'use-cases': ['usecases'],
   fred: ['fred', 'graph'],
+  jessica: ['jessica', 'graph'],
+  bobby: ['bobby', 'graph'],
+  provisioner: ['provisioner', 'graph'],
+  suan: ['suan', 'graph'],
+  cases: ['cases'],
   'how-it-works': ['how'],
   'why-bia': ['why'],
 }

@@ -659,7 +659,7 @@ fn snippet(m: &Msg) -> String {
     s
 }
 
-/// A new message from bia: wake the person's devices that are not in front (not when muted).
+/// A new message from bia: wake the person's devices unless a live session took it (not when muted).
 fn push_msg(h: &Hub, identity: &str, m: &Msg) {
     if h.with_user(identity, |u| u.meta.muted) {
         return;
@@ -681,8 +681,9 @@ fn push_msg(h: &Hub, identity: &str, m: &Msg) {
     if body.chars().count() > 300 {
         body = body.chars().take(300).collect::<String>() + "…";
     }
-    crate::push::notify(
+    crate::push::notify_message(
         identity,
+        m.rev,
         crate::push::Note {
             title: crate::push::who(),
             body,

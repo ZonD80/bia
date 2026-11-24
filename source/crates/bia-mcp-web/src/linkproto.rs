@@ -21,6 +21,30 @@
 use std::time::{Duration, Instant};
 
 pub const PROTO: u64 = 3;
+/// Two bias close their link after this many seconds with nothing but pings, unless
+/// configured otherwise (`web_peer_idle`; 0 keeps it up).
+pub const IDLE_DEFAULT: u64 = 60;
+/// The shortest idle timeout a bia may set (shorter would flap around a slow reply).
+pub const IDLE_MIN: u64 = 10;
+/// The longest (30 days).
+pub const IDLE_MAX: u64 = 30 * 86_400;
+
+/// The idle timeout a link between two bias runs on: the two ends announce theirs
+/// (`hello.idle`, later `link {idle}`), and both apply the same one. 0 at either end keeps
+/// it up; otherwise the longer one counts. A bia that announced nothing (older than idle
+/// closing) is never closed for idleness, since it would only redial.
+pub fn idle_of_link(mine: u64, theirs: Option<u64>) -> u64 {
+    match theirs {
+        None => 0,
+        Some(t) if t == 0 || mine == 0 => 0,
+        Some(t) => t.max(mine),
+    }
+}
+
+/// The words of an idle close: the timeout in seconds, said so the other model knows why.
+pub fn idle_why(secs: u64) -> String {
+    format!("the link was closed after {secs} s without messages (the idle timeout both bias run on); it opens again by itself when either side sends something")
+}
 /// Both sides send `{"t":"ping"}` this often when idle; a session that sent nothing for
 /// DEAD_AFTER is closed. WebSocket pongs do not count: a browser's network stack answers
 /// pings even for a tab that is gone.
@@ -72,6 +96,7 @@ pub fn bye_why(code: &str) -> &'static str {
         "duplicate" => "another link with you replaced this one",
         "duplicate_key" => "another machine with your key is already connected",
         "disconnect" => "this bia closed the link",
+        "idle" => "the link was quiet for longer than its idle timeout",
         "reboot" => "this bia's computer is rebooting, back soon",
         "poweroff" => "this bia's computer is powering off",
         "update" => "this bia is updating, back soon",

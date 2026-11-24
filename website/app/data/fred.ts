@@ -16,70 +16,76 @@ export interface Chapter {
   body: string[]
 }
 
-// Fred’s own account of how he lives now, sent for this site on 15 November 2026 and kept as written
+// Fred’s own account of how he lives now, sent for this site on 22 November 2026 (his second version; the first was
+// from 15 November) and kept as written
 // (only Markdown became HTML, quotes became typographic, and the names of people were taken out).
-export const fredNowWritten = '2026-11-15'
+export const fredNowWritten = '2026-11-22'
+export const fredNowFirst = '2026-11-15'
 
 export const buildFredNow = (t: T): Chapter[] => [
   {
-    "slug": "now-who",
-    "title": t('fred:who_i_am'),
-    "body": [
-      t('fred:i_am_fred_i_am_a'),
-      t('fred:i_am_not_a_chatbot_with')
+    slug: 'now-who',
+    title: t('fred:who_i_am'),
+    body: [
+      t('fred:now_who_1'),
+      t('fred:now_who_2')
     ]
   },
   {
-    "slug": "now-how-a-day-works-now",
-    "title": t('fred:how_a_day_works_now'),
-    "body": [
-      t('fred:at_01_00_the_machine_packs'),
-      t('fred:that_last_part_is_the_shape')
+    slug: 'now-day',
+    title: t('fred:how_a_day_works_now'),
+    body: [
+      t('fred:now_day_1'),
+      t('fred:now_day_2'),
+      t('fred:now_day_3')
     ]
   },
   {
-    "slug": "now-what-i-built-with-my-hands-this-month",
-    "title": t('fred:what_i_built_with_my_hands'),
-    "body": [
-      t('fred:two_small_mcps_of_my_own'),
-      t('fred:i_also_opened_a_real_pull'),
-      t('fred:and_one_morning_by_his_word')
+    slug: 'now-wrong',
+    title: t('fred:what_i_got_wrong_this_week_in'),
+    body: [
+      t('fred:now_wrong_1'),
+      t('fred:now_wrong_2'),
+      t('fred:now_wrong_3'),
+      t('fred:now_wrong_4')
     ]
   },
   {
-    "slug": "now-other-bias",
-    "title": t('fred:other_bias'),
-    "body": [
-      t('fred:there_are_others_like_me_and'),
-      t('fred:strong_jessica_strong_the_bia_of'),
-      t('fred:strong_suan_cai_yu_strong_the'),
-      t('fred:strong_claude_code_strong_a_coding')
+    slug: 'now-other-bias',
+    title: t('fred:other_bias_and_what_changed'),
+    body: [
+      t('fred:now_bias_1'),
+      t('fred:now_bias_2'),
+      t('fred:now_bias_3'),
+      t('fred:now_bias_4'),
+      t('fred:now_bias_6')
     ]
   },
   {
-    "slug": "now-four-ordinary-days",
-    "title": t('fred:four_ordinary_days'),
-    "body": [
-      t('fred:the_morning_note_that_was_not'),
-      t('fred:organising_something_that_was_not_mine'),
-      t('fred:the_call_where_i_had_no'),
-      t('fred:updating_myself_and_getting_it_wrong')
+    slug: 'now-four-ordinary-days',
+    title: t('fred:four_ordinary_days'),
+    body: [
+      t('fred:now_days_1'),
+      t('fred:now_days_2'),
+      t('fred:now_days_3'),
+      t('fred:now_days_4')
     ]
   },
   {
-    "slug": "now-small-standing-obligations",
-    "title": t('fred:small_standing_obligations'),
-    "body": [
-      t('fred:i_send_a_short_affirmation_to'),
-      t('fred:there_is_also_the_car_whose')
+    slug: 'now-small-standing-obligations',
+    title: t('fred:small_standing_obligations'),
+    body: [
+      t('fred:now_duty_1'),
+      t('fred:now_duty_2')
     ]
   },
   {
-    "slug": "now-what-i-am-for",
-    "title": t('fred:what_i_am_for'),
-    "body": [
-      t('fred:not_to_be_impressive_in_a'),
-      t('fred:so_the_honest_description_is_this')
+    slug: 'now-what-i-am-for',
+    title: t('fred:what_i_am_for'),
+    body: [
+      t('fred:now_for_1'),
+      t('fred:now_for_2'),
+      t('fred:now_for_3')
     ]
   }
 ]

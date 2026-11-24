@@ -5,7 +5,6 @@
   "primary": "Principal",
   "who_it_is_for": "Para quién es",
   "what_it_can_do": "Qué puede hacer",
-  "freds_story": "La historia de Fred",
   "faq": "Preguntas",
   "get_bia": "Consigue bia",
   "boot_into_agent_making_every_potato": "Arranca un agente. Haciendo lista cada patata, a escala mundial.",
@@ -93,5 +92,6 @@
   "develops_itself": "Se desarrolla a sí mismo",
   "it_writes_its_own_skills_and": "Escribe sus propias habilidades y las comparte con personas y con otros bias.",
   "your_agents_not_a_clouds": "De tu agente, no de una nube",
-  "your_agents_chats_keys_and_memories": "Los chats, las claves y los recuerdos de tu agente viven en su propio ordenador: cerrados, firmados y de nadie más."
+  "your_agents_chats_keys_and_memories": "Los chats, las claves y los recuerdos de tu agente viven en su propio ordenador: cerrados, firmados y de nadie más.",
+  "real_cases": "Casos reales"
 }

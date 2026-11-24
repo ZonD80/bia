@@ -212,6 +212,8 @@ const BiaLink = (() => {
       switch (v.t) {
         case 'm': case 'gone':
           if (v.seq > (L.rx || 0)) L.rx = v.seq;
+          // tell bia this session has it (delivered): it then pushes it to no other device
+          if (!L.ackT) L.ackT = setTimeout(() => { L.ackT = 0; if (L.rx) sendJson({ t: 'ack', seq: L.rx }); }, 200);
           if (v.t === 'm') {
             // our file arrived there: its copy here is no longer needed
             for (const f of v.m.files || []) if (f.fid && !f.pending && L.blobs.has(f.fid) && !L.jobs.has(f.fid)) dropBlob(f.fid);

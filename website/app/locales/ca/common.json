@@ -5,7 +5,6 @@
   "primary": "Principal",
   "who_it_is_for": "Per a qui és",
   "what_it_can_do": "Què pot fer",
-  "freds_story": "La història d’en Fred",
   "faq": "Preguntes",
   "get_bia": "Aconsegueix bia",
   "boot_into_agent_making_every_potato": "Arrenca un agent. Fent llesta cada patata, a escala mundial.",
@@ -93,5 +92,6 @@
   "develops_itself": "Es desenvolupa a si mateix",
   "it_writes_its_own_skills_and": "Escriu les seves pròpies habilitats i les comparteix amb persones i amb altres bias.",
   "your_agents_not_a_clouds": "Del teu agent, no d’un núvol",
-  "your_agents_chats_keys_and_memories": "Els xats, les claus i els records del teu agent viuen al seu propi ordinador: tancats, signats i de ningú més."
+  "your_agents_chats_keys_and_memories": "Els xats, les claus i els records del teu agent viuen al seu propi ordinador: tancats, signats i de ningú més.",
+  "real_cases": "Casos reals"
 }

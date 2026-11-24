@@ -128,8 +128,12 @@ if command -v tint2 >/dev/null 2>&1 && ! pgrep -x tint2 >/dev/null 2>&1; then
   tint2 -c /usr/local/share/bia/tint2rc >/var/log/tint2.bia.log 2>&1 &
 fi
 if command -v x11vnc >/dev/null 2>&1 && ! pgrep -x x11vnc >/dev/null 2>&1; then
+  # Kernels without SysV IPC (e.g. Android's, when bia runs in a chroot on a
+  # phone) have no shmget: x11vnc then has to poll without MIT-SHM.
+  noshm=""
+  [ -d /proc/sysvipc ] || noshm="-noshm"
   x11vnc -display :0 -auth "$XAUTHORITY" -rfbport 5900 -localhost -forever -shared -nopw \
-    -bg -o /var/log/x11vnc.bia.log
+    $noshm -bg -o /var/log/x11vnc.bia.log
 fi
 
 # Input methods: fcitx5 (keyboard, pinyin, hangul). Ctrl+Space, Ctrl+Shift+Space or the

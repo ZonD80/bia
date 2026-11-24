@@ -3,6 +3,9 @@
 //! wakes its service worker (`/sw.js`) for new bia messages, calls and human tasks (for identities with trust root),
 //! even with the console closed. Nothing is pushed while a tab of that identity is in front
 //! (the page reports `{"t":"active"}` over its WebSocket) — that tab notifies by itself.
+//! A chat message is pushed only when no other channel took it: at once when the identity
+//! has no live session, else after DELIVERY_WAIT if no session acknowledged it (`ack {seq}`)
+//! by then; a session that has it shows it itself.
 //! Payloads are end-to-end encrypted: the push service only sees ciphertext.
 use crate::bus::Bus;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
@@ -500,6 +503,27 @@ pub fn notify(identity: &str, note: Note) {
         .spawn(move || {
             for s in &targets {
                 send_logged(p, s, &note);
+            }
+        });
+}
+
+/// How long live sessions get to report a message delivered before it is pushed anyway.
+pub const DELIVERY_WAIT: Duration = Duration::from_secs(30);
+
+/// A new chat message at revision `rev`: push it now when `identity` has no live session (no
+/// other channel), else only if no session reported it delivered within DELIVERY_WAIT.
+pub fn notify_message(identity: &str, rev: u64, note: Note) {
+    if !crate::link::online(identity) {
+        notify(identity, note);
+        return;
+    }
+    let identity = identity.to_string();
+    let _ = std::thread::Builder::new()
+        .name("web-push-wait".into())
+        .spawn(move || {
+            std::thread::sleep(DELIVERY_WAIT);
+            if crate::link::delivered(&identity) < rev {
+                notify(&identity, note);
             }
         });
 }

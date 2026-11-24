@@ -8,7 +8,7 @@
       <nav id="primary-nav" class="top__nav" :aria-label="$t('common:primary')" @click="open = false">
         <NuxtLink :to="$lp('/use-cases')">{{ $t('common:who_it_is_for') }}</NuxtLink>
         <NuxtLink :to="$lp('/features')">{{ $t('common:what_it_can_do') }}</NuxtLink>
-        <NuxtLink :to="$lp('/fred')">{{ $t('common:freds_story') }}</NuxtLink>
+        <NuxtLink :to="$lp('/cases')">{{ $t('common:real_cases') }}</NuxtLink>
         <NuxtLink :to="$lp('/cloud')">bia cloud</NuxtLink>
         <NuxtLink :to="$lp('/faq')">{{ $t('common:faq') }}</NuxtLink>
         <a :href="REPO_URL" target="_blank" rel="noopener">GitHub</a>

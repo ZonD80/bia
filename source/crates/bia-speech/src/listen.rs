@@ -19,6 +19,8 @@ pub struct Listener {
     fed: usize,
     pieces: Vec<Segment>,
     state: Arc<Mutex<LangState>>,
+    /// Quiet that ends an utterance (GAP_SECS unless the bus sets its own).
+    gap: f32,
 }
 
 pub struct Utterance {
@@ -48,7 +50,14 @@ impl Listener {
             fed: 0,
             pieces: Vec::new(),
             state: Arc::new(Mutex::new(LangState::new(start.as_deref().unwrap_or(&reg.default_lang)))),
+            gap: GAP_SECS,
         })
+    }
+
+    /// A longer pause before an utterance counts as finished: phone calls (narrowband,
+    /// network dropouts) split sentences at 0.7 s.
+    pub fn set_gap(&mut self, secs: f32) {
+        self.gap = secs.clamp(0.3, 5.0);
     }
 
     fn to_16k(&mut self, pcm: &[i16]) -> Vec<f32> {
@@ -71,7 +80,7 @@ impl Listener {
         let last = self.pieces.last()?;
         let end = last.start + last.samples.len();
         let total: usize = self.pieces.iter().map(|p| p.samples.len()).sum();
-        let quiet = !self.vad.speaking() && self.fed.saturating_sub(end) as f32 >= GAP_SECS * 16_000.0;
+        let quiet = !self.vad.speaking() && self.fed.saturating_sub(end) as f32 >= self.gap * 16_000.0;
         if quiet || total as f32 >= MAX_SECS * 16_000.0 {
             return Some(Utterance { pieces: std::mem::take(&mut self.pieces), state: self.state.clone() });
         }

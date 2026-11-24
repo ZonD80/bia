@@ -125,6 +125,13 @@ pub struct LinkState {
     pub rx: u64,
     #[serde(default)]
     pub outbox: Vec<Out>,
+    /// This peer's own idle timeout here (seconds, 0 = keep up); None = the default
+    /// (`web_peer_idle`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle: Option<u64>,
+    /// The last link closed for idleness (by either end): nothing redials it until a send.
+    #[serde(default)]
+    pub idle_closed: bool,
 }
 
 // ---------------------------------------------------------------- the writer
@@ -312,6 +319,12 @@ pub struct Link {
     our_bye: Mutex<Option<String>>,
     /// Replaced by another link of the same identity: closing it says nothing.
     replaced: AtomicBool,
+    /// Last frame other than a ping or link metadata, either way: the idle timer.
+    last_act: Mutex<Instant>,
+    /// The other bia's idle timeout (its hello or `link {idle}`); None = it announced none.
+    their_idle: Mutex<Option<u64>>,
+    /// The other bia has dialed this one successfully before (so it can bring the link back).
+    their_reached: AtomicBool,
 }
 
 impl Link {
@@ -334,6 +347,22 @@ impl Link {
     fn heard_bye(&self, v: &Value) {
         *self.their_bye.lock().unwrap() = v["reason"].as_str().map(str::to_string);
         *self.their_why.lock().unwrap() = v["why"].as_str().map(clean_why).filter(|w| !w.is_empty());
+    }
+    /// The other bia's link metadata (`hello` or `link`): its idle timeout and whether it
+    /// has dialed this one before.
+    fn take_meta(&self, v: &Value) {
+        if let Some(i) = v["idle"].as_u64() {
+            *self.their_idle.lock().unwrap() = Some(i);
+        }
+        if let Some(r) = v["reached"].as_bool() {
+            self.their_reached.store(r, Ordering::Relaxed);
+        }
+    }
+    /// A frame that counts as talk (not a ping, not link metadata): the idle timer starts over.
+    fn talked(&self, t: &str) {
+        if t != "ping" && t != "link" {
+            *self.last_act.lock().unwrap() = Instant::now();
+        }
     }
     fn silent_close(&self, reason: &str) {
         self.replaced.store(true, Ordering::Relaxed);
@@ -367,6 +396,8 @@ struct Rt {
     dup_told: bool,
     /// m/gone frames applied since the state was last saved (client side).
     unsaved: u32,
+    /// The highest chat revision any session of this identity said it has (`ack {seq}`).
+    delivered: u64,
 }
 
 /// One file being pulled: its size and the session it comes over.
@@ -405,6 +436,8 @@ pub struct Links {
     changed: Condvar,
     closing: AtomicBool,
     ticks: AtomicU64,
+    /// Idle timeout for links with other bias (seconds, 0 = keep up), `state/peer-idle.json`.
+    idle_default: AtomicU64,
 }
 
 static LINKS: OnceLock<Arc<Links>> = OnceLock::new();
@@ -425,6 +458,12 @@ pub fn init(files: &Path, bus: Arc<Bus>) -> Arc<Links> {
                 changed: Condvar::new(),
                 closing: AtomicBool::new(false),
                 ticks: AtomicU64::new(0),
+                idle_default: AtomicU64::new(
+                    bia_mcp::statefile::read::<Value>(&idle_path(files))
+                        .and_then(|v| v["secs"].as_u64())
+                        .map(clamp_idle)
+                        .unwrap_or(IDLE_DEFAULT),
+                ),
             })
         })
         .clone();
@@ -513,6 +552,11 @@ pub fn online(identity: &str) -> bool {
             .get(identity)
             .is_some_and(|r| !r.links.is_empty())
     })
+}
+
+/// The highest chat revision a session of `identity` acknowledged (`ack {seq}`).
+pub fn delivered(identity: &str) -> u64 {
+    links().map_or(0, |l| l.inner.lock().unwrap().rt.get(identity).map_or(0, |r| r.delivered))
 }
 
 /// The identity is looking at the web app right now (no push needed).
@@ -994,6 +1038,9 @@ impl Links {
             their_why: Mutex::new(None),
             our_bye: Mutex::new(None),
             replaced: AtomicBool::new(false),
+            last_act: Mutex::new(Instant::now()),
+            their_idle: Mutex::new(None),
+            their_reached: AtomicBool::new(false),
         });
         // writer thread
         {
@@ -1025,14 +1072,17 @@ impl Links {
         // the client says hello first; the server answers with hello once it took the
         // session (or bye when it refuses: banned, a second live session)
         if dialed {
-            let (rx, asked) = {
+            let (rx, asked, idle) = {
                 let mut inner = self.inner.lock().unwrap();
-                let st = &self.rt(&mut inner, &name).st;
-                (st.rx, st.asked)
+                let rt = self.rt(&mut inner, &name);
+                let idle = rt.st.idle;
+                (rt.st.rx, rt.st.asked, idle.unwrap_or(self.idle_default.load(Ordering::Relaxed)))
             };
             // redial: this bia comes back by itself (after a restart, a loss, as a new peer),
-            // nobody here asked for the link just now
-            w.json(&json!({"t": "hello", "proto": PROTO, "name": link.me_there, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance, "rx": rx, "redial": !asked}));
+            // nobody here asked for the link just now. idle/reached: the link metadata (this
+            // bia's idle timeout; it can dial the other one, which it just did)
+            w.json(&json!({"t": "hello", "proto": PROTO, "name": link.me_there, "ver": env!("CARGO_PKG_VERSION"), "instance": self.instance, "rx": rx, "redial": !asked,
+                           "idle": idle, "reached": true}));
         }
         // the other side's hello: the client's came while it signed in; a server first
         // challenges this bia, which checks the server's bind and answers with auth
@@ -1087,7 +1137,10 @@ impl Links {
                                     }
                                 }
                             }
-                            2 => self.on_chunk(&link, &payload),
+                            2 => {
+                                link.talked("chunk");
+                                self.on_chunk(&link, &payload)
+                            }
                             9 => w.push(10, payload),
                             10 => {}
                             8 => break,
@@ -1139,6 +1192,7 @@ impl Links {
             return Err(());
         }
         *link.instance.lock().unwrap() = instance.clone();
+        link.take_meta(hello);
         let me = self.me();
         let mut inner = self.inner.lock().unwrap();
         if self.closing.load(Ordering::Relaxed) {
@@ -1246,6 +1300,8 @@ impl Links {
         rt.st.asked = false;
         rt.st.closed = false;
         rt.st.closed_why.clear();
+        rt.st.idle_closed = false;
+        let meta = (rt.st.idle.unwrap_or(self.idle_default.load(Ordering::Relaxed)), rt.st.reached);
         if is_peer {
             // a link both ends took is wanted again at both, whoever closed the last one:
             // after a loss or a restart either may bring it back
@@ -1272,6 +1328,12 @@ impl Links {
                                "icon": crate::icon::rev(),
                                // live sessions of this identity, this one included
                                "sessions": sessions});
+            if is_peer {
+                // the link metadata for another bia: this end's idle timeout, and whether it
+                // can dial that bia (so an idle close can be undone from here too)
+                h["idle"] = json!(meta.0);
+                h["reached"] = json!(meta.1);
+            }
             if let Some(o) = crate::chat::hello_info(name).as_object() {
                 for (k, v) in o {
                     h[k] = v.clone();
@@ -1404,7 +1466,7 @@ impl Links {
         let ours = link.our_bye.lock().unwrap().clone();
         let mut tell = None;
         if current && !link.replaced.load(Ordering::Relaxed) && !self.closing.load(Ordering::Relaxed) {
-            match (theirs.as_deref(), ours) {
+            match (theirs.as_deref(), ours.as_deref()) {
                 (Some(r), _) if BYE_RESTARTS.contains(&r) => {
                     rt.attempts = 0;
                     rt.next_dial = Some(Instant::now() + backoff(0, rnd01()));
@@ -1418,6 +1480,12 @@ impl Links {
                 (Some("revoked"), _) => {
                     rt.st.want = false;
                     tell = Some(format!("{name} no longer trusts this bia (its certificate there was revoked). Tell root; trust must be set up again (web_peer_add) to talk."));
+                }
+                // quiet past the idle timeout both ends run on: no redial; a send brings it back
+                (Some("idle"), _) | (_, Some("idle")) => {
+                    rt.st.want = false;
+                    rt.st.idle_closed = true;
+                    rt.next_dial = None;
                 }
                 (Some("disconnect"), _) => {
                     rt.st.want = false;
@@ -1471,13 +1539,20 @@ impl Links {
     /// What a client sent this server: actions, acks, file transfer.
     fn on_client_frame(self: &Arc<Self>, link: &Arc<Link>, v: &Value) {
         let name = link.peer.as_str();
+        link.talked(v["t"].as_str().unwrap_or(""));
         match v["t"].as_str().unwrap_or("") {
             "ping" | "typing" => {}
+            "link" => link.take_meta(v),
             "active" => link.active.store(v["on"].as_bool().unwrap_or(false), Ordering::Relaxed),
             "ack" => {
-                // a bia that dialed us has our changes up to seq: its outbox here is done
+                // a session has the chat up to seq (delivered: no push needed for it); a bia
+                // that dialed us has our changes up to seq: its outbox here is done
                 let seq = v["seq"].as_u64().unwrap_or(0);
                 let mut inner = self.inner.lock().unwrap();
+                {
+                    let rt = self.rt(&mut inner, name);
+                    rt.delivered = rt.delivered.max(seq);
+                }
                 if inner.peers.contains_key(name) {
                     let rt = self.rt(&mut inner, name);
                     let n = rt.st.outbox.len();
@@ -1526,7 +1601,9 @@ impl Links {
     /// file transfer.
     fn on_server_frame(self: &Arc<Self>, link: &Arc<Link>, v: &Value) {
         let name = link.peer.as_str();
+        link.talked(v["t"].as_str().unwrap_or(""));
         match v["t"].as_str().unwrap_or("") {
+            "link" => link.take_meta(v),
             "m" | "gone" => {
                 let seq = v["seq"].as_u64().unwrap_or(0);
                 if v["t"] == "m" {
@@ -1890,6 +1967,7 @@ impl Links {
         for name in dial {
             self.start_dial(&name);
         }
+        self.close_idle();
         // sessions silent for DEAD_AFTER (only pongs, or nothing) are gone
         let silent: Vec<Arc<Link>> = self
             .inner
@@ -1996,6 +2074,93 @@ impl Links {
     }
 
     // ---- what the tools do ----
+
+    /// The idle timeout this end runs on with `name` (its own setting, else the default).
+    fn my_idle(&self, rt: &Rt) -> u64 {
+        rt.st.idle.unwrap_or(self.idle_default.load(Ordering::Relaxed))
+    }
+
+    /// Close links with other bias that carried nothing but pings for the timeout both ends
+    /// run on. Only when either end can bring it back (each has dialed the other before),
+    /// and nothing is still on its way (outbox, files).
+    fn close_idle(&self) {
+        let mut close = vec![];
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let names: Vec<String> = inner.peers.keys().cloned().collect();
+            for name in names {
+                let has_url = inner.peers.get(&name).is_some_and(|u| !u.is_empty());
+                let rt = self.rt(&mut inner, &name);
+                let Some(l) = rt.link() else { continue };
+                let secs = idle_of_link(self.my_idle(rt), *l.their_idle.lock().unwrap());
+                if secs == 0 || l.last_act.lock().unwrap().elapsed() < Duration::from_secs(secs) {
+                    continue;
+                }
+                let we_can = l.dialed || (rt.st.reached && has_url);
+                let they_can = !l.dialed || l.their_reached.load(Ordering::Relaxed);
+                let busy = !rt.st.outbox.is_empty() || !rt.pulls.is_empty() || !l.w.sending().is_empty();
+                if !we_can || !they_can || busy {
+                    continue;
+                }
+                rt.st.want = false;
+                rt.st.idle_closed = true;
+                rt.next_dial = None;
+                self.save_state(&name, &rt.st);
+                close.push((name, l, secs));
+            }
+        }
+        for (name, l, secs) in close {
+            self.bus.log(&format!("  link {name}: closed after {secs} s idle"));
+            *l.our_bye.lock().unwrap() = Some("idle".into());
+            l.w.close_with(Some(&json!({"t": "bye", "reason": "idle", "idle": secs, "why": idle_why(secs)})));
+            let (tls, w) = (l.tls.clone(), l.w.clone());
+            std::thread::spawn(move || {
+                w.wait_done(Instant::now() + BYE_FLUSH);
+                tls.shutdown();
+            });
+        }
+    }
+
+    /// `web_peer_idle`: set the idle timeout for all peers (`peer` None) or one (`secs`
+    /// None = back to the default). The other bia hears it at once (`link {idle}`).
+    pub fn set_idle(&self, peer: Option<&str>, secs: Option<u64>) -> Result<String, String> {
+        let secs = secs.map(|s| if s == 0 { 0 } else { clamp_idle(s) });
+        let names: Vec<String> = match peer {
+            Some(p) => {
+                self.require_peer(p)?;
+                self.refresh_peers();
+                vec![p.to_string()]
+            }
+            None => {
+                let s = secs.ok_or("seconds is required without a peer")?;
+                let p = idle_path(&self.files);
+                bia_mcp::statefile::write_json(&p, &json!({"secs": s})).map_err(|e| format!("{}: {e}", p.display()))?;
+                self.own(&p);
+                self.idle_default.store(s, Ordering::Relaxed);
+                self.inner.lock().unwrap().peers.keys().cloned().collect()
+            }
+        };
+        let mut inner = self.inner.lock().unwrap();
+        for name in &names {
+            let rt = self.rt(&mut inner, name);
+            if peer.is_some() {
+                rt.st.idle = secs;
+                self.save_state(name, &rt.st);
+            }
+            let mine = self.my_idle(rt);
+            if let Some(l) = rt.link() {
+                l.w.json(&json!({"t": "link", "idle": mine, "reached": rt.st.reached || l.dialed}));
+            }
+        }
+        drop(inner);
+        let what = |s: u64| if s == 0 { "kept up while idle".to_string() } else { format!("closed after {s} s without messages") };
+        Ok(match (peer, secs) {
+            (Some(p), Some(s)) => format!("the link with {p} is {} from this end (the other bia is told; with 0 at either end it stays up, otherwise the longer timeout counts)", what(s)),
+            (Some(p), None) => format!("the link with {p} uses the default again: {}", what(self.idle_default.load(Ordering::Relaxed))),
+            (None, Some(s)) => format!("links with other bias are {} by default (peers told; a peer's own setting still counts)", what(s)),
+            (None, None) => unreachable!(),
+        })
+    }
 
     fn require_peer(&self, name: &str) -> Result<(), String> {
         let pki = self.pki()?;
@@ -2225,7 +2390,13 @@ impl Links {
             format!(
                 "offline since {}{}",
                 crate::bus::rfc3339_unix(st.last_down),
-                if st.want { " (reconnecting)" } else { "" }
+                if st.want {
+                    " (reconnecting)"
+                } else if st.idle_closed {
+                    " (closed while idle; sending opens it again)"
+                } else {
+                    ""
+                }
             )
         } else {
             format!("offline{}", if st.want { " (connecting)" } else { "" })
@@ -2255,6 +2426,9 @@ impl Links {
             "banned_by": st.banned_by,
             "banned_us": st.banned_us,
             "reached": st.reached,
+            "idle_secs": self.my_idle(rt),
+            "idle_link_secs": link.as_ref().map(|l| idle_of_link(self.my_idle(rt), *l.their_idle.lock().unwrap())),
+            "idle_closed": st.idle_closed && link.is_none(),
             "waiting": st.outbox.len(),
             "last_error": rt.last_err,
             "instance": link.as_ref().map(|l| l.instance.lock().unwrap().clone()).unwrap_or_default(),
@@ -2403,6 +2577,22 @@ pub fn tool_disconnect(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> 
     l()?.disconnect(&peer_arg(&args)?, bia_mcp::arg_str_opt(&args, "reason").unwrap_or_default())
 }
 
+pub fn tool_idle(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
+    let peer = bia_mcp::arg_str_opt(&args, "peer").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let secs = match &args["seconds"] {
+        Value::Null => None,
+        v => match v.as_i64() {
+            Some(-1) if peer.is_some() => None,
+            Some(n) if n >= 0 => Some(n as u64),
+            _ => return Err("seconds: 0 (keep up), 10 or more, or -1 with peer (back to the default)".into()),
+        },
+    };
+    if peer.is_some() && args["seconds"].is_null() {
+        return Err("seconds is required (-1 for the default)".into());
+    }
+    l()?.set_idle(peer.as_deref(), secs)
+}
+
 pub fn tool_ban(_: &bia_mcp::Ctx, args: Value) -> Result<String, String> {
     l()?.ban(&peer_arg(&args)?, "model")
 }
@@ -2491,9 +2681,44 @@ pub fn bringing_up(identity: &str) -> bool {
     })
 }
 
+fn idle_path(files: &Path) -> PathBuf {
+    files.join("state").join("peer-idle.json")
+}
+
+fn clamp_idle(s: u64) -> u64 {
+    if s == 0 {
+        0
+    } else {
+        s.clamp(IDLE_MIN, IDLE_MAX)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_timeout_both_ends_share() {
+        // an older bia announces none: never closed for idleness
+        assert_eq!(idle_of_link(60, None), 0);
+        // 0 at either end keeps it up
+        assert_eq!(idle_of_link(0, Some(60)), 0);
+        assert_eq!(idle_of_link(60, Some(0)), 0);
+        // otherwise the longer one
+        assert_eq!(idle_of_link(60, Some(300)), 300);
+        assert_eq!(idle_of_link(120, Some(60)), 120);
+        assert_eq!((clamp_idle(0), clamp_idle(3), clamp_idle(90), clamp_idle(u64::MAX)), (0, IDLE_MIN, 90, IDLE_MAX));
+        assert!(idle_why(60).contains("60 s"));
+    }
+
+    #[test]
+    fn an_idle_closed_link_comes_back_on_send() {
+        let now = Instant::now();
+        let mut rt = Rt::default();
+        rt.st.idle_closed = true; // want=false after the idle close
+        assert!(bring_up(&mut rt, now));
+        assert!(rt.st.want && rt.st.asked && rt.next_dial == Some(now));
+    }
 
     #[test]
     fn disconnect_reason_words() {

@@ -433,10 +433,17 @@ pub fn peer_list_text() -> Result<String, String> {
         if let Some(l) = crate::link::links() {
             let d = l.describe(&p.name);
             let waiting = d["waiting"].as_u64().unwrap_or(0);
+            // the timeout the live link runs on (both ends' settings), else this end's own
+            let idle = match (d["idle_link_secs"].as_u64(), d["idle_secs"].as_u64().unwrap_or(0)) {
+                (Some(0), mine) if mine > 0 => "; kept up while idle (the other end asks so, or runs an older bia)".to_string(),
+                (Some(0), _) | (None, 0) => "; kept up while idle".to_string(),
+                (Some(s), _) | (None, s) => format!("; closes after {s} s idle"),
+            };
             out.push(format!(
-                "  link: {}  (say(identity=\"{}\", channel=\"web\")){}",
+                "  link: {}  (say(identity=\"{}\", channel=\"web\")){}{}",
                 d["state"].as_str().unwrap_or(""),
                 p.name,
+                idle,
                 if waiting > 0 { format!("; {waiting} change(s) of yours waiting to go") } else { String::new() }
             ));
             if let Some(e) = d["last_error"].as_str().filter(|e| !e.is_empty() && d["online"] != true) {

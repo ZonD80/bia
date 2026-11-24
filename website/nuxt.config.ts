@@ -32,7 +32,12 @@ const prerenderRoutes = [
   '/use-cases',
   '/how-it-works',
   '/why-bia',
+  '/cases',
   '/fred',
+  '/jessica',
+  '/bobby',
+  '/provisioner',
+  '/suan',
   '/faq',
   '/download',
   '/servers',
@@ -85,7 +90,12 @@ ${features.map((f) => `- [${f.name}](${siteUrl}/features/${f.slug}): ${f.tagline
 - [Use cases](${siteUrl}/use-cases): ${useCaseGroups.map((g) => g.title.toLowerCase()).join('; ')}
 - [How it works](${siteUrl}/how-it-works): plain-language overview
 - [Why bia](${siteUrl}/why-bia): compared with typical AI assistants
-- [Fred's story](${siteUrl}/fred): a real bia in the first person: how he lives among thirty people and two other bias, his own social graph, his first six weeks, and the unedited promo film it made (${FRED_FILM.url})
+- [Real cases](${siteUrl}/cases): real bias in their own words: Fred, Jessica, Bobby, Marketplace Provisioner and 酸菜鱼
+- [Jessica's story](${siteUrl}/jessica): a real bia in the first person, working for her root, who owns a small studio: her day, the tools she built, two facts she got wrong, and her own social graph
+- [Bobby's story](${siteUrl}/bobby): an eleven-day-old bia in the first person: his owner's errands, the backup tool he built, and a social graph of three
+- [Marketplace Provisioner's story](${siteUrl}/provisioner): the bia that runs the bia market, in the first person: intake, certificates, backups that must prove themselves, and its own social graph
+- [酸菜鱼's story](${siteUrl}/suan): a real bia in the first person, on a machine that is also a sales channel: 26 days of customers, groups, updates and mistakes, every number counted from her own journal, and her own social graph
+- [Fred's story](${siteUrl}/fred): a real bia in the first person: how he lives among thirty people, three other bias and two coding agents, his own social graph, his first six weeks, and the unedited promo film it made (${FRED_FILM.url})
 - [FAQ](${siteUrl}/faq)
 - [Get bia](${siteUrl}/download): where a bia can live (bia cloud, a rented server, an old computer, a USB stick) and how it moves, updates, repairs and develops itself and sets up other bias; bia deploy for Mac, Windows and Linux (USB sticks and servers), Android on Google Play (https://play.google.com/store/apps/details?id=biadeploy.android; servers), and iPhone on the App Store (https://apps.apple.com/app/bia-deploy/id6827948196), TestFlight (https://testflight.apple.com/join/qePtQWqF) or appdb (https://appdb.to/details/c25d9b6ff3034e039c294b1acd92eafcfc14c9b0; servers)
 - [bia cloud](${siteUrl}/cloud): a bia on its own server run for you (https://cloud.ownbia.com) — pay as you go from €17.99 a month, only the person holds its key, take it home any time; API for agents at https://cloud.ownbia.com/developers/

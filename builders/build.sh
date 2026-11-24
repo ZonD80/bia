@@ -212,6 +212,9 @@ rust() {
     strip -o "$OUT/bia-mcp-messenger" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-messenger"
     strip -o "$OUT/bia-mcp-instagram" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-instagram"
     strip -o "$OUT/bia-mcp-max" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-max"
+    echo "   building bia-mcp-phone"
+    cargo build --release --target "$triple" -p bia-mcp-phone
+    strip -o "$OUT/bia-mcp-phone" "$CARGO_TARGET_DIR/$triple/release/bia-mcp-phone"
     go_meta
     max_py
   fi
@@ -221,7 +224,7 @@ rust() {
 mcps() {
   echo "== assembling MCP folders for $RARCH"
   local M=/work/source/flash/MCPs
-  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH" "$M/max/bin/$RARCH"
+  mkdir -p "$M/system/bin/$RARCH" "$M/web/bin/$RARCH" "$M/telegram/bin/$RARCH" "$M/whatsapp/bin/$RARCH" "$M/secrets/bin/$RARCH" "$M/chrome/bin/$RARCH" "$M/screen/bin/$RARCH" "$M/carry/bin/$RARCH" "$M/lang/bin/$RARCH" "$M/messenger/bin/$RARCH" "$M/instagram/bin/$RARCH" "$M/max/bin/$RARCH" "$M/phone/bin/$RARCH"
   cp "$OUT/bia-mcp-system" "$M/system/bin/$RARCH/"
   cp "$OUT/bia-mcp-web" "$M/web/bin/$RARCH/"
   # the bia serves bia-bridge to agents (web/bridge/); macOS comes from tools/bridge-macos.sh
@@ -241,6 +244,7 @@ mcps() {
   cp "$OUT/bia-mcp-messenger" "$OUT/bia-meta" "$M/messenger/bin/$RARCH/"
   cp "$OUT/bia-mcp-instagram" "$M/instagram/bin/$RARCH/"
   cp "$OUT/bia-mcp-max" "$M/max/bin/$RARCH/"
+  [ -x "$OUT/bia-mcp-phone" ] && cp "$OUT/bia-mcp-phone" "$M/phone/bin/$RARCH/"
   max_py
 }
 

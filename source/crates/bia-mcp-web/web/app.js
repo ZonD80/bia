@@ -63,6 +63,10 @@ function h(tag, props, ...kids) {
 }
 
 const ICONS = {
+  lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  apps: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  wifi: 'M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01',
+  signal: 'M5 20v-3M9.5 20v-6.5M14 20V10M18.5 20V6',
   menu: 'M4 6h16M4 12h16M4 18h16',
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
   send: 'M3.5 11.2 20 4l-7.2 16.5-2.3-7z',
@@ -857,15 +861,15 @@ function notifyMsg(chat, m) {
   const visible = !document.hidden && S.cur === chat && S.route.startsWith('chat/');
   if (visible || (c && c.muted)) { if (visible) maybeRead(); return; }
   if (isActive()) { blip(); return; }
-  // subscribed: bia pushes it (it saw no tab of ours in front), with the system's sound
-  if (NOTIF.sub) return;
+  // this tab acknowledged it, so bia pushes it nowhere else: show it here (same tag as a push,
+  // so a late push replaces it instead of doubling it)
   blip();
-  showNote(chatTitle(chat), snippet(m), 'bia-' + chat, 'chat/' + chat);
+  showNote(chatTitle(chat), snippet(m), chat === 'main' ? 'bia-chat' : 'bia-' + chat, 'chat/' + chat);
 }
 
 // Browser notifications. A service worker (/sw.js) shows them; with Web Push bia wakes it
-// even when no tab is open. bia only pushes while no tab of this identity is in front, so
-// each tab reports {t:'active'} over its WebSocket.
+// even when no tab is open. bia pushes a message only when no session acknowledged it within
+// 30 s (or none is open), and never while a tab is in front (each reports {t:'active'}).
 const NOTIF = { reg: null, sub: null, id: '', err: '' };
 const canNotify = () => 'Notification' in window;
 const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -1060,6 +1064,7 @@ function installHelp() {
 function renderInstallAsk() {
   const el = $('#installAsk');
   if (!el) return;
+  if (window.BiaPhone) { el.hidden = true; return; } // this IS the phone's own screen
   const kind = installKind();
   const ask = (kind === 'ios' || kind === 'android') && !S.prefs.installAsked;
   el.hidden = !ask;
@@ -1124,6 +1129,9 @@ function route() {
     case 'task': showView('task', buildTaskFrame); openTaskFrame(r.slice(5)); break;
     case 'display': showView('display', buildDisplay); $('#displayFrame').src = '/gui'; break;
     case 'settings': showView('settings', buildSettings); renderSettings(); break;
+    case 'apps': if (window.BiaPhone) { showView('apps', buildApps); renderApps(); } break;
+    case 'wifi': if (window.BiaPhone) { showView('wifi', buildWifi); window.BiaPhone.wifiScan(); renderWifi(); clearInterval(wifiTimer); wifiTimer = setInterval(() => { if (S.route === 'wifi') renderWifi(); else clearInterval(wifiTimer); }, 5000); } break;
+    case 'mobile': if (window.BiaPhone) { showView('mobile', buildMobile); renderMobile(); } break;
     default: showView('empty', () => h('section', { class: 'view chatbg', id: 'v-empty' }, h('div', { class: 'pill' }, 'Select a chat to start messaging')));
   }
   if (viewKey !== 'chat') S.cur = null;
@@ -1213,8 +1221,140 @@ function renderChatList() {
       tool('files', 'folder', 'Files', 'browse, upload, edit'),
       tool('tasks', 'hand', 'Human tasks', S.tasks.length ? S.tasks.map(t => t.title).join(', ') : 'nothing waiting', S.tasks.length || null),
       tool('display', 'display', 'Display', 'screen :0 over VNC'),
-      tool('settings', 'settings', 'Settings', 'certificates, appearance'));
+      tool('settings', 'settings', 'Settings', 'certificates, appearance'),
+      ...phoneTools(tool));
   }
+}
+
+// ======================================================================
+// the phone (only on bia's own phone screen: the bia app there provides window.BiaPhone)
+// ======================================================================
+function phoneStatus() {
+  try { return JSON.parse(window.BiaPhone.status()); } catch (e) { return {}; }
+}
+function phoneTools(tool) {
+  if (!window.BiaPhone) return [];
+  const st = phoneStatus();
+  const line = [st.network || st.sim_operator, st.roaming ? 'roaming' : ''].filter(Boolean).join(', ');
+  return [
+    h('div', { class: 'side-label' }, 'Phone'),
+    tool('apps', 'apps', 'Apps', 'Android apps on this phone'),
+    tool('wifi', 'wifi', 'Wi-Fi', st.ssid ? 'connected to ' + st.ssid : (st.wifi_on ? 'not connected' : 'off')),
+    tool('mobile', 'signal', 'Mobile network', line || (st.sim === 'ready' ? 'SIM ready' : 'no SIM')),
+  ];
+}
+function phoneHead(icon, title, sub, ...extra) {
+  return h('div', { class: 'vhead' }, backBtn(), h('div', { class: 'avatar xs tool' }, ic(icon)),
+    h('div', { class: 'tbox' }, h('div', { class: 'title' }, title), h('div', { class: 'subtitle' }, sub)), ...extra);
+}
+
+function buildApps() {
+  return h('section', { class: 'view' },
+    phoneHead('apps', 'Apps', 'Android apps on this phone',
+      iconBtn('settings', 'Android settings', () => window.BiaPhone.settings('all'))),
+    h('div', { class: 'page' }, h('div', { class: 'page-inner', id: 'appGrid',
+      style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:14px' })));
+}
+function renderApps() {
+  const el = $('#appGrid');
+  if (!el) return;
+  let apps = [];
+  try { apps = JSON.parse(window.BiaPhone.apps()); } catch (e) { set(el, h('div', { class: 'fempty' }, 'Could not list apps: ' + e.message)); return; }
+  set(el, ...apps.map(a => h('div', {
+    style: 'display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;text-align:center;font-size:13px',
+    onclick: () => window.BiaPhone.launch(a.pkg),
+  }, h('img', { src: a.icon, alt: '', style: 'width:52px;height:52px' }), h('span', null, a.label))));
+}
+
+let wifiTimer = null;
+function buildWifi() {
+  return h('section', { class: 'view' },
+    phoneHead('wifi', 'Wi-Fi', 'networks this phone can join',
+      iconBtn('refresh', 'Scan again', () => { window.BiaPhone.wifiScan(); setTimeout(renderWifi, 3000); }),
+      iconBtn('settings', 'Android Wi-Fi settings', () => window.BiaPhone.settings('wifi'))),
+    h('div', { class: 'page' }, h('div', { class: 'page-inner', style: 'padding-left:0;padding-right:0' }, h('div', { id: 'wifiNow' }), h('div', { id: 'wifiList' }))));
+}
+function wifiIcon(level) {
+  // four arcs, the ones above the signal level dimmed
+  const arcs = ['M12 19.5h.01', 'M8.5 16a5 5 0 0 1 7 0', 'M5.5 12.5a9.5 9.5 0 0 1 13 0', 'M2.5 9a14 14 0 0 1 19 0'];
+  const t = document.createElement('template');
+  t.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' +
+    arcs.map((d, i) => `<path d="${d}" style="opacity:${i < Math.max(level, 1) ? 1 : 0.25}"/>`).join('') + '</svg>';
+  return t.content.firstChild;
+}
+function renderWifi() {
+  const now = $('#wifiNow'), list = $('#wifiList');
+  if (!now || !list) return;
+  const st = phoneStatus();
+  let nets = [];
+  try { nets = JSON.parse(window.BiaPhone.wifiList()); } catch (e) {}
+  const cur = nets.find(n => n.current) || (st.ssid ? { ssid: st.ssid, level: 3, saved: true } : null);
+  // one row like the sidebar's: icon, name, one line under it, an action at the right
+  const row = (n, sub, right, onclick) => h('div', { class: 'citem', onclick },
+    h('div', { class: 'avatar sm tool' }, wifiIcon(n.level)),
+    h('div', { class: 'cbody' },
+      h('div', { class: 'ctop' }, h('span', { class: 'ctitle' }, n.ssid), n.secure ? ic('lock', 'mutei') : null),
+      h('div', { class: 'cbot' }, h('span', { class: 'cprev' }, sub))),
+    right);
+  const forget = n => h('button', { class: 'btn ghost', style: 'padding:6px 12px;font-size:14px',
+    onclick: e => { e.stopPropagation(); window.BiaPhone.wifiForget(n.ssid); setTimeout(renderWifi, 1500); } }, 'Forget');
+  set(now,
+    h('div', { class: 'side-label' }, st.wifi_on ? 'Connected' : 'Wi-Fi is off'),
+    cur ? row(cur, ['connected', st.ip, st.rssi ? st.rssi + ' dBm' : ''].filter(Boolean).join(' · '), forget(cur)) :
+      h('div', { class: 'fempty' }, st.wifi_on ? 'Not connected' : 'Wi-Fi is off'));
+  const others = nets.filter(n => !n.current && (!cur || n.ssid !== cur.ssid));
+  if (!others.length) { set(list, h('div', { class: 'side-label' }, 'Networks'), h('div', { class: 'fempty' }, 'Scanning…')); return; }
+  set(list, h('div', { class: 'side-label' }, 'Networks'), ...others.map(n => {
+    const wrap = h('div');
+    const pw = h('input', { class: 'input', type: 'password', placeholder: 'Password for ' + n.ssid, autocomplete: 'off' });
+    const note = h('span', { class: 'cprev' });
+    const join = () => {
+      const ok = window.BiaPhone.wifiConnect(n.ssid, pw.value || '');
+      note.textContent = ok ? 'connecting…' : 'Android did not accept this network';
+      setTimeout(renderWifi, 6000);
+    };
+    const form = h('div', { class: 'row', style: 'gap:8px;padding:0 12px 12px 72px' }, pw,
+      h('button', { class: 'btn', onclick: join }, 'Connect'));
+    pw.addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
+    const sub = h('span', null, n.saved ? 'saved' : (n.secure ? 'secured' : 'open'), ' ', note);
+    const r = row(n, sub, n.saved ? forget(n) : null, () => {
+      if (n.secure && !n.saved) { if (!form.isConnected) { wrap.append(form); pw.focus(); } return; }
+      join();
+    });
+    wrap.append(r);
+    return wrap;
+  }));
+}
+
+function buildMobile() {
+  const code = h('input', { class: 'input', placeholder: 'USSD code, e.g. *100#', autocomplete: 'off', inputmode: 'tel' });
+  const out = h('div', { id: 'ussdOut', class: 'tmsg', style: 'white-space:pre-wrap' });
+  const send = h('button', { class: 'btn' }, 'Send');
+  send.onclick = () => { if (!code.value.trim()) return; out.textContent = 'Asking the network…'; window.BiaPhone.ussd(code.value.trim()); };
+  code.addEventListener('keydown', e => { if (e.key === 'Enter') send.click(); });
+  window.biaPhoneUssd = (c, text, err) => { const o = $('#ussdOut'); if (o) o.textContent = err ? c + ': ' + err : text; };
+  return h('section', { class: 'view' },
+    phoneHead('signal', 'Mobile network', 'SIM, carrier, roaming, USSD',
+      iconBtn('settings', 'Android mobile network settings', () => window.BiaPhone.settings('mobile'))),
+    h('div', { class: 'page' }, h('div', { class: 'page-inner' },
+      h('div', { id: 'mobileNow' }),
+      h('div', { class: 'card' }, h('div', { class: 'tbody' },
+        h('div', { class: 'ttitle' }, 'USSD'),
+        h('div', { class: 'muted', style: 'font-size:13px' }, 'balance, bundles and carrier menus'),
+        h('div', { class: 'row', style: 'gap:8px;margin-top:8px' }, code, send), out)))));
+}
+function renderMobile() {
+  const el = $('#mobileNow');
+  if (!el) return;
+  const st = phoneStatus();
+  const row = (k, v) => h('div', { style: 'display:flex;justify-content:space-between;gap:12px;padding:4px 0' }, h('span', { class: 'muted' }, k), h('span', null, v));
+  set(el, h('div', { class: 'card' }, h('div', { class: 'tbody' },
+    row('SIM', st.sim === 'ready' ? `${st.sim_operator} (${st.sim_country})` : (st.sim || 'unknown')),
+    row('Number', st.number || 'unknown'),
+    row('Network', st.network ? `${st.network} (${st.network_country})` : 'none'),
+    row('Roaming', st.roaming ? 'yes' : 'no'),
+    row('Mobile data', st.data_enabled ? 'on' : 'off'),
+    h('div', { class: 'actions' }, h('button', { class: 'btn ghost', onclick: () => window.BiaPhone.settings('mobile') }, 'Data, roaming, carrier: Android settings')))));
 }
 
 function chatMenu(x, y, id) {

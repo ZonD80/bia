@@ -268,6 +268,12 @@ pub fn reboot(poweroff: bool) -> ! {
     unsafe {
         libc::sync();
     }
+    // bia on a phone (a Debian chroot on Android): powering off means the phone, and
+    // Android must shut down cleanly; the bia app there does it (files/phone/link.json).
+    if phone_power(poweroff) {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        std::process::exit(0)
+    }
     let bin = if poweroff {
         "/sbin/poweroff"
     } else {
@@ -278,6 +284,32 @@ pub fn reboot(poweroff: bool) -> ! {
         .status();
     let _ = std::process::Command::new(bin).status();
     std::process::exit(0)
+}
+
+/// Ask the bia app on the phone to power the phone off or restart it. True when it
+/// accepted (Android then shuts down, this process included).
+fn phone_power(poweroff: bool) -> bool {
+    use std::io::{Read, Write};
+    let files = std::env::var("BIA_FILES").unwrap_or_else(|_| "/home/bia/files".into());
+    let Ok(s) = std::fs::read_to_string(std::path::Path::new(&files).join("phone/link.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) else { return false };
+    let host = v["url"].as_str().unwrap_or("").trim_start_matches("http://").trim_end_matches('/').to_string();
+    let token = v["token"].as_str().unwrap_or("");
+    let Ok(mut c) = std::net::TcpStream::connect(&host) else { return false };
+    let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let body = format!("{{\"action\":\"{}\"}}", if poweroff { "off" } else { "reboot" });
+    let req = format!(
+        "POST /power HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    if c.write_all(req.as_bytes()).is_err() {
+        return false;
+    }
+    let mut out = String::new();
+    let _ = c.read_to_string(&mut out);
+    out.starts_with("HTTP/1.1 200")
 }
 
 /// Where things are: /home/bia in system mode, subdirectories of --volume in dev mode.
@@ -343,19 +375,30 @@ pub fn ipv4_addrs() -> Vec<(String, String)> {
 
 /// True when the kernel has a default IPv4 route (destination 0.0.0.0).
 pub fn has_default_route() -> bool {
-    let Ok(s) = std::fs::read_to_string("/proc/net/route") else {
-        return false;
-    };
-    for line in s.lines().skip(1) {
-        let mut cols = line.split_whitespace();
-        let _iface = cols.next();
-        let dest = cols.next().unwrap_or("");
-        // Kernel hex; little-endian bytes. 00000000 = default.
-        if dest == "00000000" {
-            return true;
+    if let Ok(s) = std::fs::read_to_string("/proc/net/route") {
+        for line in s.lines().skip(1) {
+            let mut cols = line.split_whitespace();
+            let _iface = cols.next();
+            let dest = cols.next().unwrap_or("");
+            // Kernel hex; little-endian bytes. 00000000 = default.
+            if dest == "00000000" {
+                return true;
+            }
         }
     }
-    false
+    // /proc/net/route only shows the main table. With policy routing (Android,
+    // where bia runs in a chroot on a phone) the default route lives in a
+    // per-network table, so ask the kernel instead: connect() on a UDP socket
+    // does the route lookup (rules included) without sending anything.
+    routable("1.1.1.1:53") || routable("[2606:4700:4700::1111]:53")
+}
+
+/// True when the kernel has a route to `addr` (UDP connect, no packet sent).
+fn routable(addr: &str) -> bool {
+    let bind = if addr.starts_with('[') { "[::]:0" } else { "0.0.0.0:0" };
+    std::net::UdpSocket::bind(bind)
+        .and_then(|s| s.connect(addr))
+        .is_ok()
 }
 
 /// True when resolv.conf lists at least one nameserver (not a comment).

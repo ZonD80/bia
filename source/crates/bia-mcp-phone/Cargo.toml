@@ -1,0 +1,11 @@
+[package]
+name = "bia-mcp-phone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP: the phone bus (SMS, calls, USSD, carrier status) when bia runs on a phone, through the bia app's local API"
+
+[dependencies]
+bia-mcp = { path = "../bia-mcp" }
+bia-speech = { path = "../bia-speech" }
+serde_json.workspace = true

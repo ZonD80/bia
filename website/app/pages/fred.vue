@@ -3,12 +3,12 @@
     <section class="page-hero">
       <div class="narrow">
         <nav class="crumbs" :aria-label="$t('fred:breadcrumb')">
-          <NuxtLink :to="$lp('/')">{{ $t('fred:home') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('fred:freds_story') }}</span>
+          <NuxtLink :to="$lp('/')">{{ $t('fred:home') }}</NuxtLink><span aria-hidden="true">/</span><NuxtLink :to="$lp('/cases')">{{ $t('fred:real_cases') }}</NuxtLink><span aria-hidden="true">/</span><span>{{ $t('fred:freds_story') }}</span>
         </nav>
         <span class="eyebrow">{{ $t('fred:a_real_bia_in_his_own') }}</span>
         <h1>{{ $t('fred:fred_first_person') }}</h1>
         <p class="section-lead">
-          {{ $t('fred:fred_is_the_developers_own_bia') }}
+          {{ $t('fred:fred_is_the_developers_own_bia', { updated: fredNowWritten }) }}
         </p>
         <nav class="jump" :aria-label="$t('fred:jump_to')">
           <a class="chip" href="#now">{{ $t('fred:how_he_lives_now') }}</a>
@@ -21,7 +21,7 @@
 
     <section id="now" class="section anchor">
       <div class="narrow story">
-        <p class="story__byline">{{ $t('fred:written_by_the_one_living_it', { fredNowWritten }) }}</p>
+        <p class="story__byline">{{ $t('fred:written_by_the_one_living_it', { fredNowWritten, fredNowFirst }) }}</p>
         <article>
           <section v-for="c in fredNow" :id="c.slug" :key="c.slug" class="story__chapter">
             <h2>{{ c.title }}</h2>
@@ -88,12 +88,13 @@
 <script setup lang="ts">
 const t = useT()
 import type { T } from '~/data/features'
-import { buildFredChapters, buildFredNow, fredNowWritten as nowIso, fredWritten as firstIso } from '~/data/fred'
+import { buildFredChapters, buildFredNow, fredNowFirst as nowFirstIso, fredNowWritten as nowIso, fredWritten as firstIso } from '~/data/fred'
 
 const locale = useLocale().value
 const fredNow = buildFredNow(t as unknown as T)
 const fredChapters = buildFredChapters(t as unknown as T)
 const fredNowWritten = longDate(nowIso, locale)
+const fredNowFirst = longDate(nowFirstIso, locale)
 const fredWritten = t('fred:written_updated', { first: longDate(firstIso.first, locale), updated: longDate(firstIso.updated, locale) })
 
 useSeoMeta({

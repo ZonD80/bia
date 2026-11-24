@@ -5,7 +5,6 @@
   "primary": "Primary",
   "who_it_is_for": "Who it is for",
   "what_it_can_do": "What it can do",
-  "freds_story": "Fred’s story",
   "faq": "FAQ",
   "get_bia": "Get bia",
   "boot_into_agent_making_every_potato": "Boot into agent. Making every potato smart — on a global scale.",
@@ -93,5 +92,6 @@
   "develops_itself": "Develops itself",
   "it_writes_its_own_skills_and": "It writes its own skills — and shares them with people and other bias.",
   "your_agents_not_a_clouds": "Your agent’s, not a cloud’s",
-  "your_agents_chats_keys_and_memories": "Your agent’s chats, keys and memories live on its own computer — locked, signed and nobody else’s."
+  "your_agents_chats_keys_and_memories": "Your agent’s chats, keys and memories live on its own computer — locked, signed and nobody else’s.",
+  "real_cases": "Real cases"
 }
