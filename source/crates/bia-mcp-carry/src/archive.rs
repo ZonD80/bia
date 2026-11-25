@@ -283,6 +283,8 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
             chown_home(Path::new(HOME), &kept);
         }
     }
+    // Docker after the packages (docker itself) and the home (bind mounts, compose files)
+    let docker_line = crate::docker::import(ctx, &stage.0.join(crate::docker::DIR), &crate::docker::keep_dir(&files_root()));
     let mut missing_bins = Vec::new();
     if mode != Mode::Update {
         let staged = stage.0.join("mcps");
@@ -317,6 +319,9 @@ fn unfold_inner(ctx: &Ctx, src: &Path, mode: Mode, stash: Option<&Path>) -> Resu
         base
     };
     let mut notice = boot_notice(&base, &failed, &missing_bins);
+    if let Some(line) = docker_line.filter(|l| !l.is_empty()) {
+        notice.push_str(&line);
+    }
     if !lost_links.is_empty() {
         notice.push_str(&format!(
             " Links into /home/bia that did not come back (what they pointed to was not in the archive, or the path is taken): {}.",
@@ -424,8 +429,16 @@ fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, to
         ctx.log(format!("fold:   left out /{rel}"));
     }
     ctx.log(format!("fold: {} files, {} bytes", members.files, members.bytes));
-    if !force && members.bytes > 0 {
-        space_short("fold", &dir_ready(dest_dir)?, members.bytes, 1, tool, "")?;
+    // Docker lives under /var, which is never carried: its containers, images and volumes
+    // go in as an export (crate::docker). Only the live system has a Docker to ask.
+    let live = base == Path::new("/");
+    let docker_need = if live { crate::docker::estimate() } else { 0 };
+    if docker_need > 0 {
+        ctx.log(format!("fold: docker export about {docker_need} bytes"));
+    }
+    if !force && members.bytes + docker_need > 0 {
+        // the Docker export is written out first, then compressed into the archive
+        space_short("fold", &dir_ready(dest_dir)?, members.bytes + 2 * docker_need, 1, tool, "")?;
     }
     // Only the manifest is written outside the archive; everything else streams from `base`.
     let meta = Scratch(scratch_dir(dest_dir, &home, "meta"));
@@ -433,9 +446,32 @@ fn fold_shared(ctx: &Ctx, base: &Path, dest: &Path, force: bool, stamp: bool, to
     fs::create_dir_all(&meta.0).map_err(|e| e.to_string())?;
     ctx.log("fold: recording packages and MCP binaries");
     let manifest_len = write_manifest(&meta.0.join("manifest.json"), base, &custom)?;
+    let mut docker_bytes = 0;
+    if live {
+        let dir = meta.0.join(crate::docker::DIR);
+        match crate::docker::export(ctx, &dir) {
+            Ok(Some(e)) => {
+                docker_bytes = e.bytes;
+                ctx.log(format!(
+                    "fold: docker: {} containers, {} images, {} volumes, {} bytes",
+                    e.containers, e.images, e.volumes, e.bytes
+                ));
+            }
+            Ok(None) => {}
+            Err(e) if force => {
+                let _ = fs::remove_dir_all(&dir);
+                ctx.log(format!("fold: docker left out ({e}); force was given"));
+            }
+            Err(e) => {
+                return Err(format!(
+                    "fold: Docker could not be exported ({e}), and without it the containers would be lost. Fix Docker, or ask the owner and fold with force=true to go without it."
+                ))
+            }
+        }
+    }
     let list = meta.0.join("members");
     members.write_list(&list)?;
-    let unpacked = members.bytes + manifest_len;
+    let unpacked = members.bytes + manifest_len + docker_bytes;
     ctx.log(format!("fold: compressing {unpacked} bytes with {} into {}", gzip_program(), dest.display()));
     tar_create(&meta.0, base, &list, dest)?;
     let path = if stamp {
@@ -2589,6 +2625,12 @@ fn tar_create(meta: &Path, base: &Path, list: &Path, dest: &Path) -> Result<(), 
         .arg("-C")
         .arg(meta)
         .arg("manifest.json")
+        // the Docker export (crate::docker), whole: --recursion is positional in GNU tar
+        .args(if meta.join(crate::docker::DIR).is_dir() {
+            vec!["--recursion", crate::docker::DIR, "--no-recursion"]
+        } else {
+            vec![]
+        })
         .arg("-C")
         .arg(base)
         .arg("-T")

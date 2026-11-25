@@ -273,6 +273,34 @@ check(bool(src) and src.startswith("blob:"), f"the photo is shown from what the 
 pulled = t1.js("(async () => { const i = [...document.querySelectorAll('#msgsIn .media img')].pop(); return (await (await fetch(i.src)).arrayBuffer()).byteLength; })()")
 check(pulled == len(png), f"…intact ({pulled} bytes)")
 
+# ---- a markdown file from bia opens formatted in the viewer, its source one click away
+open(f"{files}/notes.md", "w").write("# Manifest\n\n## Rules\n\nOne **referee** decides: `submit()`.\n\n- first\n  - nested\n- second\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```sh\nmake test\n```\n\n<script>window.__mdx = 1</script><img src=x onerror=\"window.__mdx = 2\">\n\n[bad](javascript:window.__mdx=3) and https://ownbia.com\n")
+web.tool("send", identity="root", channel="web", text="the notes", files=[f"{files}/notes.md"])
+t1.until("(() => { const d = [...document.querySelectorAll('#msgsIn .doc')].pop(); return d && d.textContent.includes('notes.md'); })()", 20)
+t1.js("[...document.querySelectorAll('#msgsIn .doc')].pop().click()")
+got = t1.until("""(() => { const d = document.querySelector('.viewer .mdview'); return d && JSON.stringify({
+  h1: d.querySelector('h1')?.textContent, h2: d.querySelector('h2')?.textContent, b: d.querySelector('strong')?.textContent,
+  nested: d.querySelectorAll('ul ul li').length, th: d.querySelector('table th')?.textContent, pre: d.querySelector('pre code')?.textContent,
+  html: !d.querySelector('script, img'), shown: d.textContent.includes('<script>'), bad: d.querySelector('a[href^="javascript"]') !== null,
+  link: d.querySelector('a[href="https://ownbia.com"]')?.target, lib: !!window.markdownit}); })()""", 20)
+time.sleep(0.5)
+check(got and json.loads(got) == {"h1": "Manifest", "h2": "Rules", "b": "referee", "nested": 1, "th": "a", "pre": "make test\n",
+                                  "html": True, "shown": True, "bad": False, "link": "_blank", "lib": True}, f"a markdown file shows as a document (markdown-it): {got}")
+check(t1.js("window.__mdx === undefined") is True, "…and HTML or javascript: links in it do not run")
+t1.js("document.querySelector('.viewer .vmdflip').click()")
+raw = t1.js("(() => { const p = document.querySelector('.viewer pre.editor'); return p && p.textContent; })()")
+check(bool(raw) and raw.startswith("# Manifest") and t1.js("!document.querySelector('.viewer .mdview')") is True, "…and its source one click away")
+t1.js("document.querySelector('.viewer .vmdflip').click()")
+check(t1.js("!!document.querySelector('.viewer .mdview') && document.querySelectorAll('.viewer .vmdflip').length === 1") is True, "…and back to formatted")
+t1.js("document.querySelector('.viewer .vtop [title=Close]').click()")
+open(f"{files}/plain.txt", "w").write("# not markdown\n")
+web.tool("send", identity="root", channel="web", text="plain", files=[f"{files}/plain.txt"])
+t1.until("(() => { const d = [...document.querySelectorAll('#msgsIn .doc')].pop(); return d && d.textContent.includes('plain.txt'); })()", 20)
+t1.js("[...document.querySelectorAll('#msgsIn .doc')].pop().click()")
+raw = t1.until("(() => { const p = document.querySelector('.viewer pre.editor'); return p && p.textContent !== 'Loading…' && p.textContent; })()", 20)
+check(raw == "# not markdown\n" and t1.js("!document.querySelector('.viewer .mdview') && !document.querySelector('.viewer .vmdflip')") is True, f"a .txt file stays plain text: {raw!r}")
+t1.js("document.querySelector('.viewer .vtop [title=Close]').click()")
+
 # ---- settings: the agent CA can be downloaded, in both forms, with its fingerprint shown
 t1.js("go('settings')")
 c = http.client.HTTPSConnection("127.0.0.1", 8443, context=ssl._create_unverified_context())

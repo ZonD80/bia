@@ -39,6 +39,7 @@ QEMU) and Yaaia's communication features (messengers, calls, contacts,
 | [kitty](https://sw.kovidgoyal.net/kitty/) | terminal hosting the agent console |
 | [x11vnc](https://github.com/LibVNC/x11vnc), [noVNC](https://novnc.com/) | remote view of the desktop from the web console |
 | [Forge (node-forge)](https://github.com/digitalbazaar/forge) (BSD-3-Clause, vendored in `web/vendor/`) | reading .p12 files in the web app's sign-in page |
+| [markdown-it](https://github.com/markdown-it/markdown-it) 14.3.3 (MIT, vendored in `web/vendor/`) | showing Markdown files formatted in the web app's file viewer |
 | [Let's Encrypt](https://letsencrypt.org/) | publicly trusted certificates for bia's public addresses and hostnames (ACME) |
 | [xdotool](https://github.com/jordansissel/xdotool), [scrot](https://github.com/resurrecting-open-source-projects/scrot) | screen MCP input and screenshots |
 | [DejaVu fonts](https://dejavu-fonts.github.io/), [Noto Color Emoji](https://github.com/googlefonts/noto-emoji) | fonts |

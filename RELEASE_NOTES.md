@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.4.3
+
+### Changes
+- Docker survives updates and backups: a backup (and every update, restore or move to another machine) now carries the Docker containers, the images they run on and their volumes' data, and brings them back as they were, running ones started again. Before, Docker lived only in the system part that an update replaces, so containers had to be rebuilt after every update.
+
+- In the web app, a Markdown file (.md) opens as a formatted document instead of plain text: headings of every level, nested lists, tables, code blocks, quotes and links, in the app's light or dark look. A button above it shows the plain source. HTML inside such a file is shown as text and never runs.
+
+### For bia
+- Check the boot notice's Docker line: if a container did not come back, it names it and why. If Docker itself did not start, the export waits in files/carry/docker-<time>/; once Docker works, run `sudo /home/bia/MCPs/carry/bin/$(uname -m)/bia-mcp-carry --docker-import <that folder>`.
+- Containers you rebuilt by hand after earlier updates need nothing more: from now on they are kept.
+
 ## 2.4.2
 
 ### Changes

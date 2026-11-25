@@ -445,6 +445,30 @@ function loadForge() {
   });
 }
 
+// Markdown files in the viewer: markdown-it (CommonMark + tables, strikethrough), loaded the
+// first time one is opened. Raw HTML in the file is shown as text and javascript: links are
+// refused, so a file someone sent cannot run anything here.
+let mditLoading = null;
+function loadMdit() {
+  if (window.markdownit) return Promise.resolve();
+  return mditLoading = mditLoading || new Promise((ok, no) => {
+    const s = document.createElement('script');
+    s.src = '/vendor/markdown-it.min.js';
+    s.onload = ok; s.onerror = () => { mditLoading = null; no(new Error('could not load the Markdown reader')); };
+    document.head.appendChild(s);
+  });
+}
+async function mdDoc(text) {
+  let html;
+  try {
+    await loadMdit();
+    html = window.markdownit({ html: false, linkify: true, typographer: false }).render(text);
+  } catch { html = md(text); } // the chat's own formatter when the reader cannot load
+  const doc = h('div', { class: 'mdview', html });
+  for (const a of doc.querySelectorAll('a[href]')) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+  return doc;
+}
+
 // An address only the local network reaches: the certificate there is bia's own.
 function onLanAddress() {
   const host = location.hostname.replace(/^\[|\]$/g, '');
@@ -1843,7 +1867,8 @@ function buildQuote(id) {
 // A file of the chat as a blob URL: pulled over the link once (ours are here already).
 function attSrc(f, onProg) { return S.link.url(f, onProg); }
 function downloadAtt(f) { attSrc(f).then(u => download(u, f.name)).catch(e => toast(e.message, true)); }
-const viewKind = f => f.mime.startsWith('text/') || f.mime.includes('json') ? 'text' : f.mime === 'application/pdf' ? 'pdf' : f.kind;
+const isMarkdown = name => /\.(md|markdown|mdown|mkd)$/i.test(name || '');
+const viewKind = f => isMarkdown(f.name) || f.mime.startsWith('text/') || f.mime.includes('json') ? 'text' : f.mime === 'application/pdf' ? 'pdf' : f.kind;
 
 // A file still on its way (ours being pulled by bia, or bia's not arrived) or lost.
 function fileState(f, mine) {
@@ -1896,7 +1921,7 @@ function buildDoc(m, f, i) {
     h('div', { class: 'grow' }, h('div', { class: 'dname' }, f.name), h('div', { class: 'dsize' }, fmtBytes(f.size) + ' · ' + (f.name.split('.').pop() || '').toUpperCase())));
 }
 function openFileAtt(m, f, i) {
-  const viewable = /^(application\/pdf|text\/|image\/|video\/|audio\/|application\/json)/.test(f.mime);
+  const viewable = /^(application\/pdf|text\/|image\/|video\/|audio\/|application\/json)/.test(f.mime) || isMarkdown(f.name);
   if (viewable) openViewer([{ get: () => attSrc(f), name: f.name, kind: viewKind(f) }], 0);
   else downloadAtt(f);
 }
@@ -2415,6 +2440,7 @@ function openViewer(items, idx) {
     stage);
   const show = () => {
     const it = items[i];
+    v.querySelectorAll('.vmdflip').forEach(b => b.remove());
     name.textContent = it.name;
     $('#vcount', v).textContent = items.length > 1 ? `${i + 1} of ${items.length}` : '';
     let el;
@@ -2428,8 +2454,26 @@ function openViewer(items, idx) {
       else if (it.kind === 'audio' || it.kind === 'voice') el = h('audio', { src: url, controls: true, autoplay: true });
       else if (it.kind === 'pdf') el = h('iframe', { src: url });
       else if (it.kind === 'text') {
-        el = h('pre', { class: 'editor', style: 'max-width:1000px;height:100%;margin:0;overflow:auto;white-space:pre-wrap' }, 'Loading…');
-        fetch(url).then(r => r.text()).then(t => { el.textContent = t.length > 2e6 ? t.slice(0, 2e6) + '\n…' : t; });
+        const src = h('pre', { class: 'editor', style: 'max-width:1000px;height:100%;margin:0;overflow:auto;white-space:pre-wrap' }, 'Loading…');
+        el = src;
+        fetch(url).then(r => r.text()).then(t => {
+          t = t.length > 2e6 ? t.slice(0, 2e6) + '\n…' : t;
+          src.textContent = t;
+          if (!isMarkdown(it.name) || shown !== i) return;
+          return mdDoc(t).then(doc => {
+            if (shown !== i) return;
+            // markdown: formatted as a document, with the source one click away
+            const wrap = h('div', { class: 'mdwrap' }, doc);
+            const flip = iconBtn('file', 'Show the source', () => {
+              const formatted = wrap.contains(doc);
+              set(wrap, formatted ? src : doc);
+              flip.title = formatted ? 'Show formatted' : 'Show the source';
+          });
+          flip.classList.add('vmdflip');
+          src.replaceWith(wrap);
+          $('.vtop', v).insertBefore(flip, dlBtn);
+          });
+        });
       } else el = h('div', { class: 'muted' }, 'No preview');
       loading.replaceWith(el);
     }).catch(e => { loading.textContent = 'Not available: ' + e.message; });

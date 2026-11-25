@@ -1,6 +1,6 @@
 {
   "name": "phone",
-  "version": "2.4.2",
+  "version": "2.4.3",
   "description": "bia's own phone line when bia runs on a phone: SMS in and out (chats phone:<number>), phone calls (ring, answer, reject, place), USSD codes and the line's status (SIM, carrier, roaming, signal). Incoming SMS arrive like other chats; say(channel='phone:+34…') sends an SMS. An incoming call arrives as [incoming call]; a missed one as [missed call]. In a call bia hears the other side (their speech arrives as messages on the phone:<number> chat) and say() on that chat speaks into the call, as in WhatsApp calls; text spoken in a call is not also sent as SMS. On this phone, machine poweroff and reboot switch off or restart the phone itself (Android shuts down cleanly; bia comes back with it on a reboot). Starts by itself when the bia app on the phone has linked the line (files/phone/link.json).",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-phone",

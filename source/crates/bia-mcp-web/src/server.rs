@@ -25,6 +25,8 @@ const LINK_JS: &str = include_str!("../web/link.js");
 const KEYS_JS: &str = include_str!("../web/keys.js");
 /// node-forge 1.3.1 (BSD-3-Clause), only for reading .p12 files on the no-key page.
 const FORGE_JS: &str = include_str!("../web/vendor/forge.min.js");
+/// markdown-it 14.3.3 (MIT), only for showing a Markdown file in the viewer.
+const MDIT_JS: &str = include_str!("../web/vendor/markdown-it.min.js");
 const ICON: &str = include_str!("../web/icon.svg");
 const ICON_PNG: &[u8] = include_bytes!("../web/icon-192.png");
 const ICON_512: &[u8] = include_bytes!("../web/icon-512.png");
@@ -267,6 +269,7 @@ fn is_public(method: &str, path: &str) -> bool {
             | "/link.js"
             | "/keys.js"
             | "/vendor/forge.min.js"
+            | "/vendor/markdown-it.min.js"
             | "/icon.svg"
             | "/icon-192.png"
             | "/icon-512.png"
@@ -1083,6 +1086,7 @@ impl Web {
             ("GET", "/link.js") => asset(stream, "text/javascript; charset=utf-8", LINK_JS),
             ("GET", "/keys.js") => asset(stream, "text/javascript; charset=utf-8", KEYS_JS),
             ("GET", "/vendor/forge.min.js") => asset(stream, "text/javascript; charset=utf-8", FORGE_JS),
+            ("GET", "/vendor/markdown-it.min.js") => asset(stream, "text/javascript; charset=utf-8", MDIT_JS),
             ("GET", "/app.css") => asset(stream, "text/css; charset=utf-8", APP_CSS),
             ("GET", "/icon.svg") => asset(stream, "image/svg+xml", ICON),
             // browsers that ask for it unprompted: bia's own picture when it chose one

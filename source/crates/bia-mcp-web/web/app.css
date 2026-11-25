@@ -379,6 +379,35 @@ a.btn { text-decoration: none; }
 .viewer .vstage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; position: relative; }
 .viewer .vstage img, .viewer .vstage video { max-width: 100%; max-height: 100%; object-fit: contain; }
 .viewer .vstage iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+/* a markdown file in the viewer (markdown-it), set as a document */
+.viewer .mdwrap { width: 100%; max-width: 980px; height: 100%; display: flex; }
+.viewer .mdwrap > pre.editor { flex: 1; }
+.mdview { flex: 1; overflow: auto; background: var(--panel); color: var(--txt); border: 1px solid var(--line2); border-radius: 10px; padding: 28px 40px; font: 16px/1.65 var(--font); overflow-wrap: break-word; }
+.mdview > :first-child { margin-top: 0; }
+.mdview > :last-child { margin-bottom: 0; }
+.mdview h1, .mdview h2, .mdview h3, .mdview h4, .mdview h5, .mdview h6 { line-height: 1.25; margin: 1.5em 0 .6em; font-weight: 600; }
+.mdview h1 { font-size: 1.9em; padding-bottom: .3em; border-bottom: 1px solid var(--line2); }
+.mdview h2 { font-size: 1.45em; padding-bottom: .25em; border-bottom: 1px solid var(--line2); }
+.mdview h3 { font-size: 1.2em; }
+.mdview h4 { font-size: 1.05em; }
+.mdview h5, .mdview h6 { font-size: .95em; color: var(--dim2); }
+.mdview p, .mdview ul, .mdview ol, .mdview blockquote, .mdview table, .mdview pre { margin: 0 0 1em; }
+.mdview ul, .mdview ol { padding-left: 1.8em; }
+.mdview li + li { margin-top: .25em; }
+.mdview li > ul, .mdview li > ol { margin: .25em 0 0; }
+.mdview code { font-family: var(--mono); font-size: .88em; background: var(--code-bg); border-radius: 5px; padding: .15em .4em; }
+.mdview pre { background: var(--code-bg); border-radius: 8px; padding: 12px 16px; overflow-x: auto; font: 13.5px/1.5 var(--mono); }
+.mdview pre code { background: none; padding: 0; font-size: inherit; }
+.mdview blockquote { padding: .2em 1em; border-left: 4px solid var(--acc); color: var(--dim2); }
+.mdview blockquote > :last-child { margin-bottom: 0; }
+.mdview table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; font-size: .95em; }
+.mdview th, .mdview td { border: 1px solid var(--line2); padding: 6px 13px; text-align: left; }
+.mdview th { font-weight: 600; background: var(--code-bg); }
+.mdview hr { border: 0; border-top: 1px solid var(--line2); margin: 1.6em 0; }
+.mdview a { color: var(--link); text-decoration: none; }
+.mdview a:hover { text-decoration: underline; }
+.mdview img { max-width: 100%; }
+@media (max-width: 700px) { .mdview { padding: 18px 16px; font-size: 15px; } }
 .viewer .vnav { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,.1); color: #fff; }
 .viewer .vnav.l { left: 12px; } .viewer .vnav.r { right: 12px; }
 

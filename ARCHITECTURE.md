@@ -896,9 +896,28 @@ to. So a database's folder moved into the home and linked from `/var/lib/…`, o
 bind-mounted into a container, works as before. All of `/var` can never be linked: it
 holds the package database and other state that must match the image.
 
+- **Docker** (`docker.rs`, archive folder `docker/`). Docker keeps everything under
+  `/var/lib/docker`, which is never carried, so the fold of a live system exports it:
+  `docker.json` (`docker inspect` of every container, the user-defined networks and the
+  volumes they use, which containers ran), `images.tar` (`docker save` of each container's
+  image, by tag when the tag still points at it) and `volumes/<name>.tar` (each local
+  volume's data with numeric owners and xattrs, read while the running containers are
+  paused, so a database is crash-consistent; a volume bound to a host folder carries only
+  its definition). The fold refuses when the export fails (`force` goes on without it), and
+  its space check counts the export twice (written, then compressed). Unfold, after the
+  packages and the home, starts Docker, loads the images, makes the networks and volumes
+  (data put back), creates each container from its own inspect through the Engine API
+  (Config, HostConfig, the chosen aliases and addresses; labels kept, so compose still owns
+  its containers and does not recreate them; a hostname docker made from the old id and
+  what a shared network refuses are dropped; `container:<old id>` becomes the name) in an
+  order that has what each needs first, and starts those that ran. Names already there are
+  left alone. The boot notice says what came back; when Docker cannot be brought back the
+  export is kept in `files/carry/docker-<time>/` for `bia-mcp-carry --docker-import <dir>`.
+  Test: `tests/integration/carry-docker-test.sh` (real dockerd, compose project included).
+
 Not kept, and named in the boot notice (manifest `left_out`): files of the image that
 were changed (the new image's version is in place), own files over the size limits, and
-links whose target is not in the archive. Data under `/var` is never carried by itself:
+links whose target is not in the archive. Apart from Docker's export, data under `/var` is never carried by itself:
 it is kept in the home and linked from its system path, or bind-mounted from there.
 
 On failure the marker stays (every boot retries), the log goes to

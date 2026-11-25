@@ -1,6 +1,7 @@
 //! Carry: fold a backup, unfold it, or fly it onto a machine that is landing.
 mod archive;
 mod debs;
+mod docker;
 mod fly;
 mod migrate;
 mod morph;
@@ -81,6 +82,39 @@ fn main() {
         return;
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Docker on its own (crate::docker): a kept export put back by hand, or exported for a test.
+    if args.first().map(String::as_str) == Some("--docker-import") || args.first().map(String::as_str) == Some("--docker-export") {
+        let Some(dir) = args.get(1) else {
+            console_line("--docker-import / --docker-export needs a folder");
+            std::process::exit(2);
+        };
+        let dir = std::path::Path::new(dir);
+        let ctx = bia_mcp::Ctx::console();
+        if args[0] == "--docker-export" {
+            match docker::export(&ctx, dir) {
+                Ok(Some(e)) => console_line(&format!("docker: exported {} containers, {} images, {} volumes ({} bytes) into {}", e.containers, e.images, e.volumes, e.bytes, dir.display())),
+                Ok(None) => console_line("docker: nothing to export"),
+                Err(e) => {
+                    console_line(&format!("docker: {e}"));
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            let keep = dir.with_extension("failed");
+            match docker::import(&ctx, dir, &keep) {
+                Some(l) if l.contains("did not come back") => {
+                    console_line(l.trim());
+                    std::process::exit(1);
+                }
+                Some(l) => console_line(l.trim()),
+                None => {
+                    console_line("docker: no docker.json there");
+                    std::process::exit(1);
+                }
+            }
+        }
+        std::process::exit(0);
+    }
     if args.first().map(String::as_str) == Some("--fold-to") {
         let ctx = bia_mcp::Ctx::console();
         let dest = args.get(1).map(String::as_str).unwrap_or("");
@@ -147,7 +181,7 @@ fn main() {
     Server::new("carry", env!("CARGO_PKG_VERSION"))
         .tool(
             "fold",
-            "Save a gzip backup of /home/bia under /home/bia/files. It includes settings, chats, passwords, Chrome, Telegram, the model, and MCP binaries for aarch64 and x86_64. It also lists each manually installed package with its version, architecture, and apt origin. The file is named name.unfold-<bytes>.tar.gz, where <bytes> is the unpacked size. Refuses while earlier backups lie in /home/bia/files (they would be packed again): ask the owner whether to delete them, or pass include_backups=true. Refuses when the disk has less free space than /home/bia. If it refuses for space, ask the user and call again with force=true only after they confirm. Returns the file path. The file contains passwords.",
+            "Save a gzip backup of /home/bia under /home/bia/files. It includes settings, chats, passwords, Chrome, Telegram, the model, MCP binaries for aarch64 and x86_64, and Docker (containers, their images and volume data; running containers pause for a moment while volumes are read). It also lists each manually installed package with its version, architecture, and apt origin. The file is named name.unfold-<bytes>.tar.gz, where <bytes> is the unpacked size. Refuses while earlier backups lie in /home/bia/files (they would be packed again): ask the owner whether to delete them, or pass include_backups=true. Refuses when the disk has less free space than /home/bia. If it refuses for space, ask the user and call again with force=true only after they confirm. Returns the file path. The file contains passwords.",
             json!({"type": "object", "properties": {
                 "path": {"type": "string", "description": "where to write the backup, under /home/bia/files. Omit for carry/fold-<time>.unfold-<bytes>.tar.gz"},
                 "force": {"type": "boolean", "description": "true folds even when free space is below the folder size. Ask the user first. Default false."},
