@@ -39,6 +39,13 @@
 #      extend; a new start/rescue/fsck begins it afresh, and it is kept after the rest
 #      of /bia-update is removed.
 #
+#   On a phone (a Debian chroot on Android, started by bia-chroot.sh: no systemd, no ESP,
+#      no rescue image) the source is always the internet release. Step 1 stages and folds
+#      as above, then leaves /bia-update/android-apply and restarts the phone through the
+#      bia app. At boot the launcher, while nothing of bia runs, copies the new root over
+#      this one from inside the new root (android-apply, the rescue image's rules), sets
+#      pending and runs "bia-update boot" before bia starts; the unfold needs no restart.
+#
 #   bia-update start [--force] [--from=/dev/…|--from=internet]
 #   bia-update rescue [/dev/…]
 #   bia-update fsck
@@ -76,10 +83,12 @@ console_printf() {
   local c
   # Started by the agent (/update, carry_update): stderr is a pipe it already
   # shows on every console.
-  [ -p /dev/stderr ] && return 0
+  # (/proc/self/fd/2: a phone's /dev is Android's, which has no /dev/stderr)
+  [ -p /proc/self/fd/2 ] && return 0
   for c in "${CONSOLES[@]}"; do
+    # 2>/dev/null first: it must also silence a console that cannot be opened
     # shellcheck disable=SC2059
-    printf "$1" "$2" >"$c" 2>/dev/null || true
+    printf "$1" "$2" 2>/dev/null >"$c" || true
   done
 }
 
@@ -127,7 +136,7 @@ wait_route() {
   local i=0
   say "bia-update: waiting for a default route (dhcp)"
   while [ "$i" -lt 60 ]; do
-    if ip route show default 2>/dev/null | grep -q .; then
+    if has_route; then
       ok "default route is up"
       return 0
     fi
@@ -187,6 +196,25 @@ version_newer() { [ "$(ver_key "$1")" \> "$(ver_key "$2")" ]; }
 
 label_of() { blkid -c /dev/null -o value -s LABEL "$1" 2>/dev/null || true; }
 uuid_of() { blkid -c /dev/null -o value -s UUID "$1" 2>/dev/null || true; }
+
+# bia on a phone: bia-chroot.sh (the launcher on Android) writes /run/bia-host.
+on_android() { [ "$(cat /run/bia-host 2>/dev/null)" = android ]; }
+ANDROID_MARK=$UPDATE/android-apply
+
+# Android's policy routing keeps the default route out of the main table.
+has_route() {
+  ip route show default 2>/dev/null | grep -q . || ip route get 1.1.1.1 >/dev/null 2>&1
+}
+
+# Restart or switch off the phone through the bia app (files/phone/link.json). Arg: reboot|off
+phone_power() {
+  local link=/home/bia/files/phone/link.json url token
+  [ -f "$link" ] || return 1
+  url=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$link") || return 1
+  token=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$link") || return 1
+  curl -fsS -m 10 -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+    --data "{\"action\":\"$1\"}" "$url/power" >/dev/null
+}
 
 carry_bin() {
   local arch
@@ -267,7 +295,7 @@ mount_rw() {
 run_logged() {
   local log=/dev/null
   [ -d "$UPDATE" ] && [ "${NO_LOG:-}" != 1 ] && log=$LOG
-  if [ -p /dev/stderr ]; then
+  if [ -p /proc/self/fd/2 ]; then
     "$@" 2> >(tee -a "$log" >&2)
   else
     "$@" 2> >(tee -a "$log" "${CONSOLES[@]}" >&2 2>/dev/null)
@@ -459,6 +487,15 @@ reboot_into_rescue() {
   sleep infinity
 }
 
+restart_phone() {
+  ok "staged"
+  say "bia-update: restarting the phone; at boot the new system is copied in before bia starts"
+  mkdir -p /run/bia && printf '{"reason":"update","at":%s}\n' "$(date +%s)" > /run/bia/shutdown-reason || true
+  sync
+  phone_power reboot || refuse "restart" "the bia app did not restart the phone; restart it by hand (hold the power button) to continue the update"
+  sleep infinity
+}
+
 describe() {
   local root=$1 dev=$2
   say "bia-update: $(label_of "$dev") ($dev) version $(ver_of "$root") (built $(rel_of "$root")) arch $(arch_of "$root" || echo unreadable)"
@@ -555,7 +592,7 @@ net_stage() {
   arch=$(release_arch)
   mkdir -p "$NET"
   chmod 700 "$UPDATE"
-  ip route show default 2>/dev/null | grep -q . || wait_route
+  has_route || wait_route
   say "bia-update: checking $RELEASE_URL for the newest release"
   fetch "$RELEASE_URL/bia-os.json" "$NET/bia-os.json" 0 \
     || refuse "internet" "cannot download bia-os.json from $RELEASE_URL (no internet?)"
@@ -590,6 +627,10 @@ net_stage() {
   xz -dc "$NET/$file" | dd of="$NET/os.img" bs=4M conv=sparse status=none || refuse "unpack" "xz failed"
   rm -f "/bia-update/net/$file"
   [ "$(sha256sum "$NET/os.img" | cut -d' ' -f1)" = "$raw_sum" ] || refuse "unpack" "the unpacked image does not match its sha256"
+  # Android keeps its loop nodes in /dev/block: give losetup the usual names
+  if on_android; then
+    for p in $(seq 0 31); do [ -e "/dev/loop$p" ] || mknod -m 600 "/dev/loop$p" b 7 "$p" 2>/dev/null || true; done
+  fi
   # each partition on its own read-only loop device (no partition scan, no udev needed)
   NET_LOOPS=
   while read -r off len; do
@@ -607,8 +648,11 @@ net_stage() {
   [ "$(arch_of "$NET/mnt-root" || true)" = "$(arch_of / || true)" ] \
     || refuse "architecture" "the $arch image is not this machine's architecture"
   say "bia-update: copying the new system into $NET/root"
-  rsync -aHAX --numeric-ids --delete "$NET/mnt-root/" "$NET/root/" \
-    || refuse "unpack" "copying the image's root failed (disk full?)"
+  # Android labels every file on /data and refuses other labels (rsync_xal_set errors)
+  local xf=()
+  on_android && xf=(--filter='-x security.selinux')
+  rsync -aHAX "${xf[@]}" --numeric-ids --delete "$NET/mnt-root/" "$NET/root/" \
+    || refuse "unpack" "copying the image's root failed (rsync exit $?; disk full?)"
   rsync -rt --delete "$NET/mnt-esp/" "$NET/esp/" || refuse "unpack" "copying the image's boot files failed"
   [ "$(ver_of "$NET/root")" = "$ver" ] || say "bia-update: note: the image says version $(ver_of "$NET/root"), the manifest $ver"
   net_cleanup
@@ -647,6 +691,10 @@ start_main() {
   here=$(ver_of /)
   say "bia-update: this system is $(label_of "$root") ($root) version $here"
 
+  if on_android; then
+    [ -z "$from" ] || refuse "source" "on a phone the update comes from the internet; no other bia system can be attached"
+    net=1
+  fi
   if [ -n "$from" ]; then
     case $from in /dev/*) ;; *) from=/dev/$from ;; esac
     [ -b "$from" ] || refuse "source" "$from is not a block device"
@@ -689,7 +737,7 @@ start_main() {
     newest=$(printf '%s\n' "$staged" | tail -n 1)
     [ -n "$newest" ] && [ -d "$NET/root" ] || refuse "internet" "the release could not be prepared"
     src_ver=${newest%% *}
-    read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
+    on_android || read -r esp_dev esp_mnt < <(live_esp_mount) || refuse "ESP" "cannot find this system's ESP"
     say "bia-update: folding this machine into $UPDATE"
     rm -f /bia-update/fold.tar.gz /bia-update/rescue-failed /bia-update/rescue.log
     hold_buses
@@ -702,6 +750,13 @@ start_main() {
     printf '%s\n' "$APPLY_LEAD" > "$UPDATE/lead"
     printf 'from the internet: release %s\n' "$newest" > "$UPDATE/need-apply"
     sync
+    if on_android; then
+      printf 'DIR=%s\n' "$NET/root" > "$ANDROID_MARK"
+      sync
+      printf 'staged: version %s (downloaded) will be copied onto this system (version %s) while the phone restarts, then the agent is unfolded. Restarting the phone now.\n' \
+        "$src_ver" "$here"
+      restart_phone
+    fi
     write_marker "$esp_mnt" "DIR=$NET/root" "$root" "DIR=$NET/esp" "$esp_dev" "$esp_dev"
     boot_next_current
     printf 'staged: version %s (downloaded) will be copied onto this system (version %s) by the rescue image, then the agent is unfolded. Rebooting now.\n' \
@@ -909,6 +964,8 @@ boot_main() {
     boot_next_current
     if run_logged "$bin" --finish-update "$UPDATE/fold.tar.gz" "$UPDATE/local-mcps"; then
       ok "restoring this machine"
+      # on a phone this runs before bia starts: nothing to restart
+      on_android && exit 0
       # --finish-update has started the reboot.
       sleep infinity
     fi
@@ -924,8 +981,10 @@ boot_main() {
     exit 0
   fi
   if [ -f "$UPDATE/need-apply" ]; then
-    # Staged, but GRUB booted the normal entry: the rescue image never ran.
+    # Staged, but GRUB booted the normal entry: the rescue image never ran
+    # (on a phone: the launcher did not copy it, e.g. an older bia-chroot.sh).
     fail "update"
+    rm -f "$ANDROID_MARK"
     clear_stale_marker
     notify_agent "an OS update was staged but the rescue image did not start ($(cat "$UPDATE/need-apply")). Nothing was changed. $(cat "$UPDATE/rescue-failed" 2>/dev/null) Log: $LOG."
     rm -f "$UPDATE/need-apply"

@@ -6,6 +6,8 @@ license.workspace = true
 description = "MCP: the phone bus (SMS, calls, USSD, carrier status) when bia runs on a phone, through the bia app's local API"
 
 [dependencies]
+qrcode = { version = "0.14", default-features = false, features = ["image"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 bia-mcp = { path = "../bia-mcp" }
 bia-speech = { path = "../bia-speech" }
 serde_json.workspace = true

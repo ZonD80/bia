@@ -1737,6 +1737,18 @@ fn reboot(notice: &str) -> Result<(), String> {
     fs::write(&notice_path, notice).map_err(|e| format!("boot notice: {e}"))?;
     let _ = fs::write(dir.join("last_exit"), "reboot");
     let _ = Command::new("sync").status();
+    // bia on a phone (a Debian chroot on Android, no systemd)
+    if on_android() {
+        // the launcher runs the update's unfold before bia starts: nothing to restart
+        if std::env::var("BIA_BEFORE_SESSION").as_deref() == Ok("1") {
+            return Ok(());
+        }
+        // the phone itself restarts, through the bia app (Android shuts down cleanly)
+        return phone_reboot().map_err(|e| {
+            let _ = fs::remove_file(&notice_path);
+            format!("reboot: {e}")
+        });
+    }
     match Command::new("systemctl").arg("reboot").spawn() {
         Ok(_) => Ok(()),
         Err(e) => {
@@ -1744,6 +1756,28 @@ fn reboot(notice: &str) -> Result<(), String> {
             Err(format!("reboot: {e}"))
         }
     }
+}
+
+/// bia-chroot.sh, the launcher of bia on a phone, writes /run/bia-host.
+pub fn on_android() -> bool {
+    fs::read_to_string("/run/bia-host").is_ok_and(|s| s.trim() == "android")
+}
+
+/// Restart the phone through the bia app on it (files/phone/link.json, POST /power).
+fn phone_reboot() -> Result<(), String> {
+    use std::io::{Read, Write};
+    let link = fs::read_to_string(files_root().join("phone/link.json")).map_err(|_| "the bia app on this phone is not linked (files/phone/link.json)".to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&link).map_err(|e| format!("link.json: {e}"))?;
+    let host = v["url"].as_str().unwrap_or("").trim_start_matches("http://").trim_end_matches('/').to_string();
+    let token = v["token"].as_str().unwrap_or("");
+    let body = r#"{"action":"reboot"}"#;
+    let mut c = std::net::TcpStream::connect(&host).map_err(|e| format!("the bia app does not answer: {e}"))?;
+    c.set_read_timeout(Some(std::time::Duration::from_secs(10))).ok();
+    write!(c, "POST /power HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+        .map_err(|e| e.to_string())?;
+    let mut out = String::new();
+    let _ = c.read_to_string(&mut out);
+    if out.starts_with("HTTP/1.1 200") { Ok(()) } else { Err(format!("the bia app refused: {}", out.lines().next().unwrap_or(""))) }
 }
 
 /// Reinstall the folded machine's manual packages. A kept .deb (see `debs`) is used for

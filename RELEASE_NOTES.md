@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.0
+
+### Changes
+- On a phone, bia can now manage Wi-Fi itself: list the networks around, join one with its password (it reports a wrong password and goes back to the network it was on) and forget saved ones.
+- On a phone, bia can run the Wi-Fi hotspot: switch it on and off, rename it, set or remove its password, and see who is connected. It also makes a QR code that joins the hotspot when scanned with a phone camera, and can send it in any chat or show it on the phone's screen.
+- On a phone, "update yourself" works: bia downloads the new release, restarts the phone, the new system is put in place before bia starts, and bia comes back with all its settings, chats and files.
+- Voice messages and calls no longer read Markdown aloud: bold and italic marks, list bullets, headings, code, table lines and long web addresses are left out (a link is read as its text, an address as its site name).
+- After bia restarts (an update, a reboot), an open web app works again by itself: the console, status, screen and tasks used to fail until the page was reloaded.
+- On narrow phone screens the console's header and input bar fit again (the Send button and the title were cut off).
+
+### For bia
+- On a phone: phone_wifi_list, phone_wifi_connect(ssid, password), phone_wifi_forget and phone_hotspot(on, ssid, password) (mcp/phone); after switching the hotspot on, send /home/bia/files/phone/hotspot-qr.png with say(files=[…]) to whoever asked.
+- On a phone, carry_update now works like on a computer; the phone restarts once during it. Tell the owner before calling.
+
 ## 2.4.3
 
 ### Changes

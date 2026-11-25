@@ -1,7 +1,7 @@
 {
   "name": "phone",
-  "version": "2.4.3",
-  "description": "bia's own phone line when bia runs on a phone: SMS in and out (chats phone:<number>), phone calls (ring, answer, reject, place), USSD codes and the line's status (SIM, carrier, roaming, signal). Incoming SMS arrive like other chats; say(channel='phone:+34…') sends an SMS. An incoming call arrives as [incoming call]; a missed one as [missed call]. In a call bia hears the other side (their speech arrives as messages on the phone:<number> chat) and say() on that chat speaks into the call, as in WhatsApp calls; text spoken in a call is not also sent as SMS. On this phone, machine poweroff and reboot switch off or restart the phone itself (Android shuts down cleanly; bia comes back with it on a reboot). Starts by itself when the bia app on the phone has linked the line (files/phone/link.json).",
+  "version": "2.5.0",
+  "description": "bia's own phone line when bia runs on a phone: SMS in and out (chats phone:<number>), phone calls (ring, answer, reject, place), USSD codes, the line's status (SIM, carrier, roaming, signal), the phone's Wi-Fi (list, join, forget: Android owns it, not nmcli) and its Wi-Fi hotspot (on/off, name, password, a QR code to join it). Incoming SMS arrive like other chats; say(channel='phone:+34…') sends an SMS. An incoming call arrives as [incoming call]; a missed one as [missed call]. In a call bia hears the other side (their speech arrives as messages on the phone:<number> chat) and say() on that chat speaks into the call, as in WhatsApp calls; text spoken in a call is not also sent as SMS. On this phone, machine poweroff and reboot switch off or restart the phone itself (Android shuts down cleanly; bia comes back with it on a reboot). Starts by itself when the bia app on the phone has linked the line (files/phone/link.json).",
   "command": {
     "aarch64": "bin/aarch64/bia-mcp-phone",
     "x86_64": "bin/x86_64/bia-mcp-phone"
@@ -28,7 +28,19 @@
     "ussd",
     "balance",
     "mobile",
-    "cellular"
+    "cellular",
+    "wifi",
+    "wi-fi",
+    "wireless",
+    "network",
+    "ssid",
+    "password",
+    "join",
+    "internet",
+    "hotspot",
+    "tethering",
+    "share internet",
+    "qr"
   ],
   "examples": [
     "+34625640810|phone:+34625640810|<issued>|<delivered>|hi, are you there? -> say(identity='+34625640810', channel='phone:+34625640810', message='Yes, here!')",
@@ -36,6 +48,10 @@
     "+34625640810|phone:+34625640810|<issued>|<delivered>|[incoming call] from +34625640810 -> phone_call_accept() or phone_call_hangup()",
     "root|console|<issued>|<delivered>|what's my balance? -> phone_ussd(code='*100#')",
     "root|console|<issued>|<delivered>|is the SIM in roaming? -> phone_status()",
-    "+34625640810|phone:+34625640810|<issued>|<delivered>|[speech en] hello, can you hear me? -> say(identity='+34625640810', channel='phone:+34625640810', message='Yes, I hear you!')"
+    "+34625640810|phone:+34625640810|<issued>|<delivered>|[speech en] hello, can you hear me? -> say(identity='+34625640810', channel='phone:+34625640810', message='Yes, I hear you!')",
+    "root|web|<issued>|<delivered>|connect to the cafe wifi CafeNet, password latte2024 -> phone_wifi_connect(ssid='CafeNet', password='latte2024')",
+    "root|web|<issued>|<delivered>|which wifi networks are around? -> phone_wifi_list()",
+    "root|telegram:12345|<issued>|<delivered>|turn on the hotspot and send me the QR -> phone_hotspot(on=true), then say(channel='telegram:12345', message='Hotspot bia is on, password …', files=['/home/bia/files/phone/hotspot-qr.png'])",
+    "root|web|<issued>|<delivered>|set hotspot password to sunny-day-42 -> phone_hotspot(password='sunny-day-42')"
   ]
 }

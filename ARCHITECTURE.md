@@ -737,6 +737,11 @@ the chats, and `chat_unignore` stops ignoring but keeps what is not shown yet.
 
 ### Speech
 
+Every text to speak goes through `tts::plan`, which first strips Markdown
+(`plain::speakable`): emphasis and code marks go, links keep their text, URLs become
+their host, code blocks, rules and table separators are skipped, headings, list items
+and table rows end with a pause; `<lang=…>` spans stay.
+
 `bia-speech` (a library shared by `telegram`, `whatsapp`, `messenger`, `instagram` and `lang`) dlopens the
 sherpa-onnx C API and keeps models loaded in-process. Incoming audio (call audio
 per participant, or a voice-note file) goes through Silero VAD, split at short
@@ -847,6 +852,22 @@ overwritten:
    verifies by checksum, refreshes the destination ESP, sets
    `/bia-update/pending`, removes the marker and reboots.
 4. `bia-update.service` unfolds the agent and reboots into the new system.
+
+**On a phone** (bia's Debian in a chroot on Android, started by the launcher
+`usr/local/share/bia/android/bia-chroot.sh`, installed as Magisk's
+`/data/adb/service.d/bia.sh`; it writes `/run/bia-host` = `android`) there is no ESP,
+GRUB, systemd or rescue image, and the source is always the internet release.
+`bia-update start` stages and folds as above (Android's `/dev/block/loop*` get
+`/dev/loopN` names for losetup), writes `/bia-update/android-apply` and restarts the
+phone through the bia app (`POST /power`). At boot the launcher, before any bia process
+runs, chroots into the downloaded root (`/bia-update/net/root`: it has bash and rsync,
+Android has neither) with the old root bind-mounted at `/mnt/dst` and runs the old
+root's `android-apply`: the rescue image's rsync rules (plus `/etc/resolv.conf`, and
+`security.selinux` labels are never touched), then a checksum verify. It sets
+`pending` and runs `bia-update boot` with `BIA_BEFORE_SESSION=1`, so carry's unfold
+does not restart anything; elsewhere on a phone carry's reboot restarts the phone
+through the bia app. A newer launcher in the root replaces the installed one for the
+next boot.
 
 What an unfold brings back outside `/home/bia` (all in `archive.rs`):
 

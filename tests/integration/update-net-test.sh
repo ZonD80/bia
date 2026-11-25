@@ -125,6 +125,8 @@ check "DIR= sources pass through the marker" 'grep -q "case \$dev in DIR=\*)" /w
 start_log "start --test"
 check "a new run starts a fresh log" '[ "$(wc -l </bia-update/update.log)" = 1 ] && grep -q "bia-update start --test" /bia-update/update.log'
 run_logged sh -c 'echo "fold: 42 files" >&2' 2>/dev/null
+# tee writes the log in the background: give it a moment
+for _ in $(seq 20); do grep -q "fold: 42 files" /bia-update/update.log && break; sleep 0.1; done
 check "child stderr goes to the log" 'grep -q "fold: 42 files" /bia-update/update.log'
 check "the net tree is work to finish" 'has_work'
 rm -rf /bia-update/net

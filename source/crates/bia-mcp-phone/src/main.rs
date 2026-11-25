@@ -290,6 +290,87 @@ fn status_text() -> ToolResult {
     ))
 }
 
+fn wifi_text(scan: bool) -> ToolResult {
+    let w = api("GET", if scan { "/wifi?scan=1" } else { "/wifi" }, None, Duration::from_secs(20))?;
+    let mut out = match w["current"].as_str().filter(|s| !s.is_empty()) {
+        Some(c) => format!("on Wi-Fi {c} ({})", w["ip"].as_str().unwrap_or("")),
+        None if w["enabled"].as_bool() == Some(false) => "Wi-Fi is off".into(),
+        None => "not on any Wi-Fi network".into(),
+    };
+    let nets = w["networks"].as_array().cloned().unwrap_or_default();
+    if nets.is_empty() {
+        out.push_str("\nno networks in range");
+    } else {
+        out.push_str("\nin range (signal 0-4):");
+        for n in &nets {
+            let mut tags = vec![n["security"].as_str().unwrap_or("").to_string()];
+            if n["saved"].as_bool() == Some(true) {
+                tags.push("saved".into());
+            }
+            if n["current"].as_bool() == Some(true) {
+                tags.push("connected".into());
+            }
+            out.push_str(&format!("\n  {} — {}/4, {}", n["ssid"].as_str().unwrap_or(""), n["level"], tags.join(", ")));
+        }
+    }
+    let saved: Vec<&str> = w["saved"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default();
+    if !saved.is_empty() {
+        out.push_str(&format!("\nsaved: {}", saved.join(", ")));
+    }
+    Ok(out)
+}
+
+/// The text a phone camera reads to join a Wi-Fi network (the de-facto WIFI: format).
+fn wifi_qr_text(ssid: &str, password: &str) -> String {
+    let esc = |s: &str| s.chars().fold(String::new(), |mut o, c| {
+        if matches!(c, '\\' | ';' | ',' | ':' | '"') {
+            o.push('\\');
+        }
+        o.push(c);
+        o
+    });
+    if password.is_empty() {
+        format!("WIFI:T:nopass;S:{};;", esc(ssid))
+    } else {
+        format!("WIFI:T:WPA;S:{};P:{};;", esc(ssid), esc(password))
+    }
+}
+
+/// files/phone/hotspot-qr.png: scanning it joins the hotspot (any chat can carry it).
+fn hotspot_qr(ssid: &str, password: &str) -> Result<PathBuf, String> {
+    use image::Luma;
+    let q = qrcode::QrCode::new(wifi_qr_text(ssid, password).as_bytes()).map_err(|e| format!("qr: {e}"))?;
+    let img = q.render::<Luma<u8>>().min_dimensions(480, 480).quiet_zone(true).build();
+    let _ = std::fs::create_dir_all(dir());
+    let p = dir().join("hotspot-qr.png");
+    img.save(&p).map_err(|e| format!("write {}: {e}", p.display()))?;
+    Ok(p)
+}
+
+fn hotspot_text(h: &Value) -> String {
+    let ssid = h["ssid"].as_str().unwrap_or("");
+    let pw = h["password"].as_str().unwrap_or("");
+    let mut s = format!(
+        "hotspot {}: name {ssid}, {}",
+        if h["on"].as_bool() == Some(true) { "on" } else { "off" },
+        if pw.is_empty() { "open (no password)".to_string() } else { format!("password {pw}") }
+    );
+    if h["on"].as_bool() == Some(true) {
+        let n = h["clients"].as_array().map(|a| a.len()).unwrap_or(0);
+        s.push_str(&format!(", {n} device(s) connected"));
+    }
+    if !ssid.is_empty() {
+        match hotspot_qr(ssid, pw) {
+            Ok(p) => s.push_str(&format!(
+                "\nQR code to join it: {} — a phone camera scanning it joins at once; send it with say(files=[…]) on any chat, or on the web chat to show it on this phone's screen",
+                p.display()
+            )),
+            Err(e) => s.push_str(&format!("\n(no QR code: {e})")),
+        }
+    }
+    s
+}
+
 fn main() {
     let srv = Server::new("phone", env!("CARGO_PKG_VERSION"))
         .tool(
@@ -335,7 +416,13 @@ fn main() {
         )
         .tool("read", "Read receipts (SMS has none).", obj(json!({}), &[]), |_c, _a| Ok(String::new()))
         .tool("typing", "Typing indicator (SMS has none).", obj(json!({}), &[]), |_c, _a| Ok(String::new()))
-        .tool("status", "bia's phone line: SIM, carrier, roaming, signal, mobile data, call state, Wi-Fi.", obj(json!({}), &[]), |_c, _a| status_text())
+        .tool("status", "bia's phone line: SIM, carrier, roaming, signal, mobile data, call state, Wi-Fi, hotspot.", obj(json!({}), &[]), |_c, _a| {
+            let mut s = status_text()?;
+            if let Ok(h) = api("GET", "/hotspot", None, Duration::from_secs(10)) {
+                s.push_str(&format!("\n{}", hotspot_text(&h)));
+            }
+            Ok(s)
+        })
         .tool(
             "call",
             "Call a number from bia's phone line. Once they answer, their speech arrives on the phone:<number> chat and say() there speaks into the call.",
@@ -374,6 +461,78 @@ fn main() {
             },
         )
         .tool(
+            "wifi_list",
+            "Wi-Fi networks around this phone (scans first, ~4 s) and the one it is on; Android owns the phone's Wi-Fi, so this, not nmcli, is how bia sees it.",
+            obj(json!({"scan": {"type": "boolean", "description": "default true; false = last results, instant"}}), &[]),
+            |_c, a| wifi_text(a["scan"].as_bool() != Some(false)),
+        )
+        .tool(
+            "wifi_connect",
+            "Join a Wi-Fi network on this phone: ssid, password (leave out for an open or already saved network), hidden=true for a network that does not broadcast its name. Waits up to 30 s and reports the address or why it failed (wrong password, not in range); after a failure the phone goes back to its earlier network.",
+            obj(json!({
+                "ssid": {"type": "string", "description": "the network name exactly as wifi_list shows it"},
+                "password": {"type": "string"},
+                "hidden": {"type": "boolean"}
+            }), &["ssid"]),
+            |ctx, a| {
+                let ssid = arg_str(&a, "ssid")?;
+                let body = json!({"ssid": ssid, "password": arg_str_opt(&a, "password").unwrap_or(""), "hidden": a["hidden"].as_bool().unwrap_or(false)});
+                ctx.log(format!("wifi: joining {ssid}"));
+                match api("POST", "/wifi/connect", Some(&body), Duration::from_secs(90)) {
+                    Ok(r) => Ok(format!("joined Wi-Fi {ssid}: address {}, signal {}/4; Android remembers it", r["ip"].as_str().unwrap_or(""), r["level"])),
+                    Err(e) => {
+                        let now = api("GET", "/wifi", None, Duration::from_secs(10)).ok()
+                            .and_then(|w| w["current"].as_str().filter(|s| !s.is_empty()).map(|s| format!("; the phone is on {s} now")))
+                            .unwrap_or_else(|| "; the phone is not on Wi-Fi now".into());
+                        Err(format!("{}{now}", e.trim_start_matches("phone: ")))
+                    }
+                }
+            },
+        )
+        .tool(
+            "wifi_forget",
+            "Remove a saved Wi-Fi network from this phone (it will not join it again by itself).",
+            obj(json!({"ssid": {"type": "string"}}), &["ssid"]),
+            |_c, a| {
+                let ssid = arg_str(&a, "ssid")?;
+                api("POST", "/wifi/forget", Some(&json!({"ssid": ssid})), Duration::from_secs(10))?;
+                Ok(format!("forgot {ssid}"))
+            },
+        )
+        .tool(
+            "hotspot",
+            "This phone's Wi-Fi hotspot: without arguments shows it (on/off, name, password, devices connected); on=true/false switches it; ssid and password (8-63 characters) rename it or set a new password, open=true removes the password. The phone keeps its own Wi-Fi while sharing it; without Wi-Fi it shares mobile data (mind roaming).",
+            obj(json!({
+                "on": {"type": "boolean"},
+                "ssid": {"type": "string"},
+                "password": {"type": "string"},
+                "open": {"type": "boolean", "description": "true = no password (anyone can join)"}
+            }), &[]),
+            |ctx, a| {
+                let mut body = json!({});
+                for k in ["on", "open"] {
+                    if let Some(v) = a[k].as_bool() {
+                        body[k] = json!(v);
+                    }
+                }
+                for k in ["ssid", "password"] {
+                    if let Some(v) = arg_str_opt(&a, k) {
+                        body[k] = json!(v);
+                    }
+                }
+                if body.as_object().is_some_and(|o| o.is_empty()) {
+                    return Ok(hotspot_text(&api("GET", "/hotspot", None, Duration::from_secs(10))?));
+                }
+                let mut shown = body.clone();
+                if shown.get("password").is_some() {
+                    shown["password"] = json!("***");
+                }
+                ctx.log(format!("hotspot: {shown}"));
+                let r = api("POST", "/hotspot", Some(&body), Duration::from_secs(60))?;
+                Ok(hotspot_text(&r))
+            },
+        )
+        .tool(
             "history",
             "SMS exchanged with a number on this phone line (newest last).",
             obj(json!({"chat_id": {"type": "string"}, "limit": {"type": "integer"}}), &["chat_id"]),
@@ -407,7 +566,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::chat_id;
+    use super::{chat_id, wifi_qr_text};
+
+    #[test]
+    fn wifi_qr() {
+        assert_eq!(wifi_qr_text("bia-test", "bia-pass-123"), "WIFI:T:WPA;S:bia-test;P:bia-pass-123;;");
+        assert_eq!(wifi_qr_text("a;b", ""), "WIFI:T:nopass;S:a\\;b;;");
+        assert_eq!(wifi_qr_text("x", "p:\\\""), "WIFI:T:WPA;S:x;P:p\\:\\\\\\\";;");
+    }
 
     #[test]
     fn numbers_become_chat_ids() {

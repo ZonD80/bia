@@ -6,8 +6,8 @@ no-key page takes root's .p12 (password 12345678 tried by itself), the browser e
 non-extractable key of its own and signs in; a new tab is in at once with it; the app connects with
 protocol 3 and loads the chat, a message both ways, a file from the page (hashed in the page, pulled by bia) and a photo
 from bia (pulled by the page, shown as a blob), a second tab open at the same time (both in sync,
-both showing "open in 2 places", the note gone once one closes), and a message written while bia is down that survives a reload and
-reaches bia once it is back.
+both showing "open in 2 places", the note gone once one closes), a message written while bia is down that survives a reload and
+reaches bia once it is back, and an open page whose root views work again after bia restarts.
 
   python3 -I tests/integration/web-app-e2e.py target/debug/bia-mcp-web [chrome]
 """
@@ -436,6 +436,22 @@ check(t3.until(LOADED, 30) is not None and t3.until("!(S.pending.get('main') || 
 web.tool("send", identity="root", channel="web", text="welcome back")
 t3.js("go('chat/main')")
 check(t3.until("document.querySelector('#msgsIn') && document.querySelector('#msgsIn').textContent.includes('welcome back')", 15) is not None, "and gets bia's messages live")
+
+# ---- bia restarts under an open page (an update, a reboot): its sessions were in memory, so
+# the page signs in again once the bus is back; the root views (console, status, tasks) work
+# without a reload (they used to answer 401 for up to 25 minutes)
+web.stop()
+check(t3.until("!S.wsOk", 20) is not None, "the open page notices bia restarting")
+web = Mcp()
+check(t3.until("S.wsOk", 30) is not None, "the bus is back by itself")
+ROOT_OK = "fetch('/v1/status', {credentials: 'same-origin', cache: 'no-store'}).then(r => r.status)"
+got = None
+for _ in range(30):
+    got = t3.js(ROOT_OK)
+    if got == 200:
+        break
+    time.sleep(0.5)
+check(got == 200, f"root requests work again after the restart without a reload (status {got})")
 
 # a named bia: its name in the chat list and the chat header, not plain "bia"
 names = json.loads(t3.js("JSON.stringify({ list: (document.querySelector('#chatList') || {}).textContent || '', head: (document.querySelector('#chatHead') || {}).textContent || '' })"))

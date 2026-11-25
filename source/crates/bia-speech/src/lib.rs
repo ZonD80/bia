@@ -20,6 +20,7 @@ pub mod listen;
 pub mod models;
 pub mod paths;
 pub mod pipeline;
+pub mod plain;
 pub mod registry;
 pub mod sherpa;
 pub mod store;

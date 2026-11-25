@@ -1,0 +1,56 @@
+#!/bin/bash
+# The phone's "rescue image": copy a new bia root onto the old one while no bia process
+# runs. bia-chroot.sh (the launcher on Android) runs it at boot, chrooted into the new
+# root (/bia-update/net/root of the old one, which has bash and rsync; Android has
+# neither), with the old root bind-mounted at the destination:
+#
+#   android-apply /mnt/dst
+#
+# Same rules as the rescue image (usr/local/share/bia/rescue/rescue): the destination
+# keeps its identity, clock, the agent's files and /bia-update; the rest becomes the new
+# release, then a checksum pass verifies the copy. Exit 0 on success.
+set -uo pipefail
+DST=${1:?destination}
+say() { printf 'android-apply: %s\n' "$*"; }
+[ -f "$DST/etc/bia-release" ] || { say "$DST is not a bia root"; exit 1; }
+[ -f /etc/bia-release ] || { say "this (the source) is not a bia root"; exit 1; }
+
+EXCLUDES=(
+  --exclude=/proc/* --exclude=/sys/* --exclude=/dev/* --exclude=/run/*
+  --exclude=/tmp/* --exclude=/mnt/* --exclude=/media/* --exclude=/lost+found
+  --exclude=/swapfile --exclude=/bia-update
+  --exclude=/etc/fstab --exclude=/etc/hostname --exclude=/etc/hosts --exclude=/etc/machine-id --exclude=/var/lib/dbus/machine-id
+  --exclude=/var/lib/systemd/random-seed
+  --exclude=/etc/localtime --exclude=/etc/timezone --exclude=/etc/adjtime
+  --exclude=/etc/fake-hwclock.data --exclude=/etc/systemd/timesyncd.conf
+  --exclude=/etc/systemd/timesyncd.conf.d --exclude=/var/lib/systemd/timesync
+  --exclude=/var/lib/systemd/clock --exclude=/var/lib/fake-hwclock
+  --exclude=/home/bia/files
+  --exclude=/etc/bia
+  # the launcher links it to Android's DNS servers at every start
+  --exclude=/etc/resolv.conf
+)
+# Android labels every file on /data (security.selinux): never copy or remove those labels,
+# but keep the rest (file capabilities such as ping's)
+RSYNC=(rsync -aHAX --numeric-ids --delete --delete-delay --no-inc-recursive --filter='-x security.selinux')
+
+say "version $(cat "$DST/etc/bia-version" 2>/dev/null) -> $(cat /etc/bia-version 2>/dev/null) (build $(cat /etc/bia-release))"
+say "copying"
+"${RSYNC[@]}" --checksum --info=stats1 "${EXCLUDES[@]}" / "$DST/"
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 24 ] || { say "rsync exited $rc (phone storage full?)"; exit 1; }
+for d in proc sys dev run tmp mnt media; do mkdir -p "$DST/$d"; done
+chmod 1777 "$DST/tmp"
+
+say "verifying"
+sync
+out=$("${RSYNC[@]}" -n --checksum --out-format='%i %n' "${EXCLUDES[@]}" / "$DST/")
+rc=$?
+[ "$rc" -eq 0 ] || [ "$rc" -eq 24 ] || { say "rsync verify exited $rc"; exit 1; }
+bad=$(printf '%s\n' "$out" | grep -v '^\.d\.\.t\.\.\.\.\.\. ' | grep -v '^$' || true)
+if [ -n "$bad" ]; then
+  say "$(printf '%s\n' "$bad" | wc -l) paths differ after the copy: $(printf '%s\n' "$bad" | head -n 10 | tr '\n' ' ')"
+  exit 1
+fi
+[ "$(cat "$DST/etc/bia-release")" = "$(cat /etc/bia-release)" ] || { say "the release stamp did not land"; exit 1; }
+say "done"

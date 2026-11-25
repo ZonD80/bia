@@ -182,7 +182,9 @@ pub fn plan(reg: &Registry, text: &str, lang: &str) -> Result<Vec<(Span, String,
             format!("unknown lang {lang:?}; use a code such as \"en\", \"ru\", \"es-MX\"")
         }
     })?;
-    let spans = langs::spans(text, &base.code)?;
+    // spoken words only: no Markdown marks, URLs or code (voice notes and every call)
+    let text = crate::plain::speakable(text);
+    let spans = langs::spans(&text, &base.code)?;
     if spans.is_empty() {
         return Err("text is empty".into());
     }

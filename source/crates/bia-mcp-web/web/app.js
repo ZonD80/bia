@@ -621,12 +621,23 @@ async function start(who) {
   if (S.root) { pollTasks(); setInterval(pollTasks, 4000); pollStatus(); setInterval(pollStatus, 5000); pollQr(); setInterval(pollQr, 3000); }
   if (who.days_left !== undefined && who.days_left < 30) toast(`Your certificate expires in ${who.days_left} days — renew it in Settings`, true);
   // the session cookie lasts an hour: sign in again with this browser's key well before
-  setInterval(() => BiaKeys.signin().catch(() => {}), 25 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeRead(); updateTitle(); sendActive(); });
+  setInterval(() => freshSession(), 25 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { maybeRead(); freshSession(20 * 60 * 1000); } updateTitle(); sendActive(); });
   window.addEventListener('focus', () => { maybeRead(); sendActive(); });
   // focus moving into an iframe (display, task pages) blurs the window but keeps the tab in front
   window.addEventListener('blur', () => setTimeout(sendActive, 0));
   notifInit();
+}
+
+// The HTTP session (cookie) for the root views, downloads and task pages. bia keeps sessions
+// in memory: after it restarts (an update, a reboot) the old cookie is dead while the bus
+// signs in again by itself, so every time the bus is back the page signs in too. Timers
+// sleep in a hidden tab or phone WebView, so coming back after a while also renews it.
+let sessionAt = Date.now(), sessionBusy = null;
+function freshSession(olderThan = 0) {
+  if (Date.now() - sessionAt < olderThan || sessionBusy) return sessionBusy;
+  sessionBusy = BiaKeys.signin().then(() => { sessionAt = Date.now(); }).catch(() => {}).finally(() => { sessionBusy = null; });
+  return sessionBusy;
 }
 
 // ======================================================================
@@ -671,7 +682,11 @@ function connect() {
     // sign in on the socket with this browser's key
     auth: async ch => { const rec = await BiaKeys.current(); return rec ? BiaKeys.auth(rec, ch.nonce, (await BiaKeys.challenge()).ca_sha256) : null; },
     onSignedOut: () => { toast('bia no longer accepts this browser\'s key', true); setTimeout(() => location.reload(), 3000); },
-    onState: st => { S.linkState = st; S.wsOk = st === 'online'; setConn(); },
+    onState: st => {
+      const back = st === 'online' && S.linkState && S.linkState !== 'online';
+      S.linkState = st; S.wsOk = st === 'online'; setConn();
+      if (back) freshSession();
+    },
     onMoved: (url, port) => {
       S.movedTo = url;
       // inside a bia deploy app: it keeps the new address and opens it by itself
@@ -2508,11 +2523,11 @@ function buildConsole() {
       state,
       iconBtn('fontDown', 'Smaller', () => termFont(-1)), iconBtn('fontUp', 'Larger', () => termFont(1)),
       iconBtn('copy', 'Copy all', () => copyText(CON.term.text(), 'Console')),
-      iconBtn('eraser', 'Clear scrollback', () => CON.term.clear()),
-      iconBtn('refresh', 'Reconnect', () => { if (CON.ws) CON.ws.close(); else conConnect(); })),
+      iconBtn('eraser', 'Clear scrollback', () => CON.term.clear(), 'wide-only'),
+      iconBtn('refresh', 'Reconnect', () => { if (CON.ws) CON.ws.close(); else conConnect(); }, 'wide-only')),
     host,
     h('div', { class: 'termbar' }, h('span', { class: 'prompt' }, '->'), inp,
-      h('button', { class: 'btn danger small', title: 'Interrupt the model (like Enter on an empty line)', onclick: () => conSend('') }, ic('stop'), 'Stop'),
+      h('button', { class: 'btn danger small', title: 'Interrupt the model (like Enter on an empty line)', 'aria-label': 'Stop', onclick: () => conSend('') }, ic('stop'), h('span', { class: 'wide-only' }, 'Stop')),
       h('button', { class: 'btn small', onclick: () => { conSend(inp.value); inp.value = ''; } }, 'Send')));
   CON.state = state;
   CON.term = new BiaTerm(host, {
