@@ -367,13 +367,19 @@ func (m *messenger) classicMessage(ctx context.Context, tt *tableThreads, wm *ta
 }
 
 // mentionNames lists who was mentioned: "Name (id)".
+// A tag of bia itself is "you" (the agent reads it as bia being called).
 func (m *messenger) mentionNames(ctx context.Context, text string, mentions socket.Mentions) []string {
 	var out []string
+	own := m.ownID()
 	for _, mt := range mentions {
 		if mt.ID == 0 {
 			continue
 		}
 		id := strconv.FormatInt(mt.ID, 10)
+		if id == own {
+			out = append(out, "you")
+			continue
+		}
 		name := m.st.UserName(ctx, id)
 		if name == "" {
 			runes := []rune(text)

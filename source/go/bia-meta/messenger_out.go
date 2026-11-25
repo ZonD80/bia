@@ -381,6 +381,16 @@ func (m *messenger) sendClassic(ctx context.Context, t *target, p SendParams, re
 		return nil
 	}
 	text := p.Text
+	// @Name of a group member: a real mention (only where the chat's members are known)
+	var members []tagMember
+	if strings.Contains(text, "@") {
+		members = chatTagMembers(ctx, m.st, t.key, m.ownID())
+	}
+	tag := func(task *socket.SendMessageTask) {
+		if tags := findTags(task.Text, members); len(tags) > 0 {
+			task.MentionData = tags.ToData()
+		}
+	}
 	for i, f := range p.Files {
 		data, mimeType, name, err := readFile(f)
 		if err != nil {
@@ -411,13 +421,16 @@ func (m *messenger) sendClassic(ctx context.Context, t *target, p SendParams, re
 		shown := labelled(kind, "", name)
 		if i == 0 && text != "" && !voice {
 			task.Text, shown, text = text, labelled(kind, text, name), ""
+			tag(task)
 		}
 		if err = sendTask(task, shown); err != nil {
 			return sentSoFar(ids, err)
 		}
 	}
 	if strings.TrimSpace(text) != "" {
-		if err = sendTask(&socket.SendMessageTask{SendType: table.TEXT, Text: text}, text); err != nil {
+		task := &socket.SendMessageTask{SendType: table.TEXT, Text: text}
+		tag(task)
+		if err = sendTask(task, text); err != nil {
 			return sentSoFar(ids, err)
 		}
 	}

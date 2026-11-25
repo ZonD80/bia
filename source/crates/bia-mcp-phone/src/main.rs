@@ -13,7 +13,7 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn files_dir() -> PathBuf {
+pub(crate) fn files_dir() -> PathBuf {
     PathBuf::from(std::env::var("BIA_FILES").unwrap_or_else(|_| "/home/bia/files".into()))
 }
 fn dir() -> PathBuf {
@@ -219,12 +219,14 @@ fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String) {
             match state {
                 "ringing" => {
                     *ringing_from = num.clone();
+                    call::RINGING.store(true, std::sync::atomic::Ordering::Relaxed);
+                    call::preparing();
                     let from = members::From { sender: format!("phone:{num}"), ..Default::default() };
                     ctx.inbound_by(
                         &num,
                         &format!("phone:{num}"),
                         &format!("c{seq}"),
-                        &format!("[incoming call] from {num} — phone_call_accept() answers it (then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences), phone_call_hangup() rejects it"),
+                        &format!("[incoming call] from {num} — phone_call_accept() answers it (then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences; the line itself says a short \"Got it.\" / \"One moment.\" the moment it understands them, so never start a reply with one), phone_call_hangup() rejects it"),
                         at,
                         &from,
                     );
@@ -372,6 +374,16 @@ fn hotspot_text(h: &Value) -> String {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--replay") {
+        let path = args.get(1).map(String::as_str).unwrap_or("");
+        let gap = args.get(2).and_then(|g| g.parse().ok()).unwrap_or(1.2);
+        if let Err(e) = call::replay(path, gap) {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let srv = Server::new("phone", env!("CARGO_PKG_VERSION"))
         .tool(
             "send",
@@ -425,11 +437,14 @@ fn main() {
         })
         .tool(
             "call",
-            "Call a number from bia's phone line. Once they answer, their speech arrives on the phone:<number> chat and say() there speaks into the call.",
+            "Call a number from bia's phone line. Once they answer, their speech arrives on the phone:<number> chat and say() there speaks into the call (the line says a short \"Got it.\" / \"One moment.\" itself when it understands them: never start a reply with one).",
             obj(json!({"chat_id": {"type": "string", "description": "the number, +34…"}}), &["chat_id"]),
             |_c, a| {
                 let to = chat_id(arg_str(&a, "chat_id")?);
                 api("POST", "/call", Some(&json!({"to": to})), Duration::from_secs(10))?;
+                // models load while it rings at the other end
+                call::RINGING.store(true, std::sync::atomic::Ordering::Relaxed);
+                call::preparing();
                 Ok(format!("calling {to}"))
             },
         )
@@ -442,13 +457,15 @@ fn main() {
                 call::say(ctx, &chat, arg_str(&a, "text")?, arg_str_opt(&a, "lang").unwrap_or(""))
             },
         )
-        .tool("call_accept", "Answer the phone call that is ringing now.", obj(json!({"chat_id": {"type": "string"}}), &[]), |_c, _a| {
+        .tool("call_accept", "Answer the phone call that is ringing now (it waits for the call's speech models to load first, up to 20 s, so the caller is heard at once).", obj(json!({"chat_id": {"type": "string"}}), &[]), |_c, _a| {
+            let waited = call::wait_ready(Duration::from_secs(20));
             api("POST", "/answer", None, Duration::from_secs(10))?;
-            Ok("answered".into())
+            Ok(if waited >= 1.0 { format!("answered (after {waited:.0} s loading the speech models)") } else { "answered".into() })
         })
-        .tool("call_hangup", "End the current phone call, or reject the ringing one.", obj(json!({}), &[]), |_c, _a| {
+        .tool("call_hangup", "End the current phone call, or reject the ringing one. It first lets what you said finish playing (up to 30 s), so a goodbye is heard.", obj(json!({}), &[]), |_c, _a| {
+            let waited = call::wait_spoken(Duration::from_secs(30));
             api("POST", "/hangup", None, Duration::from_secs(10))?;
-            Ok("hung up".into())
+            Ok(if waited >= 0.5 { format!("hung up after your last words played ({waited:.0} s)") } else { "hung up".into() })
         })
         .tool(
             "ussd",

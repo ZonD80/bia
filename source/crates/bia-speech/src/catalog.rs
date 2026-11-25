@@ -37,6 +37,16 @@ pub struct Voice {
     pub url: String,
     pub size: u64,
     pub sha256: String,
+    /// A voice of separate files (Phonon: config, tokenizer, weights, voice), each saved
+    /// under the name its URL ends with, instead of one archive at `url`.
+    pub files: Vec<File>,
+}
+
+impl Voice {
+    /// Download size of the whole voice.
+    pub fn total_size(&self) -> u64 {
+        self.size + self.files.iter().map(|f| f.size).sum::<u64>()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -118,7 +128,23 @@ mod tests {
         let ru = &c.languages["ru"];
         assert!(ru.hear && !ru.voices.is_empty());
         assert!(c.voices.contains_key(&ru.default_voice));
-        assert!(c.voices.values().all(|v| v.sha256.len() == 64 && v.size > 0 && v.url.starts_with("https://")));
+        // one archive, or files each pinned (Phonon)
+        assert!(c.voices.values().all(|v| if v.files.is_empty() {
+            v.sha256.len() == 64 && v.size > 0 && v.url.starts_with("https://")
+        } else {
+            v.url.is_empty() && v.files.iter().all(|f| f.sha256.len() == 64 && f.size > 0 && f.url.starts_with("https://"))
+        }));
+        // English speaks with Phonon by default; the image's Piper voice is its fallback
+        assert_eq!(c.languages["en"].default_voice, "phonon-31m-en");
+        assert!(c.languages["en"].voices.iter().any(|v| v == crate::registry::BUNDLED_VOICE));
+        // French, German, Spanish, Portuguese: Phonon too, in the image and in the catalog
+        // (mirrored on bia's release) for images without it
+        for (id, lang, _) in crate::registry::BUNDLED_PHONON_MORE {
+            assert_eq!(c.languages[lang].default_voice, id);
+            let v = &c.voices[id];
+            assert!(v.kind == "phonon" && v.langs == [lang] && v.url.contains("/phonon-voices-"));
+            assert!(crate::registry::Registry::default().voices[id].bundled);
+        }
         // one archive, or files each pinned
         assert!(c.asr.values().all(|v| if v.files.is_empty() {
             v.sha256.len() == 64 && v.url.starts_with("https://")
@@ -130,6 +156,6 @@ mod tests {
         assert!(fa.files.iter().any(|f| f.url.ends_with("/model.onnx")) && fa.files.iter().any(|f| f.url.ends_with("/tokens.txt")));
         assert!(fa.total_size() > 100_000_000);
         assert!(c.extras.contains_key("speaker-campplus"));
-        assert!(c.languages["en"].default_voice == crate::registry::BUNDLED_VOICE);
+
     }
 }

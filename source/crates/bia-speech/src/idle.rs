@@ -48,6 +48,17 @@ pub fn touch() {
     });
 }
 
+/// Unload every model nobody holds right now (a call ended: its models are not needed
+/// until the next one), without waiting for the idle timeout. Returns how many.
+pub fn unload_now() -> usize {
+    let n = crate::models::unload_unused() + crate::tts::unload_unused();
+    if n > 0 {
+        trim();
+        crate::diag::log("speech", format!("unloaded {n} model(s): no longer needed"));
+    }
+    n
+}
+
 /// Hand the freed heap back to the system (glibc keeps it otherwise).
 fn trim() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]

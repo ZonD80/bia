@@ -657,6 +657,9 @@ impl Tg {
         if let Some(r) = reply_note(client, &msg, chat_id).await {
             text = format!("{r}\n{text}");
         }
+        if let Some(m) = mentions_note(client, &msg).await {
+            text = format!("{m}\n{text}");
+        }
         // Transcribed and delivered in turn: what this chat sent next reaches the model
         // after the transcript.
         turn.wait().await;
@@ -1215,8 +1218,10 @@ impl Tg {
         let client = self.require_ready()?;
         let (chat_id, title, username) = self.resolve_target(target)?;
         let work = async {
+            let people = taggable(&client, chat_id, text).await;
             if files.is_empty() {
-                let m = match client.send_message(chat_id, formatted(text)).await {
+                let (msg, _) = formatted_tagged(text, &people);
+                let m = match client.send_message(chat_id, msg).await {
                     Err(e) if entities_refused(&e.to_string()) => client.send_message(chat_id, InputMessage::text(text)).await,
                     r => r,
                 }
@@ -1238,7 +1243,7 @@ impl Tg {
                     .await
                     .map_err(|e| format!("upload {}: {e}", path.display()))?;
                 let caption = if n == 0 { text } else { "" };
-                let msg = formatted(caption);
+                let (msg, _) = formatted_tagged(caption, if n == 0 { &people } else { &[] });
                 // OGG/Opus goes out as a voice message, not as a file.
                 let media = if is_voice_file(&path) {
                     let (secs, wave) = voice_meta(&path);
@@ -2169,6 +2174,115 @@ async fn fwd_peer_label(client: &Client, peer: &tl::enums::Peer) -> String {
     }
 }
 
+/// This account's username, lowercase ("" without one), cached after the first lookup.
+async fn my_username(client: &Client) -> String {
+    static ME: OnceLock<String> = OnceLock::new();
+    if let Some(u) = ME.get() {
+        return u.clone();
+    }
+    let Ok(me) = client.get_me().await else { return String::new() };
+    ME.get_or_init(|| me.username.clone().unwrap_or_default().to_lowercase()).clone()
+}
+
+/// `[mentions: you, Ann (@ann, 123)]` for a message that tags people: a tag by name
+/// carries the user id, an `@username` the name; Telegram also flags a tag of bia.
+async fn mentions_note(client: &Client, msg: &ferogram::update::IncomingMessage) -> Option<String> {
+    let text = msg.text().unwrap_or("");
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+    let span = |o: i32, l: i32| -> String {
+        let (o, l) = (o.max(0) as usize, l.max(0) as usize);
+        String::from_utf16_lossy(utf16.get(o..(o + l).min(utf16.len())).unwrap_or(&[]))
+    };
+    let me_id = my_user_id(client).await.unwrap_or(0);
+    let me_name = my_username(client).await;
+    let mut who: Vec<String> = Vec::new();
+    if msg.mentioned() {
+        who.push("you".into());
+    }
+    for e in msg.entities().into_iter().flatten() {
+        match e {
+            tl::enums::MessageEntity::MentionName(m) => {
+                who.push(if m.user_id == me_id { "you".into() } else { user_label(client, m.user_id).await });
+            }
+            tl::enums::MessageEntity::Mention(m) => {
+                let un = span(m.offset, m.length).trim_start_matches('@').to_string();
+                if !me_name.is_empty() && un.to_lowercase() == me_name {
+                    who.push("you".into());
+                } else if !un.is_empty() {
+                    who.push(format!("@{un}"));
+                }
+            }
+            _ => {}
+        }
+    }
+    bia_mcp::share::mentions_text(&who)
+}
+
+/// The members of a group bia can tag by name (`@Ann`): Telegram needs the user and its
+/// access hash. A direct chat or a failed lookup gives none.
+async fn taggable(client: &Client, chat_id: i64, text: &str) -> Vec<(tl::types::User, bia_mcp::share::Taggable)> {
+    if chat_id >= 0 || !text.contains('@') {
+        return vec![];
+    }
+    let list = match client.get_participants(chat_id, 200).await {
+        Ok(l) => l,
+        Err(e) => {
+            Tg::global().log(format!("tags telegram:{chat_id}: {e}"));
+            return vec![];
+        }
+    };
+    let me = my_user_id(client).await.unwrap_or(0);
+    list.into_iter()
+        .filter(|p| p.user.id != me)
+        .map(|p| {
+            let u = p.user;
+            let full = [u.first_name.as_deref(), u.last_name.as_deref()].into_iter().flatten().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+            let mut names = vec![full.clone()];
+            if let Some(f) = u.first_name.as_deref().filter(|f| !f.is_empty() && *f != full) {
+                names.push(f.to_string());
+            }
+            if let Some(un) = u.username.as_deref().filter(|s| !s.is_empty()) {
+                names.push(un.to_string());
+            }
+            let number = u.phone.clone().unwrap_or_default();
+            (u, bia_mcp::share::Taggable { names, number })
+        })
+        .collect()
+}
+
+/// [`formatted`] plus tags: `@Ann` or `@+number` of a member becomes a tag by name
+/// (Telegram links an `@username` by itself, so that stays text).
+fn formatted_tagged(md: &str, people: &[(tl::types::User, bia_mcp::share::Taggable)]) -> (InputMessage, usize) {
+    if people.is_empty() {
+        return (formatted(md), 0);
+    }
+    let r = bia_mcp::md::rich(md);
+    let members: Vec<bia_mcp::share::Taggable> = people.iter().map(|(_, t)| t.clone()).collect();
+    let mut tags = Vec::new();
+    for t in bia_mcp::share::find_tags(&r.text, &members) {
+        let u = &people[t.who].0;
+        let said = r.text[t.start + 1..t.end].to_lowercase();
+        if u.username.as_deref().is_some_and(|un| un.to_lowercase() == said) {
+            continue;
+        }
+        let Some(hash) = u.access_hash else { continue };
+        let offset = r.text[..t.start].encode_utf16().count() as i32;
+        let length = r.text[t.start..t.end].encode_utf16().count() as i32;
+        tags.push(tl::enums::MessageEntity::InputMessageEntityMentionName(tl::types::InputMessageEntityMentionName {
+            offset,
+            length,
+            user_id: tl::enums::InputUser::InputUser(tl::types::InputUser { user_id: u.id, access_hash: hash }),
+        }));
+    }
+    if tags.is_empty() {
+        return (formatted(md), 0);
+    }
+    let n = tags.len();
+    let mut ents = formatted_entities(&r);
+    ents.extend(tags);
+    (InputMessage::text(r.text).entities(ents), n)
+}
+
 /// This account's user id (cached after the first lookup).
 async fn my_user_id(client: &Client) -> Option<i64> {
     static ME: OnceLock<i64> = OnceLock::new();
@@ -2193,9 +2307,15 @@ fn live() -> &'static bia_mcp::share::LiveTracker {
 
 /// The model's markdown as Telegram shows it: plain text with formatting entities.
 fn formatted(md: &str) -> InputMessage {
-    use bia_mcp::md::Style;
     let r = bia_mcp::md::rich(md);
-    let ents: Vec<tl::enums::MessageEntity> = r
+    let ents = formatted_entities(&r);
+    let m = InputMessage::text(r.text);
+    if ents.is_empty() { m } else { m.entities(ents) }
+}
+
+fn formatted_entities(r: &bia_mcp::md::Rich) -> Vec<tl::enums::MessageEntity> {
+    use bia_mcp::md::Style;
+    r
         .spans
         .iter()
         .map(|sp| {
@@ -2210,9 +2330,7 @@ fn formatted(md: &str) -> InputMessage {
                 Style::Quote => tl::enums::MessageEntity::Blockquote(tl::types::MessageEntityBlockquote { collapsed: false, offset, length }),
             }
         })
-        .collect();
-    let m = InputMessage::text(r.text);
-    if ents.is_empty() { m } else { m.entities(ents) }
+        .collect()
 }
 
 /// Telegram refused the formatting (ENTITY_BOUNDS_INVALID, ENTITY_TEXTURL_INVALID, …):

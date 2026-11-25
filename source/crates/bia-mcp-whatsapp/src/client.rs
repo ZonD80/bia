@@ -729,6 +729,20 @@ impl HistoryStore {
         self.load(key).iter().find(|l| l.id == id).cloned()
     }
 
+    /// The name a sender last wrote under in this chat, by the user part of their JID
+    /// (`130606214176782` of `130606214176782@lid`): "Les" of "Les (16462692038)".
+    fn name_of(&mut self, key: &str, user: &str) -> Option<String> {
+        self.load(key)
+            .iter()
+            .rev()
+            .find(|l| !l.me && l.from_jid.split(['@', ':']).next() == Some(user))
+            .map(|l| match l.from.rsplit_once(" (") {
+                Some((n, rest)) if rest.trim_end_matches(')').chars().all(|c| c.is_ascii_digit()) => n.to_string(),
+                _ => l.from.clone(),
+            })
+            .filter(|n| !n.is_empty() && !n.starts_with('+'))
+    }
+
     /// Replace the text of a cached line (after an edit). False when the id is unknown.
     fn set_text(&mut self, key: &str, id: &str, text: &str) -> bool {
         let path = Self::path(key);
@@ -1901,13 +1915,26 @@ impl Wa {
         text: &str,
         files: &[String],
     ) -> Result<String, String> {
+        let (wire, tagged) = self.tags(client, t, text).await;
+        let ctx = || buffa::MessageField::some(wa::ContextInfo { mentioned_jid: tagged.clone(), ..Default::default() });
+        let tag_note = if tagged.is_empty() { String::new() } else { format!(" (tagged {})", tagged.len()) };
         if files.is_empty() {
-            let r = client
-                .send_text(t.jid.clone(), text)
-                .await
-                .map_err(|e| format!("send: {e}"))?;
+            let r = if tagged.is_empty() {
+                client.send_text(t.jid.clone(), text).await
+            } else {
+                let msg = wa::Message {
+                    extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
+                        text: Some(wire.clone()),
+                        context_info: ctx(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                client.send_message(t.jid.clone(), msg).await
+            }
+            .map_err(|e| format!("send: {e}"))?;
             self.record_outgoing(&t.key, &r.message_id, text);
-            return Ok(format!("sent message id {} → {}", r.message_id, Self::format_chat(&t.key, &t.title)));
+            return Ok(format!("sent message id {}{tag_note} → {}", r.message_id, Self::format_chat(&t.key, &t.title)));
         }
         let root = files_dir();
         let mut n = 0usize;
@@ -1924,7 +1951,7 @@ impl Wa {
                 .unwrap_or("file")
                 .to_string();
             let caption = if n == 0 && !text.is_empty() {
-                Some(text.to_string())
+                Some(wire.clone())
             } else {
                 None
             };
@@ -1990,10 +2017,20 @@ impl Wa {
                     "document",
                 )
             };
+            // tags in the caption (the first file carries the text)
+            let mut msg = msg;
+            if n == 0 && !tagged.is_empty() {
+                if let Some(m) = msg.image_message.as_option_mut() {
+                    m.context_info = ctx();
+                } else if let Some(m) = msg.document_message.as_option_mut() {
+                    m.context_info = ctx();
+                }
+            }
             let r = client
                 .send_message(t.jid.clone(), msg)
                 .await
                 .map_err(|e| format!("send_file: {e}"))?;
+            let caption = caption.as_ref().map(|_| text.to_string());
             let shown = match &caption {
                 Some(c) => format!("[{label}] {c}"),
                 None => format!("[{label}] {name}"),
@@ -2698,6 +2735,8 @@ impl Wa {
             None
         };
         self.note_chat(&key, &chat, title.as_deref(), ts);
+        // Tags: `@130606214176782` reads `@Les`, and who was tagged comes as a line.
+        let (text, mention_note) = self.mentions(&client, &key, base, &text).await;
         // Live location: WhatsApp sends one message per move. The first point of a share
         // reaches the model; later points only update the tracker (no history line either).
         let mut text = text;
@@ -2786,6 +2825,9 @@ impl Wa {
         if let Some(r) = self.reply_note(&client, &key, base).await {
             deliver = if deliver.is_empty() { r } else { format!("{r}\n{deliver}") };
         }
+        if let Some(m) = mention_note {
+            deliver = if deliver.is_empty() { m } else { format!("{m}\n{deliver}") };
+        }
         let mut voice = None;
         // During an active voice call, ignore chat media (live STT covers speech).
         let in_call = Calls::global().active_key().as_deref() == Some(key.as_str());
@@ -2849,6 +2891,110 @@ impl Wa {
         }
         self.inbound_by(&label, &key, &info.id, &deliver, ts, &from);
         Ok(())
+    }
+
+    /// Who a message tags (`context_info.mentioned_jid`): its text with the ids after `@`
+    /// replaced by names, and the `[mentions: …]` line ("you" for bia). WhatsApp puts only
+    /// the tagged person's id in the text (`@130606214176782`, a LID in most groups).
+    async fn mentions(&self, client: &Client, key: &str, base: &wa::Message, text: &str) -> (String, Option<String>) {
+        let tagged: Vec<String> = context_info(base).map(|c| c.mentioned_jid.clone()).unwrap_or_default();
+        if tagged.is_empty() {
+            return (text.to_string(), None);
+        }
+        let me: Vec<String> = [client.pn(), client.lid()].into_iter().flatten().map(|j| j.user.to_string()).collect();
+        let my_name = client.push_name();
+        let (mut who, mut names) = (Vec::new(), Vec::new());
+        for s in &tagged {
+            let Ok(j) = s.parse::<Jid>() else { continue };
+            let user = j.user.to_string();
+            if me.contains(&user) {
+                who.push("you".to_string());
+                if !my_name.trim().is_empty() {
+                    names.push((user, my_name.trim().to_string()));
+                }
+                continue;
+            }
+            let k = key_of_jid_async(client, &j).await;
+            let num = if k.chars().all(|c| c.is_ascii_digit()) { k.clone() } else { String::new() };
+            let name = (!num.is_empty())
+                .then(|| self.book.lock().unwrap().title(&num))
+                .flatten()
+                .filter(|n| !looks_numeric(n))
+                .or_else(|| self.hist.lock().unwrap().name_of(key, &user))
+                .or_else(|| (!num.is_empty()).then(|| self.hist.lock().unwrap().name_of(key, &num)).flatten());
+            let (label, shown) = match (name, num.is_empty()) {
+                (Some(n), false) => (format!("{n} (+{num})"), n),
+                (Some(n), true) => (n.clone(), n),
+                (None, false) => (format!("+{num}"), format!("+{num}")),
+                (None, true) => (format!("unknown member {user}"), user.clone()),
+            };
+            who.push(label);
+            names.push((user, shown));
+        }
+        (bia_mcp::share::name_mentions(text, &names), bia_mcp::share::mentions_text(&who))
+    }
+
+    /// Tags in what bia writes to a group: `@Les`, `@ZonD Eighty` or `@+16462692038` of a
+    /// member becomes WhatsApp's own tag (`@<id>` in the text plus the id in the message's
+    /// mentions, so it is highlighted and notifies them). Returns the text to send and
+    /// the ids; the text stays as written when nobody is tagged.
+    async fn tags(&self, client: &Client, t: &Target, text: &str) -> (String, Vec<String>) {
+        if !t.jid.is_group() || !text.contains('@') {
+            return (text.to_string(), vec![]);
+        }
+        let meta = match client.groups().get_metadata(&t.jid).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.log(format!("tags whatsapp:{}: {e}", t.key));
+                return (text.to_string(), vec![]);
+            }
+        };
+        let me: Vec<String> = [client.pn(), client.lid()].into_iter().flatten().map(|j| j.user.to_string()).collect();
+        let mut people: Vec<(Jid, bia_mcp::share::Taggable)> = Vec::new();
+        for p in &meta.participants {
+            if me.contains(&p.jid.user.to_string()) {
+                continue;
+            }
+            let num = match &p.phone_number {
+                Some(pn) => pn.user.to_string(),
+                None => key_of_jid_async(client, &p.jid).await,
+            };
+            let num = if num.chars().all(|c| c.is_ascii_digit()) { num } else { String::new() };
+            let mut names = Vec::new();
+            if !num.is_empty() {
+                if let Some(n) = self.book.lock().unwrap().title(&num).filter(|n| !looks_numeric(n)) {
+                    names.push(n);
+                }
+            }
+            for u in [p.jid.user.to_string(), num.clone()] {
+                if let Some(n) = (!u.is_empty()).then(|| self.hist.lock().unwrap().name_of(&t.key, &u)).flatten() {
+                    names.push(n);
+                }
+            }
+            // a first name tags too ("@ZonD" for "ZonD Eighty")
+            let firsts: Vec<String> = names.iter().filter_map(|n| n.split_whitespace().next().filter(|f| *f != n).map(str::to_string)).collect();
+            names.extend(firsts);
+            people.push((p.jid.clone(), bia_mcp::share::Taggable { names, number: num }));
+        }
+        let members: Vec<bia_mcp::share::Taggable> = people.iter().map(|(_, m)| m.clone()).collect();
+        let found = bia_mcp::share::find_tags(text, &members);
+        if found.is_empty() {
+            return (text.to_string(), vec![]);
+        }
+        let (mut out, mut ids, mut last) = (String::new(), Vec::new(), 0);
+        for tag in &found {
+            let jid = &people[tag.who].0;
+            out.push_str(&text[last..tag.start]);
+            out.push('@');
+            out.push_str(&jid.user);
+            last = tag.end;
+            let id = jid.to_non_ad().to_string();
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        out.push_str(&text[last..]);
+        (out, ids)
     }
 
     /// `[reply to <id> from <who>: "…"]` for a message that quotes another one: author and
@@ -3019,6 +3165,23 @@ fn hold_inbound(identity: &str, channel: &str, id: &str, text: &str, issued: i64
 #[cfg(test)]
 mod shared_tests {
     use super::*;
+
+    #[test]
+    fn a_tagged_lid_is_named_from_the_chat_history() {
+        let mut h = HistoryStore::default();
+        let line = |id: &str, from: &str, jid: &str, me: bool| HistLine { id: id.into(), ts: 1, me, from: from.into(), from_jid: jid.into(), text: "x".into() };
+        // loaded in memory only: the key is never written
+        h.chats.insert("g".into(), vec![
+            line("1", "Les (16462692038)", "130606214176782@lid", false),
+            line("2", "+34600000000", "98858084360353@lid", false),
+            line("3", "Nando", "55512345@s.whatsapp.net", false),
+            line("4", "me", "", true),
+        ]);
+        assert_eq!(h.name_of("g", "130606214176782").as_deref(), Some("Les"));
+        assert_eq!(h.name_of("g", "98858084360353"), None, "a bare number is no name");
+        assert_eq!(h.name_of("g", "55512345").as_deref(), Some("Nando"));
+        assert_eq!(h.name_of("g", "999"), None);
+    }
 
     #[test]
     fn locations_and_contacts_become_text() {

@@ -48,7 +48,7 @@ fn main() {
             "app_link",
             "Make a link that opens bia's web app in the bia deploy phone app: the chat, or another page path, for root or a contact (identity). It carries a one-time key for them. Send it with say in their own chat; the reply names the app's store links.",
             json!({"type": "object", "properties": {
-                "path": {"type": "string", "description": "optional: page of bia's web app, for example /hitl/<id>. Default / (the chat)."},
+                "path": {"type": "string", "description": "optional: page of bia's web app, for example /#task/<id> (a human task). Default / (the chat)."},
                 "identity": {"type": "string", "description": "optional: who you send it to, root (default) or an addressbook contact id. The link carries a one-time key for them."}
             }}),
             hitl::app_link_tool,

@@ -551,6 +551,120 @@ impl TextMemory {
     }
 }
 
+// ---- mentions (tags of people in group chats) ----
+
+/// `[mentions: you, Les (+16462692038)]`: who a message tags, "you" for bia itself.
+/// The agent reads "you" here as the message calling bia (queue rank, answers).
+pub fn mentions_text(who: &[String]) -> Option<String> {
+    let mut seen: Vec<&str> = Vec::new();
+    for w in who.iter().map(|w| w.trim()).filter(|w| !w.is_empty()) {
+        if !seen.contains(&w) {
+            seen.push(w);
+        }
+    }
+    (!seen.is_empty()).then(|| format!("[mentions: {}]", seen.join(", ")))
+}
+
+/// Replace platform ids in a message's text with names: `@130606214176782` → `@Les`.
+/// `names` maps the id as it appears after `@` to the name to show.
+pub fn name_mentions(text: &str, names: &[(String, String)]) -> String {
+    let mut out = text.to_string();
+    // longest id first, so 1234 never cuts into @12345
+    let mut names: Vec<&(String, String)> = names.iter().filter(|(id, n)| !id.is_empty() && !n.is_empty()).collect();
+    names.sort_by_key(|(id, _)| std::cmp::Reverse(id.len()));
+    for (id, name) in names {
+        let pat = format!("@{id}");
+        let mut res = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        while let Some(i) = rest.find(&pat) {
+            let after = &rest[i + pat.len()..];
+            res.push_str(&rest[..i]);
+            if after.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+                res.push_str(&pat);
+            } else {
+                res.push('@');
+                res.push_str(name);
+            }
+            rest = after;
+        }
+        res.push_str(rest);
+        out = res;
+    }
+    out
+}
+
+/// A member of a chat that bia can tag: `names` as people write them (display name,
+/// first name, username), `number` the phone digits when known.
+#[derive(Clone, Debug, Default)]
+pub struct Taggable {
+    pub names: Vec<String>,
+    pub number: String,
+}
+
+/// A tag found in outgoing text: bytes `start..end` (the `@` included) name `who`
+/// (an index into the members given to `find_tags`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tag {
+    pub start: usize,
+    pub end: usize,
+    pub who: usize,
+}
+
+/// Find `@Name`, `@username` and `@+number` in text bia writes to a group: the longest
+/// member name that follows an `@` (any case, ending at a word boundary), or the
+/// member with that phone number. An `@` inside a word (an email address) or one that
+/// names nobody stays plain text.
+pub fn find_tags(text: &str, members: &[Taggable]) -> Vec<Tag> {
+    let digits = |s: &str| s.chars().filter(|c| c.is_ascii_digit()).collect::<String>();
+    let mut names: Vec<(String, usize)> = Vec::new();
+    for (i, m) in members.iter().enumerate() {
+        for n in &m.names {
+            let n = n.trim().trim_start_matches('@').to_lowercase();
+            if n.chars().count() >= 2 {
+                names.push((n, i));
+            }
+        }
+    }
+    names.sort_by_key(|(n, _)| std::cmp::Reverse(n.len()));
+    let low = text.to_lowercase();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while let Some(off) = text[at..].find('@') {
+        let start = at + off;
+        let after = start + 1;
+        at = after;
+        if text[..start].chars().next_back().is_some_and(|c| c.is_alphanumeric()) {
+            continue;
+        }
+        // @+34 625 640 810 / @34625640810
+        let num: String = text[after..].chars().take_while(|c| c.is_ascii_digit() || *c == '+' || *c == ' ' || *c == '-').collect();
+        let num = num.trim_end_matches([' ', '-']);
+        if digits(num).len() >= 6 {
+            let d = digits(num);
+            if let Some(who) = members.iter().position(|m| !m.number.is_empty() && digits(&m.number) == d) {
+                out.push(Tag { start, end: after + num.len(), who });
+                at = after + num.len();
+                continue;
+            }
+        }
+        // lowercase keeps byte offsets for the text people write (Latin, Cyrillic…)
+        if low.len() != text.len() {
+            continue;
+        }
+        for (n, who) in &names {
+            if low[after..].starts_with(n.as_str()) {
+                let end = after + n.len();
+                if !text[end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    out.push(Tag { start, end, who: *who });
+                    at = end;
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,5 +793,32 @@ mod tests {
         m.flush();
         assert_eq!(TextMemory::open(dir.join("t.json"), 2).get("c:2"), Some((20, "two".into())));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mentions_line_and_names_in_text() {
+        assert_eq!(mentions_text(&["you".into(), "Les (+16462692038)".into(), "you".into()]).unwrap(), "[mentions: you, Les (+16462692038)]");
+        assert!(mentions_text(&[]).is_none());
+        let names = vec![("130606214176782".to_string(), "Les".to_string()), ("1306".to_string(), "Short".to_string())];
+        assert_eq!(name_mentions("So @130606214176782 are you ready? cc @1306, not @13060621417678299", &names),
+                   "So @Les are you ready? cc @Short, not @13060621417678299");
+    }
+
+    #[test]
+    fn tags_in_outgoing_text() {
+        let m = vec![
+            Taggable { names: vec!["Les".into()], number: "16462692038".into() },
+            Taggable { names: vec!["ZonD Eighty".into(), "ZonD".into()], number: "34625640810".into() },
+            Taggable { names: vec!["Ana".into(), "@ana_b".into()], number: String::new() },
+        ];
+        let t = "@Les and @zond eighty, ask @+34 625 640 810 or @ana_b. mail les@x.com, @Nobody, @Lesley";
+        let tags = find_tags(t, &m);
+        let got: Vec<(&str, usize)> = tags.iter().map(|g| (&t[g.start..g.end], g.who)).collect();
+        assert_eq!(got, vec![("@Les", 0), ("@zond eighty", 1), ("@+34 625 640 810", 1), ("@ana_b", 2)]);
+        // Cyrillic names keep their offsets
+        let m = vec![Taggable { names: vec!["Лёша".into()], number: String::new() }];
+        let t = "Привет, @лёша!";
+        let tags = find_tags(t, &m);
+        assert_eq!(&t[tags[0].start..tags[0].end], "@лёша");
     }
 }

@@ -414,6 +414,13 @@ async function whoami() {
 }
 
 (async function boot() {
+  // an old human task link (/hitl/<id>) arrives as /?task=<id> with its own #enroll=…: the
+  // task is a route of the app now (#task/<id>), next to the link's key grant
+  const oldTask = new URLSearchParams(location.search).get('task');
+  if (oldTask && /^[A-Za-z0-9_-]+$/.test(oldTask)) {
+    const rest = location.hash.replace(/^#/, '');
+    history.replaceState(null, '', '/#task/' + oldTask + (rest ? '&' + rest : ''));
+  }
   // bia cloud's first access: the .biaconfig comes in the link, the password is typed here
   const fromLink = BiaKeys.fromHash();
   if (fromLink) { showBoot({ file: fromLink, name: 'the link' }); return; }
@@ -1158,7 +1165,8 @@ function route() {
     if (innerWidth > 760) { go('chat/main'); return; }
     viewKey = 'empty';
   }
-  if (!S.root && ['console', 'shell', 'files', 'tasks', 'task', 'display'].includes(viewKey)) { go('chat/main'); return; }
+  // a single task (#task/<id>) may be meant for anyone: the server says whether it is theirs
+  if (!S.root && ['console', 'shell', 'files', 'tasks', 'display'].includes(viewKey)) { go('chat/main'); return; }
   switch (viewKey) {
     case 'chat': openChat('main'); break;
     case 'console': showView('console', buildConsole); break;

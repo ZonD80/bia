@@ -201,7 +201,7 @@ fn main() {
         )
         .tool(
             "send",
-            "Send a WhatsApp message. chat_id is a phone number with country code (digits, e.g. 15551234567) or an id from whatsapp_search/whatsapp_chats (groups look like 1203630...@g.us). text is the message. files are paths under /home/bia/files. Pictures (jpg/png/webp) are sent as images. Other files are sent as documents.",
+            "Send a WhatsApp message. chat_id is a phone number with country code (digits, e.g. 15551234567) or an id from whatsapp_search/whatsapp_chats (groups look like 1203630...@g.us). text is the message. files are paths under /home/bia/files. Pictures (jpg/png/webp) are sent as images. Other files are sent as documents. In a group, @Name (as members appear in its messages; a first name works) or @+number tags that member: it is highlighted and notifies them; an @word that names no member stays plain text. Incoming tags arrive as a [mentions: …] line (you = you were tagged).",
             json!({"type": "object", "required": ["chat_id"], "properties": {
                 "chat_id": {"type": "string", "description": "phone digits, whatsapp:<phone>, or a group id from whatsapp_search"},
                 "text": {"type": "string", "description": "the message. Optional if you send files."},

@@ -41,7 +41,10 @@ VAD_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sile
 VAD_SHA=9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6
 GTCRN_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx"
 GTCRN_SHA=e77603ac0c23dac3227dd2d7135b3a585cbee2679048aecfa886657d3ae1b534
-TTS_ASSET="vits-piper-en_US-lessac-medium-int8.tar.bz2"
+# the default voice: low quality = 16 kHz and the fastest Piper (a phone speaks it at
+# 0.6x real time, a -high voice at 5x); enough for calls, which are 8 kHz
+TTS_ASSET="vits-piper-en_US-lessac-low-int8.tar.bz2"
+TTS_SHA=af63fbe60d8bdcfccdee61ba057304a11dfc077145da383d4d351ec3c594d5e2
 TTS_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/${TTS_ASSET}"
 
 fetch() {
@@ -101,14 +104,48 @@ fetch "$GTCRN_URL" "$CACHE/gtcrn_simple.onnx"
 verify "$CACHE/gtcrn_simple.onnx" "$GTCRN_SHA"
 cp -a "$CACHE/gtcrn_simple.onnx" "$DEST/models/gtcrn/gtcrn_simple.onnx"
 
-echo "== speech: piper en_US-lessac-medium int8 (via sherpa-tts)"
+echo "== speech: piper en_US-lessac-low int8 (via sherpa-tts)"
 fetch "$TTS_URL" "$CACHE/$TTS_ASSET"
+verify "$CACHE/$TTS_ASSET" "$TTS_SHA"
 rm -rf "$CACHE/tts-unpack"
 mkdir -p "$CACHE/tts-unpack"
 tar -xjf "$CACHE/$TTS_ASSET" -C "$CACHE/tts-unpack"
-TROOT=$(find "$CACHE/tts-unpack" -name 'en_US-lessac-medium.onnx' | head -1 | xargs dirname)
-mkdir -p "$DEST/models/piper-en_US-lessac-medium"
-cp -a "$TROOT/." "$DEST/models/piper-en_US-lessac-medium/"
+TROOT=$(find "$CACHE/tts-unpack" -name 'en_US-lessac-low.onnx' | head -1 | xargs dirname)
+mkdir -p "$DEST/models/piper-en_US-lessac-low"
+cp -a "$TROOT/." "$DEST/models/piper-en_US-lessac-low/"
+
+# English's voice: Gradium Phonon 31m (Apache 2.0, public), streams while it speaks. The
+# files at one commit of the Hub repo, each checked (the same pins as the lang catalog).
+PHONON_BASE="https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f"
+echo "== speech: Gradium Phonon 31m (English)"
+mkdir -p "$CACHE/phonon-31m-en" "$DEST/models/phonon-31m-en"
+while read -r f sha; do
+  fetch "$PHONON_BASE/$f" "$CACHE/phonon-31m-en/$f"
+  verify "$CACHE/phonon-31m-en/$f" "$sha"
+  cp -a "$CACHE/phonon-31m-en/$f" "$DEST/models/phonon-31m-en/$f"
+done <<'PINS'
+config.json b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85
+tokenizer.json 691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936
+model.q8.gguf a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae
+default-voice.safetensors dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a
+PINS
+
+# French, German, Spanish, Portuguese: Gradium Phonon 40m (CC BY-NC 4.0; credit and licence in
+# each archive), mirrored unchanged on bia's own release since the Hub gates them by login.
+PHONON40_BASE="https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25"
+echo "== speech: Gradium Phonon 40m (fr, de, es, pt)"
+while read -r id sha; do
+  fetch "$PHONON40_BASE/$id.tar.bz2" "$CACHE/$id.tar.bz2"
+  verify "$CACHE/$id.tar.bz2" "$sha"
+  rm -rf "$DEST/models/$id"
+  tar -xjf "$CACHE/$id.tar.bz2" -C "$DEST/models"
+  [ -f "$DEST/models/$id/model.q8.gguf" ] || { echo "$id: no model.q8.gguf in the archive"; exit 1; }
+done <<'PINS'
+phonon-40m-fr 907ea4ece7ecbc8c648173562bcb4ff95923eb47fbc0bcf468affae83d97b377
+phonon-40m-de 4cb95676be698e6bf353f36078d77fe9eb8d19e9e3858dd5c82f3536e81e89c2
+phonon-40m-es 257674d39c434e286ce97746702ef005d02bb32bb7a61f07f04c26a2e336f34a
+phonon-40m-pt e8c36a26f4d211702c952803a99fe92f19e3113803b00b55274d6f849a3144b6
+PINS
 
 echo "== speech: ntgcalls $NTGCALLS_VER (shared lib for guest + build cache)"
 fetch "$NTG_BASE/$NTG_SHARED_ASSET" "$CACHE/$NTGCALLS_VER-$NTG_SHARED_ASSET"

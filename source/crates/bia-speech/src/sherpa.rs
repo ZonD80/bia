@@ -9,6 +9,64 @@ use std::sync::OnceLock;
 pub type P = *const c_char;
 pub type H = *const c_void;
 
+// ---- online (streaming) recognizer: Kroko ----
+
+#[repr(C)]
+pub struct OnlineTransducerCfg {
+    pub encoder: P,
+    pub decoder: P,
+    pub joiner: P,
+}
+
+#[repr(C)]
+pub struct OnlineModelCfg {
+    pub transducer: OnlineTransducerCfg,
+    pub paraformer: [P; 2],
+    pub zipformer2_ctc: P,
+    pub tokens: P,
+    pub num_threads: i32,
+    pub provider: P,
+    pub debug: i32,
+    pub model_type: P,
+    pub modeling_unit: P,
+    pub bpe_vocab: P,
+    pub tokens_buf: P,
+    pub tokens_buf_size: i32,
+    pub nemo_ctc: P,
+    pub t_one_ctc: P,
+}
+
+#[repr(C)]
+pub struct OnlineRecognizerCfg {
+    pub feat_config: FeatureCfg,
+    pub model_config: OnlineModelCfg,
+    pub decoding_method: P,
+    pub max_active_paths: i32,
+    pub enable_endpoint: i32,
+    pub rule1_min_trailing_silence: f32,
+    pub rule2_min_trailing_silence: f32,
+    pub rule3_min_utterance_length: f32,
+    pub hotwords_file: P,
+    pub hotwords_score: f32,
+    pub ctc_fst_decoder_config: [usize; 2],
+    pub rule_fsts: P,
+    pub rule_fars: P,
+    pub blank_penalty: f32,
+    pub hotwords_buf: P,
+    pub hotwords_buf_size: i32,
+    pub hr: HomophoneCfg,
+}
+
+#[repr(C)]
+pub struct OnlineResult {
+    pub text: P,
+    pub tokens: P,
+    pub tokens_arr: *const P,
+    pub timestamps: *const f32,
+    pub count: i32,
+    pub json: P,
+}
+
 // ---- offline recognizer ----
 
 #[repr(C)]
@@ -450,6 +508,13 @@ api! {
     speaker_is_ready: fn(H, H) -> i32 = "SherpaOnnxSpeakerEmbeddingExtractorIsReady";
     speaker_compute: fn(H, H) -> *const f32 = "SherpaOnnxSpeakerEmbeddingExtractorComputeEmbedding";
     speaker_destroy_embedding: fn(*const f32) = "SherpaOnnxSpeakerEmbeddingExtractorDestroyEmbedding";
+    create_online_recognizer: fn(*const OnlineRecognizerCfg) -> H = "SherpaOnnxCreateOnlineRecognizer";
+    destroy_online_recognizer: fn(H) = "SherpaOnnxDestroyOnlineRecognizer";
+    create_online_stream: fn(H) -> H = "SherpaOnnxCreateOnlineStream";
+    online_ready: fn(H, H) -> i32 = "SherpaOnnxIsOnlineStreamReady";
+    decode_online_stream: fn(H, H) = "SherpaOnnxDecodeOnlineStream";
+    get_online_result: fn(H, H) -> *const OnlineResult = "SherpaOnnxGetOnlineStreamResult";
+    destroy_online_result: fn(*const OnlineResult) = "SherpaOnnxDestroyOnlineRecognizerResult";
     online_accept_waveform: fn(H, i32, *const f32, i32) = "SherpaOnnxOnlineStreamAcceptWaveform";
     online_input_finished: fn(H) = "SherpaOnnxOnlineStreamInputFinished";
     destroy_online_stream: fn(H) = "SherpaOnnxDestroyOnlineStream";
@@ -536,6 +601,22 @@ mod layout {
     #[cfg(target_pointer_width = "64")]
     fn matches_c_header() {
         assert_eq!(size_of::<OfflineRecognizerCfg>(), 608);
+        assert_eq!(size_of::<OnlineRecognizerCfg>(), 272);
+        assert_eq!(size_of::<OnlineModelCfg>(), 136);
+        assert_eq!(size_of::<OnlineResult>(), 48);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, model_config), 8);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, decoding_method), 144);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, enable_endpoint), 156);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, hotwords_file), 176);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, ctc_fst_decoder_config), 192);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, blank_penalty), 224);
+        assert_eq!(offset_of!(OnlineRecognizerCfg, hr), 248);
+        assert_eq!(offset_of!(OnlineModelCfg, tokens), 48);
+        assert_eq!(offset_of!(OnlineModelCfg, num_threads), 56);
+        assert_eq!(offset_of!(OnlineModelCfg, tokens_buf_size), 112);
+        assert_eq!(offset_of!(OnlineModelCfg, nemo_ctc), 120);
+        assert_eq!(offset_of!(OnlineModelCfg, t_one_ctc), 128);
+        assert_eq!(offset_of!(OnlineResult, json), 40);
         assert_eq!(size_of::<OfflineModelCfg>(), 504);
         assert_eq!(offset_of!(OfflineRecognizerCfg, model_config), 8);
         assert_eq!(offset_of!(OfflineRecognizerCfg, lm_config), 512);

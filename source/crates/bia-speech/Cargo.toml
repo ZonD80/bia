@@ -11,3 +11,6 @@ serde_json.workspace = true
 libc.workspace = true
 sha2 = "0.10"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+# Gradium Phonon (on-device streaming TTS, Rust runtime; models have their own licences)
+ptts = { version = "0.7.1", default-features = false, features = ["hf"] }
+xn = "0.2.14"

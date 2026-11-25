@@ -6,6 +6,7 @@
 //! transcription, Piper/Kokoro voices. Languages, voices and settings come from the
 //! registry that bia-mcp-lang manages.
 
+pub mod acks;
 pub mod audio;
 pub mod calllog;
 pub mod catalog;
@@ -58,4 +59,20 @@ pub fn status() -> String {
 pub fn warm() {
     models::warm();
     tts::warm();
+}
+
+/// [`warm`] (call models and voices), waiting for it.
+pub fn warm_wait() {
+    models::warm_now();
+    tts::warm_now();
+}
+
+/// Load the call models now (as a ringing call does), waiting for them.
+pub fn warm_call_models() {
+    models::warm_now();
+}
+
+/// Unload the models nobody uses right now (see [`idle::unload_now`]).
+pub fn unload_now() -> usize {
+    idle::unload_now()
 }

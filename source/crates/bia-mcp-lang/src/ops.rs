@@ -455,7 +455,7 @@ pub fn catalog_text(query: Option<&str>) -> Result<String, String> {
                     "  {v} — {} {}, {}{}{}\n",
                     cv.locale,
                     cv.quality,
-                    catalog::mb(cv.size),
+                    catalog::mb(cv.total_size()),
                     if cv.note.is_empty() { String::new() } else { format!(", {}", cv.note) },
                     if flags.is_empty() { String::new() } else { format!(" [{}]", flags.join(", ")) }
                 ));

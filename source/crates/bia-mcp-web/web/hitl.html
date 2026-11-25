@@ -196,6 +196,8 @@
     <button id="done">Done</button>
     <button id="fail">Failed</button>
   </div>
+  <script src="/pki.js"></script>
+  <script src="/keys.js"></script>
   <script>
     const cred = { credentials: 'include' };
     const id = location.pathname.split('/').filter(Boolean)[1];
@@ -286,7 +288,30 @@
       $('view').appendChild(f);
     }
 
+    // Signed in for this page: this browser's own key, or the one-time grant (#enroll=…) of
+    // the link bia sent, which makes this browser a key of its own for that person.
+    async function signIn() {
+      const ok = async () => { const r = await fetch('/v1/whoami', cred).catch(() => null); return !!(r && r.ok); };
+      const token = BiaKeys.enrollToken();
+      if (await ok()) return true;
+      try { if (await BiaKeys.current()) { await BiaKeys.signin(); if (await ok()) return true; } } catch {}
+      if (token) {
+        try { await BiaKeys.enrollWithToken(token); if (await ok()) return true; }
+        catch (e) {
+          $('hint').textContent = e.kind === 'link'
+            ? 'This link has expired or was already used. Ask bia to send it again.'
+            : 'This link could not sign you in: ' + e.message;
+          return false;
+        }
+      }
+      $('hint').textContent = '';
+      $('hint').append('This browser has no key for this bia yet. Open the link bia sent you again, or ',
+        el('a', { href: '/', textContent: 'sign in here' }), ' first.');
+      return false;
+    }
+
     async function boot() {
+      if (!(await signIn())) { $('done').disabled = $('fail').disabled = true; return; }
       const r = await fetch('/v1/hitl/' + id, cred);
       if (r.status === 401) { location.href = '/'; return; }
       if (!r.ok) { $('hint').textContent = 'no such task'; return; }

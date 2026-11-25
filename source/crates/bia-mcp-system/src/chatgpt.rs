@@ -776,7 +776,7 @@ pub fn login(ctx: &Ctx, args: Value) -> Result<String, String> {
     }
     let start_url = format!("http://127.0.0.1:{port}/");
     let mut links = hitl::task_links(&id).join(" ");
-    if let Some(l) = hitl::app_line(&format!("/hitl/{id}")) {
+    if let Some(l) = hitl::app_line(&format!("/#task/{id}")) {
         ctx.log(l.clone());
         links = format!("{links}; {l}");
     }

@@ -45,8 +45,50 @@ PREFERRED_LOCALE = {
 }
 # Default voice where the first medium voice is a poor pick.
 PREFERRED_VOICE = {
-    "en": "piper-en_US-lessac-medium", "ru": "piper-ru_RU-irina-medium",
-    "de": "piper-de_DE-thorsten-medium",
+    "en": "phonon-31m-en", "ru": "piper-ru_RU-irina-medium",
+    "de": "phonon-40m-de", "fr": "phonon-40m-fr", "es": "phonon-40m-es", "pt": "phonon-40m-pt",
+}
+# Gradium Phonon voices (kind "phonon", streaming). Files pinned to a commit with their
+# sha256 (tools: download at the commit and hash; the 40m models are gated on the Hub).
+PHONON_VOICES = {
+    "phonon-40m-fr": {"kind": "phonon", "langs": ["fr"], "locale": "fr_FR", "speaker": "default", "quality": "streaming", "note": "Gradium Phonon 40m (French): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)", "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-fr.tar.bz2", "size": 61259306, "sha256": "907ea4ece7ecbc8c648173562bcb4ff95923eb47fbc0bcf468affae83d97b377"},
+    "phonon-40m-de": {"kind": "phonon", "langs": ["de"], "locale": "de_DE", "speaker": "default", "quality": "streaming", "note": "Gradium Phonon 40m (German): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)", "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-de.tar.bz2", "size": 61290997, "sha256": "4cb95676be698e6bf353f36078d77fe9eb8d19e9e3858dd5c82f3536e81e89c2"},
+    "phonon-40m-es": {"kind": "phonon", "langs": ["es"], "locale": "es_ES", "speaker": "default", "quality": "streaming", "note": "Gradium Phonon 40m (Spanish): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)", "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-es.tar.bz2", "size": 61220170, "sha256": "257674d39c434e286ce97746702ef005d02bb32bb7a61f07f04c26a2e336f34a"},
+    "phonon-40m-pt": {"kind": "phonon", "langs": ["pt"], "locale": "pt_BR", "speaker": "default", "quality": "streaming", "note": "Gradium Phonon 40m (Portuguese): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)", "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-pt.tar.bz2", "size": 61282207, "sha256": "e8c36a26f4d211702c952803a99fe92f19e3113803b00b55274d6f849a3144b6"},
+
+    "phonon-31m-en": {"kind": "phonon", "langs": ["en"], "locale": "en_US", "speaker": "default",
+                      "quality": "streaming",
+                      "note": "Gradium Phonon 31m: streams as it speaks (first sound in well under a second, even on a phone), Apache 2.0",
+                      "url": "", "size": 0, "sha256": "", "files": [
+                       {
+                        "kind": "",
+                        "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/config.json",
+                        "size": 4634,
+                        "sha256": "b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85",
+                        "note": ""
+                       },
+                       {
+                        "kind": "",
+                        "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/tokenizer.json",
+                        "size": 277967,
+                        "sha256": "691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936",
+                        "note": ""
+                       },
+                       {
+                        "kind": "",
+                        "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/model.q8.gguf",
+                        "size": 64512352,
+                        "sha256": "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+                        "note": ""
+                       },
+                       {
+                        "kind": "",
+                        "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/default-voice.safetensors",
+                        "size": 256136,
+                        "sha256": "dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a",
+                        "note": ""
+                       }
+                      ]},
 }
 # Character voices (game robots and the like) are never a default.
 NOVELTY = ("glados", "turret", "jarvis")
@@ -61,7 +103,9 @@ EXTRA_VOICES = {
     "coqui-uk-mai": ("vits-coqui-uk-mai.tar.bz2", "uk", "female", "medium",
                      "Coqui TTS (M-AILABS data), female"),
 }
-QUALITY_RANK = {"medium": 0, "low": 1, "high": 2, "x_low": 3}
+# Defaults prefer low (16 kHz, fastest: a phone speaks it at 0.6x real time, -high at
+# 5x); people who want more pick another voice with lang_install(voice=…).
+QUALITY_RANK = {"streaming": 0, "low": 0, "medium": 1, "x_low": 2, "high": 3}
 
 WHISPER_ASR = {
     "whisper-tiny": ("sherpa-onnx-whisper-tiny.tar.bz2", "tiny", "fast; bundled; used for calls and language detection"),
@@ -76,6 +120,24 @@ TRANSDUCER_ASR = {
                      "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk"],
                     "NVIDIA Parakeet TDT 0.6B v3: 25 European languages, about 10x faster than whisper-small "
                     "and as accurate; voice notes in other languages use the best Whisper installed"),
+}
+
+# Moonshine: English only, very fast on a phone (call model). The release asset predates
+# GitHub's digests, so its size and sha256 are pinned here (hashed from the download).
+# id -> (url, size, sha256, languages, size name, note)
+MOONSHINE_ASR = {
+    "moonshine-tiny-en": ("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2",
+                          107600538, "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2", ["en"], "moonshine",
+                          "Moonshine tiny (Useful Sensors, MIT): English only, made for phones and small boards: 8x faster than speaking on a Snapdragon 660 with Parakeet-like accuracy on calls; other languages in a call go to the best Whisper installed"),
+}
+
+# Kroko streaming zipformers (Apache 2.0): decode while the caller speaks (call model).
+# id -> (asr-models asset, size name, languages, note)
+KROKO_NAMES = {"en": "English", "fr": "French", "de": "German", "es": "Spanish"}
+KROKO_ASR = {
+    f"kroko-{l}": (f"sherpa-onnx-streaming-zipformer-{l}-kroko-2025-08-06.tar.bz2", "kroko", [l],
+                   f"Kroko streaming zipformer ({n}, Apache 2.0): writes words down while the caller speaks, with capitals and punctuation, so the text is ready when they stop; made for phones. {n} only; other languages in a call go to the best Whisper installed")
+    for l, n in KROKO_NAMES.items()
 }
 
 # NeMo CTC models for one language, published as separate files on Hugging Face (pinned
@@ -173,6 +235,12 @@ def main():
                        "quality": quality, "note": note, **file_entry(h, a)}
         by_lang.setdefault(lang, []).append(vid)
 
+    # Gradium Phonon: streaming voices, separate files on Hugging Face pinned to a commit
+    for vid, v in PHONON_VOICES.items():
+        voices[vid] = v
+        for l in v["langs"]:
+            by_lang.setdefault(l, []).insert(0, vid)
+
     kokoro = tts.get("kokoro-int8-multi-lang-v1_0.tar.bz2")
     if kokoro and kokoro.get("digest"):
         voices["kokoro-multi-v1_0"] = {
@@ -184,8 +252,11 @@ def main():
             by_lang.setdefault(l, []).append("kokoro-multi-v1_0")
 
     def default_voice(lang, ids):
-        if PREFERRED_VOICE.get(lang) in ids:
-            return PREFERRED_VOICE[lang]
+        pref = PREFERRED_VOICE.get(lang)
+        if pref in ids:
+            # the same speaker in low quality when there is one
+            low = pref.rsplit("-", 1)[0] + "-low"
+            return low if low in ids else pref
         piper = [v for v in ids if v.startswith("piper-") and not any(n in v for n in NOVELTY)]
         piper = piper or [v for v in ids if voices[v]["kind"] == "vits"]
         if not piper:
@@ -210,6 +281,11 @@ def main():
         asr_models[mid] = {"kind": "whisper", "langs": [], "size_name": size, "note": note, **file_entry(h, a)}
     for mid, (file, size, langs, note) in TRANSDUCER_ASR.items():
         asr_models[mid] = {"kind": "nemo_transducer", "langs": langs, "size_name": size, "note": note, **file_entry(h, asr[file])}
+    for mid, (url, n, sha, langs, size, note) in MOONSHINE_ASR.items():
+        asr_models[mid] = {"kind": "moonshine", "langs": langs, "size_name": size, "note": note,
+                           "url": url, "size": n, "sha256": sha}
+    for mid, (file, size, langs, note) in KROKO_ASR.items():
+        asr_models[mid] = {"kind": "online_transducer", "langs": langs, "size_name": size, "note": note, **file_entry(h, asr[file])}
     for mid, (repo, rev, langs, size, note, files) in CTC_ASR.items():
         asr_models[mid] = {
             "kind": "nemo_ctc", "langs": langs, "size_name": size, "note": note, "url": "", "size": 0, "sha256": "",

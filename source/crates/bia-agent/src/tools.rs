@@ -1141,7 +1141,7 @@ impl Tools {
             obj(json!({
                 "identity": {"type": "string", "description": "recipient identity, e.g. root; defaults to last human inbound"},
                 "channel": {"type": "string", "description": "channel, e.g. web or console; defaults to last human inbound"},
-                "message": {"type": "string", "description": "markdown text; optional when files or poll are given"},
+                "message": {"type": "string", "description": "markdown text; optional when files or poll are given. In a group chat, @Name (as the member appears in its messages; a first name works), @username or @+number tags that member (whatsapp, telegram): highlighted, and it notifies them"},
                 "lang": {"type": "string", "description": "language of message (en, ru, es-MX…) for voice=true and for speaking it in an active call; defaults to the person's preferred language (addressbook)"},
                 "voice": {"type": "boolean", "description": "send message as a voice message (spoken with the voice of lang) on web, telegram, whatsapp, messenger, instagram or max; only when the user asks for a voice reply"},
                 "reply_to": {"type": "string", "description": "web: id of the message to quote"},

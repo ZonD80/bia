@@ -25,7 +25,7 @@
 <body>
 <div id="view">
   <div id="stage"></div>
-  <div id="hint" hidden>Tap clicks. Hold for a right click, hold and drag to drag. Pinch zooms, two fingers scroll.</div>
+  <div id="hint" hidden>Tap clicks. Hold for a right click, hold and drag to drag (or press Drag below first). Pinch zooms, two fingers scroll.</div>
   <div id="status"><span id="statusText">Connecting to bia's screen…</span><br><button id="retry" hidden>Try again</button></div>
 </div>
 <div id="bar"></div>
@@ -136,6 +136,9 @@ function wheel(x, y, dx, dy) {
 
 const HOLD_MS = 450, SLOP = 10, TWO_TAP_MS = 300;
 let mode = '', start = null, last = null, holdTimer = 0, moved = false;
+// The Drag button: the next finger on the glass presses at once and drags (sliders, puzzle
+// pieces, files on a desktop), without the hold first; it ends with that drag.
+let dragArmed = false;
 const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 const mid = t => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
 
@@ -148,6 +151,12 @@ view.addEventListener('touchstart', e => {
     clearTimeout(holdTimer);
     if (mode === 'drag') mouse('mouseup', last.x, last.y, 0, 0);
     const p = { x: t[0].clientX, y: t[0].clientY };
+    if (dragArmed) {
+      mode = 'drag'; start = p; last = p; moved = false;
+      mouse('mousemove', p.x, p.y, 0, 0);
+      mouse('mousedown', p.x, p.y, 0, 1);
+      return;
+    }
     mode = 'one'; start = p; last = p; moved = false;
     holdTimer = setTimeout(() => {
       mode = 'held';
@@ -213,6 +222,7 @@ function touchEnd(e) {
     else if (mode === 'two' && !moved && Date.now() - start.at < TWO_TAP_MS) click(start.x, start.y, 2);
   }
   if (mode === 'drag') mouse('mouseup', last.x, last.y, 0, 0);
+  if (dragArmed && mode === 'drag') { dragArmed = false; renderBar(); }
   mode = '';
 }
 view.addEventListener('touchend', touchEnd, { capture: true, passive: false });
@@ -262,6 +272,7 @@ function renderBar() {
   bar.replaceChildren(
     btn('Keyboard', () => { if (document.activeElement === kbd) kbd.blur(); else kbd.focus({ preventScroll: true }); renderBar(); }, document.activeElement === kbd),
     btn('Fit', () => { z = 1; tx = ty = 0; place(); }),
+    btn('Drag', () => { dragArmed = !dragArmed; renderBar(); }, dragArmed),
     ...['Esc', 'Tab'].map(k => btn(k, () => press(XK[k]))),
     ...Object.keys(MODS).map(m => btn(m, () => {
       if (!rfb || !up) return;

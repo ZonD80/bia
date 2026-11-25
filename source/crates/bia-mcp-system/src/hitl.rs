@@ -208,7 +208,7 @@ pub fn app_link_tool(_: &Ctx, args: Value) -> Result<String, String> {
     let path = bia_mcp::arg_str_opt(&args, "path").unwrap_or("/").trim();
     let path = if path.is_empty() { "/" } else { path };
     if !path.starts_with('/') || path.contains("://") {
-        return Err("path is a page of bia's web app such as / or /hitl/<id>".into());
+        return Err("path is a page of bia's web app such as / or /#task/<id>".into());
     }
     let link = app_link(path, &recipient(&args)?).ok_or("bia's web app has no address yet: enable mcp/web first")?;
     Ok(format!(
@@ -221,10 +221,10 @@ pub fn app_link_tool(_: &Ctx, args: Value) -> Result<String, String> {
 pub(crate) fn task_links(id: &str) -> Vec<String> {
     let u = console_urls();
     if u.is_empty() {
-        vec![format!("/hitl/{id} (web console)")]
+        vec![format!("/#task/{id} (web console)")]
     } else {
         u.into_iter()
-            .map(|u| with_path(&u, &format!("/hitl/{id}")))
+            .map(|u| with_path(&u, &format!("/#task/{id}")))
             .collect()
     }
 }
@@ -262,7 +262,7 @@ pub fn ask(ctx: &Ctx, args: Value) -> Result<String, String> {
             "open {u} — the page shows the machine display; do the work there, then Done"
         ));
     }
-    if let Some(l) = app_line(&format!("/hitl/{id}")) {
+    if let Some(l) = app_line(&format!("/#task/{id}")) {
         ctx.log(l);
     }
     ctx.log("display: the task page embeds /gui (VNC 127.0.0.1:5900 of display :0)");

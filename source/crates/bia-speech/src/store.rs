@@ -135,6 +135,23 @@ fn s(p: &Path) -> String {
 
 /// Find the model files of an unpacked voice.
 pub fn resolve_voice(dir: &Path, kind: &str, langs: &[String], locale: &str) -> Result<Voice, String> {
+    if kind == "phonon" {
+        // a Phonon checkpoint folder: loaded whole by its runtime
+        for f in ["config.json", "tokenizer.json", "model.q8.gguf"] {
+            if !dir.join(f).exists() {
+                return Err(format!("no {f} in {}", dir.display()));
+            }
+        }
+        return Ok(Voice {
+            kind: kind.to_string(),
+            langs: langs.to_vec(),
+            locale: locale.to_string(),
+            dir: s(dir),
+            model: s(&dir.join("model.q8.gguf")),
+            tokens: s(&dir.join("tokenizer.json")),
+            ..Default::default()
+        });
+    }
     let all = files(dir);
     let onnx: Vec<&PathBuf> = all.iter().filter(|p| name(p).ends_with(".onnx")).collect();
     let model = onnx
@@ -223,7 +240,48 @@ pub fn resolve_transducer(dir: &Path, langs: &[String]) -> Result<Asr, String> {
         decoder: pick("decoder.int8.onnx")?,
         joiner: pick("joiner.int8.onnx")?,
         tokens: pick("tokens.txt")?,
-        bundled: false,
+        ..Default::default()
+    })
+}
+
+/// The files of a streaming zipformer transducer (Kroko): int8 ones when there are.
+pub fn resolve_online(dir: &Path, langs: &[String]) -> Result<Asr, String> {
+    let all = files(dir);
+    let pick = |part: &str| {
+        let int8 = format!("{part}.int8.onnx");
+        let plain = format!("{part}.onnx");
+        all.iter()
+            .find(|p| name(p) == int8)
+            .or_else(|| all.iter().find(|p| name(p) == plain))
+            .map(|p| s(p))
+            .ok_or_else(|| format!("no {plain} in {}", dir.display()))
+    };
+    Ok(Asr {
+        kind: crate::models::ONLINE.into(),
+        langs: langs.to_vec(),
+        dir: s(dir),
+        encoder: pick("encoder")?,
+        decoder: pick("decoder")?,
+        joiner: pick("joiner")?,
+        tokens: all.iter().find(|p| name(p) == "tokens.txt").map(|p| s(p)).ok_or_else(|| format!("no tokens.txt in {}", dir.display()))?,
+        ..Default::default()
+    })
+}
+
+/// The files of a Moonshine model (sherpa-onnx's int8 export).
+pub fn resolve_moonshine(dir: &Path, langs: &[String]) -> Result<Asr, String> {
+    let all = files(dir);
+    let pick = |want: &str| all.iter().find(|p| name(p) == want).map(|p| s(p)).ok_or_else(|| format!("no {want} in {}", dir.display()));
+    Ok(Asr {
+        kind: "moonshine".into(),
+        langs: langs.to_vec(),
+        dir: s(dir),
+        preprocessor: pick("preprocess.onnx")?,
+        encoder: pick("encode.int8.onnx")?,
+        decoder: pick("uncached_decode.int8.onnx")?,
+        cached_decoder: pick("cached_decode.int8.onnx")?,
+        tokens: pick("tokens.txt")?,
+        ..Default::default()
     })
 }
 

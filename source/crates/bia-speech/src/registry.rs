@@ -9,7 +9,20 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
-pub const BUNDLED_VOICE: &str = "piper-en_US-lessac-medium";
+/// The voice in the image: low quality (16 kHz), the fastest Piper; images before 2.5.1
+/// had lessac-medium (an old registry naming it falls back to this one).
+pub const BUNDLED_VOICE: &str = "piper-en_US-lessac-low";
+/// English's voice in the image (since 2.5.1): Gradium Phonon, which streams as it speaks.
+/// The Piper voice above stays as its fallback (see `tts::fallback_voice`).
+pub const BUNDLED_PHONON: &str = "phonon-31m-en";
+/// Phonon voices of other languages in the image (since 2.5.1), used once the language is
+/// learned: (voice id, language, locale).
+pub const BUNDLED_PHONON_MORE: [(&str, &str, &str); 4] = [
+    ("phonon-40m-fr", "fr", "fr_FR"),
+    ("phonon-40m-de", "de", "de_DE"),
+    ("phonon-40m-es", "es", "es_ES"),
+    ("phonon-40m-pt", "pt", "pt_BR"),
+];
 pub const BUNDLED_ASR: &str = "whisper-tiny";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -33,8 +46,10 @@ pub struct Voice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Asr {
-    /// whisper, nemo_transducer (Parakeet) or nemo_ctc (one-language models such as
-    /// shenava-fa; `encoder` is its one model file). NeMo ones detect no language and
+    /// online_transducer (Kroko: streams, decodes while the speaker talks),
+    /// whisper, nemo_transducer (Parakeet), nemo_ctc (one-language models such as
+    /// shenava-fa; `encoder` is its one model file) or moonshine (English, fast enough on a
+    /// phone to answer as you stop speaking). Only Whisper detects the language; the others
     /// transcribe only `langs`.
     pub kind: String,
     /// Empty: every language Whisper knows.
@@ -46,6 +61,10 @@ pub struct Asr {
     pub joiner: String,
     pub tokens: String,
     pub bundled: bool,
+    /// moonshine only: its audio preprocessor and the cached decoder (`decoder` is the
+    /// uncached one)
+    pub preprocessor: String,
+    pub cached_decoder: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -123,13 +142,43 @@ impl Default for Registry {
                 langs: vec!["en".into()],
                 locale: "en_US".into(),
                 dir: s(&piper),
-                model: s(&piper.join("en_US-lessac-medium.onnx")),
+                model: s(&piper.join("en_US-lessac-low.onnx")),
                 tokens: s(&piper.join("tokens.txt")),
                 data_dir: s(&piper.join("espeak-ng-data")),
                 bundled: true,
                 ..Default::default()
             },
         );
+        let phonon = b.join(BUNDLED_PHONON);
+        voices.insert(
+            BUNDLED_PHONON.to_string(),
+            Voice {
+                kind: "phonon".into(),
+                langs: vec!["en".into()],
+                locale: "en_US".into(),
+                dir: s(&phonon),
+                model: s(&phonon.join("model.q8.gguf")),
+                tokens: s(&phonon.join("tokenizer.json")),
+                bundled: true,
+                ..Default::default()
+            },
+        );
+        for (id, lang, locale) in BUNDLED_PHONON_MORE {
+            let dir = b.join(id);
+            voices.insert(
+                id.to_string(),
+                Voice {
+                    kind: "phonon".into(),
+                    langs: vec![lang.into()],
+                    locale: locale.into(),
+                    dir: s(&dir),
+                    model: s(&dir.join("model.q8.gguf")),
+                    tokens: s(&dir.join("tokenizer.json")),
+                    bundled: true,
+                    ..Default::default()
+                },
+            );
+        }
         let mut asr = BTreeMap::new();
         asr.insert(
             BUNDLED_ASR.to_string(),
@@ -151,7 +200,7 @@ impl Default for Registry {
             default_lang: "en".into(),
             enabled: vec!["en".into()],
             ignored: vec![],
-            voice: [("en".to_string(), BUNDLED_VOICE.to_string())].into(),
+            voice: [("en".to_string(), BUNDLED_PHONON.to_string())].into(),
             voices,
             asr,
             asr_call: BUNDLED_ASR.into(),
@@ -173,8 +222,29 @@ impl Registry {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         let d = Registry::default();
+        // a bundled voice of an older image (lessac-medium before 2.5.1) is gone after the update
+        r.voices.retain(|k, v| !v.bundled || d.voices.contains_key(k));
         for (k, v) in d.voices {
-            r.voices.insert(k, v);
+            if Path::new(&v.dir).exists() {
+                r.voices.insert(k, v);
+                continue;
+            }
+            // The image lacks this voice (one before 2.5.1 has no Phonon): a copy installed
+            // from the catalog under the same id stays, or is found again in the models
+            // folder when an entry saved by mistake points at the image.
+            let installed = r.voices.get(&k).is_some_and(|o| !o.bundled && Path::new(&o.dir).exists());
+            if installed {
+                continue;
+            }
+            let own = crate::paths::models().join(&k);
+            match crate::store::resolve_voice(&own, &v.kind, &v.langs, &v.locale) {
+                Ok(found) if own.exists() => {
+                    r.voices.insert(k, found);
+                }
+                _ => {
+                    r.voices.insert(k, v);
+                }
+            }
         }
         for (k, v) in d.asr {
             r.asr.insert(k, v);
@@ -195,6 +265,12 @@ impl Registry {
             r.asr_file = BUNDLED_ASR.into();
         }
         r.voice.retain(|_, v| r.voices.contains_key(v));
+        // English always has a voice: the bundled one when its own went away. The image's
+        // Piper voice was English's default before Phonon came with the image: it moves on.
+        let en = r.voice.entry("en".into()).or_insert_with(|| BUNDLED_PHONON.into());
+        if en == BUNDLED_VOICE {
+            *en = BUNDLED_PHONON.into();
+        }
         r
     }
 
@@ -226,8 +302,10 @@ impl Registry {
                 return Some((id.as_str(), v));
             }
         }
+        // only a voice that speaks the language: what bia hears in Spanish it answers in a
+        // Spanish voice, never with another language's (a wrong mapping gives none)
         let id = self.voice.get(&lang.code)?;
-        self.voices.get(id).map(|v| (id.as_str(), v))
+        self.voices.get(id).filter(|v| v.langs.contains(&lang.code)).map(|v| (id.as_str(), v))
     }
 
     pub fn extra(&self, id: &str) -> Option<&str> {
@@ -313,7 +391,7 @@ mod tests {
         std::env::set_var("BIA_SPEECH_STORE", &dir);
         let r = Registry::load();
         assert_eq!(r.enabled, ["en"]);
-        assert_eq!(r.voice["en"], BUNDLED_VOICE);
+        assert_eq!(r.voice["en"], BUNDLED_PHONON);
         let mut r2 = r.clone();
         r2.enabled.push("ru".into());
         r2.voices.insert(
@@ -329,6 +407,48 @@ mod tests {
         let es_mx = crate::langs::parse("ru-RU").unwrap();
         assert_eq!(r3.voice_for(&es_mx).unwrap().0, "piper-ru_RU-irina-medium");
         assert!(r3.voice_for(&crate::langs::parse("es").unwrap()).is_none());
+
+        // an image before 2.5.1 bundled lessac-medium: after the update its entry is gone
+        // and English speaks with the new bundled voice
+        let mut old = Registry::load();
+        old.voices.insert(
+            "piper-en_US-lessac-medium".into(),
+            Voice { kind: "vits".into(), langs: vec!["en".into()], bundled: true, ..Default::default() },
+        );
+        old.voice.insert("en".into(), "piper-en_US-lessac-medium".into());
+        old.save().unwrap();
+        let up = Registry::load();
+        assert!(!up.voices.contains_key("piper-en_US-lessac-medium"), "stale bundled voice dropped");
+        assert_eq!(up.voice["en"], BUNDLED_PHONON);
+        assert!(up.voices[BUNDLED_VOICE].model.ends_with("en_US-lessac-low.onnx"));
+        assert!(up.voices[BUNDLED_PHONON].bundled && up.voices[BUNDLED_PHONON].kind == "phonon");
+
+        // an image before 2.5.1 has no Phonon of its own: the one installed from the catalog
+        // (same id) stays, it is not replaced by the image's entry that points nowhere
+        let own = dir.join("models").join(BUNDLED_PHONON);
+        std::fs::create_dir_all(&own).unwrap();
+        let mut inst = Registry::load();
+        inst.voices.insert(
+            BUNDLED_PHONON.into(),
+            Voice { kind: "phonon".into(), langs: vec!["en".into()], dir: own.to_string_lossy().into(), ..Default::default() },
+        );
+        inst.save().unwrap();
+        let kept = Registry::load();
+        assert!(!kept.voices[BUNDLED_PHONON].bundled, "the installed Phonon voice is kept");
+        assert_eq!(kept.voices[BUNDLED_PHONON].dir, own.to_string_lossy());
+        // saved by mistake as the image's (which this image lacks): the installed copy in the
+        // models folder is found again
+        let models_own = crate::paths::models().join(BUNDLED_PHONON);
+        std::fs::create_dir_all(&models_own).unwrap();
+        for f in ["config.json", "tokenizer.json", "model.q8.gguf"] {
+            std::fs::write(models_own.join(f), b"x").unwrap();
+        }
+        let mut wrong = Registry::load();
+        wrong.voices.insert(BUNDLED_PHONON.into(), Registry::default().voices[BUNDLED_PHONON].clone());
+        wrong.save().unwrap();
+        let fixed = Registry::load();
+        assert!(!fixed.voices[BUNDLED_PHONON].bundled);
+        assert_eq!(fixed.voices[BUNDLED_PHONON].dir, models_own.to_string_lossy());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

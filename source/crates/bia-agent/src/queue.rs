@@ -49,6 +49,15 @@ pub fn calls_bia(text: &str, me: &str) -> bool {
     if text.contains(": this message woke you") {
         return true;
     }
+    // a tag of bia in a group: [mentions: you, Les (+1…)] (bia_mcp::share::mentions_text)
+    if text.lines().any(|l| {
+        l.trim_start()
+            .strip_prefix("[mentions: ")
+            .and_then(|r| r.strip_suffix(']'))
+            .is_some_and(|r| r.split(", ").any(|w| w == "you"))
+    }) {
+        return true;
+    }
     if text.lines().any(|l| {
         l.trim_start().strip_prefix("[reply to ").and_then(|r| r.split_once(' ')).map(|(_, rest)| rest.starts_with("from you,") || rest.starts_with("from you:") || rest.starts_with("from you]")).unwrap_or(false)
     }) {
@@ -432,6 +441,8 @@ mod tests {
         assert!(calls_bia("what does milo think?", "Milo"));
         assert!(!calls_bia("milonga tonight", "Milo"));
         assert!(calls_bia("[ignored chat telegram:-5: this message woke you (wake pattern)]", ""));
+        assert!(calls_bia("[mentions: Les (+1646), you]\nare you ready?", ""));
+        assert!(!calls_bia("[mentions: Les (+1646)]\nare you ready?", "Milo"));
     }
 
     #[test]

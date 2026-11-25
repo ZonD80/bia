@@ -50,6 +50,12 @@ impl Recognizer {
         } else if asr.kind == "nemo_ctc" {
             cfg.model_config.nemo_ctc.model = s.p(&asr.encoder);
             cfg.model_config.model_type = s.p("nemo_ctc");
+        } else if asr.kind == "moonshine" {
+            let m = &mut cfg.model_config.moonshine;
+            m.preprocessor = s.p(&asr.preprocessor);
+            m.encoder = s.p(&asr.encoder);
+            m.uncached_decoder = s.p(&asr.decoder);
+            m.cached_decoder = s.p(&asr.cached_decoder);
         } else {
             cfg.model_config.whisper.encoder = s.p(&asr.encoder);
             cfg.model_config.whisper.decoder = s.p(&asr.decoder);
@@ -64,8 +70,15 @@ impl Recognizer {
     }
 
     fn load(asr: &Asr) -> Result<Self, String> {
-        if !matches!(asr.kind.as_str(), "whisper" | "nemo_transducer" | "nemo_ctc") {
+        if asr.kind == ONLINE {
+            return Self::load_online(asr);
+        }
+        if !matches!(asr.kind.as_str(), "whisper" | "nemo_transducer" | "nemo_ctc" | "moonshine") {
             return Err(format!("unsupported speech model kind {}", asr.kind));
+        }
+        if asr.kind == "moonshine" {
+            need(&asr.preprocessor, "speech model preprocessor")?;
+            need(&asr.cached_decoder, "speech model cached decoder")?;
         }
         need(&asr.encoder, "speech model encoder")?;
         if asr.kind != "nemo_ctc" {
@@ -83,6 +96,85 @@ impl Recognizer {
             return Err(format!("could not load speech model {}", asr.dir));
         }
         Ok(Self { h, asr: asr.clone() })
+    }
+
+    /// A streaming transducer (Kroko): it decodes as the audio comes in.
+    fn load_online(asr: &Asr) -> Result<Self, String> {
+        need(&asr.encoder, "speech model encoder")?;
+        need(&asr.decoder, "speech model decoder")?;
+        need(&asr.joiner, "speech model joiner")?;
+        need(&asr.tokens, "speech model tokens")?;
+        let api = sherpa::api()?;
+        let mut s = Strs::default();
+        let mut cfg: sherpa::OnlineRecognizerCfg = unsafe { std::mem::zeroed() };
+        cfg.feat_config.sample_rate = 16_000;
+        cfg.feat_config.feature_dim = 80;
+        cfg.model_config.transducer.encoder = s.p(&asr.encoder);
+        cfg.model_config.transducer.decoder = s.p(&asr.decoder);
+        cfg.model_config.transducer.joiner = s.p(&asr.joiner);
+        cfg.model_config.tokens = s.p(&asr.tokens);
+        cfg.model_config.num_threads = threads();
+        cfg.model_config.provider = s.p("cpu");
+        cfg.decoding_method = s.p("greedy_search");
+        let h = unsafe { (api.create_online_recognizer)(&cfg) };
+        if h.is_null() {
+            return Err(format!("could not load speech model {}", asr.dir));
+        }
+        Ok(Self { h, asr: asr.clone() })
+    }
+
+    /// Streaming model: [`Recognizer::stream`] decodes while the speaker talks.
+    pub fn is_online(&self) -> bool {
+        self.asr.kind == ONLINE
+    }
+
+    /// A live stream of a streaming model (None for the others).
+    pub fn stream(&self) -> Option<OnlineStream> {
+        if !self.is_online() {
+            return None;
+        }
+        let api = sherpa::api().ok()?;
+        let h = unsafe { (api.create_online_stream)(self.h) };
+        (!h.is_null()).then_some(OnlineStream { h })
+    }
+
+    /// Decode what `st` has buffered so far (call with the recognizer locked, often).
+    pub fn advance(&self, st: &OnlineStream) {
+        if let Ok(api) = sherpa::api() {
+            unsafe {
+                while (api.online_ready)(self.h, st.h) == 1 {
+                    (api.decode_online_stream)(self.h, st.h);
+                }
+            }
+        }
+    }
+
+    /// The text of `st` so far.
+    pub fn text(&self, st: &OnlineStream) -> String {
+        let Ok(api) = sherpa::api() else { return String::new() };
+        unsafe {
+            let r = (api.get_online_result)(self.h, st.h);
+            if r.is_null() {
+                return String::new();
+            }
+            let t = cstr_to_string((*r).text);
+            (api.destroy_online_result)(r);
+            t.trim().to_string()
+        }
+    }
+
+    /// End of input: decode the rest and give the whole text.
+    pub fn finish(&self, st: &OnlineStream) -> String {
+        if let Ok(api) = sherpa::api() {
+            // the model looks a little ahead: a short tail of silence lets the last word out
+            let tail = vec![0.0f32; 16_000 * 3 / 10];
+            unsafe {
+                (api.online_accept_waveform)(st.h, 16_000, tail.as_ptr(), tail.len() as i32);
+                (api.online_input_finished)(st.h);
+            }
+        }
+        self.advance(st);
+        self.text(st)
     }
 
     /// Whisper (detects the language, can be told one); a NeMo model has neither.
@@ -103,6 +195,10 @@ impl Recognizer {
     /// [`Recognizer::decode`] and the language Whisper decoded in (its own detection
     /// when `language` is ""): one encoder pass gives both.
     pub fn decode_lang(&self, samples: &[f32], language: &str) -> Result<(String, String), String> {
+        if let Some(st) = self.stream() {
+            st.accept(samples);
+            return Ok((self.finish(&st), language.to_string()));
+        }
         let api = sherpa::api()?;
         let mut s = Strs::default();
         let cfg = Self::config(&self.asr, language, &mut s);
@@ -134,7 +230,39 @@ impl Recognizer {
 impl Drop for Recognizer {
     fn drop(&mut self) {
         if let Ok(api) = sherpa::api() {
-            unsafe { (api.destroy_recognizer)(self.h) };
+            if self.is_online() {
+                unsafe { (api.destroy_online_recognizer)(self.h) };
+            } else {
+                unsafe { (api.destroy_recognizer)(self.h) };
+            }
+        }
+    }
+}
+
+/// Registry kind of a streaming transducer (Kroko).
+pub const ONLINE: &str = "online_transducer";
+
+/// Audio fed to a streaming model; decoded by [`Recognizer::advance`]. Must not outlive
+/// its recognizer (callers keep the `Shared<Recognizer>` next to it).
+pub struct OnlineStream {
+    h: H,
+}
+
+unsafe impl Send for OnlineStream {}
+
+impl OnlineStream {
+    /// 16 kHz mono.
+    pub fn accept(&self, samples: &[f32]) {
+        if let Ok(api) = sherpa::api() {
+            unsafe { (api.online_accept_waveform)(self.h, 16_000, samples.as_ptr(), samples.len() as i32) };
+        }
+    }
+}
+
+impl Drop for OnlineStream {
+    fn drop(&mut self) {
+        if let Ok(api) = sherpa::api() {
+            unsafe { (api.destroy_online_stream)(self.h) };
         }
     }
 }
@@ -210,7 +338,9 @@ pub struct Segment {
 
 impl Vad {
     /// `min_silence`: pause (s) that ends a segment. `max_speech`: forced split (s).
-    pub fn new(reg: &Registry, min_silence: f32, max_speech: f32) -> Result<Self, String> {
+    /// `min_speech`: shorter speech is dropped (0.25 s for files; calls go lower: on phone
+    /// audio a word such as "six" is a single 0.2 s burst).
+    pub fn new(reg: &Registry, min_silence: f32, max_speech: f32, min_speech: f32) -> Result<Self, String> {
         let model = reg.extra("silero-vad").ok_or("Silero VAD model missing")?;
         let api = sherpa::api()?;
         let mut s = Strs::default();
@@ -218,7 +348,7 @@ impl Vad {
         cfg.silero_vad.model = s.p(model);
         cfg.silero_vad.threshold = std::env::var("BIA_VAD_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(0.5);
         cfg.silero_vad.min_silence_duration = min_silence;
-        cfg.silero_vad.min_speech_duration = 0.25;
+        cfg.silero_vad.min_speech_duration = min_speech;
         cfg.silero_vad.window_size = 512;
         cfg.silero_vad.max_speech_duration = max_speech;
         cfg.sample_rate = 16_000;
@@ -294,7 +424,7 @@ impl Drop for Vad {
 
 /// All speech segments of a whole recording.
 pub fn segments(reg: &Registry, samples: &[f32], min_silence: f32) -> Result<Vec<Segment>, String> {
-    let mut vad = Vad::new(reg, min_silence, 20.0)?;
+    let mut vad = Vad::new(reg, min_silence, 20.0, 0.25)?;
     let mut out = Vec::new();
     for chunk in samples.chunks(16_000) {
         out.extend(vad.accept(chunk));
@@ -549,10 +679,13 @@ pub(crate) fn unload_unused() -> usize {
 
 /// Load the call-path models in the background so the first utterance is fast.
 pub fn warm() {
-    std::thread::spawn(|| {
-        let reg = registry::current();
-        let _ = slid(&reg);
-        let _ = recognizer(&reg, &reg.asr_call);
-        let _ = denoiser(&reg);
-    });
+    std::thread::spawn(warm_now);
+}
+
+/// [`warm`], waiting for it.
+pub fn warm_now() {
+    let reg = registry::current();
+    let _ = slid(&reg);
+    let _ = recognizer(&reg, &reg.asr_call);
+    let _ = denoiser(&reg);
 }

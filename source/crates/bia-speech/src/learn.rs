@@ -51,17 +51,41 @@ pub fn label(code: &str) -> String {
 
 /// Download and register a catalog voice (no-op when installed).
 pub fn ensure_voice(ctx: &dyn Report, cat: &Catalog, id: &str, pct: (u32, u32)) -> Result<bool, String> {
-    if registry::current().voices.contains_key(id) {
+    // installed, or in the image (an older image has the entry but not the files: download)
+    if registry::current().voices.get(id).is_some_and(|v| std::path::Path::new(&v.dir).exists()) {
         return Ok(false);
     }
     let cv = cat.voices.get(id).ok_or_else(|| format!("unknown voice {id}; see lang_catalog"))?;
     let models = crate::paths::models();
-    let archive = models.join(format!(".{id}-{}.tar.bz2", crate::paths::stamp()));
-    store::download(ctx, &Want { url: &cv.url, size: cv.size, sha256: &cv.sha256, label: id }, &archive, pct.0, pct.1)?;
     let dir = models.join(id);
-    let res = store::unpack(&archive, &dir);
-    let _ = std::fs::remove_file(&archive);
-    res?;
+    if cv.files.is_empty() {
+        let archive = models.join(format!(".{id}-{}.tar.bz2", crate::paths::stamp()));
+        store::download(ctx, &Want { url: &cv.url, size: cv.size, sha256: &cv.sha256, label: id }, &archive, pct.0, pct.1)?;
+        let res = store::unpack(&archive, &dir);
+        let _ = std::fs::remove_file(&archive);
+        res?;
+    } else {
+        // separate files: all into a temporary folder, which then becomes the voice's
+        let tmp = models.join(format!(".{id}-{}", crate::paths::stamp()));
+        let total = cv.total_size().max(1);
+        let span = pct.1.saturating_sub(pct.0) as u64;
+        let mut done = 0u64;
+        let res = cv.files.iter().try_for_each(|f| {
+            let file = f.url.rsplit('/').next().unwrap_or(id);
+            let from = pct.0 + (done * span / total) as u32;
+            let to = pct.0 + ((done + f.size) * span / total) as u32;
+            done += f.size;
+            store::download(ctx, &Want { url: &f.url, size: f.size, sha256: &f.sha256, label: id }, &tmp.join(file), from, to)
+        });
+        let res = res.and_then(|_| {
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::rename(&tmp, &dir).map_err(|e| format!("{}: {e}", dir.display()))
+        });
+        if res.is_err() {
+            let _ = std::fs::remove_dir_all(&tmp);
+        }
+        res?;
+    }
     store::own_like_parent(&dir);
     let v = store::resolve_voice(&dir, &cv.kind, &cv.langs, &cv.locale)?;
     // Load it and let it read a sentence now: a broken voice fails here, not in a call.
@@ -153,6 +177,8 @@ pub fn ensure_asr(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<bool, Str
     store::own_like_parent(&dir);
     let a = match ca.kind.as_str() {
         "nemo_transducer" => store::resolve_transducer(&dir, &ca.langs)?,
+        "moonshine" => store::resolve_moonshine(&dir, &ca.langs)?,
+        crate::models::ONLINE => store::resolve_online(&dir, &ca.langs)?,
         "nemo_ctc" => store::resolve_ctc(&dir, &ca.langs)?,
         _ => store::resolve_whisper(&dir)?,
     };
@@ -226,7 +252,7 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
             match ensure_voice(ctx, &cat, &v, (0, 95)) {
                 Ok(fresh) => {
                     if fresh {
-                        downloaded = cat.voices.get(&v).map(|cv| catalog::mb(cv.size));
+                        downloaded = cat.voices.get(&v).map(|cv| catalog::mb(cv.total_size()));
                     }
                     voice_id = Some(v);
                     break;
@@ -262,6 +288,12 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
         (None, _) => "speak: no voice exists for this language; you can understand it but must answer in another language".into(),
     };
     let mut out = format!("learned {}: {hear}; {speak}.", label(&l.code));
+    if voice_id.is_some() {
+        if let Some(h) = crate::acks::missing_hint(&l.code) {
+            out.push(' ');
+            out.push_str(&h);
+        }
+    }
     if !skipped.is_empty() {
         out.push_str(&format!(" Skipped: {}.", skipped.join("; ")));
     }
@@ -360,8 +392,9 @@ pub fn auto_learn(code: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "[new language: {code} ({name}) — learned it automatically: speech in {name} is now transcribed{}. Tell the user (in their language) that you have learned {name}. If they do not want it, lang_disable(lang=\"{code}\").]",
-        if has_voice { "" } else { "; its voice (to speak it) is downloading now, a few seconds to a minute" }
+        "[new language: {code} ({name}) — learned it automatically: speech in {name} is now transcribed{}. Tell the user (in their language) that you have learned {name}. If they do not want it, lang_disable(lang=\"{code}\").{}]",
+        if has_voice { "" } else { "; its voice (to speak it) is downloading now, a few seconds to a minute" },
+        crate::acks::missing_hint(code).map(|h| format!(" {h}")).unwrap_or_default()
     ))
 }
 

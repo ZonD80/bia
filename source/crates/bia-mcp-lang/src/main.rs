@@ -25,12 +25,28 @@ fn main() {
         )
         .tool(
             "install",
-            "Learn a language: download and verify its voice (sha256-pinned) and enable it, so speech in it is transcribed and you can speak it (lang= on call_say / send_voice). The first non-English language also installs whisper-base (207 MB) for voice notes, and Persian (fa) its own model shenava-fa (117 MB). Do it without asking when you hear a new language ([new language heard: …]) or the user speaks or asks for one; tell the user first that you are learning it. lang may carry a region (es-MX, pt-BR, en-GB) to pick a voice of that locale. voice picks a specific voice from lang_catalog.",
+            "Learn a language: download and verify its voice (sha256-pinned) and enable it, so speech in it is transcribed and you can speak it (lang= on call_say / send_voice). The first non-English language also installs whisper-base (207 MB) for voice notes, and Persian (fa) its own model shenava-fa (117 MB). Do it without asking when you hear a new language ([new language heard: …]) or the user speaks or asks for one; tell the user first that you are learning it. lang may carry a region (es-MX, pt-BR, en-GB) to pick a voice of that locale. voice picks a specific voice from lang_catalog. Voice quality costs speed: on a phone a -high voice is about 5x slower than speaking (a call reply starts 10-30 s late); there pick -low (fastest, enough for calls) or -medium.",
             json!({"type": "object", "required": ["lang"], "properties": {
                 "lang": {"type": "string", "description": "language code (es), with optional region (es-MX), or English name"},
                 "voice": {"type": "string", "description": "voice id from lang_catalog (optional)"}
             }}),
             |ctx, a| ops::install(ctx, arg_str(&a, "lang")?, arg_str_opt(&a, "voice")),
+        )
+        .tool(
+            "acks",
+            "Acknowledgments said in a call the moment you understand a phrase, while you think (\"Got it.\", \"One moment.\"). Built in for en, ru, es, fr, de, pt, it; write your own 3-5 for any other language you learn (short, neutral: no yes/no, no grammatical gender). phrases omitted: shows them; phrases=[] goes back to the built-in ones.",
+            json!({"type": "object", "required": ["lang"], "properties": {
+                "lang": {"type": "string", "description": "language code (nl)"},
+                "phrases": {"type": "array", "items": {"type": "string"}}
+            }}),
+            |_, a| {
+                let lang = arg_str(&a, "lang")?;
+                let list = match a.get("phrases") {
+                    Some(_) => bia_speech::acks::set(lang, &arg_str_list(&a, "phrases"))?,
+                    None => bia_speech::acks::phrases(lang),
+                };
+                Ok(if list.is_empty() { format!("no acknowledgments for {lang}") } else { format!("{lang}: {}", list.join(" | ")) })
+            },
         )
         .tool(
             "remove",
@@ -86,7 +102,7 @@ fn main() {
         )
         .tool(
             "settings",
-            "Speech settings. denoise: clean audio (GTCRN) before language detection (default on). asr_denoised: Whisper gets the cleaned audio too (default on). split_pauses: split at short pauses to catch a language change mid-phrase (on). hallucination_filter: drop Whisper noise phrases (on). discovery: report languages heard but not learned (on). echo_filter: drop call speech repeating what you say (opt-in). speaker_check: drop speech whose voice does not match the enrolled voice print (opt-in; downloads a 29 MB model; see lang_enroll). call_model / file_model: whisper-tiny (bundled, fast), whisper-base (207 MB, better), whisper-small (639 MB, voice notes only), parakeet-v3 (487 MB; 25 European languages incl. en, de, es, fr, it, ru, uk, pl, pt: fastest and most accurate for them; installed for voice notes with the first of them learned; a voice note in another language uses the best Whisper installed) — downloaded when chosen. Voice notes are transcribed phrase by phrase, each in its own language.",
+            "Speech settings. denoise: clean audio (GTCRN) before language detection (default on). asr_denoised: Whisper gets the cleaned audio too (default on). split_pauses: split at short pauses to catch a language change mid-phrase (on). hallucination_filter: drop Whisper noise phrases (on). discovery: report languages heard but not learned (on). echo_filter: drop call speech repeating what you say (opt-in). speaker_check: drop speech whose voice does not match the enrolled voice print (opt-in; downloads a 29 MB model; see lang_enroll). call_model / file_model: whisper-tiny (bundled, fast), whisper-base (207 MB, better), whisper-small (639 MB, voice notes only), parakeet-v3 (487 MB; 25 European languages incl. en, de, es, fr, it, ru, uk, pl, pt: fastest and most accurate for them; installed for voice notes with the first of them learned; a voice note in another language uses the best Whisper installed), moonshine-tiny-en (108 MB; English only, made for phones: on a phone the best call_model, it transcribes 8x faster than speaking with near-Parakeet accuracy, while Parakeet is slower than speech there and lags; other languages in a call go to Whisper), kroko-en / kroko-fr / kroko-de / kroko-es (57 MB, Spanish 124 MB; one language each, call_model only: streams, writing words down while the caller speaks, with capitals and punctuation, so the text is ready the moment they stop; other languages go to Whisper) — downloaded when chosen. Voice notes are transcribed phrase by phrase, each in its own language.",
             json!({"type": "object", "properties": {
                 "denoise": {"type": "boolean"},
                 "asr_denoised": {"type": "boolean"},

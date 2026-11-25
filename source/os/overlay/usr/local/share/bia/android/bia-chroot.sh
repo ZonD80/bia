@@ -108,6 +108,10 @@ start() {
   in_root BIA_BEFORE_SESSION=1 /usr/local/sbin/bia-update boot >> $LOG/update-boot.log 2>&1
   # the unfold may have put back /etc files: the Android groups again
   prepare_root
+  # what bia-swap.service and fstab do on a computer: /swapfile at half the RAM, then on
+  # (bia-swap switches it on only when it resized it)
+  in_root /usr/local/sbin/bia-swap >> $LOG/swap.log 2>&1
+  grep -q "/swapfile " /proc/swaps || in_root swapon /swapfile >> $LOG/swap.log 2>&1
   self_update
   # bia.service: Restart=always, RestartSec=2
   (

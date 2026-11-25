@@ -737,10 +737,41 @@ the chats, and `chat_unignore` stops ignoring but keeps what is not shown yet.
 
 ### Speech
 
+Voices are sherpa-onnx ones (Piper, Kokoro: a whole sentence per callback) or Gradium
+Phonon (`ptts` crate, kind `phonon`, a checkpoint folder of separate pinned files: it
+streams 80 ms pieces, first sound ~0.5-0.7 s on a Snapdragon 660). English defaults to
+Phonon (`phonon-31m-en`, from the Hub); fr/de/es/pt to Phonon 40m (`phonon-40m-<l>`,
+gated on the Hub, mirrored on bia's `phonon-voices-2026-11-25` release); all five are in
+the image. A Phonon engine is loaded per (voice, language): its text rules follow the
+language spoken, and `voice_for` only returns a voice listing the language. In calls,
+`pipeline::call_model_for` sends a run outside the call model's languages (Moonshine,
+Kroko: one language) to the best Whisper. A streaming call model (kind `online_transducer`,
+Kroko) runs live: `listen::Live` feeds it on its own thread from the moment the VAD hears
+speech (0.6 s pre-roll), and the pipeline takes its text for a whole utterance routed to it
+(`Opts::live`) instead of decoding. For a one-segment utterance, `pipeline::prepare`
+(denoise + tiny LID) runs as soon as the VAD hands over the segment, in the gap before the
+utterance completes (`Opts::pre`); the pipeline then skips both. `--replay <pcm> [gap]` of
+bia-mcp-phone (BIA_REPLAY_REALTIME=1) measures this on a phone. A Phonon voice that fails to load or speak hands the span to
+the language's other voice (the image's Piper voice for English). Thread count:
+`BIA_TTS_THREADS` (default half the cores, 2-4), shared with xn for Phonon. In a phone
+call, `call::feed` holds 0.3 s of speech before playing (and again after running dry) and
+writes silence only when less than 0.15 s is left ahead; call_accept waits for the call
+models (`wait_ready`), call_hangup for queued speech to finish (`wait_spoken`). A new say() cuts the reply playing
+(`SAY_GEN`). Acknowledgments (`bia_speech::acks`: built in for 7 languages, bia's own in
+files/speech/acks.json via lang_acks) are made as call audio while the phone rings and
+played the moment a phrase of 3+ words is understood; a reply waits for one, never cuts it.
+
 Every text to speak goes through `tts::plan`, which first strips Markdown
 (`plain::speakable`): emphasis and code marks go, links keep their text, URLs become
 their host, code blocks, rules and table separators are skipped, headings, list items
 and table rows end with a pause; `<lang=…>` spans stay.
+
+In calls (`Listener`), the VAD keeps speech down to 0.1 s (a "six" on phone audio is one
+0.2 s burst), and when an utterance ends, neighbouring segments less than 1 s apart are
+cut again from the kept stream as one stretch with their real pauses (0.15 s around),
+unless both are 1.5 s or longer (those keep their own language identification). A lone
+segment under 0.25 s is dropped. Decoded one by one, the words of a counted number or a
+slow sentence came out as noise; joined, Whisper and Parakeet hear the phrase.
 
 `bia-speech` (a library shared by `telegram`, `whatsapp`, `messenger`, `instagram` and `lang`) dlopens the
 sherpa-onnx C API and keeps models loaded in-process. Incoming audio (call audio

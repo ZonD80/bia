@@ -30,8 +30,8 @@
     "uk"
    ],
    "note": "NVIDIA Parakeet TDT 0.6B v3: 25 European languages, about 10x faster than whisper-small and as accurate; voice notes in other languages use the best Whisper installed",
-   "sha256": "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf",
-   "size": 487170055,
+   "sha256": "1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9",
+   "size": 487211443,
    "size_name": "parakeet",
    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
   },
@@ -88,6 +88,61 @@
    "size": 116204861,
    "size_name": "tiny",
    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2"
+  },
+  "moonshine-tiny-en": {
+   "kind": "moonshine",
+   "langs": [
+    "en"
+   ],
+   "note": "Moonshine tiny (Useful Sensors, MIT): English only, made for phones and small boards: 8x faster than speaking on a Snapdragon 660 with Parakeet-like accuracy on calls; other languages in a call go to the best Whisper installed",
+   "sha256": "d5fe6ec4334fef36255b2a4010412cad4c007e33103fec62fb5d17cad88086f2",
+   "size": 107600538,
+   "size_name": "moonshine",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-moonshine-tiny-en-int8.tar.bz2"
+  },
+  "kroko-en": {
+   "kind": "online_transducer",
+   "langs": [
+    "en"
+   ],
+   "note": "Kroko streaming zipformer (English, Apache 2.0): writes words down while the caller speaks, with capitals and punctuation, so the text is ready when they stop; made for phones. English only; other languages in a call go to the best Whisper installed",
+   "sha256": "c8676e5ff9ac2a85296e53ee0fd4d5fb1db6770e7a7647166eeafe349ade6834",
+   "size": 57267600,
+   "size_name": "kroko",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06.tar.bz2"
+  },
+  "kroko-fr": {
+   "kind": "online_transducer",
+   "langs": [
+    "fr"
+   ],
+   "note": "Kroko streaming zipformer (French, Apache 2.0): writes words down while the caller speaks, with capitals and punctuation, so the text is ready when they stop; made for phones. French only; other languages in a call go to the best Whisper installed",
+   "sha256": "e6ffd3dc43725cd6c8137b05c739f15607d0df946b9b90eb141e10059efca024",
+   "size": 57220361,
+   "size_name": "kroko",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-fr-kroko-2025-08-06.tar.bz2"
+  },
+  "kroko-de": {
+   "kind": "online_transducer",
+   "langs": [
+    "de"
+   ],
+   "note": "Kroko streaming zipformer (German, Apache 2.0): writes words down while the caller speaks, with capitals and punctuation, so the text is ready when they stop; made for phones. German only; other languages in a call go to the best Whisper installed",
+   "sha256": "9e27b783c20e67b0d0f13a258c1861fce199917c969d9176a438bee38df64962",
+   "size": 57565698,
+   "size_name": "kroko",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-de-kroko-2025-08-06.tar.bz2"
+  },
+  "kroko-es": {
+   "kind": "online_transducer",
+   "langs": [
+    "es"
+   ],
+   "note": "Kroko streaming zipformer (Spanish, Apache 2.0): writes words down while the caller speaks, with capitals and punctuation, so the text is ready when they stop; made for phones. Spanish only; other languages in a call go to the best Whisper installed",
+   "sha256": "31b2230a95d23290b308b393da930015a4b2105cb3abb9367aed35f7fcf29cf1",
+   "size": 124394665,
+   "size_name": "kroko",
+   "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-es-kroko-2025-08-06.tar.bz2"
   }
  },
  "extras": {
@@ -125,7 +180,7 @@
    "voices": []
   },
   "ar": {
-   "default_voice": "piper-ar_JO-kareem-medium",
+   "default_voice": "piper-ar_JO-kareem-low",
    "hear": true,
    "name": "Arabic",
    "voices": [
@@ -201,7 +256,7 @@
    ]
   },
   "cs": {
-   "default_voice": "piper-cs_CZ-jirka-medium",
+   "default_voice": "piper-cs_CZ-jirka-low",
    "hear": true,
    "name": "Czech",
    "voices": [
@@ -227,10 +282,11 @@
    ]
   },
   "de": {
-   "default_voice": "piper-de_DE-thorsten-medium",
+   "default_voice": "phonon-40m-de",
    "hear": true,
    "name": "German",
    "voices": [
+    "phonon-40m-de",
     "piper-de_DE-dii-high",
     "piper-de_DE-eva_k-x_low",
     "piper-de_DE-glados-high",
@@ -259,10 +315,11 @@
    ]
   },
   "en": {
-   "default_voice": "piper-en_US-lessac-medium",
+   "default_voice": "phonon-31m-en",
    "hear": true,
    "name": "English",
    "voices": [
+    "phonon-31m-en",
     "kokoro-multi-v1_0",
     "piper-en_GB-alan-low",
     "piper-en_GB-alan-medium",
@@ -310,10 +367,11 @@
    ]
   },
   "es": {
-   "default_voice": "piper-es_ES-davefx-medium",
+   "default_voice": "phonon-40m-es",
    "hear": true,
    "name": "Spanish",
    "voices": [
+    "phonon-40m-es",
     "piper-es_AR-daniela-high",
     "piper-es_ES-carlfm-x_low",
     "piper-es_ES-davefx-medium",
@@ -352,7 +410,7 @@
    ]
   },
   "fi": {
-   "default_voice": "piper-fi_FI-harri-medium",
+   "default_voice": "piper-fi_FI-harri-low",
    "hear": true,
    "name": "Finnish",
    "voices": [
@@ -367,10 +425,11 @@
    "voices": []
   },
   "fr": {
-   "default_voice": "piper-fr_FR-siwis-medium",
+   "default_voice": "phonon-40m-fr",
    "hear": true,
    "name": "French",
    "voices": [
+    "phonon-40m-fr",
     "piper-fr_FR-gilles-low",
     "piper-fr_FR-miro-high",
     "piper-fr_FR-siwis-low",
@@ -498,7 +557,7 @@
    ]
   },
   "kk": {
-   "default_voice": "piper-kk_KZ-issai-high",
+   "default_voice": "piper-kk_KZ-iseke-x_low",
    "hear": true,
    "name": "Kazakh",
    "voices": [
@@ -702,10 +761,11 @@
    "voices": []
   },
   "pt": {
-   "default_voice": "piper-pt_BR-cadu-medium",
+   "default_voice": "phonon-40m-pt",
    "hear": true,
    "name": "Portuguese",
    "voices": [
+    "phonon-40m-pt",
     "piper-pt_BR-cadu-medium",
     "piper-pt_BR-dii-high",
     "piper-pt_BR-edresson-low",
@@ -899,7 +959,7 @@
    "voices": []
   },
   "vi": {
-   "default_voice": "piper-vi_VN-vais1000-medium",
+   "default_voice": "piper-vi_VN-25hours_single-low",
    "hear": true,
    "name": "Vietnamese",
    "voices": [
@@ -3037,6 +3097,101 @@
    "size": 14016124,
    "speaker": "xiao_ya",
    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-xiao_ya-medium-int8.tar.bz2"
+  },
+  "phonon-31m-en": {
+   "kind": "phonon",
+   "langs": [
+    "en"
+   ],
+   "locale": "en_US",
+   "speaker": "default",
+   "quality": "streaming",
+   "note": "Gradium Phonon 31m: streams as it speaks (first sound in well under a second, even on a phone), Apache 2.0",
+   "url": "",
+   "size": 0,
+   "sha256": "",
+   "files": [
+    {
+     "kind": "",
+     "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/config.json",
+     "size": 4634,
+     "sha256": "b5d0f88353638370d94035b7d73d7d6577c0554d78f8d7ecfd40490aae39ae85",
+     "note": ""
+    },
+    {
+     "kind": "",
+     "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/tokenizer.json",
+     "size": 277967,
+     "sha256": "691a00068fa7b989f2f3e5ae5daa2d1a5bb319f2d5360deafcfb19a8bb6e7936",
+     "note": ""
+    },
+    {
+     "kind": "",
+     "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/model.q8.gguf",
+     "size": 64512352,
+     "sha256": "a7d9aad2cd6dc66473f24a08bc6d2939030ef4d751ef82349361fbef3272dbae",
+     "note": ""
+    },
+    {
+     "kind": "",
+     "url": "https://huggingface.co/gradium/phonon-31m-en/resolve/92741c5b07d085ff840e26fea8ce43110b87852f/default-voice.safetensors",
+     "size": 256136,
+     "sha256": "dc537478eaadc1a5257fcda2e3501ab81e14c111a5d95a5838f350db2afd0f1a",
+     "note": ""
+    }
+   ]
+  },
+  "phonon-40m-fr": {
+   "kind": "phonon",
+   "langs": [
+    "fr"
+   ],
+   "locale": "fr_FR",
+   "speaker": "default",
+   "quality": "streaming",
+   "note": "Gradium Phonon 40m (French): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)",
+   "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-fr.tar.bz2",
+   "size": 61259306,
+   "sha256": "907ea4ece7ecbc8c648173562bcb4ff95923eb47fbc0bcf468affae83d97b377"
+  },
+  "phonon-40m-de": {
+   "kind": "phonon",
+   "langs": [
+    "de"
+   ],
+   "locale": "de_DE",
+   "speaker": "default",
+   "quality": "streaming",
+   "note": "Gradium Phonon 40m (German): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)",
+   "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-de.tar.bz2",
+   "size": 61290997,
+   "sha256": "4cb95676be698e6bf353f36078d77fe9eb8d19e9e3858dd5c82f3536e81e89c2"
+  },
+  "phonon-40m-es": {
+   "kind": "phonon",
+   "langs": [
+    "es"
+   ],
+   "locale": "es_ES",
+   "speaker": "default",
+   "quality": "streaming",
+   "note": "Gradium Phonon 40m (Spanish): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)",
+   "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-es.tar.bz2",
+   "size": 61220170,
+   "sha256": "257674d39c434e286ce97746702ef005d02bb32bb7a61f07f04c26a2e336f34a"
+  },
+  "phonon-40m-pt": {
+   "kind": "phonon",
+   "langs": [
+    "pt"
+   ],
+   "locale": "pt_BR",
+   "speaker": "default",
+   "quality": "streaming",
+   "note": "Gradium Phonon 40m (Portuguese): streams as it speaks, comes with bia; CC BY-NC 4.0 (non-commercial)",
+   "url": "https://github.com/zond80/bia/releases/download/phonon-voices-2026-11-25/phonon-40m-pt.tar.bz2",
+   "size": 61282207,
+   "sha256": "e8c36a26f4d211702c952803a99fe92f19e3113803b00b55274d6f849a3144b6"
   }
  }
 }

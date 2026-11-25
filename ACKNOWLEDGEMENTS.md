@@ -59,7 +59,8 @@ QEMU) and Yaaia's communication features (messengers, calls, contacts,
 | [Node.js](https://nodejs.org/) | runtime for chrome-devtools-mcp |
 | [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | on-device speech-to-text, text-to-speech, VAD, language identification, denoising |
 | [Whisper](https://github.com/openai/whisper) (tiny bundled; base/small on demand) | speech recognition and spoken language identification |
-| [Piper](https://github.com/rhasspy/piper) (en_US-lessac-medium bundled; other voices on demand) | speech synthesis voices |
+| [Piper](https://github.com/rhasspy/piper) (en_US-lessac-low bundled; other voices on demand) | speech synthesis voices |
+| [Gradium Phonon](https://github.com/gradium-ai/xn-ptts) (`ptts` runtime, MIT OR Apache-2.0; Phonon 31m English, Apache 2.0; Phonon 40m French, German, Spanish, Portuguese, [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), non-commercial, mirrored unchanged on bia's `phonon-voices-2026-11-25` release), bundled in the image | streaming speech synthesis |
 | [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (optional) | multilingual speech synthesis voice |
 | [Silero VAD](https://github.com/snakers4/silero-vad) | voice activity detection |
 | [GTCRN](https://github.com/Xiaobin-Rong/gtcrn) | speech denoising |

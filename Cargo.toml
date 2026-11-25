@@ -25,7 +25,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.5.0"
+version = "2.5.1"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -79,3 +79,11 @@ ntgcalls = { path = "source/vendor/ntgcalls" }
 # Patched: email login (CodeDelivery on LoginToken, sign_in_email, setup_login_email,
 # verify_login_email), which 0.6.5 has in the TL schema but no client calls for.
 ferogram = { path = "source/vendor/ferogram" }
+
+# xn-gemm's fp16 kernels are inline asm in helpers that only build when inlined into
+# their fp16 callers (release does; an unoptimised build fails with "instruction requires:
+# fullfp16" on aarch64). Phonon's runtime pulls them in through bia-speech.
+[profile.dev.package.xn-gemm-common]
+opt-level = 3
+[profile.dev.package.xn-gemm-f16]
+opt-level = 3

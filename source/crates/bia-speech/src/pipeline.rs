@@ -256,10 +256,51 @@ pub struct Opts<'a> {
     pub speaker_key: Option<&'a str>,
     /// Apply the echo filter even when the setting is off.
     pub echo_always: bool,
+    /// What a streaming call model (Kroko) wrote down live while this was said: used for
+    /// the whole utterance when it is routed to that model, instead of decoding again.
+    /// Received only when needed (it may still be finishing).
+    pub live: Option<&'a std::sync::mpsc::Receiver<String>>,
+    /// The language of a one-segment utterance, found while the call waited to see whether
+    /// the speaker went on ([`prepare`]).
+    pub pre: Option<&'a Pre>,
+}
+
+/// Language identification of one call segment done ahead, in the pause before the
+/// utterance is complete.
+#[derive(Debug, Clone, Default)]
+pub struct Pre {
+    /// What tiny heard (cleaned audio when denoise is on); None under 0.6 s.
+    pub lang: Option<String>,
+}
+
+/// [`Pre`] for a call segment (the same cleaning and detection `transcribe` does).
+pub fn prepare(reg: &Registry, samples: &[f32]) -> Pre {
+    models::nice_thread();
+    if secs(samples.len()) < 0.6 {
+        return Pre::default();
+    }
+    let clean = reg
+        .settings
+        .denoise
+        .then(|| models::denoiser(reg))
+        .flatten()
+        .and_then(|d| d.lock().ok().and_then(|d| d.run(samples).ok()))
+        .filter(|c| !c.is_empty());
+    let lang = models::slid(reg)
+        .ok()
+        .and_then(|s| s.lock().ok().and_then(|s| s.detect(clean.as_deref().unwrap_or(samples)).ok()))
+        .filter(|l| !l.is_empty());
+    Pre { lang }
 }
 
 fn secs(n: usize) -> f32 {
     n as f32 / RATE
+}
+
+/// Characters of a transcript as a measure of how much was said: a digit stands for a
+/// spoken word ("1, 2, 3, 4" is short text for four words, not a skipped stretch).
+fn spoken_len(text: &str) -> f32 {
+    text.chars().map(|c| if c.is_ascii_digit() { 5.0 } else { 1.0 }).sum()
 }
 
 fn concat<'a>(parts: impl Iterator<Item = &'a [f32]>) -> Vec<f32> {
@@ -274,13 +315,30 @@ fn concat<'a>(parts: impl Iterator<Item = &'a [f32]>) -> Vec<f32> {
     out
 }
 
+/// The model that writes down a run in `lang` ("" = not known) for a call: the call model
+/// when it knows that language (Whisper knows all; Moonshine only English), else the best
+/// Whisper installed. A phrase in Spanish never goes to an English-only model, so what bia
+/// hears is in the language it then answers and speaks in.
+pub(crate) fn call_model_for<'a>(reg: &'a Registry, call: &'a str, lang: &str) -> &'a str {
+    match reg.asr.get(call) {
+        Some(a) if !a.langs.is_empty() && !a.langs.iter().any(|l| l == lang) => models::best_whisper(reg),
+        _ => call,
+    }
+}
+
 pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts: &Opts) -> Result<Heard, String> {
     let mut heard = Heard { secs: pieces.iter().map(|p| secs(p.samples.len())).sum(), ..Default::default() };
     if pieces.is_empty() {
         return Ok(heard);
     }
     let s = &reg.settings;
-    let den = if s.denoise { models::denoiser(reg) } else { None };
+    let t0 = std::time::Instant::now();
+    let pre = opts.pre.filter(|_| pieces.len() == 1 && opts.forced.is_none() && !st.file);
+    // cleaned audio is still needed to decode (unless the live text is used) or check the voice
+    let need_clean = pre.is_none()
+        || (s.asr_denoised && opts.live.is_none())
+        || (s.speaker_check && opts.speaker_key.is_some_and(|k| reg.speakers.contains_key(k)));
+    let den = if s.denoise && need_clean { models::denoiser(reg) } else { None };
     let clean: Vec<Vec<f32>> = pieces
         .iter()
         .map(|p| {
@@ -310,11 +368,19 @@ pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts
         return transcribe_chunks(reg, pieces, clean, st, opts, heard);
     }
 
+    let t_clean = t0.elapsed().as_millis();
     // Language per segment.
     let mut lid: Vec<Option<String>> = vec![None; pieces.len()];
     let mut all_weak = false;
     if let Some(f) = opts.forced {
         lid.iter_mut().for_each(|l| *l = Some(f.to_string()));
+    } else if let Some(p) = pre {
+        if heard.secs >= LID_MIN_SECS {
+            lid[0] = p.lang.clone();
+        } else if let Some(l) = p.lang.as_ref().filter(|l| heard.secs >= 0.6 && reg.is_enabled(l)) {
+            lid[0] = Some(l.clone());
+            all_weak = true;
+        }
     } else {
         // voice notes: the voice-note model (better at close languages); calls: tiny
         let slid = if st.file { models::slid_for(reg, opts.asr)? } else { models::slid(reg)? };
@@ -380,32 +446,48 @@ pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts
     crate::diag::log(
         "speech",
         format!(
-            "{:.1}s in {} segment(s); lid={:?}; routes={:?}; current={}",
+            "{:.1}s in {} segment(s); lid={:?}; routes={:?}; current={} (clean {} ms, lid {} ms{})",
             heard.secs,
             pieces.len(),
             lid,
             routed.iter().map(|r| format!("{}{}/{}", r.lang, if r.installed { "" } else { "?" }, if r.decode.is_empty() { "auto" } else { &r.decode })).collect::<Vec<_>>(),
-            st.current
+            st.current,
+            t_clean,
+            t0.elapsed().as_millis() - t_clean,
+            if pre.is_some() { ", found ahead" } else { "" }
         ),
     );
 
-    // Merge neighbours with the same language into runs and transcribe each.
-    let rec = models::recognizer(reg, opts.asr)?;
-    let rec = rec.lock().map_err(|_| "recognizer lock")?;
+    // Merge neighbours with the same language into runs and transcribe each. A call model
+    // for some languages only (Moonshine: English) takes the runs in its languages; the
+    // rest goes to the best Whisper installed.
     let mut i = 0;
     while i < pieces.len() {
         let mut j = i + 1;
         while j < pieces.len() && routed[j] == routed[i] {
             j += 1;
         }
+        let model = call_model_for(reg, opts.asr, &routed[i].decode);
+        // the live text first, without holding the recognizer: its stream needs the
+        // recognizer to finish (holding it here kept the text from coming, 10 s per phrase)
+        let streaming = model == opts.asr && reg.asr.get(model).is_some_and(|a| a.kind == models::ONLINE);
+        let live = opts
+            .live
+            .filter(|_| i == 0 && j == pieces.len() && streaming)
+            .and_then(|r| r.recv_timeout(std::time::Duration::from_secs(10)).ok());
+        let rec = models::recognizer(reg, model)?;
+        let rec = rec.lock().map_err(|_| "recognizer lock")?;
         let src: Vec<&[f32]> = (i..j)
             .map(|k| if s.asr_denoised { clean[k].as_slice() } else { pieces[k].samples.as_slice() })
             .collect();
         let samples = concat(src.into_iter());
         let Route { lang, installed, decode } = routed[i].clone();
-        let mut text = decode_robust(&rec, &samples, &decode, 0)?;
+        let mut text = match &live {
+            Some(t) => t.clone(),
+            None => decode_robust(&rec, &samples, &decode, 0)?,
+        };
         let d = secs(samples.len());
-        if j - i > 1 && (text.chars().count() as f32) < d * 8.0 {
+        if live.is_none() && j - i > 1 && spoken_len(&text) < d * 8.0 {
             // A merged run came out short: Whisper skipped part of it. Try the
             // segments one by one and keep the longer result.
             let mut parts = Vec::new();
@@ -837,7 +919,7 @@ fn transcribe_file_with(path: &std::path::Path, lang: Option<&str>, asr: Option<
     let mut st = LangState::for_file(start.unwrap_or(&reg.default_lang));
     st.sender = start.map(str::to_string);
     let asr = asr.unwrap_or(&reg.asr_file).to_string();
-    transcribe(&reg, pieces, &mut st, &Opts { asr: &asr, forced: lang, echo: None, speaker_key: None, echo_always: false })
+    transcribe(&reg, pieces, &mut st, &Opts { asr: &asr, forced: lang, echo: None, speaker_key: None, echo_always: false, live: None, pre: None })
 }
 
 /// Voice print of a recording, for the opt-in speaker check.
@@ -857,6 +939,23 @@ pub fn voice_print(path: &std::path::Path) -> Result<Vec<f32>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_call_phrase_goes_to_a_model_of_its_language() {
+        let mut reg = Registry::default();
+        reg.asr.insert("moonshine-tiny-en".into(), crate::registry::Asr { kind: "moonshine".into(), langs: vec!["en".into()], ..Default::default() });
+        reg.asr.insert("whisper-base".into(), crate::registry::Asr { kind: "whisper".into(), ..Default::default() });
+        // English to Moonshine; French, German, Spanish, Portuguese, Russian and an unknown
+        // language to the best Whisper installed, never to the English-only model
+        assert_eq!(call_model_for(&reg, "moonshine-tiny-en", "en"), "moonshine-tiny-en");
+        for l in ["fr", "de", "es", "pt", "ru", ""] {
+            assert_eq!(call_model_for(&reg, "moonshine-tiny-en", l), "whisper-base", "{l:?}");
+        }
+        // a Whisper call model takes every language itself
+        for l in ["en", "es", ""] {
+            assert_eq!(call_model_for(&reg, crate::registry::BUNDLED_ASR, l), crate::registry::BUNDLED_ASR);
+        }
+    }
 
     fn reg(enabled: &[&str]) -> Registry {
         Registry { enabled: enabled.iter().map(|s| s.to_string()).collect(), ..Default::default() }

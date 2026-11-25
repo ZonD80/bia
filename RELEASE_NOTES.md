@@ -5,6 +5,33 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.1
+
+### Changes
+- Speech in calls is understood much better: a sentence said slowly, or numbers counted out, used to be cut into single words that came out as nonsense ("one So 3 Good"); it is now heard as one phrase with its natural pauses. Short words such as "six" are no longer lost on phone lines.
+- The Parakeet speech model (the most accurate one for 25 European languages, English and Russian included) installs again: its download had changed upstream and was refused.
+- English speech uses Gradium Phonon, a voice that speaks while it is still being made: in calls the first word comes in well under a second even on a phone, however long the sentence. It comes with bia (no download), and so do Phonon voices for French, German, Spanish and Portuguese, used as soon as bia learns one of them. Other languages keep their voices, and if Phonon ever fails, the sentence is said with the usual voice instead. What bia hears and what it says stay in the same language: speech in a language the call model does not know goes to one that does, and a reply is only spoken by a voice of its language.
+- Calls can be understood with Moonshine, a small English speech model made for phones: on a phone it writes down what was said about 8 times faster than it was spoken, nearly as well as the big Parakeet model, which is slower than speech there and lags. Other languages in a call still go to Whisper.
+- Calls can be understood live with Kroko (English, French, German or Spanish, 57 MB): it writes words down while the caller speaks, with capitals and punctuation, so on a phone the text is ready about 0.2 s after they stop instead of 1–2 s, and in tests it made fewer mistakes than Moonshine (numbers, greetings). Other languages in a call still go to Whisper.
+- In calls, the language of a phrase is found during the pause after it, before the phrase counts as finished, so answers start sooner with any speech model.
+- Calls on a phone: bia answers once its speech models are loaded (a few seconds of extra ringing), so the caller's first words are understood at once; its voice no longer breaks up into short holes (it is made with more of the CPU and starts after a little is ready); and when bia says goodbye and hangs up, the goodbye is heard to the end first. When bia says something new while it is still speaking, it stops the old reply and switches to the new one at once. And the moment bia understands a phrase, it says a short "Got it." / "One moment." in that language (made while the phone rang) instead of going silent while it thinks. These come built in for English, Russian, Spanish, French, German, Portuguese and Italian; for any other language bia learns, it writes its own (lang_acks), and a language learned during a call gets them in that call.
+- Human task links open in the web app itself (#task/…): a link bia sends now works in a browser that has never been signed in (it used to answer "client certificate required"), and older task links still work.
+- On a phone or tablet, bia's screen (in a human task or Display) has a Drag button: the next finger press-and-slide drags, for sliders, puzzle pieces and dragging things on the desktop, without holding the finger still first.
+- Voice replies start much sooner: the default voices are now the fast "low" quality ones (bia's own English voice is lessac-low instead of lessac-medium; for 9 languages the default changed the same way), speech uses up to 4 processor cores, and bia knows that a "high" voice is about 5 times slower than speaking on a phone. On a phone a call reply used to start 10-30 s late with a high voice.
+- On a phone, bia's voice in calls no longer carries short bursts of high-pitched noise on "s" sounds: it is filtered to the telephone band before it goes into the call.
+- On a phone, swap now works: like on a computer, bia gets a swap file of half the memory (it had none there), which keeps the big speech models from squeezing the rest.
+- In calls, a long first sentence starts playing after its first part instead of after the whole sentence is made.
+- On a phone, the speech models load while a call rings (in or out), so the first answer is not slowed by loading them, and they are freed again 10 s after the call, giving their memory back to the phone.
+- Tags in group chats: when someone tags bia in WhatsApp, Telegram, Messenger or Instagram, bia now sees it (a `[mentions: you, …]` line) and treats it like a reply to it. In WhatsApp a tagged person showed as a bare number ("@130606214176782"); it now reads as their name. bia can tag people too: "@Name" or "@+number" of a group member becomes a real tag in WhatsApp, Telegram and Messenger groups.
+
+### For bia
+- If lang_settings or lang_install failed earlier with "parakeet-v3: got … bytes, expected …", run it again now.
+- If your voice for a language is a "-high" one and you speak in calls on a slow machine (a phone), switch it to "-low" or "-medium" with lang_install(lang=…, voice=…) and tell the owner why.
+- English now speaks with Phonon by itself (it comes with this release). For French, German, Spanish or Portuguese already learned, switch to Phonon with lang_install(lang=<code>) (its default voice is now Phonon). If you chose another English voice earlier and want the faster one, lang_install(lang="en", voice="phonon-31m-en").
+- On a phone (or another slow machine) where calls are in English: lang_settings(call_model="kroko-en") (57 MB; kroko-fr, kroko-de, kroko-es for calls mostly in those); keep parakeet-v3 for voice notes.
+- For each language you have learned other than en, ru, es, fr, de, pt, it: write 3-5 short neutral call acknowledgments in it with lang_acks(lang=…, phrases=[…]) ("Got it.", "One moment." — no yes/no, no grammatical gender).
+- To tag someone in a group, write @Name (as they appear in the chat) or @+number in say; a tag of you arrives as [mentions: you, …].
+
 ## 2.5.0
 
 ### Changes

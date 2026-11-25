@@ -535,6 +535,21 @@ t7 = fresh(APP + "#enroll=" + tok)
 check(t7.until("!document.getElementById('boot').hidden && document.body.innerText.includes('already used or has lapsed')", 20) is not None, "the same link in another browser says it was used")
 t7.close()
 
+# ---- human task links live in the app (#task/<id>): a new browser signs up and lands on the task,
+# and an old /hitl/<id> link (from before) is sent there with its #enroll grant intact
+def grant():
+    t = os.urandom(16).hex()
+    json.dump({"identity": "gina", "trust": "normal", "created": int(time.time())}, open(f"{files}/state/applink/{t}.json", "w"))
+    return t
+for label, url in (("a task link", APP + "#task/ab12cd34&enroll=" + grant()),
+                   ("an old /hitl/ task link", APP + "hitl/ab12cd34#enroll=" + grant())):
+    ctx3 = cdp.call("Target.createBrowserContext")["browserContextId"]
+    t8 = fresh(url)
+    ok = t8.until(LOADED, 40) is not None and t8.js("S.me.identity") == "gina"
+    where = t8.js("location.pathname + location.search + location.hash")
+    check(ok and where == "/#task/ab12cd34", f"{label} with a key signs a new browser up and opens the task in the app: {where!r}")
+    t8.close()
+
 # revoking the file's certificate says which browser keys were made with it (they still work)
 import re as _re
 lines = web.tool("pki_list")[0].splitlines()

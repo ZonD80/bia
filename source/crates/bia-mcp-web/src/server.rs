@@ -971,6 +971,17 @@ impl Web {
             return;
         }
         let Some(id) = client else {
+            // A human task link from before tasks lived in the app (/hitl/<id>) in a browser
+            // without a session: the app signs in and opens it. A redirect keeps the link's
+            // #enroll=… grant, which the server never sees.
+            if req.method == "GET" && req.header("accept").is_some_and(|a| a.contains("text/html")) {
+                if let Some((task, extra)) = crate::hitl::split_path(&req.path) {
+                    if extra.is_empty() {
+                        redirect(&mut stream, &format!("/?task={task}"));
+                        return;
+                    }
+                }
+            }
             respond(&mut stream, 401, "text/plain; charset=utf-8", NO_CERT, Some("Link: </AGENTS.md>; rel=\"describedby\"; type=\"text/markdown\""));
             return;
         };

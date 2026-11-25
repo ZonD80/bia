@@ -332,6 +332,11 @@ fn deliver(ev: &Value, live: bool) {
             let from = if b(r, "me") { "you".to_string() } else { label(s(r, "sender"), s(r, "sender_name")) };
             parts.push(bia_mcp::share::reply_text(s(r, "id"), &from, s(r, "text"), ""));
         }
+        // who the message tags: ["you", "Ann (123)"] from the bridge
+        let tagged: Vec<String> = ev.get("mentions").and_then(|m| m.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        if let Some(m) = bia_mcp::share::mentions_text(&tagged) {
+            parts.push(m);
+        }
         // a forward: what the sender wrote with it (MAX), then who wrote the text first
         if let Some(f) = ev.get("forward").filter(|f| f.is_object()) {
             let comment = s(&ev, "comment").trim().to_string();

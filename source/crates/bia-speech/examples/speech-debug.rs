@@ -14,7 +14,7 @@ fn main() {
     }
     println!("{:.2}s audio", x.len() as f32 / 16000.0);
     {
-        let mut vad = models::Vad::new(&reg, min_sil, 20.0).unwrap();
+        let mut vad = models::Vad::new(&reg, min_sil, 20.0, 0.25).unwrap();
         let mut was = false;
         for (i, c) in x.chunks(512).enumerate() {
             let segs = vad.accept(c);

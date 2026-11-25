@@ -99,7 +99,8 @@ pub fn take_token(files: &std::path::Path, t: &str) -> Option<Grant> {
 fn enc(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
-        let keep = b.is_ascii_alphanumeric() || b"-._~:/?=&".contains(&b);
+        // `#`: a route of the web app (`/#task/<id>`) is part of the page asked for
+        let keep = b.is_ascii_alphanumeric() || b"-._~:/?=&#".contains(&b);
         if keep {
             out.push(b as char);
         } else {
@@ -135,7 +136,7 @@ fn rank(origin: &str) -> Option<u8> {
     }
 }
 
-/// The link to `path` (for example `/hitl/ab12cd34`) on this bia at the best of `origins`,
+/// The link to `path` (for example `/#task/ab12cd34`) on this bia at the best of `origins`,
 /// with key grant `token` if any.
 pub fn page_link(origins: &[String], path: &str, token: Option<&str>) -> Option<String> {
     if !path.starts_with('/') {
@@ -164,8 +165,8 @@ mod tests {
             "https://[2001:db8::1]:8443".to_string(),
         ];
         assert_eq!(
-            page_link(&o, "/hitl/ab12cd34", Some(&"ab".repeat(16))).unwrap(),
-            format!("https://203.0.113.5:8443/hitl/ab12cd34#enroll={}", "ab".repeat(16))
+            page_link(&o, "/#task/ab12cd34", Some(&"ab".repeat(16))).unwrap(),
+            format!("https://203.0.113.5:8443/#task/ab12cd34&enroll={}", "ab".repeat(16))
         );
         let mut with_name = o.clone();
         with_name.push("https://bia.example.com".into());

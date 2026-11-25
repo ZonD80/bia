@@ -781,6 +781,10 @@ func (ig *instagram) message(ctx context.Context, chat string, group bool, title
 				continue
 			}
 			id := strconv.FormatInt(mt.UserFBID, 10)
+			if id == own {
+				names = append(names, "you")
+				continue
+			}
 			names = append(names, fmt.Sprintf("%s (%s)", ig.st.UserName(ctx, id), id))
 		}
 		if len(names) > 0 {
