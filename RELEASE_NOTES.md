@@ -5,6 +5,14 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.2
+
+### Changes
+- Switching a language bia learned earlier to its new default voice works as described: the 2.5.1 note said lang_install(lang=…) alone moves French, German, Spanish or Portuguese to Phonon, but a learned language keeps the voice it has. lang_install now says when it kept a voice that is no longer the default, and how to switch.
+
+### For bia
+- If you speak French, German, Spanish or Portuguese with a voice other than Phonon and did not choose it on purpose, switch: lang_install(lang="es", voice="phonon-40m-es") (fr: phonon-40m-fr, de: phonon-40m-de, pt: phonon-40m-pt). Without voice= a learned language keeps its voice.
+
 ## 2.5.1
 
 ### Changes
@@ -27,7 +35,7 @@ owner, For bia as concrete steps with tool names. Keep each item to one line.
 ### For bia
 - If lang_settings or lang_install failed earlier with "parakeet-v3: got … bytes, expected …", run it again now.
 - If your voice for a language is a "-high" one and you speak in calls on a slow machine (a phone), switch it to "-low" or "-medium" with lang_install(lang=…, voice=…) and tell the owner why.
-- English now speaks with Phonon by itself (it comes with this release). For French, German, Spanish or Portuguese already learned, switch to Phonon with lang_install(lang=<code>) (its default voice is now Phonon). If you chose another English voice earlier and want the faster one, lang_install(lang="en", voice="phonon-31m-en").
+- English now speaks with Phonon by itself (it comes with this release). For French, German, Spanish or Portuguese already learned, switch to Phonon by naming the voice: lang_install(lang="fr", voice="phonon-40m-fr") (de: phonon-40m-de, es: phonon-40m-es, pt: phonon-40m-pt); without voice= a learned language keeps the voice it has. If you chose another English voice earlier and want the faster one, lang_install(lang="en", voice="phonon-31m-en").
 - On a phone (or another slow machine) where calls are in English: lang_settings(call_model="kroko-en") (57 MB; kroko-fr, kroko-de, kroko-es for calls mostly in those); keep parakeet-v3 for voice notes.
 - For each language you have learned other than en, ru, es, fr, de, pt, it: write 3-5 short neutral call acknowledgments in it with lang_acks(lang=…, phrases=[…]) ("Got it.", "One moment." — no yes/no, no grammatical gender).
 - To tag someone in a group, write @Name (as they appear in the chat) or @+number in say; a tag of you arrives as [mentions: you, …].

@@ -206,12 +206,22 @@ pub fn ensure_extra(ctx: &dyn Report, cat: &Catalog, id: &str) -> Result<(), Str
     })
 }
 
+/// A language learned earlier keeps its voice when lang_install names none, even after a
+/// release changed the default: say which voice is the default now and how to switch.
+fn default_hint(kept: Option<&str>, used: Option<&str>, default: &str) -> Option<String> {
+    let k = kept?;
+    (used == Some(k) && !default.is_empty() && default != k)
+        .then(|| format!("It kept its voice {k}; the default voice is now {default}: lang_install(lang=…, voice=\"{default}\") switches to it."))
+}
+
 /// Learn a language: enable it for hearing and install its voice.
 pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<String, String> {
     let l = parse_lang(lang)?;
     let cat = catalog::load()?;
     let info = cat.languages.get(&l.code).cloned().unwrap_or_default();
     let reg = registry::current();
+    // the voice the language already had, when bia named none (it is kept)
+    let mut kept: Option<String> = None;
     let voice_id = match voice.filter(|v| !v.is_empty()) {
         Some(v) => {
             let cv = cat.voices.get(v).ok_or_else(|| format!("unknown voice {v}; lang_catalog(query=\"{}\") lists them", l.code))?;
@@ -229,7 +239,10 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
                     .cloned()
             });
             exact
-                .or_else(|| reg.voice.get(&l.code).cloned())
+                .or_else(|| {
+                    kept = reg.voice.get(&l.code).cloned();
+                    kept.clone()
+                })
                 .or_else(|| Some(info.default_voice.clone()).filter(|v| !v.is_empty()))
         }
     };
@@ -293,6 +306,10 @@ pub fn install(ctx: &dyn Report, lang: &str, voice: Option<&str>) -> Result<Stri
             out.push(' ');
             out.push_str(&h);
         }
+    }
+    if let Some(h) = default_hint(kept.as_deref(), voice_id.as_deref(), &info.default_voice) {
+        out.push(' ');
+        out.push_str(&h);
     }
     if !skipped.is_empty() {
         out.push_str(&format!(" Skipped: {}.", skipped.join("; ")));
@@ -508,5 +525,16 @@ mod resume_tests {
         r.default_lang = "en".into();
         assert_eq!(unfinished(&r, |_| true), ["es", "fr"]);
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn kept_voice_names_the_new_default() {
+        let h = super::default_hint(Some("piper-es_ES-davefx-medium"), Some("piper-es_ES-davefx-medium"), "phonon-40m-es").unwrap();
+        assert!(h.contains("phonon-40m-es") && h.contains("davefx"));
+        assert!(super::default_hint(Some("phonon-40m-es"), Some("phonon-40m-es"), "phonon-40m-es").is_none());
+        assert!(super::default_hint(None, Some("phonon-40m-es"), "phonon-40m-es").is_none());
     }
 }
