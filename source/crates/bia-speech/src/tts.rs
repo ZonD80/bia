@@ -418,7 +418,13 @@ pub fn warm() {
 /// [`warm`], waiting for it.
 pub fn warm_now() {
     let reg = registry::current();
-    for l in &reg.enabled {
+    warm_langs(&reg.enabled);
+}
+
+/// Load the voices of `langs` (a call's languages), waiting for them.
+pub fn warm_langs(list: &[String]) {
+    let reg = registry::current();
+    for l in list {
         if let Some((id, v)) = reg.voice_for(&langs::Lang { code: l.clone(), region: None }) {
             let _ = engine(id, v, l);
         }

@@ -106,25 +106,57 @@ pub fn started(ctx: &Ctx, number: &str) {
         log("debug: recording the uplink too");
     }
     log(format!("call with {number}: phone mic and earpiece muted, in-call record and music on"));
-    bia_speech::warm();
+    // normally loaded while it rang; a call that connected without ringing here loads now
+    if plan().lock().unwrap().as_ref().map(|p| p.number.as_str()) != Some(number) {
+        preparing(number, None);
+    }
     let ctx = ctx.clone();
     let num = number.to_string();
     let _ = std::thread::Builder::new().name("call-listen".into()).spawn(move || listen(ctx, num));
 }
 
-/// The phone rings or bia dials: load the speech models now, while it rings, so the first
-/// words of the call are heard and answered without the load on top (5-10 s on a phone).
-pub fn preparing() {
-    let (lock, cv) = &*WARM;
-    *lock.lock().unwrap() = false;
-    let _ = std::thread::Builder::new().name("call-warm".into()).spawn(move || {
+/// The coming (or current) call; its models are loaded for the languages [`preparing`]
+/// picked: the one bia fixed, else the person's addressbook language, else the default.
+pub struct Plan {
+    pub number: String,
+    /// bia fixed the call's language: every phrase is heard in it, no detection.
+    pub forced: Option<String>,
+}
+
+pub fn plan() -> &'static Mutex<Option<Plan>> {
+    static P: Mutex<Option<Plan>> = Mutex::new(None);
+    &P
+}
+
+/// The phone rings or bia is about to dial `number`: load the speech models and voice of
+/// the call's language now, so the first words are heard and answered without the load on
+/// top (5-10 s on a phone). `lang` fixes the call's language. The languages it loads.
+pub fn preparing(number: &str, lang: Option<&str>) -> Vec<String> {
+    let lang = lang.filter(|l| !l.trim().is_empty());
+    let langs = bia_speech::call_langs(&format!("phone:{number}"), lang);
+    let forced = lang.and_then(|_| langs.first().cloned());
+    *plan().lock().unwrap() = Some(Plan { number: number.to_string(), forced: forced.clone() });
+    let (lock, _) = &*WARM;
+    *lock.lock().unwrap() += 1;
+    let list = langs.clone();
+    let spawned = std::thread::Builder::new().name("call-warm".into()).spawn(move || {
         let t = Instant::now();
-        bia_speech::warm_wait();
-        log(format!("call models loaded in {:.1}s", t.elapsed().as_secs_f64()));
-        *lock.lock().unwrap() = true;
+        bia_speech::warm_call(&list, forced.is_some());
+        log(format!(
+            "call models for {} loaded in {:.1}s{}",
+            if list.is_empty() { "any language".to_string() } else { list.join(", ") },
+            t.elapsed().as_secs_f64(),
+            if forced.is_some() { " (language fixed)" } else { "" }
+        ));
+        let (lock, cv) = &*WARM;
+        *lock.lock().unwrap() -= 1;
         cv.notify_all();
-        make_acks();
+        make_acks(&list);
     });
+    if spawned.is_err() {
+        *WARM.0.lock().unwrap() -= 1;
+    }
+    langs
 }
 
 // ---- acknowledgments ----
@@ -152,12 +184,12 @@ fn ack_list(lang: &str) -> Vec<(String, Vec<u8>)> {
     list
 }
 
-/// Make the acknowledgments of every language bia speaks (while the phone rings).
-fn make_acks() {
+/// Make the acknowledgments of the call's languages (while the phone rings); another
+/// language heard in the call gets its own when it first comes up.
+fn make_acks(langs: &[String]) {
     let t = Instant::now();
-    let reg = bia_speech::registry::current();
     let mut n = 0;
-    for l in &reg.enabled {
+    for l in langs {
         let list = ack_list(l);
         n += list.len();
         ack_audio().lock().unwrap().insert(l.clone(), list);
@@ -228,16 +260,17 @@ fn acknowledge(ctx: &Ctx, chat: &str, lang: &str, text: &str) {
     }
 }
 
-/// Speech models of the coming call loaded (true when nothing is loading).
-static WARM: std::sync::LazyLock<(Mutex<bool>, std::sync::Condvar)> = std::sync::LazyLock::new(|| (Mutex::new(true), std::sync::Condvar::new()));
+/// Loads of call models still running (the coming call is ready at 0).
+static WARM: std::sync::LazyLock<(Mutex<usize>, std::sync::Condvar)> = std::sync::LazyLock::new(|| (Mutex::new(0), std::sync::Condvar::new()));
 
 /// Wait (at most `max`) until the models [`preparing`] loads are in: an incoming call is
-/// answered only then, so the caller's first words are heard at once. Seconds waited.
+/// answered, and an outgoing one dialled, only then, so the first words are heard at once.
+/// Seconds waited.
 pub fn wait_ready(max: Duration) -> f64 {
     let t = Instant::now();
     let (lock, cv) = &*WARM;
     let g = lock.lock().unwrap();
-    let _ = cv.wait_timeout_while(g, max, |ready| !*ready);
+    let _ = cv.wait_timeout_while(g, max, |loading| *loading > 0);
     t.elapsed().as_secs_f64()
 }
 
@@ -274,12 +307,14 @@ pub fn ended() {
     if was.is_some() {
         log("call ended: phone mic and earpiece restored");
     }
+    *plan().lock().unwrap() = None;
     RINGING.store(false, std::sync::atomic::Ordering::Relaxed);
     unload_after_call();
 }
 
 fn listen(ctx: Ctx, num: String) {
     let channel = format!("phone:{num}");
+    let forced = plan().lock().unwrap().as_ref().filter(|p| p.number == num).and_then(|p| p.forced.clone());
     let mut listener = match bia_speech::Listener::with_lang(RATE, bia_speech::contacts::lang_for(&channel)) {
         Ok(l) => l,
         Err(e) => {
@@ -287,6 +322,12 @@ fn listen(ctx: Ctx, num: String) {
             return;
         }
     };
+    if let Some(f) = &forced {
+        match listener.force_lang(f) {
+            Ok(()) => log(format!("the call is heard in {f} only")),
+            Err(e) => log(format!("call language {f} not fixed: {e}")),
+        }
+    }
     // phone audio: narrowband with dropouts; 0.7 s split sentences mid-way
     listener.set_gap(1.2);
     let mut child = match Command::new("arecord")
@@ -380,6 +421,10 @@ pub fn replay(path: &str, gap: f32) -> Result<(), String> {
     // as when the phone rings: the call models load before anyone speaks
     bia_speech::warm_call_models();
     let mut listener = bia_speech::Listener::with_lang(RATE, None)?;
+    // BIA_REPLAY_LANG=es: as a call whose language bia fixed
+    if let Ok(l) = std::env::var("BIA_REPLAY_LANG") {
+        listener.force_lang(&l)?;
+    }
     listener.set_gap(gap);
     let mut fed = 0usize;
     // BIA_REPLAY_REALTIME=1: feed at the pace of a call (a streaming model decodes along)
@@ -675,7 +720,12 @@ pub fn say(ctx: &Ctx, chat: &str, text: &str, lang: &str) -> Result<String, Stri
     // a new reply replaces the one playing or waiting (bia changed its mind, or answers
     // what the caller just said): it starts as soon as the old one stops
     let gen = SAY_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    if speaker().send(Say { chat: chat.into(), text: text.into(), lang: lang.into(), ctx: ctx.clone(), gen, ack: None }).is_err() {
+    // no language given: the one fixed for the call
+    let lang = match lang.trim() {
+        "" => plan().lock().unwrap().as_ref().and_then(|p| p.forced.clone()).unwrap_or_default(),
+        l => l.to_string(),
+    };
+    if speaker().send(Say { chat: chat.into(), text: text.into(), lang, ctx: ctx.clone(), gen, ack: None }).is_err() {
         UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
     Ok(format!("speaking in the call with {chat}"))

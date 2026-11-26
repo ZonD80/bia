@@ -689,3 +689,50 @@ pub fn warm_now() {
     let _ = recognizer(&reg, &reg.asr_call);
     let _ = denoiser(&reg);
 }
+
+/// The speech models a call in `langs` needs, waiting for them: the call model, or the
+/// Whisper that takes a language the call model does not know (Russian with kroko-en);
+/// language identification only when the language is not fixed (`forced`).
+pub fn warm_call(langs: &[String], forced: bool) {
+    let reg = registry::current();
+    if !forced {
+        let _ = slid(&reg);
+    }
+    let _ = denoiser(&reg);
+    for id in call_models(&reg, langs) {
+        let _ = recognizer(&reg, &id);
+    }
+}
+
+/// Recognizers a call in `langs` decodes with (the call model when no language is known).
+pub fn call_models(reg: &Registry, langs: &[String]) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for l in langs {
+        let id = crate::pipeline::call_model_for(reg, &reg.asr_call, l).to_string();
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        ids.push(reg.asr_call.clone());
+    }
+    ids
+}
+
+#[cfg(test)]
+mod call_tests {
+    use crate::registry::{Asr, Registry};
+
+    #[test]
+    fn a_call_loads_the_model_of_its_language() {
+        let mut reg = Registry::default();
+        reg.asr.insert("kroko-en".into(), Asr { kind: super::ONLINE.into(), langs: vec!["en".into()], ..Default::default() });
+        reg.asr_call = "kroko-en".into();
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(super::call_models(&reg, &l(&["en"])), l(&["kroko-en"]));
+        // Russian is not Kroko's: the bundled Whisper takes it, Kroko is not loaded
+        assert_eq!(super::call_models(&reg, &l(&["ru"])), l(&[crate::registry::BUNDLED_ASR]));
+        // someone with no known language: the call model
+        assert_eq!(super::call_models(&reg, &[]), l(&["kroko-en"]));
+    }
+}

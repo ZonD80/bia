@@ -72,6 +72,37 @@ pub fn warm_call_models() {
     models::warm_now();
 }
 
+/// The languages a call on `channel` (phone:+34…) is expected in: `lang` when bia fixed
+/// it for the call, else the person's preferred language from the addressbook, else the
+/// default language (someone bia does not know yet).
+pub fn call_langs(channel: &str, lang: Option<&str>) -> Vec<String> {
+    let reg = registry::current();
+    let pick = lang
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| contacts::lang_for(channel))
+        .or_else(|| Some(reg.default_lang.clone()));
+    pick.and_then(|l| langs::parse(&l)).map(|l| vec![l.code]).filter(|v| !v[0].is_empty()).unwrap_or_default()
+}
+
+/// A language bia fixes for a call: one it can hear and speak. Its code (es-MX → es).
+pub fn check_call_lang(lang: &str) -> Result<String, String> {
+    let l = langs::parse(lang).ok_or_else(|| format!("unknown language {lang:?}"))?;
+    if !langs::can_hear(&l.code) {
+        return Err(format!("{} can not be heard in a call: no speech model knows it", l.code));
+    }
+    if registry::current().voice_for(&l).is_none() {
+        return Err(format!("no voice speaks {} yet: lang_install(lang=\"{}\") first", l.code, l.code));
+    }
+    Ok(l.code)
+}
+
+/// Load what a call in `langs` needs (speech models and voices), waiting for them.
+pub fn warm_call(langs: &[String], forced: bool) {
+    models::warm_call(langs, forced);
+    tts::warm_langs(langs);
+}
+
 /// Unload the models nobody uses right now (see [`idle::unload_now`]).
 pub fn unload_now() -> usize {
     idle::unload_now()

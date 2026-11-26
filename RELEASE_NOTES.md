@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.3
+
+### Changes
+- Phone calls: before bia calls someone, it loads its speech models and voice first, then dials, so their first words are heard and answered at once (it used to dial and load while it rang, and a quick "hello" could come before they were in).
+- Phone calls load only what the call needs: the speech model and voice of the person's language from the addressbook, or bia's default language for someone it does not know yet (they used to load a voice for every language bia speaks, and the call model even when the person's language goes to Whisper). Another language that comes up in the call is loaded when it is heard.
+- A phone call can be held in one language: phone_call and phone_call_accept take lang. Everything the other person says is then heard as that language (no guessing, so a short "Hola" is no longer taken for another language), and replies without a language are spoken in it.
+
+### For bia
+- When you know which language a phone call will be in (you call a Spanish restaurant; someone wrote to you in Russian before calling), pass it: phone_call(chat_id=…, lang="es") or phone_call_accept(lang="ru"). Leave it out when you do not know.
+- Set the language of people you talk to by phone in the addressbook (addressbook_upsert(lang=…)): their calls then load the right speech models before answering.
+
 ## 2.5.2
 
 ### Changes

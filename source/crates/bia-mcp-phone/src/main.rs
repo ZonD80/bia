@@ -220,13 +220,17 @@ fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String) {
                 "ringing" => {
                     *ringing_from = num.clone();
                     call::RINGING.store(true, std::sync::atomic::Ordering::Relaxed);
-                    call::preparing();
+                    let langs = call::preparing(&num, None);
+                    let expect = match langs.first() {
+                        Some(l) => format!("speech is loading for {l} (their language in the addressbook, else the default); "),
+                        None => String::new(),
+                    };
                     let from = members::From { sender: format!("phone:{num}"), ..Default::default() };
                     ctx.inbound_by(
                         &num,
                         &format!("phone:{num}"),
                         &format!("c{seq}"),
-                        &format!("[incoming call] from {num} — phone_call_accept() answers it (then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences; the line itself says a short \"Got it.\" / \"One moment.\" the moment it understands them, so never start a reply with one), phone_call_hangup() rejects it"),
+                        &format!("[incoming call] from {num} — {expect}phone_call_accept() answers it (lang=… holds the call in that language: say so when you know it, e.g. from the earlier chat; then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences; the line itself says a short \"Got it.\" / \"One moment.\" the moment it understands them, so never start a reply with one), phone_call_hangup() rejects it"),
                         at,
                         &from,
                     );
@@ -437,15 +441,39 @@ fn main() {
         })
         .tool(
             "call",
-            "Call a number from bia's phone line. Once they answer, their speech arrives on the phone:<number> chat and say() there speaks into the call (the line says a short \"Got it.\" / \"One moment.\" itself when it understands them: never start a reply with one).",
-            obj(json!({"chat_id": {"type": "string", "description": "the number, +34…"}}), &["chat_id"]),
+            "Call a number from bia's phone line (lang fixes the call's language). It first loads the speech models and voice of the call's language (a few seconds), then dials. Once they answer, their speech arrives on the phone:<number> chat and say() there speaks into the call (the line says a short \"Got it.\" / \"One moment.\" itself when it understands them: never start a reply with one).",
+            obj(
+                json!({
+                    "chat_id": {"type": "string", "description": "the number, +34…"},
+                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect the language of each phrase, starting from their addressbook language (else the default)."}
+                }),
+                &["chat_id"],
+            ),
             |_c, a| {
                 let to = chat_id(arg_str(&a, "chat_id")?);
-                api("POST", "/call", Some(&json!({"to": to})), Duration::from_secs(10))?;
-                // models load while it rings at the other end
+                let lang = match arg_str_opt(&a, "lang").filter(|l| !l.trim().is_empty()) {
+                    Some(l) => Some(bia_speech::check_call_lang(l)?),
+                    None => None,
+                };
+                if call::active_number().is_some() {
+                    return Err("a call is in progress: phone_call_hangup() first".into());
+                }
+                // the models load before dialling: the first words are heard at once
                 call::RINGING.store(true, std::sync::atomic::Ordering::Relaxed);
-                call::preparing();
-                Ok(format!("calling {to}"))
+                let langs = call::preparing(&to, lang.as_deref());
+                let waited = call::wait_ready(Duration::from_secs(25));
+                if let Err(e) = api("POST", "/call", Some(&json!({"to": to})), Duration::from_secs(10)) {
+                    call::RINGING.store(false, std::sync::atomic::Ordering::Relaxed);
+                    *call::plan().lock().unwrap() = None;
+                    return Err(e);
+                }
+                let how = match (&lang, langs.first()) {
+                    (Some(l), _) => format!(" (the call is held in {l})"),
+                    (None, Some(l)) => format!(" (expecting {l}; each phrase's language is detected)"),
+                    (None, None) => String::new(),
+                };
+                let load = if waited >= 1.0 { format!("; speech models loaded in {waited:.0} s first") } else { String::new() };
+                Ok(format!("calling {to}{how}{load}"))
             },
         )
         .tool(
@@ -457,7 +485,27 @@ fn main() {
                 call::say(ctx, &chat, arg_str(&a, "text")?, arg_str_opt(&a, "lang").unwrap_or(""))
             },
         )
-        .tool("call_accept", "Answer the phone call that is ringing now (it waits for the call's speech models to load first, up to 20 s, so the caller is heard at once).", obj(json!({"chat_id": {"type": "string"}}), &[]), |_c, _a| {
+        .tool(
+            "call_accept",
+            "Answer the phone call that is ringing now (it waits for the call's speech models to load first, up to 20 s, so the caller is heard at once). lang holds the call in that language.",
+            obj(
+                json!({
+                    "chat_id": {"type": "string"},
+                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect each phrase's language."}
+                }),
+                &[],
+            ),
+            |_c, a| {
+            if let Some(l) = arg_str_opt(&a, "lang").filter(|l| !l.trim().is_empty()) {
+                let code = bia_speech::check_call_lang(l)?;
+                let number = call::plan().lock().unwrap().as_ref().map(|p| p.number.clone());
+                match number {
+                    Some(n) => {
+                        call::preparing(&n, Some(&code));
+                    }
+                    None => return Err("no call is ringing".into()),
+                }
+            }
             let waited = call::wait_ready(Duration::from_secs(20));
             api("POST", "/answer", None, Duration::from_secs(10))?;
             Ok(if waited >= 1.0 { format!("answered (after {waited:.0} s loading the speech models)") } else { "answered".into() })

@@ -41,6 +41,8 @@ pub struct Listener {
     live: Option<Live>,
     /// Language of the utterance's first segment, found while waiting for the end.
     pre: Option<mpsc::Receiver<pipeline::Pre>>,
+    /// The call's language, fixed by bia: every phrase is decoded in it, no detection.
+    forced: Option<String>,
 }
 
 pub struct Utterance {
@@ -50,6 +52,7 @@ pub struct Utterance {
     live: Option<mpsc::Receiver<String>>,
     /// Found ahead for an utterance of one segment.
     pre: Option<mpsc::Receiver<pipeline::Pre>>,
+    forced: Option<String>,
 }
 
 /// Audio before the VAD noticed speech, fed first (Silero reports a start a little late).
@@ -147,7 +150,26 @@ impl Listener {
             audio_at: 0,
             live: reg.asr.get(&reg.asr_call).filter(|a| a.kind == models::ONLINE).and_then(|_| Live::start(reg.asr_call.clone())),
             pre: None,
+            forced: None,
         })
+    }
+
+    /// Hear the whole call in `lang` (bia was told the call's language): no language
+    /// detection, which also keeps a short "Hello" from being taken for another language.
+    /// The streaming call model is dropped when it does not know `lang` (Whisper takes it).
+    pub fn force_lang(&mut self, lang: &str) -> Result<(), String> {
+        let code = crate::langs::parse(lang).map(|l| l.code).ok_or_else(|| format!("unknown language {lang}"))?;
+        if !crate::langs::can_hear(&code) {
+            return Err(format!("{code} can not be heard (no speech model knows it)"));
+        }
+        let _ = crate::learn::enable_hearing(&code);
+        let reg = registry::current();
+        if crate::pipeline::call_model_for(&reg, &reg.asr_call, &code) != reg.asr_call {
+            self.live = None;
+        }
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).current = code.clone();
+        self.forced = Some(code);
+        Ok(())
     }
 
     /// A longer pause before an utterance counts as finished: phone calls (narrowband,
@@ -176,7 +198,7 @@ impl Listener {
         let had = self.pieces.len();
         self.pieces.extend(self.vad.accept(&x));
         // the first segment of an utterance: find its language while waiting for the end
-        if had == 0 && self.pieces.len() == 1 {
+        if had == 0 && self.pieces.len() == 1 && self.forced.is_none() {
             let (tx, rx) = mpsc::channel();
             let samples = self.pieces[0].samples.clone();
             let ok = std::thread::Builder::new()
@@ -221,7 +243,7 @@ impl Listener {
             let pieces = join_close(std::mem::take(&mut self.pieces), &self.audio, self.audio_at);
             let live = self.live.as_mut().and_then(Live::finish);
             let pre = self.pre.take().filter(|_| pieces.len() == 1);
-            return Some(Utterance { pieces, state: self.state.clone(), live, pre });
+            return Some(Utterance { pieces, state: self.state.clone(), live, pre, forced: self.forced.clone() });
         }
         None
     }
@@ -299,7 +321,7 @@ impl Utterance {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let asr = reg.asr_call.clone();
         let pre = self.pre.and_then(|r| r.recv_timeout(std::time::Duration::from_secs(10)).ok());
-        let opts = Opts { asr: &asr, forced: None, echo, speaker_key, echo_always, live: self.live.as_ref(), pre: pre.as_ref() };
+        let opts = Opts { asr: &asr, forced: self.forced.as_deref(), echo, speaker_key, echo_always, live: self.live.as_ref(), pre: pre.as_ref() };
         let mut heard = pipeline::transcribe(&reg, self.pieces, &mut st, &opts)?;
         // A new language on a call: learn it now; the next phrases route to it.
         if let Some(l) = &heard.new_lang {
