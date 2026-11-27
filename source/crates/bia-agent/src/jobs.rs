@@ -28,6 +28,17 @@ pub struct Job {
     pub log_path: String,
     #[serde(default)]
     pub pid: u32,
+    /// the open human messages this job works for (the call's for_ids, else the turn's)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub for_msgs: Vec<ForMsg>,
+}
+
+/// A human message a job works for: its envelope id, chat and sender.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ForMsg {
+    pub id: String,
+    pub channel: String,
+    pub identity: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -176,6 +187,7 @@ impl Store {
             ended: 0,
             log_path: log_path.to_string_lossy().into(),
             pid: 0,
+            for_msgs: vec![],
         };
         self.jobs.push(job.clone());
         self.save();
@@ -187,6 +199,32 @@ impl Store {
             j.jsonrpc_id = jsonrpc_id;
         }
         self.save();
+    }
+
+    pub fn set_for(&mut self, id: &str, for_msgs: Vec<ForMsg>) {
+        if let Some(j) = self.get_mut(id) {
+            j.for_msgs = for_msgs;
+        }
+        self.save();
+    }
+
+    /// Running jobs that work for someone, oldest first: (job, the message it works for,
+    /// "job:<id> <tool>, running <n>s").
+    pub fn running_for(&self) -> Vec<(ForMsg, String)> {
+        let mut running: Vec<&Job> = self
+            .jobs
+            .iter()
+            .filter(|j| (j.state == "running" || j.state == "killing") && !j.for_msgs.is_empty())
+            .collect();
+        running.sort_by_key(|j| j.issued);
+        let mut out = vec![];
+        for j in running {
+            let desc = format!("{PREFIX}{} {}, running {}s", j.id, j.tool, now().saturating_sub(j.issued));
+            for m in &j.for_msgs {
+                out.push((m.clone(), desc.clone()));
+            }
+        }
+        out
     }
 
     pub fn set_pid(&mut self, id: &str, pid: u32) {
@@ -420,6 +458,7 @@ mod tests {
             ended: 0,
             log_path: logs.join("busy.log").to_string_lossy().into(),
             pid: 0,
+            for_msgs: vec![],
         };
         let file = File { next: 0, jobs: vec![busy] };
         std::fs::create_dir_all(dir.join("state")).unwrap();

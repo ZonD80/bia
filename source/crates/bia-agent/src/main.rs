@@ -645,6 +645,7 @@ fn run(con: Arc<Console>, system_mode: bool) -> Result<repl::Exit> {
         fmm_ctx_used: 0,
         fmm_overhead: 0,
         fmm_backups: Default::default(),
+        turn_for: None,
         fmm_probation: None,
     };
     for m in &mut repl.history {

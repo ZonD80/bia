@@ -159,6 +159,139 @@ fn console_command(ib: &Inbound) -> Option<&str> {
     ib.text.trim().strip_prefix('/')
 }
 
+/// Who the work of a turn is for (see Repl::turn_for).
+#[derive(Clone, Debug)]
+pub enum TurnFor {
+    /// a person wrote: their open messages in that chat
+    Chat { identity: String, channel: String },
+    /// a job's result came in: the messages that job worked for
+    Msgs(Vec<crate::jobs::ForMsg>),
+}
+
+/// Remove the agent's `for_ids` argument from a call's arguments (also inside a wrapped
+/// `arguments` object); returns it.
+fn take_for_ids(args: &mut Value) -> Option<Value> {
+    let obj = args.as_object_mut()?;
+    let top = obj.remove("for_ids");
+    let inner = obj
+        .get_mut("arguments")
+        .and_then(|a| a.as_object_mut())
+        .and_then(|a| a.remove("for_ids"));
+    top.or(inner)
+}
+
+/// "m12 (Anna on telegram:-100), m15 (Ben on telegram:-100)"
+fn for_label(msgs: &[crate::jobs::ForMsg]) -> String {
+    msgs.iter()
+        .map(|m| format!("{} ({} on {})", m.id, m.identity, m.channel))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The open messages a call works for: its for_ids (resolved on the turn's chat first),
+/// else the turn's (the last writer's open messages, or the finished job's). An explicit
+/// empty list is bia's own work.
+fn resolve_for(open: &crate::unanswered::Set, turn: Option<&TurnFor>, arg: Option<&Value>) -> Vec<crate::jobs::ForMsg> {
+    let to_msg = |e: crate::unanswered::Entry| crate::jobs::ForMsg {
+        id: e.id,
+        channel: e.channel,
+        identity: e.identity,
+    };
+    let still_open = |m: &crate::jobs::ForMsg| open.find(&m.id, &m.channel).is_some_and(|e| e.channel == m.channel);
+    let prefer = match turn {
+        Some(TurnFor::Chat { channel, .. }) => channel.clone(),
+        Some(TurnFor::Msgs(m)) => m.first().map(|m| m.channel.clone()).unwrap_or_default(),
+        None => String::new(),
+    };
+    if let Some(v) = arg {
+        let ids: Vec<String> = match v {
+            Value::Array(a) => a
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from).or_else(|| x.as_u64().map(|n| n.to_string())))
+                .collect(),
+            Value::String(s) => s.split([',', ' ']).map(String::from).collect(),
+            Value::Number(n) => vec![n.to_string()],
+            _ => vec![],
+        };
+        let mut out: Vec<crate::jobs::ForMsg> = vec![];
+        for id in ids.iter().map(|i| i.trim()).filter(|i| !i.is_empty()) {
+            if let Some(e) = open.find(id, &prefer) {
+                let m = to_msg(e);
+                if !out.contains(&m) {
+                    out.push(m);
+                }
+            }
+        }
+        return out;
+    }
+    match turn {
+        Some(TurnFor::Chat { identity, channel }) => open.open_of(identity, channel).into_iter().map(to_msg).collect(),
+        Some(TurnFor::Msgs(m)) => m.iter().filter(|m| still_open(m)).cloned().collect(),
+        None => vec![],
+    }
+}
+
+/// The line added to a job result: who it works for and, per chat whose status is due
+/// (the same schedule as the unanswered reminders, so several results ask once), the status
+/// to send before the next step. Never while bia speaks into that call.
+fn for_note(open: &mut crate::unanswered::Set, msgs: Vec<crate::jobs::ForMsg>, now: u64) -> String {
+    let msgs: Vec<crate::jobs::ForMsg> = msgs
+        .into_iter()
+        .filter(|m| open.find(&m.id, &m.channel).is_some_and(|e| e.channel == m.channel))
+        .collect();
+    if msgs.is_empty() {
+        return String::new();
+    }
+    let mut chans: Vec<String> = vec![];
+    for m in &msgs {
+        if !chans.contains(&m.channel) {
+            chans.push(m.channel.clone());
+        }
+    }
+    let mut late: Vec<String> = vec![];
+    let mut busy: Vec<String> = vec![];
+    for ch in chans {
+        if open.is_speaking(&ch, now) {
+            busy.push(ch);
+        } else if let Some(waited) = open.claim_status(&ch, now) {
+            let call = open.in_call(&ch);
+            late.push(format!("{ch} has heard nothing for {waited}s{}", if call { " (in a voice call)" } else { "" }));
+        }
+    }
+    let mut note = format!("\n[for {}]", for_label(&msgs));
+    if !late.is_empty() {
+        note.push_str(&format!(
+            " {}: before the next step, say a short status there (or the answer, with answered=[…], if this finishes it).",
+            late.join("; ")
+        ));
+    }
+    if !busy.is_empty() {
+        note.push_str(&format!(
+            " You are still speaking into the call on {}: wait for [you finished speaking] before you say more there.",
+            busy.join(", ")
+        ));
+    }
+    note
+}
+
+/// What bia said into a call has played, was cut, or could not be made.
+fn speech_done(text: &str) -> bool {
+    let t = text.trim_start();
+    ["[you finished speaking]", "[voice cancelled]", "[voice failed"].iter().any(|p| t.starts_with(p))
+}
+
+/// A voice call on the envelope's chat started (true) or ended (false).
+fn call_state(text: &str) -> Option<bool> {
+    let t = text.trim_start();
+    if t.starts_with("[call ready]") || t.starts_with("[call started]") {
+        Some(true)
+    } else if ["[call ended]", "[call rejected]", "[call declined]", "[missed call]"].iter().any(|p| t.starts_with(p)) {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// A human message that the model must eventually close with answered=[ids].
 /// The physical console is not tracked: the person there watches the model work.
 fn needs_answer(ib: &Inbound) -> bool {
@@ -271,6 +404,9 @@ pub struct Repl {
     /// tokens the provider counted beyond the history at the last reply (system prompt, tools)
     pub fmm_overhead: usize,
     pub fmm_backups: std::collections::HashMap<String, Vec<u8>>,
+    /// Who the work of this turn is for, when a call leaves out for_ids: the person who
+    /// wrote last, or the messages of the job whose result came in.
+    pub turn_for: Option<TurnFor>,
     /// FMM settings from before the last switch, kept until the new provider's first real
     /// reply succeeds; if that reply fails they are restored and the turn runs again.
     pub fmm_probation: Option<Vec<u8>>,
@@ -2282,7 +2418,10 @@ now: {now}", done.join("\n")), failed)
     fn run_calls(&mut self, calls: &[ToolCall]) {
         self.tools.fired_job.set(false);
         for c in calls {
-            let (raw_name, raw_args) = crate::tools::Tools::expand_call(&c.name, &c.args);
+            let (raw_name, mut raw_args) = crate::tools::Tools::expand_call(&c.name, &c.args);
+            // the agent's own argument: never reaches the function (or guide_call, which
+            // would map a stray key onto a real parameter)
+            let for_arg = take_for_ids(&mut raw_args).or_else(|| c.args.get("for_ids").cloned());
             let (name, args, note) = match self.tools.guide_call(&raw_name, &raw_args) {
                 // unwrap once more after guide_call aligned the arguments, the way Tools::call
                 // will: a discover(call="bash") must reach the job path below, not the tools
@@ -2338,7 +2477,8 @@ now: {now}", done.join("\n")), failed)
             if name == "bash" {
                 match self.tools.fire_bash(&args, &c.id) {
                     Ok(jid) => {
-                        let stub = note_body(format!("accepted job:{jid}; result will arrive as system|job:{jid}|issued|delivered||…"));
+                        let served = self.tag_job(&jid, for_arg.as_ref());
+                        let stub = note_body(format!("accepted job:{jid}{served}; result will arrive as system|job:{jid}|issued|delivered||…"));
                         self.con.writeln(&self.con.c(GRAY, &format!("     {stub}")));
                         self.log(&format!("tool {name}"), &stub);
                         self.push_history(Msg::tool(c.name.clone(), c.id.clone(), stub));
@@ -2357,7 +2497,8 @@ now: {now}", done.join("\n")), failed)
             if self.tools.is_mcp(&name) {
                 match self.fire_mcp_job(&name, &args, &c.id) {
                     Ok(jid) => {
-                        let stub = note_body(format!("accepted job:{jid}; result will arrive as system|job:{jid}|issued|delivered||…"));
+                        let served = self.tag_job(&jid, for_arg.as_ref());
+                        let stub = note_body(format!("accepted job:{jid}{served}; result will arrive as system|job:{jid}|issued|delivered||…"));
                         self.con.writeln(&self.con.c(GRAY, &format!("     {stub}")));
                         self.log(&format!("tool {name}"), &stub);
                         self.push_history(Msg::tool(c.name.clone(), c.id.clone(), stub));
@@ -2427,6 +2568,49 @@ now: {now}", done.join("\n")), failed)
             };
             self.push_history(Msg::tool(c.name.clone(), c.id.clone(), content));
         }
+    }
+
+    fn for_msgs(&self, arg: Option<&Value>) -> Vec<crate::jobs::ForMsg> {
+        resolve_for(&self.tools.unanswered, self.turn_for.as_ref(), arg)
+    }
+
+    /// Record who a fired job works for; returns " for m12 (Anna)" for the call's result.
+    /// for_ids that name no open message (an event's id, a closed one) fall back to the
+    /// turn's people, and the result says so.
+    fn tag_job(&mut self, jid: &str, arg: Option<&Value>) -> String {
+        let mut msgs = self.for_msgs(arg);
+        let mut note = String::new();
+        if msgs.is_empty() && arg.is_some_and(|v| !matches!(v, Value::Array(a) if a.is_empty())) {
+            msgs = self.for_msgs(None);
+            if !msgs.is_empty() {
+                note = format!(" (for_ids {} named no open message)", arg.map(|v| v.to_string()).unwrap_or_default());
+            }
+        }
+        if msgs.is_empty() {
+            return String::new();
+        }
+        // fire_mcp may put MCP reload notes before the id
+        let id = jid.split_whitespace().last().unwrap_or(jid);
+        let shown = for_label(&msgs);
+        self.tools
+            .jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_for(id, msgs);
+        format!(" for {shown}{note}")
+    }
+
+    /// A job result for someone: who it is for and, when they have waited without a word
+    /// for the chat's nudge interval, the status to send now.
+    fn job_for_note(&mut self, ib: &Inbound) -> String {
+        let Some(id) = ib.channel.strip_prefix(crate::jobs::PREFIX) else {
+            return String::new();
+        };
+        let msgs = {
+            let st = self.tools.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            st.get(id).map(|j| j.for_msgs.clone()).unwrap_or_default()
+        };
+        for_note(&mut self.tools.unanswered, msgs, crate::clock::unix(crate::clock::now()))
     }
 
     /// Fire an MCP function as a job. FMM calls keep the current fmm.json, restored when the
@@ -3003,10 +3187,16 @@ now: {now}", done.join("\n")), failed)
     fn unanswered_due(&mut self) -> Option<Inbound> {
         let now = crate::clock::unix(crate::clock::now());
         let due = self.tools.unanswered.check(now);
-        for (identity, channel) in &due.fallback {
-            let line = match self.tools.send_fallback(identity, channel) {
-                Ok(r) => format!("unanswered: no reply after nudges; sent fallback ({r}); muted until a new message or job event"),
-                Err(e) => format!("unanswered: fallback to {identity}@{channel} failed: {e:#}"),
+        for fb in &due.fallback {
+            let line = match self.tools.send_fallback(fb) {
+                Ok(r) => {
+                    self.tools.unanswered.on_fallback(&fb.channel, now);
+                    if fb.call && r.contains("spoken in") {
+                        self.tools.unanswered.speaking_started(&fb.channel, now);
+                    }
+                    format!("unanswered: no reply after nudges; sent fallback ({r}); muted until a new message or job event")
+                }
+                Err(e) => format!("unanswered: fallback to {}@{} failed: {e:#}", fb.identity, fb.channel),
             };
             self.con.writeln(&self.con.c(GRAY, &format!("  {line}")));
             self.log("system", &line);
@@ -3014,18 +3204,21 @@ now: {now}", done.join("\n")), failed)
         if due.nudge.is_empty() {
             return None;
         }
-        let jobs = self
-            .tools
-            .jobs
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .running_brief();
+        let (jobs, work) = {
+            let st = self.tools.jobs.lock().unwrap_or_else(|e| e.into_inner());
+            let work: Vec<crate::unanswered::Work> = st
+                .running_for()
+                .into_iter()
+                .map(|(m, job)| crate::unanswered::Work { channel: m.channel, id: m.id, job })
+                .collect();
+            (st.running_brief(), work)
+        };
         Some(Inbound {
             identity: ID_SYSTEM.into(),
             channel: CH_CONSOLE.into(),
             issued: crate::clock::now(),
             id: crate::console::mint_msg_id(),
-            text: crate::unanswered::notice(&due, &jobs, now),
+            text: crate::unanswered::notice(&due, &jobs, &work, now),
             sender: String::new(),
             group: false,
         })
@@ -3127,14 +3320,33 @@ now: {now}", done.join("\n")), failed)
             self.to_read.push((ib.channel.clone(), ib.id.clone(), ib.sender.clone()));
         }
         let now = crate::clock::unix(crate::clock::now());
+        if let Some(on) = call_state(&ib.text) {
+            self.tools.unanswered.set_call(&ib.channel, on, now);
+        }
+        if speech_done(&ib.text) {
+            self.tools.unanswered.speaking_done(&ib.channel, now);
+        }
+        let mut text = ib.text.clone();
         if ib.channel.starts_with(crate::jobs::PREFIX) {
             self.tools.unanswered.wake(now);
+            text.push_str(&self.job_for_note(ib));
+            // work that follows this result is for the same people
+            let msgs = ib
+                .channel
+                .strip_prefix(crate::jobs::PREFIX)
+                .and_then(|id| self.tools.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(id).map(|j| j.for_msgs.clone()))
+                .unwrap_or_default();
+            if !msgs.is_empty() {
+                self.turn_for = Some(TurnFor::Msgs(msgs));
+            }
         } else if needs_answer(ib) && self.wants_answer(ib) {
+            let lang = speech_lang(&ib.text).unwrap_or_default();
             self.tools
                 .unanswered
-                .add(&id, &ib.channel, &ib.identity, now);
+                .add_msg(&id, &ib.channel, &ib.identity, now, ib.group, &lang);
+            self.turn_for = Some(TurnFor::Chat { identity: ib.identity.clone(), channel: ib.channel.clone() });
         }
-        let env = envelope(&ib.identity, &ib.channel, ib.issued, &id, &ib.text);
+        let env = envelope(&ib.identity, &ib.channel, ib.issued, &id, &text);
         self.push_history(Msg::user(env));
         // not reflected away before the model has had a step with it
         if let Some(m) = self.history.last() {
@@ -4054,4 +4266,123 @@ fn sampling_line(s: &crate::config::SamplingCfg) -> String {
         "temperature {} top_p {} top_k {} min_p {} repeat_penalty {} repeat_last_n {}",
         s.temperature, s.top_p, s.top_k, s.min_p, s.repeat_penalty, s.repeat_last_n
     )
+}
+
+#[cfg(test)]
+mod for_ids_tests {
+    use super::*;
+    use crate::jobs::ForMsg;
+    use crate::unanswered::Set;
+    use serde_json::json;
+
+    fn fm(id: &str, ch: &str, who: &str) -> ForMsg {
+        ForMsg { id: id.into(), channel: ch.into(), identity: who.into() }
+    }
+
+    #[test]
+    fn for_ids_is_taken_out_of_the_call() {
+        let mut a = json!({"command": "ls", "for_ids": ["m1"]});
+        assert_eq!(take_for_ids(&mut a), Some(json!(["m1"])));
+        assert_eq!(a, json!({"command": "ls"}));
+        let mut w = json!({"call": "bash", "arguments": {"command": "ls", "for_ids": "m2"}});
+        assert_eq!(take_for_ids(&mut w), Some(json!("m2")));
+        assert_eq!(w, json!({"call": "bash", "arguments": {"command": "ls"}}));
+        let mut none = json!({"command": "ls"});
+        assert_eq!(take_for_ids(&mut none), None);
+        assert_eq!(crate::tools::without_for_ids(&json!({"q": 1, "for_ids": []})), json!({"q": 1}));
+    }
+
+    #[test]
+    fn call_markers() {
+        assert_eq!(call_state("[call ready]"), Some(true));
+        assert_eq!(call_state("[call started] (they called you)"), Some(true));
+        assert_eq!(call_state("[call ended] (2m)"), Some(false));
+        assert_eq!(call_state("[missed call] from +34"), Some(false));
+        assert_eq!(call_state("[speech en] call me later"), None);
+        assert_eq!(call_state("[incoming call] from +34"), None);
+    }
+
+    /// One person's burst: a call without for_ids works for all their open messages in
+    /// that chat; someone else's open messages there are not taken along.
+    #[test]
+    fn default_is_the_last_writers_open_messages() {
+        let mut s = Set::mem();
+        s.add_msg("1", "telegram:-5", "anna", 0, true, "");
+        s.add_msg("2", "telegram:-5", "anna", 1, true, "");
+        s.add_msg("3", "telegram:-5", "ben", 2, true, "");
+        let turn = TurnFor::Chat { identity: "anna".into(), channel: "telegram:-5".into() };
+        let got = resolve_for(&s, Some(&turn), None);
+        assert_eq!(got, [fm("1", "telegram:-5", "anna"), fm("2", "telegram:-5", "anna")]);
+        assert!(resolve_for(&s, None, None).is_empty());
+    }
+
+    /// Explicit ids: several people for one task, the turn's chat first for ids that
+    /// repeat across chats, unknown or closed ids dropped, [] = bia's own work.
+    #[test]
+    fn explicit_ids_resolve() {
+        let mut s = Set::mem();
+        s.add_msg("12", "telegram:-5", "anna", 0, true, "");
+        s.add_msg("16", "telegram:-5", "ben", 1, true, "");
+        s.add_msg("12", "whatsapp:9", "carl", 2, false, "");
+        let turn = TurnFor::Chat { identity: "ben".into(), channel: "telegram:-5".into() };
+        let got = resolve_for(&s, Some(&turn), Some(&json!(["12", "16", "nope"])));
+        assert_eq!(got, [fm("12", "telegram:-5", "anna"), fm("16", "telegram:-5", "ben")]);
+        // a string list and a single number work too
+        assert_eq!(resolve_for(&s, Some(&turn), Some(&json!("12, 16"))).len(), 2);
+        assert_eq!(resolve_for(&s, Some(&turn), Some(&json!(16))), [fm("16", "telegram:-5", "ben")]);
+        assert!(resolve_for(&s, Some(&turn), Some(&json!([]))).is_empty());
+    }
+
+    /// After a job result, the next calls work for that job's people, as long as their
+    /// messages are open.
+    #[test]
+    fn job_turn_carries_its_people() {
+        let mut s = Set::mem();
+        s.add_msg("m1", "web", "root", 0, false, "");
+        let turn = TurnFor::Msgs(vec![fm("m1", "web", "root"), fm("gone", "web", "root")]);
+        assert_eq!(resolve_for(&s, Some(&turn), None), [fm("m1", "web", "root")]);
+        s.on_reply("web", &["m1".into()], 5);
+        assert!(resolve_for(&s, Some(&turn), None).is_empty());
+    }
+
+    #[test]
+    fn job_result_names_who_and_asks_for_a_late_status() {
+        let mut s = Set::mem();
+        s.add_msg("m12", "telegram:-5", "anna", 100, true, "");
+        let msgs = vec![fm("m12", "telegram:-5", "anna")];
+        // soon after the message: who it is for, nothing to do yet
+        let n = for_note(&mut s, msgs.clone(), 110);
+        assert_eq!(n, "\n[for m12 (anna on telegram:-5)]");
+        // the status is due at 20s: the first result asks for it...
+        let n = for_note(&mut s, msgs.clone(), 125);
+        assert!(n.contains("telegram:-5 has heard nothing for 25s: before the next step, say a short status there"), "{n}");
+        // ...and a second result, or the reminder, a moment later do not ask again
+        assert!(!for_note(&mut s, msgs.clone(), 126).contains("heard nothing"));
+        assert!(s.check(126).nudge.is_empty(), "asking in a job result counts as the reminder");
+        // answered: nothing to note
+        s.on_reply("telegram:-5", &["m12".into()], 132);
+        assert_eq!(for_note(&mut s, msgs, 140), "");
+    }
+
+    /// In a call nothing is asked while bia speaks; the 10 s count from when it finished.
+    #[test]
+    fn nothing_is_asked_over_bias_own_words() {
+        let mut s = Set::mem();
+        s.set_call("phone:+1", true, 0);
+        s.add_msg("p1", "phone:+1", "alex", 100, false, "en");
+        let msgs = vec![fm("p1", "phone:+1", "alex")];
+        s.speaking_started("phone:+1", 103);
+        let n = for_note(&mut s, msgs.clone(), 112);
+        assert!(!n.contains("heard nothing"), "{n}");
+        assert!(n.contains("still speaking into the call on phone:+1: wait for [you finished speaking]"), "{n}");
+        assert!(s.check(112).nudge.is_empty() && s.check(112).fallback.is_empty(), "no reminder, no fallback while speaking");
+        // finished at 115: due 10s later, not before
+        s.speaking_done("phone:+1", 115);
+        assert!(!for_note(&mut s, msgs.clone(), 124).contains("heard nothing"));
+        let n = for_note(&mut s, msgs.clone(), 125);
+        assert!(n.contains("phone:+1 has heard nothing for 10s (in a voice call)"), "{n}");
+        assert!(speech_done("[you finished speaking]") && speech_done("[voice cancelled]") && speech_done("[voice failed: x]"));
+        assert!(!speech_done("[speech en] done"));
+    }
+
 }

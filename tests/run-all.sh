@@ -165,6 +165,11 @@ ticker_agent() {
   builder 'cargo build -q -p bia-agent && python3 -I tests/integration/ticker-e2e.py "$CARGO_TARGET_DIR/debug"'
 }
 
+# statuses while bia works: for_ids on jobs, one status per chat, 10 s in a voice call, spoken fallback
+status_agent() {
+  builder 'cargo build -q -p bia-agent && python3 -I tests/integration/status-e2e.py "$CARGO_TARGET_DIR/debug"'
+}
+
 for stage in "$@"; do
   case $stage in
     unit)
@@ -178,6 +183,7 @@ for stage in "$@"; do
       run members-mcp members_mcp
       run queue-agent queue_agent
       run ticker-agent ticker_agent
+      run status-agent status_agent
       run max-mcp max_mcp
       run screen-desktop screen_desktop
       run chrome-cert chrome_cert

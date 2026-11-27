@@ -582,6 +582,10 @@ fn speaker() -> &'static mpsc::Sender<Say> {
                 if let Err(e) = r {
                     log(format!("voice failed: {e}"));
                     job.ctx.inbound("system", &format!("phone:{}", job.chat), "", &format!("[voice failed: {e}]"));
+                } else if cuttable && !superseded(gen) && active_number().as_deref() == Some(job.chat.as_str()) {
+                    // what bia said has played to the end (as on the other buses); the
+                    // line's own acknowledgments are not bia's words and say nothing
+                    job.ctx.inbound("system", &format!("phone:{}", job.chat), "", "[you finished speaking]");
                 }
             }
         });

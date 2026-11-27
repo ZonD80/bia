@@ -6,8 +6,8 @@ nothing. Meanwhile a mixed group talks without pause (one message mentions bia b
 model sends a status at the second nudge and the answer when the job is done.
 
 Checks:
-- the first nudge comes about 15s after the model got the request, though the group never
-  stops talking, and it lists the running job; the second follows about 30s later;
+- the first nudge comes about 20s after the model got the request, though the group never
+  stops talking, and it lists the running job; the second follows about 40s later;
 - a status the model sends reaches the chat; the answer closes the request (no nudge after);
 - group talk is no request: none of it is ever nudged, a root contact's talk in the mixed group
   neither, nothing is sent to the group; a message naming bia there is nudged.
@@ -225,13 +225,13 @@ print(f"     {len(R)} requests, {len(nudges)} nudges for the request, {len(ids)}
 check(task is not None, "the request reached the model")
 if task and nudges:
     d1 = nudges[0]["t"] - task["t"]
-    check(12 <= d1 <= 30, f"the first nudge came about 15s after the request, with the group talking all along ({d1:.0f}s)")
+    check(17 <= d1 <= 30, f"the first nudge came about 20s after the request, with the group talking all along ({d1:.0f}s)")
     check("running jobs: none" not in nudges[0]["nudge"] and "bash" in nudges[0]["nudge"], "it lists the running job")
 else:
     check(False, "a nudge came for the open request")
 if len(nudges) >= 2:
     d2 = nudges[1]["t"] - nudges[0]["t"]
-    check(25 <= d2 <= 50, f"the second came about 30s after the first ({d2:.0f}s)")
+    check(35 <= d2 <= 50, f"the second came about 40s after the first ({d2:.0f}s)")
 else:
     check(False, f"a second nudge came ({len(nudges)})")
 check(any(s.get("chat_id") == "5" and "MSG-STATUS" in str(s.get("text", "")) for s in sends), "the status reached the chat")

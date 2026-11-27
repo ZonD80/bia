@@ -117,6 +117,8 @@ fn save_seq(n: i64) {
 fn poll(ctx: Ctx) {
     let mut announced_down = false;
     let mut ringing_from = String::new();
+    // the number of the call in progress (its [call ended] names the chat)
+    let mut active_from = String::new();
     loop {
         // first start: only what happens from now on (no flood of the phone's past)
         let after = match load_seq() {
@@ -150,7 +152,7 @@ fn poll(ctx: Ctx) {
                     if seq <= after {
                         continue;
                     }
-                    deliver(&ctx, &e, &mut ringing_from);
+                    deliver(&ctx, &e, &mut ringing_from, &mut active_from);
                     save_seq(seq);
                 }
             }
@@ -165,7 +167,7 @@ fn poll(ctx: Ctx) {
     }
 }
 
-fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String) {
+fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String, active_from: &mut String) {
     let seq = e["seq"].as_i64().unwrap_or(0);
     let at = e["at"].as_i64().unwrap_or_else(now);
     match e["type"].as_str().unwrap_or("") {
@@ -246,12 +248,19 @@ fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String) {
                     ctx.log(format!("phone: call active {num}"));
                     if !num.is_empty() {
                         call::started(ctx, &num);
+                        // as on the other buses: the agent paces its statuses by it
+                        ctx.inbound("system", &format!("phone:{num}"), "", "[call ready]");
+                        *active_from = num.clone();
                     }
                 }
                 "idle" => {
                     ctx.log("phone: call ended");
                     call::ended();
                     ringing_from.clear();
+                    if !active_from.is_empty() {
+                        ctx.inbound("system", &format!("phone:{active_from}"), "", "[call ended]");
+                        active_from.clear();
+                    }
                 }
                 _ => {}
             }

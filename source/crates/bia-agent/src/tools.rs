@@ -1114,7 +1114,7 @@ impl Tools {
             recent_calls: Default::default(),
         };
         let obj = |props: Value, req: &[&str]| json!({"type": "object", "properties": props, "required": req});
-        t.add_grouped("discover", "discover", "The only tool in the list. An empty path lists the tree. path opens a branch (shell, talk, calendar, memory, jobs, machine, or mcp/<server>). enable=true appends that branch's function schemas once. Then call each function by the name in the schema, for example bash(...) or system_fmm_configure(...). Do not enable the same path again. q searches. call and arguments also run a function. The list never grows.",
+        t.add_grouped("discover", "discover", "The only tool in the list. An empty path lists the tree. path opens a branch (shell, talk, calendar, memory, jobs, machine, or mcp/<server>). enable=true appends that branch's function schemas once. Then call each function by the name in the schema, for example bash(...) or system_fmm_configure(...). Do not enable the same path again. q searches. call and arguments also run a function. The list never grows. Any function call (bash, MCP functions) also takes for_ids: the envelope ids of the human messages it works for (one task may serve several messages, also from several people); left out, it works for the open messages of whoever wrote last; [] = your own work. Those people get a status when it runs long.",
             obj(json!({
                 "path": {"type": "string", "description": "branch, e.g. shell or mcp/telegram or mcp/whatsapp; empty lists the top"},
                 "enable": {"type": "boolean", "description": "append this branch's function schemas"},
@@ -1135,7 +1135,8 @@ impl Tools {
                 "command": {"type": "string", "description": "passed to sh -lc"},
                 "user": {"type": "string", "description": "root (default) or bia"},
                 "cwd": {"type": "string", "description": "working directory (default /home/bia)"},
-                "timeout_secs": {"type": "integer", "description": "kill after this many seconds (default 600, 0 = no limit)"}
+                "timeout_secs": {"type": "integer", "description": "kill after this many seconds (default 600, 0 = no limit)"},
+                "for_ids": {"type": "array", "items": {"type": "string"}, "description": "envelope ids of the human messages this works for (default: the open messages of whoever wrote last; [] = your own work)"}
             }), &["command"]));
         t.add_grouped("talk", "say", "Send a message to an identity on a channel and return immediately (the result names the new message id). On telegram/whatsapp/messenger/instagram/max every message gets a local id o<n>; a send still uploading after a few seconds (big files) returns \"queued as o<n>\" and its outcome arrives later ([sent o<n> → …] with the platform ids, or [send failed o<n> …] as system|outbox). o<n> works as a message id for edit, react and delete_messages right away — they wait for that send; o<n>.2 is its second message. cancel=o<n> stops a send that is still queued or uploading; list_jobs shows sends in flight. Reply on the channel of the inbound envelope, copied exactly (physical screen → console, web with the sender's identity, telegram:<id>, whatsapp:<phone>). On web, what you send to someone who is not connected waits there and reaches them when they are back. Omitting identity/channel uses the last human inbound this turn. Their reply arrives later as a normal inbound message — do not wait inside this tool. answered lists inbound envelope ids whose task is done; leave it out for a status update while still working. With answered and no message, files or poll, nothing is sent and the ids are just closed. files are paths under /home/bia/files (or absolute) sent as attachments (pictures show as photos). On web chats you can also quote a message with reply_to (the envelope id), attach inline buttons (pressing one arrives as [button] \"text\" on <id>) and send a poll (votes arrive as [vote]). edit=<message id> replaces the text of a message you sent earlier (the id from that say result) instead of sending a new one — on web, telegram and whatsapp chats (WhatsApp allows ~15 minutes); text only, no files/voice/poll. voice=true (with lang) sends message as a voice message instead of text on web, telegram and whatsapp chats — only when the user asks for a voice reply; voice messages they send arrive transcribed as [speech <lang>]. If a Telegram or WhatsApp voice call is active on that chat, the message is also spoken into the call: then pass lang (the language of the text, e.g. en, ru; other-language parts inline as <lang=xx>…</lang>), otherwise it is only sent as text. On a call: wait for [you finished speaking] before speaking again; another say/call_say while still speaking cancels the current utterance ([voice cancelled]). [speech <lang>] may arrive mid-utterance — listen, but do not speak over yourself unless you intentionally interrupt.",
             obj(json!({
@@ -2613,8 +2614,28 @@ impl Tools {
                     false,
                 );
             }
+            // nothing at all to send: an empty message would reach the chat
+            if blank("message") && blank("files") && blank("poll") && blank("edit") {
+                return ("error: nothing to send: say needs message, files or poll (answered=[…] alone closes messages)".into(), true);
+            }
+            // a status into a call while bia still speaks there would cut its own words: not
+            // said; an answer (answered=[…]) may still interrupt on purpose
+            let now = crate::clock::unix(crate::clock::now());
+            if str_list(args, "answered").is_empty() && blank("edit") && self.unanswered.is_speaking(&channel, now) {
+                return (
+                    format!("not said: you are still speaking into the call on {channel}; wait for [you finished speaking], then say it if it still matters (an answer with answered=[…] may interrupt)"),
+                    false,
+                );
+            }
             return match self.say(args) {
-                Ok(s) => (self.note_reply(&channel, args, s), false),
+                Ok(s) => {
+                    if s.contains("spoken in") {
+                        // into a call: no reminder until [you finished speaking]
+                        let now = crate::clock::unix(crate::clock::now());
+                        self.unanswered.speaking_started(&channel, now);
+                    }
+                    (self.note_reply(&channel, args, s), false)
+                }
                 Err(e) => (format!("error: {e}"), true),
             };
         }
@@ -3098,6 +3119,7 @@ impl Tools {
 
     /// Fire a shell command as a job. Returns the job id.
     pub fn fire_bash(&mut self, args: &Value, call_id: &str) -> Result<String, String> {
+        let args = &without_for_ids(args);
         let job = {
             let mut st = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
             st.alloc("bash", "bash", call_id)?
@@ -3120,7 +3142,7 @@ impl Tools {
     }
 
     pub fn fire_mcp(&mut self, name: &str, args: &Value, call_id: &str) -> Result<String, String> {
-        let r = self.fire_mcp_inner(name, args, call_id);
+        let r = self.fire_mcp_inner(name, &without_for_ids(args), call_id);
         match r {
             Ok(t) => Ok(self.with_reload_notes(t)),
             Err(e) => Err(self.with_reload_notes(e)),
@@ -3724,12 +3746,17 @@ impl Tools {
     }
 
     /// The automatic "still working on it" for a channel that ignored its nudges.
-    pub fn send_fallback(&mut self, identity: &str, channel: &str) -> Result<String> {
-        self.say(&json!({
-            "identity": identity,
-            "channel": channel,
-            "message": crate::unanswered::FALLBACK_TEXT,
-        }))
+    pub fn send_fallback(&mut self, fb: &crate::unanswered::Fallback) -> Result<String> {
+        let mut args = json!({
+            "identity": fb.identity,
+            "channel": fb.channel,
+            "message": fb.text(),
+        });
+        // spoken into a call: in the language they speak (say needs it there)
+        if fb.call && !fb.lang.is_empty() {
+            args["lang"] = json!(fb.lang);
+        }
+        self.say(&args)
     }
 
     fn say(&mut self, args: &Value) -> Result<String> {
@@ -4333,6 +4360,15 @@ pub fn human(bytes: u64) -> String {
     }
 }
 
+/// The arguments without the agent's own `for_ids` (who the work is for; never sent on).
+pub fn without_for_ids(args: &Value) -> Value {
+    let mut a = args.clone();
+    if let Some(o) = a.as_object_mut() {
+        o.remove("for_ids");
+    }
+    a
+}
+
 #[cfg(test)]
 mod web_tests {
     use super::*;
@@ -4436,6 +4472,27 @@ done
         assert_eq!(args, json!({"note": "week done"}));
         let (name, _) = Tools::expand_call("discover", &json!({"path": "memory", "arguments": {"x": 1}}));
         assert_eq!(name, "discover");
+    }
+
+    #[test]
+    fn say_in_a_call_does_not_cut_bias_own_words() {
+        let dir = std::env::temp_dir().join(format!("bia-say-speaking-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("files").join("state")).unwrap();
+        let mut t = Tools::new(&dir.join("files"), Console::for_test());
+        let now = crate::clock::unix(crate::clock::now());
+        t.unanswered.set_call("telegram:7", true, now);
+        t.unanswered.speaking_started("telegram:7", now);
+        let (out, err) = t.call("say", &json!({"identity": "Carl", "channel": "telegram:7", "message": "still on it"}), &mut |_| {});
+        assert!(!err && out.starts_with("not said: you are still speaking into the call on telegram:7"), "{out}");
+        // nothing at all to send is an error, never an empty message
+        let (out, err) = t.call("say", &json!({"identity": "Carl", "channel": "telegram:7"}), &mut |_| {});
+        assert!(err && out.contains("nothing to send"), "{out}");
+        // closing without a message still works while speaking
+        t.unanswered.add("m1", "telegram:7", "Carl", now);
+        let (out, err) = t.call("say", &json!({"identity": "Carl", "channel": "telegram:7", "answered": ["m1"]}), &mut |_| {});
+        assert!(!err && out.contains("answered m1"), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

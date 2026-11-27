@@ -5,6 +5,21 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.4
+
+### Changes
+- While bia works on something long, people hear from it: each job knows whose message it works for, and when someone has heard nothing for 20 s (then 40, 80… in chats; every 10 s in a voice call) bia is told exactly who waits for which running job and sends one short status there. If it still says nothing, the line itself speaks a short "Still working on it." in the caller's language after 20 s in a call (in chats after five ignored reminders, as before).
+- In a group, everyone waiting gets one status together (naming each of them) instead of one message per person, and someone else writing no longer pushes back the status another person is due.
+- A job's result says whose request it was for, so answers go to the right chat when several people wait at once.
+- In a call, nothing is asked of bia or said for it over its own words: reminders and the automatic "still working" wait until what bia is saying has played, and count from then. A status bia tries to say while it is still speaking is held back instead of cutting it off (an answer may still interrupt).
+- A message with nothing in it is no longer sent: say without a message, files or a poll is an error.
+- Phone calls now tell bia when they start and end ([call ready] / [call ended]) and when what it said has played ([you finished speaking]), like Telegram and WhatsApp calls.
+
+### For bia
+- Tag each function call with the messages it works for: for_ids=["<envelope id>", …] (one task may serve several messages, also from several people; [] for your own work). Left out, it works for the open messages of whoever wrote last.
+- When an unanswered: notice or a job result says someone has heard nothing, send the one status it asks for in that chat (in a call: one short spoken sentence) before your next step.
+- In a call, say one thing, then wait for [you finished speaking] before the next; a status said while you still speak comes back "not said".
+
 ## 2.5.3
 
 ### Changes
