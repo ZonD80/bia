@@ -232,7 +232,7 @@ fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String, active_from: &mut St
                         &num,
                         &format!("phone:{num}"),
                         &format!("c{seq}"),
-                        &format!("[incoming call] from {num} — {expect}phone_call_accept() answers it (lang=… holds the call in that language: say so when you know it, e.g. from the earlier chat; then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences; the line itself says a short \"Got it.\" / \"One moment.\" the moment it understands them, so never start a reply with one), phone_call_hangup() rejects it"),
+                        &format!("[incoming call] from {num} — {expect}phone_call_accept(greeting=\"…\") answers it with your first words (required; never say() a greeting after it; lang=… holds the call in that language: say so when you know it, e.g. from the earlier chat; then you hear them and say() speaks into the call; it is a phone call: answer in one or two short sentences; the line itself says a short \"Got it.\" / \"One moment.\" the moment it understands them, so never start a reply with one), phone_call_hangup() rejects it"),
                         at,
                         &from,
                     );
@@ -247,9 +247,10 @@ fn deliver(ctx: &Ctx, e: &Value, ringing_from: &mut String, active_from: &mut St
                     let num = if num.is_empty() { ringing_from.clone() } else { num };
                     ctx.log(format!("phone: call active {num}"));
                     if !num.is_empty() {
-                        call::started(ctx, &num);
+                        let greets = call::started(ctx, &num);
                         // as on the other buses: the agent paces its statuses by it
-                        ctx.inbound("system", &format!("phone:{num}"), "", "[call ready]");
+                        let ready = if greets { "[call ready] your greeting is playing: wait for [you finished speaking]" } else { "[call ready]" };
+                        ctx.inbound("system", &format!("phone:{num}"), "", ready);
                         *active_from = num.clone();
                     }
                 }
@@ -454,12 +455,14 @@ fn main() {
             obj(
                 json!({
                     "chat_id": {"type": "string", "description": "the number, +34…"},
-                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect the language of each phrase, starting from their addressbook language (else the default)."}
+                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect the language of each phrase, starting from their addressbook language (else the default)."},
+                    "greeting": {"type": "string", "description": "required: bia's first words in the call, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"). They are made while the call connects and play the moment they pick up; do not say() a greeting again."}
                 }),
-                &["chat_id"],
+                &["chat_id", "greeting"],
             ),
             |_c, a| {
                 let to = chat_id(arg_str(&a, "chat_id")?);
+                let greet = arg_str_opt(&a, "greeting").map(str::trim).filter(|g| !g.is_empty()).ok_or("greeting is required: bia's first words when they pick up")?.to_string();
                 let lang = match arg_str_opt(&a, "lang").filter(|l| !l.trim().is_empty()) {
                     Some(l) => Some(bia_speech::check_call_lang(l)?),
                     None => None,
@@ -470,9 +473,13 @@ fn main() {
                 // the models load before dialling: the first words are heard at once
                 call::RINGING.store(true, std::sync::atomic::Ordering::Relaxed);
                 let langs = call::preparing(&to, lang.as_deref());
+                // the greeting is made while the models load and it rings: it plays the
+                // moment they pick up (and warms the voice)
+                let _ = call::prepare_greeting(&to, &greet, &call::greeting_lang(&to, lang.as_deref()));
                 let waited = call::wait_ready(Duration::from_secs(25));
                 if let Err(e) = api("POST", "/call", Some(&json!({"to": to})), Duration::from_secs(10)) {
                     call::RINGING.store(false, std::sync::atomic::Ordering::Relaxed);
+                    call::drop_greeting();
                     *call::plan().lock().unwrap() = None;
                     return Err(e);
                 }
@@ -482,7 +489,7 @@ fn main() {
                     (None, None) => String::new(),
                 };
                 let load = if waited >= 1.0 { format!("; speech models loaded in {waited:.0} s first") } else { String::new() };
-                Ok(format!("calling {to}{how}{load}"))
+                Ok(format!("calling {to}{how}{load}; the greeting plays when they pick up"))
             },
         )
         .tool(
@@ -496,34 +503,57 @@ fn main() {
         )
         .tool(
             "call_accept",
-            "Answer the phone call that is ringing now (it waits for the call's speech models to load first, up to 20 s, so the caller is heard at once). lang holds the call in that language.",
+            "Answer the phone call that is ringing now with greeting, bia's first words (required). It answers once the call's speech models are loaded (up to 20 s) and the greeting's first audio is ready, which plays the moment the line is up, so the caller is heard and greeted at once. lang holds the call in that language.",
             obj(
                 json!({
                     "chat_id": {"type": "string"},
-                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect each phrase's language."}
+                    "lang": {"type": "string", "description": "the language the call is held in (en, es, ru…): everything they say is heard as this language and say() without lang speaks it. Leave out to detect each phrase's language."},
+                    "greeting": {"type": "string", "description": "required: bia's first words in the call, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"). They are made while the call connects and play the moment it is up; do not say() a greeting again."}
                 }),
-                &[],
+                &["greeting"],
             ),
             |_c, a| {
+            let greet = arg_str_opt(&a, "greeting").map(str::trim).filter(|g| !g.is_empty()).ok_or("greeting is required: bia's first words in the call")?.to_string();
+            let number = call::plan().lock().unwrap().as_ref().map(|p| p.number.clone()).ok_or("no call is ringing")?;
+            let mut code = None;
             if let Some(l) = arg_str_opt(&a, "lang").filter(|l| !l.trim().is_empty()) {
-                let code = bia_speech::check_call_lang(l)?;
-                let number = call::plan().lock().unwrap().as_ref().map(|p| p.number.clone());
-                match number {
-                    Some(n) => {
-                        call::preparing(&n, Some(&code));
-                    }
-                    None => return Err("no call is ringing".into()),
-                }
+                let c = bia_speech::check_call_lang(l)?;
+                call::preparing(&number, Some(&c));
+                code = Some(c);
             }
+            // the greeting is made alongside the models' loading: it warms the voice, and
+            // the call is answered once its first audio is there
+            let first = call::prepare_greeting(&number, &greet, &call::greeting_lang(&number, code.as_deref()));
+            let t = std::time::Instant::now();
             let waited = call::wait_ready(Duration::from_secs(20));
-            api("POST", "/answer", None, Duration::from_secs(10))?;
-            Ok(if waited >= 1.0 { format!("answered (after {waited:.0} s loading the speech models)") } else { "answered".into() })
+            let _ = first.recv_timeout(Duration::from_secs(10).saturating_sub(t.elapsed()).max(Duration::from_secs(2)));
+            let ready = t.elapsed().as_secs_f64();
+            if let Err(e) = api("POST", "/answer", None, Duration::from_secs(10)) {
+                call::drop_greeting();
+                return Err(e);
+            }
+            Ok(if ready >= 1.0 {
+                format!("answered after {ready:.0} s (speech models {waited:.0} s, then the greeting's first audio); the greeting plays now")
+            } else {
+                "answered; the greeting plays now".into()
+            })
         })
-        .tool("call_hangup", "End the current phone call, or reject the ringing one. It first lets what you said finish playing (up to 30 s), so a goodbye is heard.", obj(json!({}), &[]), |_c, _a| {
-            let waited = call::wait_spoken(Duration::from_secs(30));
-            api("POST", "/hangup", None, Duration::from_secs(10))?;
-            Ok(if waited >= 0.5 { format!("hung up after your last words played ({waited:.0} s)") } else { "hung up".into() })
-        })
+        .tool(
+            "call_hangup",
+            "End the current phone call with goodbye, bia's last words (required): they replace whatever bia is still saying, and the line hangs up the moment they have played (do not say() a goodbye first). For a call that is still ringing it rejects it (goodbye is not said).",
+            obj(json!({"goodbye": {"type": "string", "description": "required: bia's last words in the call, one short sentence; call them by their name, never by your own (e.g. \"Bye, talk soon.\")"}}), &["goodbye"]),
+            |c, a| {
+                let bye = arg_str_opt(&a, "goodbye").map(str::trim).filter(|g| !g.is_empty()).ok_or("goodbye is required: bia's last words in the call")?.to_string();
+                let mut said = false;
+                if let Some(n) = call::active_number() {
+                    call::say(c, &n, &bye, &call::greeting_lang(&n, None))?;
+                    said = true;
+                }
+                let waited = call::wait_spoken(Duration::from_secs(30));
+                api("POST", "/hangup", None, Duration::from_secs(10))?;
+                Ok(if said { format!("said goodbye and hung up as it ended ({waited:.0} s)") } else { "rejected the ringing call".into() })
+            },
+        )
         .tool(
             "ussd",
             "Send a USSD code (balance *100#, carrier menus). The network's answer arrives as a [ussd <code>] notice.",

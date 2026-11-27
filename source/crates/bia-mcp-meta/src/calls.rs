@@ -29,6 +29,17 @@ fn state() -> &'static Mutex<Option<Active>> {
     S.get_or_init(|| Mutex::new(None))
 }
 
+/// bia's first words for the call being placed or answered: said at [call ready].
+static GREETING: Mutex<Option<String>> = Mutex::new(None);
+
+/// Get ready for the call (before it is answered or placed): speech models and the
+/// greeting's voice; the greeting is kept for [call ready].
+fn set_greeting(chat: &str, greeting: &str) {
+    // the speech models load and run once, and the voice runs on the greeting
+    let _ = bia_speech::prepare_call(&channel(chat), None, greeting);
+    *GREETING.lock().unwrap() = Some(greeting.trim().to_string()).filter(|g| !g.is_empty());
+}
+
 fn spoken() -> &'static Mutex<Option<(String, Instant)>> {
     static S: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(None))
@@ -71,7 +82,7 @@ pub fn changed(ev: &Value) {
     match s(ev, "state") {
         "ringing" => {
             if inbound::is_banned(&chat, s(ev, "peer")) {
-                std::thread::spawn(|| hangup("").map(|_| ()));
+                std::thread::spawn(|| hangup("", "").map(|_| ()));
                 return;
             }
             *state().lock().unwrap() = Some(new_active(&conversation, &chat));
@@ -116,7 +127,11 @@ fn mark_ready(conversation: &str, chat: &str, label: &str) {
     }
     crate::tts::warm();
     bia_speech::calllog::start(&channel(chat));
-    inbound::inbound(label, chat, "", "[call ready]", 0);
+    // bia's greeting first, the moment the call is up
+    let greeting = GREETING.lock().unwrap().take();
+    let greets = greeting.is_some_and(|g| say(chat, &g, "").is_ok());
+    let ready = if greets { "[call ready] your greeting is playing: wait for [you finished speaking]" } else { "[call ready]" };
+    inbound::inbound(label, chat, "", ready, 0);
 }
 
 fn played_out(conversation: &str, id: u64, gen: u64) {
@@ -239,18 +254,25 @@ pub fn status() -> Result<String, String> {
     Ok(lines.join("\n"))
 }
 
-pub fn start(chat: &str) -> Result<String, String> {
+pub fn start(chat: &str, greeting: &str) -> Result<String, String> {
+    set_greeting(chat, greeting);
     let r = helper::get().call("call_start", json!({"chat": chat}), NORMAL)?;
     Ok(format!("calling {}; wait for [call ready] or [call ended]", inbound::format_chat(s(&r, "chat"), s(&r, "name"))))
 }
 
-pub fn accept(chat: &str) -> Result<String, String> {
+pub fn accept(chat: &str, greeting: &str) -> Result<String, String> {
+    set_greeting(chat, greeting);
     let r = helper::get().call("call_accept", json!({"chat": chat}), NORMAL)?;
     Ok(format!("answering max:{}; wait for [call ready]", s(&r, "chat")))
 }
 
 /// End the call, or let a goodbye that is still being spoken finish first.
-pub fn hangup(chat: &str) -> Result<String, String> {
+pub fn hangup(chat: &str, goodbye: &str) -> Result<String, String> {
+    // bia's goodbye replaces whatever it is still saying; the call ends once it played
+    let live = state().lock().unwrap().as_ref().filter(|a| a.ready && (chat.is_empty() || a.chat == chat)).map(|a| a.chat.clone());
+    if let (Some(c), false) = (live, goodbye.trim().is_empty()) {
+        let _ = say(&c, goodbye, "");
+    }
     {
         let mut g = state().lock().unwrap();
         if let Some(a) = g.as_mut().filter(|a| a.speaking && (chat.is_empty() || a.chat == chat)) {

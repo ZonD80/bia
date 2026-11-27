@@ -97,6 +97,21 @@ pub fn check_call_lang(lang: &str) -> Result<String, String> {
     Ok(l.code)
 }
 
+/// Get ready for a call on `channel` (telegram:…, whatsapp:…, web:<identity> …) before it
+/// is answered or placed: the speech models of the person's language load and run once,
+/// and the voice runs on bia's `greeting`, so their first words are heard and the greeting
+/// plays at once when the call is up. Waits; seconds taken.
+pub fn prepare_call(channel: &str, lang: Option<&str>, greeting: &str) -> f64 {
+    let t = std::time::Instant::now();
+    let langs = call_langs(channel, lang);
+    warm_call(&langs, false);
+    let speak_in = langs.first().cloned().unwrap_or_else(|| contacts::lang_or("", channel));
+    let _ = tts::warm_phrase(greeting, &speak_in);
+    let secs = t.elapsed().as_secs_f64();
+    diag::log("call", format!("{channel}: ready for the call in {secs:.1}s (speech models + greeting voice)"));
+    secs
+}
+
 /// Load what a call in `langs` needs (speech models and voices), waiting for them.
 pub fn warm_call(langs: &[String], forced: bool) {
     models::warm_call(langs, forced);

@@ -178,7 +178,12 @@ pub fn chats(_: &Ctx, _: Value) -> Result<String, String> {
 
 pub fn call_start(_: &Ctx, args: Value) -> Result<String, String> {
     let (identity, channel) = target(&args)?;
-    call::ring(&identity, &channel)
+    call::ring(&identity, &channel, &bia_mcp::required(&args, "greeting")?)
+}
+
+pub fn call_accept(_: &Ctx, args: Value) -> Result<String, String> {
+    let (identity, channel) = target(&args)?;
+    call::accept(&identity, &channel, &bia_mcp::required(&args, "greeting")?)
 }
 
 pub fn call_cancel(_: &Ctx, args: Value) -> Result<String, String> {
@@ -188,7 +193,7 @@ pub fn call_cancel(_: &Ctx, args: Value) -> Result<String, String> {
 
 pub fn call_hangup(_: &Ctx, args: Value) -> Result<String, String> {
     let (identity, channel) = target(&args)?;
-    call::hangup(&identity, &channel)
+    call::hangup(&identity, &channel, &bia_mcp::required(&args, "goodbye")?)
 }
 
 pub fn status(_: &Ctx, _: Value) -> Result<String, String> {

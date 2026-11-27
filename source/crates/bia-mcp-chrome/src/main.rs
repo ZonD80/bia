@@ -296,11 +296,14 @@ fn main() {
         )
         .tool(
             "call_close",
-            "Leave the open web call and close its tab. While bia is still speaking it waits until that has played, so say goodbye first, then call this. Everything said is saved to a file named in [call ended].",
-            json!({"type": "object", "properties": {}}),
+            "Leave the open web call with goodbye, bia's last words (required): they replace whatever bia is still saying, and bia leaves and closes the tab the moment they have played (do not say a goodbye first). Everything said is saved to a file named in [call ended].",
+            json!({"type": "object", "required": ["goodbye"], "properties": {
+                "goodbye": {"type": "string", "description": "required: bia's last words, one short sentence; call them by their name, never by your own (e.g. \"Thanks, bye everyone.\")"},
+                "lang": {"type": "string", "description": "language of the goodbye (default: the call's language)"}
+            }}),
             {
                 let c = calls.clone();
-                move |_, _| c.close()
+                move |_, a| c.close(&a)
             },
         );
 

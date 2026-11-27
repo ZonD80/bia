@@ -56,6 +56,8 @@ struct State {
     speaking: bool,
     /// call_hangup while speaking: (target, utterance) to hang up once it has played.
     hangup_after: Option<(Option<String>, u64)>,
+    /// bia's first words for the call being placed or answered: said at [call ready].
+    greeting: Option<String>,
 }
 
 /// Longest a deferred hangup waits for the current utterance to finish.
@@ -157,12 +159,30 @@ impl Calls {
     }
 
     fn release(&self) {
-        self.st.lock().unwrap().starting = false;
+        let mut g = self.st.lock().unwrap();
+        g.starting = false;
+        g.greeting = None;
+    }
+
+    /// Get ready for the call (before it is answered or placed): speech models and the
+    /// greeting's voice; the greeting is kept for [call ready].
+    fn set_greeting(&self, key: &str, greeting: &str) {
+        // the speech models load and run once, and the voice runs on the greeting
+        let _ = bia_speech::prepare_call(&format!("whatsapp:{key}"), None, greeting);
+        self.st.lock().unwrap().greeting = Some(greeting.trim().to_string()).filter(|g| !g.is_empty());
+    }
+
+    /// The call is up: bia's greeting first, then [call ready] (saying so).
+    fn announce_ready(&self, label: &str, key: &str) {
+        let greeting = self.st.lock().unwrap().greeting.take();
+        let greets = greeting.is_some_and(|g| self.say(key, &g, "").is_ok());
+        let ready = if greets { "[call ready] your greeting is playing: wait for [you finished speaking]" } else { "[call ready]" };
+        Wa::global().inbound(label, key, "", ready);
     }
 
     // -- tool entry points (called from MCP worker threads) ----------------------
 
-    pub fn start(&self, target: &str) -> Result<String, String> {
+    pub fn start(&self, target: &str, greeting: &str) -> Result<String, String> {
         let wa = Wa::global();
         let client = wa.require_ready()?;
         let t = wa.resolve_target(target)?;
@@ -170,6 +190,7 @@ impl Calls {
             return Err("call_start is for private chats; use call_join_group for groups".into());
         }
         self.claim()?;
+        self.set_greeting(&t.key, greeting);
         let (mic_tx, mic_rx, spk_tx, spk_rx) = channels();
         let res = wa.block_on(async {
             let voip = client.voip();
@@ -191,11 +212,13 @@ impl Calls {
         }
     }
 
-    pub fn accept(&self, target: &str) -> Result<String, String> {
+    pub fn accept(&self, target: &str, greeting: &str) -> Result<String, String> {
         let wa = Wa::global();
         let client = wa.require_ready()?;
         let key = wa.resolve_target(target)?.key;
         self.claim()?;
+        // the voice warms up on the greeting before answering; it plays once the call is up
+        self.set_greeting(&key, greeting);
         let pending = self.st.lock().unwrap().pending.remove(&key);
         let Some(p) = pending else {
             self.release();
@@ -276,7 +299,7 @@ impl Calls {
         }
     }
 
-    pub fn hangup(&self, target: Option<&str>) -> Result<String, String> {
+    pub fn hangup(&self, target: Option<&str>, goodbye: &str) -> Result<String, String> {
         let wa = Wa::global();
         let client = wa.require_ready()?;
         let want: Option<String> = match target.map(str::trim).filter(|t| !t.is_empty()) {
@@ -306,6 +329,11 @@ impl Calls {
             return Ok(format!("rejected incoming call whatsapp:{}", p.key));
         }
 
+        // bia's goodbye replaces whatever it is still saying; the call ends once it played
+        let active_key = self.st.lock().unwrap().active.as_ref().filter(|a| want.as_ref().is_none_or(|k| *k == a.key)).map(|a| a.key.clone());
+        if let (Some(k), false) = (active_key, goodbye.trim().is_empty()) {
+            let _ = self.say(&k, goodbye, "");
+        }
         // Speaking: let the goodbye play out first ([you finished speaking] → hang up).
         {
             let mut g = self.st.lock().unwrap();
@@ -329,7 +357,7 @@ impl Calls {
                         }
                     };
                     if let Some(t) = due {
-                        let _ = Calls::global().hangup(t.as_deref());
+                        let _ = Calls::global().hangup(t.as_deref(), "");
                     }
                 });
                 return Ok("hanging up as soon as what you are saying has played".into());
@@ -485,8 +513,8 @@ impl Calls {
         tts::warm();
         Wa::global().spawn(monitor(handle, id, key.clone()));
         if ready_now {
-            Wa::global().inbound(&label, &key, "", "[call ready]");
             bia_speech::calllog::start(&format!("whatsapp:{key}"));
+            self.announce_ready(&label, &key);
         }
     }
 
@@ -502,8 +530,8 @@ impl Calls {
             }
         };
         if let Some((key, label)) = who {
-            Wa::global().inbound(&label, &key, "", "[call ready]");
             bia_speech::calllog::start(&format!("whatsapp:{key}"));
+            self.announce_ready(&label, &key);
         }
     }
 
@@ -586,7 +614,7 @@ impl Calls {
             // On its own thread: tearing the call down joins this pacer thread.
             (true, Some(t)) => {
                 std::thread::spawn(move || {
-                    let _ = Calls::global().hangup(t.as_deref());
+                    let _ = Calls::global().hangup(t.as_deref(), "");
                 });
             }
             (true, None) => Wa::global().inbound("system", key, "", "[you finished speaking]"),

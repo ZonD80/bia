@@ -25,14 +25,19 @@ const ECHO_SECS: u64 = 3;
 pub enum CallCmd {
     Start {
         target: String,
+        /// bia's first words, spoken the moment the call is up
+        greeting: String,
         reply: oneshot::Sender<Result<String, String>>,
     },
     Accept {
         target: String,
+        greeting: String,
         reply: oneshot::Sender<Result<String, String>>,
     },
     Hangup {
         target: Option<String>,
+        /// bia's last words: said first, the call ends once they played ("" = reject/none)
+        goodbye: String,
         reply: oneshot::Sender<Result<String, String>>,
     },
     Say {
@@ -244,23 +249,30 @@ impl Calls {
             .map_err(|_| "call command dropped".to_string())?
     }
 
-    pub fn start(&self, target: &str) -> Result<String, String> {
+    pub fn start(&self, target: &str, greeting: &str) -> Result<String, String> {
+        warm_greeting(target, greeting);
         Self::sync_cmd(|reply| CallCmd::Start {
             target: target.to_string(),
+            greeting: greeting.to_string(),
             reply,
         })
     }
 
-    pub fn accept(&self, target: &str) -> Result<String, String> {
+    pub fn accept(&self, target: &str, greeting: &str) -> Result<String, String> {
+        // the voice warms up on the greeting before answering: it starts the moment the
+        // call is up
+        warm_greeting(target, greeting);
         Self::sync_cmd(|reply| CallCmd::Accept {
             target: target.to_string(),
+            greeting: greeting.to_string(),
             reply,
         })
     }
 
-    pub fn hangup(&self, target: Option<&str>) -> Result<String, String> {
+    pub fn hangup(&self, target: Option<&str>, goodbye: &str) -> Result<String, String> {
         Self::sync_cmd(|reply| CallCmd::Hangup {
             target: target.map(str::to_string),
+            goodbye: goodbye.to_string(),
             reply,
         })
     }
@@ -293,6 +305,15 @@ impl Calls {
         }
         rx.blocking_recv().unwrap_or_else(|_| self.status())
     }
+}
+
+/// Before a call is answered or placed (on the tool's thread, not the call loop): the
+/// speech models load and run once, and the voice runs on bia's greeting.
+fn warm_greeting(target: &str, greeting: &str) {
+    let t = target.trim();
+    let chat = if t.starts_with("telegram:") { t.to_string() } else { format!("telegram:{t}") };
+    let secs = bia_speech::prepare_call(&chat, None, greeting);
+    stt_dbg(format!("speech models and greeting voice ready in {secs:.1}s"));
 }
 
 pub struct CallLoopState {
@@ -339,14 +360,20 @@ impl CallLoopState {
         cmd: CallCmd,
     ) {
         match cmd {
-            CallCmd::Start { target, reply } => {
-                let _ = reply.send(self.do_start(client, stream, &target).await);
+            CallCmd::Start { target, greeting, reply } => {
+                let _ = reply.send(self.do_start(client, stream, &target, &greeting).await);
             }
-            CallCmd::Accept { target, reply } => {
-                let _ = reply.send(self.do_accept(client, stream, &target).await);
+            CallCmd::Accept { target, greeting, reply } => {
+                let _ = reply.send(self.do_accept(client, stream, &target, &greeting).await);
             }
-            CallCmd::Hangup { target, reply } => {
+            CallCmd::Hangup { target, goodbye, reply } => {
                 let in_call = self.p2p.is_some() || self.group.is_some();
+                // the goodbye replaces whatever bia is still saying; the call ends once it played
+                let chat = self.p2p.as_ref().map(|c| c.chat_id).or(self.group.as_ref().map(|g| g.chat_id));
+                if let (true, Some(chat), false) = (in_call, chat, goodbye.trim().is_empty()) {
+                    let lang = bia_speech::contacts::lang_or("", &format!("telegram:{chat}"));
+                    let _ = self.begin_speech(chat, goodbye.trim(), &lang);
+                }
                 if in_call && Calls::global().is_speaking() && self.hangup_after.is_none() {
                     // let the goodbye play out first ([you finished speaking] → hang up)
                     self.hangup_after = Some(target.clone());
@@ -491,6 +518,7 @@ impl CallLoopState {
         client: &Client,
         stream: &mut UpdateStream,
         target: &str,
+        greeting: &str,
     ) -> Result<String, String> {
         if self.p2p.is_some() || self.group.is_some() {
             return Err("a call is already active".into());
@@ -569,8 +597,9 @@ impl CallLoopState {
             sig_out_rx,
         });
         self.refresh_snap();
-        Tg::global().inbound(&format!("user:{user_id}"), chat_id, "", "[call ready]");
         bia_speech::calllog::start(&format!("telegram:{chat_id}"));
+        let ready = self.greet(chat_id, greeting);
+        Tg::global().inbound(&format!("user:{user_id}"), chat_id, "", ready);
         Ok(format!("calling telegram:{chat_id}; wait for [call ready]"))
     }
 
@@ -579,6 +608,7 @@ impl CallLoopState {
         client: &Client,
         stream: &mut UpdateStream,
         target: &str,
+        greeting: &str,
     ) -> Result<String, String> {
         if self.p2p.is_some() || self.group.is_some() {
             return Err("a call is already active".into());
@@ -627,9 +657,10 @@ impl CallLoopState {
             sig_out_rx,
         });
         self.refresh_snap();
-        Tg::global().inbound(&format!("user:{user_id}"), chat_id, "", "[call ready]");
         bia_speech::calllog::start(&format!("telegram:{chat_id}"));
-        Ok(format!("accepted call telegram:{chat_id}"))
+        let ready = self.greet(chat_id, greeting);
+        Tg::global().inbound(&format!("user:{user_id}"), chat_id, "", ready);
+        Ok(format!("accepted call telegram:{chat_id}; the greeting plays now"))
     }
 
     /// After ICE is up: mark active chat and prime outbound silence keepalive.
@@ -671,6 +702,16 @@ impl CallLoopState {
 
     /// A new say while speaking replaces the current utterance (the agent
     /// interrupting itself). Incoming speech never touches outbound audio.
+    /// The call is up: bia's greeting first. The [call ready] text for the model.
+    fn greet(&mut self, chat_id: i64, greeting: &str) -> &'static str {
+        let lang = bia_speech::contacts::lang_or("", &format!("telegram:{chat_id}"));
+        if !greeting.trim().is_empty() && self.begin_speech(chat_id, greeting.trim(), &lang).is_ok() {
+            "[call ready] your greeting is playing: wait for [you finished speaking]"
+        } else {
+            "[call ready]"
+        }
+    }
+
     fn begin_speech(&mut self, chat_id: i64, text: &str, lang: &str) -> Result<(), String> {
         let audio = match (self.p2p.as_ref(), self.group.as_ref()) {
             (Some(a), _) => a.audio.as_ref(),

@@ -7,7 +7,7 @@ mod qr_win;
 mod speech;
 mod tts;
 
-use bia_mcp::{arg_bool, arg_str, arg_str_list, arg_str_opt, arg_u32_opt, Ctx, Server};
+use bia_mcp::{arg_bool, arg_str, arg_str_list, arg_str_opt, arg_u32_opt, required, Ctx, Server};
 use calls::Calls;
 use client::{Cfg, Tg, API_ID};
 use serde_json::json;
@@ -772,35 +772,38 @@ fn main() {
         )
         .tool(
             "call_start",
-            "Start a private Telegram voice call to a user. chat_id is a private chat number, telegram:<id>, or @username. Wait for [call ready] or [call ended] inbound messages. When the conversation is over, end it yourself with call_hangup (do not wait for the other side to disconnect).",
-            json!({"type": "object", "required": ["chat_id"], "properties": {
-                "chat_id": {"type": "string", "description": "private chat number, telegram:<id>, or @username"}
+            "Start a private Telegram voice call to a user with greeting, bia's first words (required: they play the moment they pick up). chat_id is a private chat number, telegram:<id>, or @username. Wait for [call ready] or [call ended] inbound messages. When the conversation is over, end it yourself with call_hangup(goodbye) (do not wait for the other side to disconnect).",
+            json!({"type": "object", "required": ["chat_id", "greeting"], "properties": {
+                "chat_id": {"type": "string", "description": "private chat number, telegram:<id>, or @username"},
+                "greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"); the voice warms up on it first and it plays the moment the call is up. Do not say() a greeting again."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
-                Calls::global().start(arg_str(&a, "chat_id")?)
+                Calls::global().start(arg_str(&a, "chat_id")?, &required(&a, "greeting")?)
             },
         )
         .tool(
             "call_accept",
-            "Accept a pending incoming Telegram voice call. chat_id is the telegram:<id> from the [incoming call] message.",
-            json!({"type": "object", "required": ["chat_id"], "properties": {
-                "chat_id": {"type": "string", "description": "chat number from [incoming call], or telegram:<id>"}
+            "Accept a pending incoming Telegram voice call with greeting, bia's first words (required: they play the moment the call is up). chat_id is the telegram:<id> from the [incoming call] message.",
+            json!({"type": "object", "required": ["chat_id", "greeting"], "properties": {
+                "chat_id": {"type": "string", "description": "chat number from [incoming call], or telegram:<id>"},
+                "greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"); the voice warms up on it first and it plays the moment the call is up. Do not say() a greeting again."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
-                Calls::global().accept(arg_str(&a, "chat_id")?)
+                Calls::global().accept(arg_str(&a, "chat_id")?, &required(&a, "greeting")?)
             },
         )
         .tool(
             "call_hangup",
-            "End the active Telegram voice call (or reject a ringing incoming call). Use this when the conversation is done, the user says bye/goodbye/hang up, or you need to leave — you can and should hang up yourself; do not wait for them to disconnect. chat_id optional if only one call exists.",
-            json!({"type": "object", "properties": {
-                "chat_id": {"type": "string", "description": "chat number, telegram:<id>, or @username. Optional if only one call."}
+            "End the active Telegram voice call with goodbye, bia's last words (required): they replace whatever bia is still saying and the call ends the moment they have played. A ringing incoming call is rejected (no goodbye is said). Use this when the conversation is done, the user says bye/goodbye/hang up, or you need to leave — you can and should hang up yourself; do not wait for them to disconnect. chat_id optional if only one call exists.",
+            json!({"type": "object", "required": ["goodbye"], "properties": {
+                "chat_id": {"type": "string", "description": "chat number, telegram:<id>, or @username. Optional if only one call."},
+                "goodbye": {"type": "string", "description": "required: bia's last words, one short sentence; call them by their name, never by your own (e.g. \"Bye, talk soon.\"); they replace whatever bia is still saying and the call ends the moment they have played. Do not say() a goodbye first."}
             }}),
             |ctx, a| {
                 require_login(ctx)?;
-                Calls::global().hangup(arg_str_opt(&a, "chat_id"))
+                Calls::global().hangup(arg_str_opt(&a, "chat_id"), &required(&a, "goodbye")?)
             },
         )
         .tool(
@@ -811,7 +814,7 @@ fn main() {
             }}),
             |ctx, a| {
                 require_login(ctx)?;
-                Calls::global().hangup(arg_str_opt(&a, "chat_id"))
+                Calls::global().hangup(arg_str_opt(&a, "chat_id"), "")
             },
         )
         .tool(

@@ -3488,6 +3488,8 @@ async function startCall(chat, ringId) {
     }
     let v; try { v = JSON.parse(e.data); } catch { return; }
     switch (v.t) {
+      // bia is getting ready (its speech loads) and answers: ringing until then
+      case 'ringing': CALL.ringText = v.text || ''; setCallState('ringing'); break;
       case 'ready': CALL.t0 = Date.now(); setCallState('listening'); break;
       case 'say': CALL.gen = v.gen; CALL.sayEnd = -1; play.port.postMessage('clear'); addCaption('bia', v.text); break;
       case 'say_end': if (v.gen === CALL.gen) { CALL.sayEnd = v.gen; play.port.postMessage('check'); } break;
@@ -3517,7 +3519,7 @@ function endCall(reason) {
 function setCallState(s) {
   CALL.state = s;
   const el = CALL.el && CALL.el.querySelector('.call-state');
-  if (el) el.textContent = { connecting: 'connecting…', listening: 'listening', speaking: 'bia is speaking' }[s] || s;
+  if (el) el.textContent = { connecting: 'connecting…', ringing: CALL.ringText || 'ringing…', listening: 'listening', speaking: 'bia is speaking' }[s] || s;
   if (CALL.el) CALL.el.classList.toggle('speaking', s === 'speaking');
 }
 

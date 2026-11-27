@@ -301,14 +301,14 @@ if speech:
         tool("call_say", text="Second sentence, about the budget for next year.", lang="en")
         named = until(lambda: any(d["identity"] == "voice:Echo" and "budget" in d["message"].lower() for d in inbound[n:]), 90)
         check(named, "after naming, the voice arrives under its name")
-    # a goodbye plays out before the tab closes
+    # bia's goodbye (required) plays out before the tab closes
     until(lambda: status().get("speaking") is False, 30)
-    tool("call_say", text="Goodbye everyone.", lang="en")
-    out = tool("call_close")
-    check("as soon as" in out, f"closing while speaking waits: {out}")
+    check("goodbye is required" in tool("call_close"), "leaving needs bia's goodbye")
+    out = tool("call_close", goodbye="Goodbye everyone.", lang="en")
+    check("as soon as" in out, f"leaving waits for the goodbye: {out}")
 else:
     print("no speech models (BIA_SPEECH_DIR): speaking and transcription are not checked")
-    out = tool("call_close")
+    out = tool("call_close", goodbye="Bye.")
     check("Left the call" in out, f"call_close: {out}")
 end = line("[call ended]", 40, "system")
 check(end is not None, f"the call ended: {end and end['message']}")
@@ -338,7 +338,7 @@ if speech:
     tool("call_say", text="The weather is nice in the mountains today.", lang="en")
     heard = line("[speech en", 60, None, n)
     check(heard is not None and heard["identity"].startswith("voice:s") and "weather" in heard["message"].lower(), f"bia's words came back from the page's output: {heard}")
-out = tool("call_close")
+out = tool("call_close", goodbye="Bye, everyone.", lang="en")
 check(line("[call ended]", 40, "system", n) is not None, f"the second call ended ({out[:40]})")
 
 if failed:

@@ -81,7 +81,9 @@ static RECORDER: Mutex<Option<u32>> = Mutex::new(None);
 static PLAYER: Mutex<Option<u32>> = Mutex::new(None);
 
 /// A call connected: from now on only bia hears and speaks.
-pub fn started(ctx: &Ctx, number: &str) {
+/// The call with `number` connected: route its audio, start listening, and play the
+/// greeting made ahead for it, if any (true then).
+pub fn started(ctx: &Ctx, number: &str) -> bool {
     *active().lock().unwrap() = Some(number.to_string());
     RINGING.store(false, std::sync::atomic::Ordering::Relaxed);
     {
@@ -105,14 +107,111 @@ pub fn started(ctx: &Ctx, number: &str) {
         amixer_set(UL_MIXER, "1");
         log("debug: recording the uplink too");
     }
+    ROUTED.store(true, std::sync::atomic::Ordering::SeqCst);
     log(format!("call with {number}: phone mic and earpiece muted, in-call record and music on"));
     // normally loaded while it rang; a call that connected without ringing here loads now
     if plan().lock().unwrap().as_ref().map(|p| p.number.as_str()) != Some(number) {
         preparing(number, None);
     }
+    let greeting = play_greeting(ctx, number);
     let ctx = ctx.clone();
     let num = number.to_string();
     let _ = std::thread::Builder::new().name("call-listen".into()).spawn(move || listen(ctx, num));
+    greeting
+}
+
+// ---- greeting ----
+
+/// A greeting being made before the call connects: its audio (telephone band) as it comes,
+/// then Err(why) if the voice failed.
+type Made = mpsc::Receiver<Result<Vec<u8>, String>>;
+
+struct Greeting {
+    number: String,
+    text: String,
+    lang: String,
+    audio: Made,
+}
+
+fn greeting() -> &'static Mutex<Option<Greeting>> {
+    static G: Mutex<Option<Greeting>> = Mutex::new(None);
+    &G
+}
+
+/// Start making bia's first words for the call with `number` now, while the phone rings or
+/// before it is answered: the voice warms up on them, and they play the moment the call's
+/// audio is up. The receiver gets () with the first audio (or when the voice failed).
+pub fn prepare_greeting(number: &str, text: &str, lang: &str) -> mpsc::Receiver<()> {
+    let (first_tx, first_rx) = mpsc::channel();
+    let (tx, rx) = mpsc::channel();
+    let (t, l) = (text.trim().to_string(), lang.to_string());
+    note_spoken(number, &t);
+    // counts as queued speech from now: the line's acknowledgments wait for it, and a
+    // hang-up lets it finish
+    UNSPOKEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(old) = greeting().lock().unwrap().replace(Greeting { number: number.into(), text: t.clone(), lang: l.clone(), audio: rx }) {
+        drop(old);
+        UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let spawned = std::thread::Builder::new().name("call-greet".into()).spawn(move || {
+        let mut band = Telephone::new();
+        let mut first = Some(first_tx);
+        let r = bia_speech::tts::speak(&t, &l, &mut |chunk, rate| {
+            let pcm = band.run(&resample(chunk, rate));
+            let ok = tx.send(Ok(pcm.iter().flat_map(|s| s.to_le_bytes()).collect())).is_ok();
+            if let Some(f) = first.take() {
+                let _ = f.send(());
+            }
+            ok // the call ended or bia said something else: stop making it
+        });
+        if let Err(e) = r {
+            let _ = tx.send(Err(e));
+        }
+        if let Some(f) = first.take() {
+            let _ = f.send(());
+        }
+    });
+    if spawned.is_err() {
+        if greeting().lock().unwrap().take().is_some() {
+            UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    first_rx
+}
+
+/// The call with `number` is up: its greeting goes to the speaker (true), first in line.
+fn play_greeting(ctx: &Ctx, number: &str) -> bool {
+    let g = {
+        let mut slot = greeting().lock().unwrap();
+        if slot.as_ref().is_some_and(|g| g.number == number) { slot.take() } else { None }
+    };
+    let Some(g) = g else { return false };
+    let gen = SAY_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let job = Say { chat: number.into(), text: g.text, lang: g.lang, ctx: ctx.clone(), gen, ack: None, made: Some(g.audio) };
+    if speaker().send(job).is_err() {
+        UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        return false;
+    }
+    true
+}
+
+/// The language bia's words in the coming call with `number` are spoken in: the one fixed
+/// for it, else the person's (addressbook), else the default.
+pub fn greeting_lang(number: &str, lang: Option<&str>) -> String {
+    if let Some(l) = lang.filter(|l| !l.trim().is_empty()) {
+        return l.to_string();
+    }
+    if let Some(f) = plan().lock().unwrap().as_ref().filter(|p| p.number == number).and_then(|p| p.forced.clone()) {
+        return f;
+    }
+    bia_speech::call_langs(&format!("phone:{number}"), None).into_iter().next().unwrap_or_else(|| "en".into())
+}
+
+/// A greeting for a call that never came up (missed, rejected, failed to dial) is dropped.
+pub fn drop_greeting() {
+    if greeting().lock().unwrap().take().is_some() {
+        UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// The coming (or current) call; its models are loaded for the languages [`preparing`]
@@ -121,6 +220,8 @@ pub struct Plan {
     pub number: String,
     /// bia fixed the call's language: every phrase is heard in it, no detection.
     pub forced: Option<String>,
+    /// The languages loaded (or loading) for it.
+    pub langs: Vec<String>,
 }
 
 pub fn plan() -> &'static Mutex<Option<Plan>> {
@@ -135,7 +236,18 @@ pub fn preparing(number: &str, lang: Option<&str>) -> Vec<String> {
     let lang = lang.filter(|l| !l.trim().is_empty());
     let langs = bia_speech::call_langs(&format!("phone:{number}"), lang);
     let forced = lang.and_then(|_| langs.first().cloned());
-    *plan().lock().unwrap() = Some(Plan { number: number.to_string(), forced: forced.clone() });
+    {
+        let mut p = plan().lock().unwrap();
+        // answering in the language already loading for this call: it is only fixed now, not
+        // loaded a second time (two loads of the same models at once slowed the answer)
+        if let Some(pl) = p.as_mut().filter(|pl| pl.number == number && pl.langs == langs) {
+            if forced.is_some() {
+                pl.forced = forced;
+            }
+            return langs;
+        }
+        *p = Some(Plan { number: number.to_string(), forced: forced.clone(), langs: langs.clone() });
+    }
     let (lock, _) = &*WARM;
     *lock.lock().unwrap() += 1;
     let list = langs.clone();
@@ -171,6 +283,12 @@ fn ack_audio() -> &'static Mutex<std::collections::HashMap<String, Vec<(String, 
 fn ack_list(lang: &str) -> Vec<(String, Vec<u8>)> {
     let mut list = Vec::new();
     for p in bia_speech::acks::phrases(lang) {
+        // bia's own words come first: they share the voice (one phrase at a time), and its
+        // first words of a call used to wait seconds behind these
+        let t = Instant::now();
+        while UNSPOKEN.load(std::sync::atomic::Ordering::SeqCst) > 0 && t.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let mut band = Telephone::new();
         let mut pcm: Vec<i16> = Vec::new();
         let ok = bia_speech::tts::speak(&p, lang, &mut |chunk, rate| {
@@ -186,23 +304,38 @@ fn ack_list(lang: &str) -> Vec<(String, Vec<u8>)> {
 
 /// Make the acknowledgments of the call's languages (while the phone rings); another
 /// language heard in the call gets its own when it first comes up.
+/// Languages whose acknowledgments are being made right now.
+static MAKING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 fn make_acks(langs: &[String]) {
     let t = Instant::now();
     let mut n = 0;
     for l in langs {
+        // made already for these phrases (answering prepares the call again), or being made
+        let want = bia_speech::acks::phrases(l);
+        let have = ack_audio().lock().unwrap().get(l).is_some_and(|a| a.iter().map(|(p, _)| p).eq(want.iter()));
+        {
+            let mut m = MAKING.lock().unwrap();
+            if have || m.contains(l) {
+                continue;
+            }
+            m.push(l.clone());
+        }
         let list = ack_list(l);
         n += list.len();
         ack_audio().lock().unwrap().insert(l.clone(), list);
+        MAKING.lock().unwrap().retain(|x| x != l);
     }
-    log(format!("{n} acknowledgments made in {:.1}s", t.elapsed().as_secs_f64()));
+    if n > 0 {
+        log(format!("{n} acknowledgments made in {:.1}s", t.elapsed().as_secs_f64()));
+    }
 }
 
 /// A language learned (or its phrases written) during the call: make its audio in the
 /// background; the next phrase in it gets one.
 fn remake_acks(lang: &str) {
-    static BUSY: Mutex<Vec<String>> = Mutex::new(Vec::new());
     {
-        let mut b = BUSY.lock().unwrap();
+        let mut b = MAKING.lock().unwrap();
         if b.iter().any(|l| l == lang) {
             return;
         }
@@ -213,7 +346,7 @@ fn remake_acks(lang: &str) {
         let list = ack_list(&l);
         log(format!("{} acknowledgments in {l} made", list.len()));
         ack_audio().lock().unwrap().insert(l.clone(), list);
-        BUSY.lock().unwrap().retain(|x| *x != l);
+        MAKING.lock().unwrap().retain(|x| *x != l);
     });
 }
 
@@ -235,7 +368,9 @@ fn acknowledge(ctx: &Ctx, chat: &str, lang: &str, text: &str) {
         let have: Vec<&str> = all.get(lang).map(|l| l.iter().map(|(p, _)| p.as_str()).collect()).unwrap_or_default();
         if have != want.iter().map(String::as_str).collect::<Vec<_>>() {
             drop(all);
-            if !want.is_empty() {
+            // still being made since it rang: they come by themselves (making them again
+            // mid-call took the voice from bia's replies)
+            if !want.is_empty() && !MAKING.lock().unwrap().iter().any(|l| l == lang) {
                 remake_acks(lang);
             }
             return;
@@ -254,7 +389,7 @@ fn acknowledge(ctx: &Ctx, chat: &str, lang: &str, text: &str) {
     note_spoken(chat, &pick.0);
     UNSPOKEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let gen = SAY_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-    let job = Say { chat: chat.into(), text: pick.0, lang: lang.into(), ctx: ctx.clone(), gen, ack: Some(pick.1) };
+    let job = Say { chat: chat.into(), text: pick.0, lang: lang.into(), ctx: ctx.clone(), gen, ack: Some(pick.1), made: None };
     if speaker().send(job).is_err() {
         UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
@@ -287,12 +422,30 @@ fn unload_after_call() {
     });
 }
 
+/// The call's audio is routed (in-call music and record on). The call is active a moment
+/// before: an aplay started then is refused by the device, and bia's first words were lost.
+static ROUTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Wait (at most `max`) until the active call's audio is routed.
+fn wait_routed(max: Duration) -> bool {
+    let t = Instant::now();
+    while !ROUTED.load(std::sync::atomic::Ordering::SeqCst) {
+        if active_number().is_none() || t.elapsed() >= max {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 /// A call is ringing in or out (models being loaded for it).
 pub static RINGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The call ended: give the phone back its microphone and earpiece.
 pub fn ended() {
     let was = active().lock().unwrap().take();
+    ROUTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    drop_greeting();
     for p in [&RECORDER, &PLAYER] {
         if let Some(pid) = p.lock().unwrap().take() {
             let _ = Command::new("kill").arg(pid.to_string()).status();
@@ -488,6 +641,8 @@ struct Say {
     gen: u64,
     /// An acknowledgment ("Got it."): made ahead (`audio`), never cut by the reply after it.
     ack: Option<Vec<u8>>,
+    /// Audio already being made (the greeting): played as it comes instead of synthesizing.
+    made: Option<Made>,
 }
 
 /// Number of the latest reply queued for the call.
@@ -509,6 +664,11 @@ fn speaker() -> &'static mpsc::Sender<Say> {
                 }
                 // an acknowledgment plays to the end; the reply waits for it (it is short)
                 let cuttable = job.ack.is_none();
+                // the first words of a call come right after it connects: the line's audio
+                // is set up a moment later, and aplay opened before that fails
+                if !wait_routed(Duration::from_secs(5)) {
+                    log("the call's audio is not routed: speaking anyway");
+                }
                 // stream: aplay starts with the first sentence while the rest is synthesized
                 let mut player = match start_player() {
                     Ok(p) => p,
@@ -545,6 +705,24 @@ fn speaker() -> &'static mpsc::Sender<Say> {
                     first = Some(0.0);
                     let _ = audio_tx.send(a);
                     Ok(bia_speech::tts::Spoken { first_ms: 0, samples: 0 })
+                } else if let Some(made) = job.made {
+                    let mut r = Ok(bia_speech::tts::Spoken { first_ms: 0, samples: 0 });
+                    for piece in made {
+                        if active_number().as_deref() != Some(chat.as_str()) || superseded(gen) {
+                            break; // dropping the receiver stops its making
+                        }
+                        match piece {
+                            Ok(bytes) => {
+                                secs += bytes.len() as f64 / 2.0 / RATE as f64;
+                                first.get_or_insert(t0.elapsed().as_secs_f64());
+                                if audio_tx.send(bytes).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => r = Err(e),
+                        }
+                    }
+                    r
                 } else { bia_speech::tts::speak(&job.text, &job.lang, &mut |chunk, rate| {
                     if active_number().as_deref() != Some(chat.as_str()) || superseded(gen) {
                         return false; // they hung up, or bia says something new: stop making it
@@ -572,13 +750,21 @@ fn speaker() -> &'static mpsc::Sender<Say> {
                 if let Ok(w) = writer {
                     let _ = w.join();
                 }
-                let _ = player.wait();
+                let status = player.wait();
                 *PLAYER.lock().unwrap() = None;
                 if cut {
                     log(format!("cut after {secs:.1}s made: bia said something new"));
                     continue;
                 }
                 log(format!("spoke {secs:.1}s into the call; first sound after {:.2}s, all made in {made:.1}s", first.unwrap_or(0.0)));
+                // aplay gave up (the call's audio would not open): nothing was heard, and
+                // bia must not take it for said
+                let r = match status {
+                    Ok(st) if !st.success() && active_number().as_deref() == Some(job.chat.as_str()) => {
+                        Err(format!("the call's audio did not play ({st}): nothing of \"{}\" was heard", job.text.trim()))
+                    }
+                    _ => r.map(|_| ()),
+                };
                 if let Err(e) = r {
                     log(format!("voice failed: {e}"));
                     job.ctx.inbound("system", &format!("phone:{}", job.chat), "", &format!("[voice failed: {e}]"));
@@ -729,7 +915,7 @@ pub fn say(ctx: &Ctx, chat: &str, text: &str, lang: &str) -> Result<String, Stri
         "" => plan().lock().unwrap().as_ref().and_then(|p| p.forced.clone()).unwrap_or_default(),
         l => l.to_string(),
     };
-    if speaker().send(Say { chat: chat.into(), text: text.into(), lang, ctx: ctx.clone(), gen, ack: None }).is_err() {
+    if speaker().send(Say { chat: chat.into(), text: text.into(), lang, ctx: ctx.clone(), gen, ack: None, made: None }).is_err() {
         UNSPOKEN.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
     Ok(format!("speaking in the call with {chat}"))

@@ -474,7 +474,11 @@ pub fn transcribe(reg: &Registry, pieces: Vec<Segment>, st: &mut LangState, opts
         let live = opts
             .live
             .filter(|_| i == 0 && j == pieces.len() && streaming)
-            .and_then(|r| r.recv_timeout(std::time::Duration::from_secs(10)).ok());
+            .and_then(|r| r.recv_timeout(std::time::Duration::from_secs(10)).ok())
+            // the live stream heard nothing of words it was fed (it missed the start, or
+            // starved while the CPU was busy): the whole stretch is decoded instead; the
+            // caller's first "Hello?"s of a call were dropped as empty
+            .filter(|t| !t.trim().is_empty());
         let rec = models::recognizer(reg, model)?;
         let rec = rec.lock().map_err(|_| "recognizer lock")?;
         let src: Vec<&[f32]> = (i..j)

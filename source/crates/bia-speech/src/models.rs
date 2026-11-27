@@ -699,8 +699,16 @@ pub fn warm_call(langs: &[String], forced: bool) {
         let _ = slid(&reg);
     }
     let _ = denoiser(&reg);
+    // loaded and run once (half a second of quiet): a model's first decode is the slow one,
+    // and it was the caller's first words
+    let quiet = vec![0f32; 8_000];
+    let lang = langs.first().map(String::as_str).unwrap_or("");
     for id in call_models(&reg, langs) {
-        let _ = recognizer(&reg, &id);
+        if let Ok(r) = recognizer(&reg, &id) {
+            if let Ok(r) = r.lock() {
+                let _ = r.decode(&quiet, lang);
+            }
+        }
     }
 }
 

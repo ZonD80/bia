@@ -122,14 +122,17 @@ fn main() {
             tools::chats)
         .tool(
             "call_start",
-            "Call a person in their open web chat (an incoming-call screen with ringing). [call started] arrives when they answer, [call declined] or [no answer] otherwise. During a call their speech arrives as [speech <lang>]; answer with say (lang required, keep it short): it is spoken and posted. Wait for [you finished speaking] before speaking again; [interrupted] means they talked over you. A summary with the transcript is posted to the chat when the call ends.",
-            obj(target(), &["identity"]),
+            "Call a person in their open web chat (an incoming-call screen with ringing) with greeting, bia's first words (required: the voice warms up on it while it rings and it plays the moment they answer; do not say a greeting again). [call started] arrives when they answer, [call declined] or [no answer] otherwise. During a call their speech arrives as [speech <lang>]; answer with say (lang required, keep it short): it is spoken and posted. Wait for [you finished speaking] before speaking again; [interrupted] means they talked over you. A summary with the transcript is posted to the chat when the call ends.",
+            obj(with(json!({"greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\")"}})), &["identity", "greeting"]),
             tools::call_start,
         )
+        .tool("call_accept", "Answer the web call a person placed to bia ([incoming call] from them) with greeting, bia's first words (required). It rings on their side (\"please wait while bia gets ready\") while the call's speech models load and the voice warms up on the greeting; then the call is up and the greeting plays at once. web_call_hangup(goodbye) declines it instead.",
+            obj(with(json!({"greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"); do not say() a greeting again"}})), &["identity", "greeting"]),
+            tools::call_accept)
         .tool("call_cancel", "Cancel bia's web call while it is still ringing. For an answered call use web_call_hangup.",
             obj(target(), &["identity"]), tools::call_cancel)
-        .tool("call_hangup", "End the web call bia is in, or stop ringing. Say goodbye with say first: if bia is still speaking, the call ends as soon as that has played.",
-            obj(target(), &["identity"]), tools::call_hangup)
+        .tool("call_hangup", "End the web call bia is in with goodbye, bia's last words (required): they replace whatever bia is still saying and the call ends the moment they have played (do not say a goodbye first). A call still ringing stops ringing (bia's own), or is declined (theirs).",
+            obj(with(json!({"goodbye": {"type": "string", "description": "required: bia's last words, one short sentence; call them by their name, never by your own (e.g. \"Bye, talk soon.\")"}})), &["identity", "goodbye"]), tools::call_hangup)
         .tool("status", "HTTPS addresses of this web server, its server certificates (Let's Encrypt or its own), the CA fingerprint. A person signs in by opening an address and bringing a .p12 or .biaconfig (web_pki_issue / web_pki_biaconfig when root asks).",
             obj(json!({}), &[]), tools::status)
         .tool("hostname", "Serve the web app at a hostname with its own Let's Encrypt certificate (only when root asks): add=<name> once its A record points here, remove=<name>, none = list.",

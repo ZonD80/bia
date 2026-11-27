@@ -3320,13 +3320,29 @@ now: {now}", done.join("\n")), failed)
             self.to_read.push((ib.channel.clone(), ib.id.clone(), ib.sender.clone()));
         }
         let now = crate::clock::unix(crate::clock::now());
+        let mut closed_with_call = vec![];
         if let Some(on) = call_state(&ib.text) {
             self.tools.unanswered.set_call(&ib.channel, on, now);
+            // the greeting given to *_call_accept / *_call plays as the call comes up
+            if on && ib.text.contains("greeting is playing") {
+                self.tools.unanswered.speaking_started(&ib.channel, now);
+            }
+            // what was said in the call is done with it, unless work still runs for it
+            if !on {
+                let busy: Vec<String> = self.tools.jobs.lock().unwrap_or_else(|e| e.into_inner()).running_for().into_iter().map(|(m, _)| m.id).collect();
+                closed_with_call = self.tools.unanswered.close_call(&ib.channel, &busy);
+            }
         }
         if speech_done(&ib.text) {
             self.tools.unanswered.speaking_done(&ib.channel, now);
         }
         let mut text = ib.text.clone();
+        if !closed_with_call.is_empty() {
+            text.push_str(&format!(
+                " (the call's {} message(s) are closed with it; anything still owed goes by text)",
+                closed_with_call.len()
+            ));
+        }
         if ib.channel.starts_with(crate::jobs::PREFIX) {
             self.tools.unanswered.wake(now);
             text.push_str(&self.job_for_note(ib));

@@ -1136,27 +1136,28 @@ fn max_tools(server: Server) -> Server {
             inbound::set_ctx(ctx.clone());
             crate::calls::status()
         })
-        .tool("call_start", "Start a MAX voice call to one person, only when root asked for this call: never redial or call around, because MAX may restrict an account for odd calls. chat_id is a dialog from max_chats or max_search, or the person's id. Wait for [call ready] or [call ended]. When the talk is over, end it yourself with call_hangup. Needs a QR login.", obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+        .tool("call_start", "Start a MAX voice call to one person, only when root asked for this call: never redial or call around, because MAX may restrict an account for odd calls. chat_id is a dialog from max_chats or max_search, or the person's id. greeting is bia's first words (required: they play the moment they pick up). Wait for [call ready] or [call ended]. When the talk is over, end it yourself with call_hangup(goodbye). Needs a QR login.", obj(json!({"chat_id": chat(), "greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"); the voice warms up on it first and it plays the moment the call is up. Do not say() a greeting again."}}), &["chat_id", "greeting"]), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             require_login()?;
-            crate::calls::start(&chat_arg(&a)?)
+            crate::calls::start(&chat_arg(&a)?, &bia_mcp::required(&a, "greeting")?)
         })
-        .tool("call_accept", "Accept the ringing MAX voice call. chat_id is the max:<chat> of the [incoming call] message. It rings for at most 90 seconds. Speak with say or call_say after [call ready].", obj(json!({"chat_id": chat()}), &["chat_id"]), |ctx, a| {
+        .tool("call_accept", "Accept the ringing MAX voice call with greeting, bia's first words (required: they play the moment the call is up). chat_id is the max:<chat> of the [incoming call] message. It rings for at most 90 seconds. Speak with say or call_say after [you finished speaking] for the greeting.", obj(json!({"chat_id": chat(), "greeting": {"type": "string", "description": "required: bia's first words, one short sentence; call them by their name, never by your own (e.g. \"Hi Anna, Milo here.\"); the voice warms up on it first and it plays the moment the call is up. Do not say() a greeting again."}}), &["chat_id", "greeting"]), |ctx, a| {
             inbound::set_ctx(ctx.clone());
             require_login()?;
-            crate::calls::accept(&chat_arg(&a)?)
+            crate::calls::accept(&chat_arg(&a)?, &bia_mcp::required(&a, "greeting")?)
         })
-        .tool("call_hangup", "End the MAX voice call, or cancel one that is still ringing. Use it when the talk is done or they say goodbye; do not wait for them to disconnect. A goodbye still being spoken plays out first.", json!({"type": "object", "properties": {
-            "chat_id": {"type": "string", "description": "optional: the call's chat"}
+        .tool("call_hangup", "End the MAX voice call with goodbye, bia's last words (required): they replace whatever bia is still saying and the call ends the moment they have played. A call that is still ringing is cancelled (no goodbye is said). Use it when the talk is done or they say goodbye; do not wait for them to disconnect.", json!({"type": "object", "required": ["goodbye"], "properties": {
+            "chat_id": {"type": "string", "description": "optional: the call's chat"},
+            "goodbye": {"type": "string", "description": "required: bia's last words, one short sentence; call them by their name, never by your own (e.g. \"Bye, talk soon.\"); they replace whatever bia is still saying and the call ends the moment they have played. Do not say() a goodbye first."}
         }}), |ctx, a| {
             inbound::set_ctx(ctx.clone());
-            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")))
+            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")), &bia_mcp::required(&a, "goodbye")?)
         })
         .tool("call_reject", "Reject the ringing MAX voice call.", json!({"type": "object", "properties": {
             "chat_id": {"type": "string", "description": "optional: the chat of the [incoming call]"}
         }}), |ctx, a| {
             inbound::set_ctx(ctx.clone());
-            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")))
+            crate::calls::hangup(&platform().chat_id(arg_str_opt(&a, "chat_id").unwrap_or("")), "")
         })
         .tool("call_say", "Speak text into the active MAX call with a local voice. lang is the language of the text (defaults to the person's preferred language from the addressbook); mark other-language parts inline: <lang=fr>Le Petit Bistro</lang>. A language without a voice fails at once: lang_install it (lang MCP). Keep it short, and do not call again until [you finished speaking] arrives.", obj(json!({
             "chat_id": chat(),

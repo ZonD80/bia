@@ -317,6 +317,15 @@ pub fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, String> {
 pub fn arg_str_opt<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
 }
+/// A text argument that must be there and not blank (trimmed): bia's greeting or goodbye
+/// in a call.
+pub fn required(args: &Value, key: &str) -> Result<String, String> {
+    arg_str_opt(args, key)
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("{key} is required"))
+}
 pub fn arg_bool(args: &Value, key: &str, default: bool) -> bool {
     args.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
 }

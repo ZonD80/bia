@@ -5,6 +5,20 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.5
+
+### Changes
+- Every voice call now starts with bia's own greeting and ends with its goodbye. Answering or placing a call (phone, Telegram, WhatsApp, MAX, web app) takes the first words, and hanging up takes the last words (also when leaving a Meet call). Before answering or dialling, bia loads the speech models for the person's language, runs them once, and runs its voice on the greeting, so the greeting plays the moment the call is up and the first thing the person says is understood.
+- Phone calls: bia's first words were lost when it spoke before the line's audio was ready. It now waits for it, and a reply that could not play is reported instead of being taken as said. Answering no longer loads the speech models a second time, and the short "Got it." phrases are made only once.
+- A call placed to bia from the web app now rings ("please wait while bia gets ready for the call") until bia answers it. A call nobody answers within a minute shows up as a missed call.
+- When a call ends, what was said in it no longer stays open as unanswered (unless work for it is still running).
+- Speech in calls: a phrase the live recognizer came back empty for is decoded again instead of being dropped (a caller's first "Hello?" was lost).
+
+### For bia
+- Answer calls with *_call_accept(greeting="…") and place them with *_call_start / phone_call(greeting="…"): the greeting is your first words, addressed to them by their name (never your own); do not say() a greeting after it.
+- A web call someone places to you arrives as [incoming call]: answer with web_call_accept(identity, greeting) or decline with web_call_hangup(goodbye).
+- End calls with *_call_hangup(goodbye="…") (chrome_call_close(goodbye) for Meet): the goodbye replaces what you are saying and the call ends as it finishes; do not say() a goodbye first.
+
 ## 2.5.4
 
 ### Changes

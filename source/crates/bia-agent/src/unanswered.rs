@@ -132,7 +132,12 @@ pub struct Set {
     /// (channel, since): bia is speaking into that call; nothing is asked or said there
     /// until it finished (not persisted: a restart ends the speech anyway)
     speaking: Vec<(String, u64)>,
+    /// (channel, since): when each call began (not persisted)
+    call_since: Vec<(String, u64)>,
 }
+
+/// An [incoming call] arrives this long before the call is up (it rings first).
+const RING_BEFORE_SECS: u64 = 120;
 
 fn interval(step: u32) -> u64 {
     TICK_SECS
@@ -151,6 +156,7 @@ impl Set {
             chans: f.chans,
             calls: f.calls,
             speaking: vec![],
+            call_since: vec![],
         };
         set.open.retain(|e| e.channel != "console");
         set.prune();
@@ -165,6 +171,7 @@ impl Set {
             chans: vec![],
             calls: vec![],
             speaking: vec![],
+            call_since: vec![],
         }
     }
 
@@ -227,6 +234,8 @@ impl Set {
         }
         if on {
             self.calls.push(channel.into());
+            self.call_since.retain(|(c, _)| c != channel);
+            self.call_since.push((channel.into(), now));
             if let Some(c) = self.chans.iter_mut().find(|c| c.channel == channel) {
                 c.muted = false;
                 c.silent = 0;
@@ -237,6 +246,33 @@ impl Set {
             self.speaking.retain(|(c, _)| c != channel);
         }
         self.persist();
+    }
+
+    /// The call on `channel` ended: close what was said in it (transcribed phrases since it
+    /// began, and the [incoming call] that rang just before), except `busy` ids that still
+    /// have work running for them. Their ids.
+    pub fn close_call(&mut self, channel: &str, busy: &[String]) -> Vec<String> {
+        let Some(since) = self.call_since.iter().find(|(c, _)| c == channel).map(|(_, t)| *t) else {
+            return vec![];
+        };
+        self.call_since.retain(|(c, _)| c != channel);
+        let mut closed = vec![];
+        self.open.retain(|e| {
+            let said = e.channel == channel
+                && ((!e.lang.is_empty() && e.received >= since)
+                    || (e.received + RING_BEFORE_SECS >= since && e.received <= since));
+            if said && !busy.contains(&e.id) {
+                closed.push(e.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if !closed.is_empty() {
+            self.prune();
+            self.persist();
+        }
+        closed
     }
 
     /// bia started speaking into the call on `channel` (a say, or the spoken fallback).
@@ -924,6 +960,23 @@ mod tests {
         // the next phrase they say starts over at 10s
         s.add_msg("", "phone:+34600", "alex", 140, false, "es");
         assert_eq!(s.check(150).nudge.len(), 1);
+    }
+
+    #[test]
+    fn a_call_that_ended_closes_what_was_said_in_it() {
+        let mut s = Set::mem();
+        s.add("sms", "phone:+1", "p", 10); // an SMS long before the call stays open
+        s.add("ring", "phone:+1", "p", 980); // [incoming call]
+        s.set_call("phone:+1", true, 1000);
+        s.add_msg("a", "phone:+1", "p", 1005, false, "en");
+        s.add_msg("b", "phone:+1", "p", 1010, false, "en");
+        s.add_msg("other", "telegram:2", "q", 1010, false, "en");
+        s.set_call("phone:+1", false, 1020);
+        let closed = s.close_call("phone:+1", &["b".to_string()]);
+        assert_eq!(closed, vec!["ring".to_string(), "a".to_string()]);
+        let left: Vec<String> = s.open.iter().map(|e| e.id.clone()).collect();
+        assert_eq!(left, vec!["sms", "b", "other"], "work still running for b keeps it open");
+        assert!(s.close_call("phone:+1", &[]).is_empty(), "once per call");
     }
 
     #[test]

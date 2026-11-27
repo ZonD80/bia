@@ -410,6 +410,14 @@ pub fn voice_note(text: &str, lang: &str, out: &Path) -> Result<(f32, Vec<f32>),
     Ok((samples.len() as f32 / rate.max(1) as f32, samples))
 }
 
+/// Warm the voice on `text` (bia's greeting, before a call is answered): synthesis runs
+/// until its first audio, so the words said once the call is up start at once. Seconds.
+pub fn warm_phrase(text: &str, lang: &str) -> f64 {
+    let t = Instant::now();
+    let _ = speak(text, lang, &mut |_, _| false);
+    t.elapsed().as_secs_f64()
+}
+
 /// Load the voices of the enabled languages in the background.
 pub fn warm() {
     std::thread::spawn(warm_now);

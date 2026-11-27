@@ -748,7 +748,20 @@ impl Calls {
     }
 
     /// Tool `call_close`.
-    pub fn close(&self) -> Result<String, String> {
+    pub fn close(&self, args: &Value) -> Result<String, String> {
+        let goodbye = bia_mcp::required(args, "goodbye")?;
+        // bia's goodbye replaces whatever it is still saying; it leaves once that played
+        let (mic, lang) = {
+            let g = self.inner.call.lock().unwrap();
+            let call = g.as_ref().ok_or("no call is open")?;
+            (call.mic, call.lang.clone())
+        };
+        if mic {
+            let lang = args.get("lang").and_then(Value::as_str).map(str::to_string).filter(|l| !l.trim().is_empty())
+                .or(lang)
+                .unwrap_or_else(|| bia_speech::registry::current().default_lang.clone());
+            let _ = self.say(&serde_json::json!({"text": goodbye, "lang": lang}));
+        }
         let speaking = {
             let mut g = self.inner.call.lock().unwrap();
             let call = g.as_mut().ok_or("no call is open")?;
@@ -955,7 +968,7 @@ mod tests {
         let path = end.split(" is in ").nth(1).unwrap().trim_end_matches('.');
         let text = std::fs::read_to_string(path).unwrap();
         assert!(text.contains("s1: Hello everyone") && text.contains("Anna: I am Anna") && text.contains("s3: Hallo"), "{text}");
-        assert!(calls.close().is_err());
+        assert!(calls.close(&serde_json::json!({"goodbye": "Bye."})).is_err());
         assert_eq!(calls.status().unwrap(), json!({"call": false}).to_string());
     }
 
@@ -976,11 +989,13 @@ mod tests {
         calls.from_addon("voice", &json!({"tab": 7, "d": json!({"t": "played", "gen": 4}).to_string()}));
         wait_for(&lines, "[you finished speaking]");
 
-        // leaving while speaking waits for the goodbye
+        // leaving: the goodbye replaces what bia is saying, and the call ends once it played
         calls.inner.call.lock().unwrap().as_mut().unwrap().speaking = true;
-        assert!(calls.close().unwrap().contains("as soon as"));
+        assert!(calls.close(&json!({})).unwrap_err().contains("goodbye is required"));
+        assert!(calls.close(&json!({"goodbye": "Bye."})).unwrap().contains("as soon as"));
         assert!(calls.inner.call.lock().unwrap().is_some());
-        calls.from_addon("voice", &json!({"tab": 7, "d": json!({"t": "played", "gen": 4}).to_string()}));
+        let gen = calls.inner.call.lock().unwrap().as_ref().unwrap().gen;
+        calls.from_addon("voice", &json!({"tab": 7, "d": json!({"t": "played", "gen": gen}).to_string()}));
         wait_for(&lines, "[call ended]");
         assert!(fake.sent.lock().unwrap().iter().any(|(m, p)| m == "voice_close" && p["tab"] == 7));
     }
@@ -1036,7 +1051,7 @@ mod tests {
         }
         calls.from_addon("voice", &json!({"tab": 7, "d": json!({"t": "played", "gen": 1}).to_string()}));
         wait_for(&lines, "[you finished speaking]");
-        calls.close().unwrap();
+        calls.close(&serde_json::json!({"goodbye": "Bye."})).unwrap();
         wait_for(&lines, "[call ended]");
     }
 }

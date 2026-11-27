@@ -18,6 +18,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const RING_SECS: u64 = 30;
+/// A call someone places to bia rings this long for bia to answer (web_call_accept).
+const ANSWER_SECS: u64 = 60;
 /// Continuous speech (in 20 ms frames) while bia talks that counts as interrupting.
 const BARGE_FRAMES: u32 = 15;
 /// bia's words count as a possible echo this long after they finished.
@@ -36,6 +38,9 @@ struct Call {
     ended: AtomicBool,
     /// Hang up once what bia is saying has played (goodbye first).
     hangup_after: AtomicBool,
+    /// The call is live: bia answered the person's call (web_call_accept), or they answered
+    /// bia's. Until then it rings on their side and their audio is not listened to.
+    live: AtomicBool,
     started: Instant,
     lines: Mutex<Vec<(String, String)>>,
     spoken: Mutex<Option<(String, Instant)>>,
@@ -88,6 +93,8 @@ impl Call {
 struct Ring {
     id: String,
     started: Instant,
+    /// bia's first words: said the moment they answer.
+    greeting: String,
 }
 
 fn calls() -> &'static Mutex<HashMap<Key, Arc<Call>>> {
@@ -132,11 +139,9 @@ pub fn serve(
     if let Some(old) = calls().lock().ok().and_then(|c| c.get(&k).cloned()) {
         hang_up(&old, "replaced by a new call");
     }
-    let answered = rings()
-        .lock()
-        .ok()
-        .and_then(|mut r| r.remove(&k))
-        .is_some_and(|r| r.id == ring_id || ring_id.is_empty());
+    let ring = rings().lock().ok().and_then(|mut r| r.remove(&k));
+    let greeting = ring.as_ref().map(|r| r.greeting.clone()).unwrap_or_default();
+    let answered = ring.is_some_and(|r| r.id == ring_id || ring_id.is_empty());
     if answered {
         crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": chat}));
     }
@@ -150,6 +155,7 @@ pub fn serve(
         muted: AtomicBool::new(false),
         ended: AtomicBool::new(false),
         hangup_after: AtomicBool::new(false),
+        live: AtomicBool::new(answered),
         started: Instant::now(),
         lines: Mutex::new(Vec::new()),
         spoken: Mutex::new(None),
@@ -166,26 +172,36 @@ pub fn serve(
         Err(e) => {
             call.send_json(json!({"t": "end", "reason": format!("speech unavailable: {e}")}));
             call.system(&format!("[call failed: speech unavailable: {e}]"));
+            call.ended.store(true, Ordering::SeqCst);
             finish(&call, None);
             return;
         }
     };
-    call.send_json(json!({"t": "ready"}));
-    crate::chat::emit_event(identity, json!({"t": "call", "chat": chat, "on": true}));
-    call.system(if answered {
-        "[call started] (they answered your call)"
+    if answered {
+        // they answered bia's call: bia's greeting first, the moment it is up
+        go_live(&call, &greeting, "they answered your call");
     } else {
-        "[call started] (they called you)"
-    });
-    bia_speech::diag::log(
-        "webcall",
-        format!("call started {identity}@{}", call.channel()),
-    );
+        // they call bia: it rings on their side while bia gets ready and answers
+        call.send_json(json!({"t": "ringing", "text": format!("Ringing… please wait while {} gets ready for the call", crate::push::who())}));
+        crate::chat::agent_speech(identity, chat, &format!(
+            "[incoming call] from {identity} — the web app rings on their side; web_call_accept(identity=\"{identity}\", greeting=\"…\") answers it with your first words (required; the speech models load and the voice warms up on them first, then they play the moment the call is up; never say() a greeting after it); web_call_hangup(goodbye=\"…\") declines it. It rings for {ANSWER_SECS} s."
+        ));
+        bia_speech::diag::log("webcall", format!("incoming call {identity}@{}", call.channel()));
+    }
     let mut barge = 0u32;
+    let mut unanswered = !answered;
     loop {
+        if unanswered && !call.live.load(Ordering::SeqCst) && call.started.elapsed() >= Duration::from_secs(ANSWER_SECS) {
+            call.send_json(json!({"t": "end", "reason": format!("{} did not answer", crate::push::who())}));
+            crate::chat::agent_notice(identity, chat, &format!("[missed call] from {identity}"));
+            call.ended.store(true, Ordering::SeqCst);
+            break;
+        }
+        unanswered = unanswered && !call.live.load(Ordering::SeqCst);
         match recv() {
             Ok((2, payload)) => {
-                if call.muted.load(Ordering::Relaxed) {
+                // still ringing: nobody listens yet
+                if call.muted.load(Ordering::Relaxed) || !call.live.load(Ordering::SeqCst) {
                     continue;
                 }
                 let pcm = bia_speech::audio::le_bytes_to_i16(&payload);
@@ -274,9 +290,43 @@ fn transcribe(call: Arc<Call>, utt: bia_speech::Utterance) {
     });
 }
 
+/// The call is up: tell the browser, bia's greeting first, then [call started] (saying so).
+fn go_live(call: &Arc<Call>, greeting: &str, how: &str) {
+    call.live.store(true, Ordering::SeqCst);
+    call.send_json(json!({"t": "ready"}));
+    crate::chat::emit_event(&call.identity, json!({"t": "call", "chat": call.chat, "on": true}));
+    let greets = !greeting.trim().is_empty() && speak(&call.identity, &call.channel(), greeting, "").is_ok();
+    call.system(&if greets {
+        format!("[call started] ({how}) your greeting is playing: wait for [you finished speaking]")
+    } else {
+        format!("[call started] ({how})")
+    });
+    bia_speech::diag::log("webcall", format!("call started {}@{}", call.identity, call.channel()));
+}
+
+/// bia answers the call the person placed, with its first words: the call's speech models
+/// load and the voice warms up on the greeting first (they hear it ringing meanwhile).
+pub fn accept(identity: &str, channel: &str, greeting: &str) -> Result<String, String> {
+    let call = find(identity, channel).ok_or("no web call is ringing on this channel")?;
+    if call.live.load(Ordering::SeqCst) {
+        return Err("the call is already answered".into());
+    }
+    let t = Instant::now();
+    let lang = bia_speech::contacts::lang_for_identity(identity);
+    bia_speech::prepare_call(&format!("web:{identity}"), lang.as_deref(), greeting);
+    if call.ended.load(Ordering::SeqCst) {
+        return Err("they hung up while it rang".into());
+    }
+    go_live(&call, greeting, "you answered their call");
+    Ok(format!("answered after {:.0} s getting ready; the greeting plays now", t.elapsed().as_secs_f64()))
+}
+
 /// Speak `text` (in `lang`) into the active call on this channel.
 pub fn speak(identity: &str, channel: &str, text: &str, lang: &str) -> Result<String, String> {
     let call = find(identity, channel).ok_or("no active web call on this channel")?;
+    if !call.live.load(Ordering::SeqCst) {
+        return Err("the call is still ringing: web_call_accept(greeting) answers it".into());
+    }
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("text is empty".into());
@@ -352,7 +402,7 @@ pub fn cancel_ring(identity: &str, channel: &str) -> Result<String, String> {
 }
 
 /// bia ends the call.
-pub fn hangup(identity: &str, channel: &str) -> Result<String, String> {
+pub fn hangup(identity: &str, channel: &str, goodbye: &str) -> Result<String, String> {
     if let Some(k) = key(identity, channel) {
         if rings().lock().ok().and_then(|mut r| r.remove(&k)).is_some() {
             crate::chat::emit_event(identity, json!({"t": "ring_end", "chat": k.1}));
@@ -360,6 +410,14 @@ pub fn hangup(identity: &str, channel: &str) -> Result<String, String> {
         }
     }
     let call = find(identity, channel).ok_or("no active web call on this channel")?;
+    if !call.live.load(Ordering::SeqCst) {
+        hang_up(&call, &format!("{} declined the call", crate::push::who()));
+        return Ok(format!("declined their call on {channel}"));
+    }
+    // bia's goodbye replaces whatever it is still saying; the call ends once it played
+    if !goodbye.trim().is_empty() {
+        let _ = speak(identity, channel, goodbye, "");
+    }
     if call.speaking.load(Ordering::SeqCst) {
         // let the goodbye play out; hang up when it has (or after 20 s at most)
         call.hangup_after.store(true, Ordering::SeqCst);
@@ -389,9 +447,16 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
             _ => None,
         })
         .is_some();
-    call.ended.store(true, Ordering::SeqCst);
+    let was_ended = call.ended.swap(true, Ordering::SeqCst);
     (call.close)();
     if !removed {
+        return;
+    }
+    if !call.live.load(Ordering::SeqCst) {
+        // it rang and was never answered: no call to sum up
+        if !was_ended {
+            call.system(&format!("[missed call] from {} (they hung up while it rang)", call.identity));
+        }
         return;
     }
     let dur = fmt_dur(call.started.elapsed());
@@ -419,7 +484,7 @@ fn finish(call: &Arc<Call>, reason: Option<&str>) {
 }
 
 /// bia calls an open web app (an incoming-call screen with ringing).
-pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
+pub fn ring(identity: &str, channel: &str, greeting: &str) -> Result<String, String> {
     let k = key(identity, channel).ok_or_else(|| format!("{channel} is not a web chat"))?;
     if !crate::chat::has_client(identity) {
         return Err(format!(
@@ -437,10 +502,17 @@ pub fn ring(identity: &str, channel: &str) -> Result<String, String> {
             Ring {
                 id: id.clone(),
                 started: Instant::now(),
+                greeting: greeting.trim().to_string(),
             },
         );
     }
     crate::chat::emit_event(identity, json!({"t": "ring", "chat": k.1, "id": id}));
+    // the speech models and the greeting's voice get ready while it rings
+    let (g, who) = (greeting.to_string(), identity.to_string());
+    std::thread::spawn(move || {
+        let lang = bia_speech::contacts::lang_for_identity(&who);
+        bia_speech::prepare_call(&format!("web:{who}"), lang.as_deref(), &g)
+    });
     crate::push::notify(
         identity,
         crate::push::Note {
@@ -560,8 +632,34 @@ mod tests {
                 "",
             );
         });
+        // they call bia: it rings on their side until bia answers with its greeting
         let ib = next_web(&con);
-        assert!(ib.text.starts_with("[call started]"), "{}", ib.text);
+        assert!(ib.text.starts_with("[incoming call] from root"), "{}", ib.text);
+        let rang = frames(&sink.0.lock().unwrap()).iter().any(|(op, p)| *op == 1 && String::from_utf8_lossy(p).contains("\"ringing\""));
+        assert!(rang, "the browser shows it ringing");
+        assert!(speak("root", "web", "Too early.", "en").unwrap_err().contains("still ringing"));
+        assert!(accept("root", "web", "Hello root, Milo here.").unwrap().contains("greeting plays"));
+        let ib = next_web(&con);
+        assert!(ib.text.starts_with("[call started] (you answered their call) your greeting is playing"), "{}", ib.text);
+        assert!(accept("root", "web", "Again.").is_err(), "answered once");
+        // the greeting plays out
+        let t = Instant::now();
+        let greet = loop {
+            let fr = frames(&sink.0.lock().unwrap());
+            let end = fr.iter().find_map(|(op, p)| {
+                let v: Value = (*op == 1).then(|| serde_json::from_slice(p).ok()).flatten()?;
+                (v["t"] == "say_end").then(|| v["gen"].as_u64().unwrap())
+            });
+            if let Some(g) = end {
+                break g;
+            }
+            assert!(t.elapsed().as_secs() < 30, "no say_end for the greeting");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        tx.send((1, json!({"t": "played", "gen": greet}).to_string().into_bytes())).unwrap();
+        let ib = next_web(&con);
+        assert!(ib.text.starts_with("[you finished speaking]"), "{}", ib.text);
+        sink.0.lock().unwrap().clear();
 
         // the caller speaks (synthesized), then is quiet
         let (x, rate) =
@@ -639,7 +737,7 @@ mod tests {
         );
 
         // bia hangs up: the model hears it ended, the chat gets the transcript
-        hangup("root", "web").unwrap();
+        hangup("root", "web", "").unwrap();
         drop(tx);
         server.join().unwrap();
         let ib = next_web(&con);
