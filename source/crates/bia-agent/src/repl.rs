@@ -274,6 +274,11 @@ fn for_note(open: &mut crate::unanswered::Set, msgs: Vec<crate::jobs::ForMsg>, n
     note
 }
 
+/// The room a call needs in the context: a quarter of it, at least 8k tokens.
+fn call_reserve(budget: usize) -> usize {
+    (budget / 4).max(8_192).min(budget)
+}
+
 /// What bia said into a call has played, was cut, or could not be made.
 fn speech_done(text: &str) -> bool {
     let t = text.trim_start();
@@ -917,6 +922,14 @@ impl Repl {
     fn compact_range(&mut self, start: usize, end: usize, rollup: bool) -> bool {
         if start >= end || end > self.history.len() {
             return false;
+        }
+        // a reflection takes a while (seconds, a slow brain much longer): someone in a call
+        // with bia hears why it is quiet instead of silence
+        for (channel, lang) in self.tools.unanswered.calls_now() {
+            let text = crate::unanswered::think_text(&lang);
+            if self.tools.speak_in_call(&channel, text, &lang) {
+                self.con.writeln(&self.con.c(GRAY, &format!("  [{channel}: \"{text}\" while bia reflects]")));
+            }
         }
         let span: Vec<Msg> = self.history[start..end].to_vec();
         let t_start = span
@@ -1698,6 +1711,13 @@ impl Repl {
     }
 
     /// True when the live window is within 2048 tokens of the context budget.
+    /// Too little room left for a call: a short call (speech, says, a lookup or two) would
+    /// fill the context and a reflection would come in the middle of it.
+    fn call_needs_room(&self) -> bool {
+        let lim = self.ctx_budget();
+        lim > 0 && self.live_tokens().saturating_add(call_reserve(lim)) >= lim
+    }
+
     fn need_watermark(&self) -> bool {
         let lim = self.ctx_budget();
         lim > 0 && self.live_tokens().saturating_add(2048) >= lim
@@ -3440,6 +3460,11 @@ now: {now}", done.join("\n")), failed)
         self.tools.dream.set_ctx(self.ctx_budget(), self.live_tokens());
         self.record_outbox_notes();
         self.record_ignored_note();
+        // a call is ringing: make room now, while it rings, so no reflection (and the tool
+        // reloading after it) stops bia mid-call with the caller in silence
+        if messages.iter().any(|ib| ib.text.starts_with("[incoming call]")) && self.call_needs_room() {
+            self.tools.pending_reflect.set(true);
+        }
         for ib in &messages {
             self.record_inbound(ib);
         }
@@ -4398,6 +4423,12 @@ mod for_ids_tests {
         let n = for_note(&mut s, msgs.clone(), 125);
         assert!(n.contains("phone:+1 has heard nothing for 10s (in a voice call)"), "{n}");
         assert!(speech_done("[you finished speaking]") && speech_done("[voice cancelled]") && speech_done("[voice failed: x]"));
+        // a call wants a quarter of the context free, at least 8k (never more than all of it)
+        assert_eq!(call_reserve(128_000), 32_000);
+        assert_eq!(call_reserve(16_000), 8_192);
+        assert_eq!(call_reserve(4_000), 4_000);
+        assert_eq!(crate::unanswered::think_text("ru-RU"), "Минутку, мне нужно подумать.");
+        assert_eq!(crate::unanswered::think_text(""), "One moment, please, let me think.");
         assert!(!speech_done("[speech en] done"));
     }
 

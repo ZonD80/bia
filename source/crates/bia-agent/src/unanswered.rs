@@ -39,6 +39,23 @@ pub fn fallback_text(lang: &str) -> &'static str {
     }
 }
 
+/// "One moment, please, let me think." in `lang`: said into a call before bia stops to
+/// reflect (its context is full), so the caller does not wait in silence. English otherwise.
+pub fn think_text(lang: &str) -> &'static str {
+    let l = lang.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
+    match l.as_str() {
+        "ru" => "Минутку, мне нужно подумать.",
+        "uk" => "Хвилинку, мені треба подумати.",
+        "es" => "Un momento, por favor, tengo que pensar.",
+        "ca" => "Un moment, si us plau, he de pensar.",
+        "fr" => "Un instant, s'il vous plaît, je dois réfléchir.",
+        "de" => "Einen Moment bitte, ich muss nachdenken.",
+        "pt" => "Um momento, por favor, preciso pensar.",
+        "it" => "Un momento, per favore, devo pensare.",
+        _ => "One moment, please, let me think.",
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Entry {
     pub id: String,
@@ -203,7 +220,18 @@ impl Set {
             .retain(|c| open.iter().any(|e| e.channel == c.channel));
     }
 
-    pub fn in_call(&self, channel: &str) -> bool {
+    /// The calls going on now, each with the language last heard there ("" = not known).
+    pub fn calls_now(&self) -> Vec<(String, String)> {
+        self.calls
+            .iter()
+            .map(|c| {
+                let lang = self.open.iter().rev().find(|e| e.channel == *c && !e.lang.is_empty()).map(|e| e.lang.clone()).unwrap_or_default();
+                (c.clone(), lang)
+            })
+            .collect()
+    }
+
+        pub fn in_call(&self, channel: &str) -> bool {
         self.calls.iter().any(|c| c == channel)
     }
 

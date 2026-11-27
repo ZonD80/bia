@@ -5,6 +5,17 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.6
+
+### Changes
+- Voice calls: bia's greeting plays the moment the call is up. Starting a call used to load the voices of every installed language at once, which kept the greeting waiting (silence for many seconds on a bia with many languages) and pushed out the voice the greeting had just loaded.
+- When bia's memory is almost full as a call rings, it makes room before answering, instead of stopping to think in the middle of the call. If it still has to, the caller hears "One moment, please, let me think." in their language instead of silence.
+- Telegram calls: the greeting and goodbye can be in a language other than the person's usual one, and the rest of the call is spoken in it too.
+- `bia-agent --version` prints the version and exits (it started a second agent).
+
+### For bia
+- telegram_call_accept / telegram_call_start take lang="…" for the greeting's language (e.g. when root asks you to speak English); later says on the call use it unless you pass another. telegram_call_hangup takes lang for the goodbye.
+
 ## 2.5.5
 
 ### Changes

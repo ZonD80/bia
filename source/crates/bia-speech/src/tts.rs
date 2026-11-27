@@ -217,14 +217,24 @@ fn engines() -> &'static Mutex<Vec<(String, Shared)>> {
 pub fn engine(id: &str, v: &Voice, lang: &str) -> Result<Shared, String> {
     crate::idle::touch();
     let key = if v.kind == "phonon" { format!("{id}|{}|{lang}", v.model) } else { format!("{id}|{}", v.model) };
-    let mut e = engines().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(i) = e.iter().position(|(k, _)| *k == key) {
+    let hit = |e: &mut Vec<(String, Shared)>| {
+        let i = e.iter().position(|(k, _)| *k == key)?;
         let hit = e.remove(i);
         let r = hit.1.clone();
         e.push(hit);
+        Some(r)
+    };
+    if let Some(r) = hit(&mut engines().lock().unwrap_or_else(|e| e.into_inner())) {
         return Ok(r);
     }
-    let eng = Arc::new(Mutex::new(Engine::load_for(v, lang)?));
+    // loaded without the list's lock: a voice loading (seconds) never holds up one that is
+    // already loaded and about to speak (a call's greeting)
+    let loaded = Arc::new(Mutex::new(Engine::load_for(v, lang)?));
+    let mut e = engines().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(r) = hit(&mut e) {
+        return Ok(r);
+    }
+    let eng = loaded;
     e.push((key, eng.clone()));
     if e.len() > 3 {
         e.remove(0);
@@ -418,15 +428,21 @@ pub fn warm_phrase(text: &str, lang: &str) -> f64 {
     t.elapsed().as_secs_f64()
 }
 
-/// Load the voices of the enabled languages in the background.
+/// Load the default language's voice in the background, unless voices are loaded already.
 pub fn warm() {
     std::thread::spawn(warm_now);
 }
 
-/// [`warm`], waiting for it.
+/// [`warm`], waiting for it. Only three voices stay loaded, so warming every enabled
+/// language (ten on some bias) only pushed out the ones a call had just loaded for its
+/// greeting, and kept the voices busy loading while the greeting waited: when a voice is
+/// loaded already (a call warmed its own languages) this does nothing.
 pub fn warm_now() {
+    if !engines().lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
+        return;
+    }
     let reg = registry::current();
-    warm_langs(&reg.enabled);
+    warm_langs(std::slice::from_ref(&reg.default_lang));
 }
 
 /// Load the voices of `langs` (a call's languages), waiting for them.

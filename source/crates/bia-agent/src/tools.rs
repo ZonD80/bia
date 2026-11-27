@@ -3745,6 +3745,23 @@ impl Tools {
         out
     }
 
+    /// Speak `text` into the call on `channel` only (no chat message); false when that bus
+    /// has no calls or the MCP is not running. `lang` "" = the call's or person's language.
+    pub fn speak_in_call(&mut self, channel: &str, text: &str, lang: &str) -> bool {
+        let Some((bus, chat)) = chat_bus(channel) else { return false };
+        if !CALL_BUSES.contains(&bus) {
+            return false;
+        }
+        let (bus, chat) = (bus.to_string(), chat.to_string());
+        let Some(idx) = self.server_index(&bus) else { return false };
+        let mut args = json!({"chat_id": chat, "text": text});
+        if !lang.is_empty() {
+            args["lang"] = json!(lang);
+        }
+        let (_, err) = self.mcp_invoke(idx, "call_say", args, &mut |_| {});
+        !err
+    }
+
     /// The automatic "still working on it" for a channel that ignored its nudges.
     pub fn send_fallback(&mut self, fb: &crate::unanswered::Fallback) -> Result<String> {
         let mut args = json!({

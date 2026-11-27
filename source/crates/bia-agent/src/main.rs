@@ -53,6 +53,11 @@ use tools::human;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
+    // --version answers and exits: it must never start a second agent next to the running one
+    if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
+        println!("bia {VERSION} ({})", std::env::consts::ARCH);
+        return;
+    }
     // one rustls crypto provider for the whole process (HTTPS to cloud models)
     bia_pki::install_crypto_provider();
     let system = sys::is_system();
