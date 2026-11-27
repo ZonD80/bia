@@ -13,6 +13,11 @@ DEPLOY=1: nothing runs on Ubuntu by itself; this computer's `bia-deploy server` 
 ssh as ubuntu with a password (sudo asks for it too): first contact trusts the host key, a
 changed key is refused until --host-key names the new one; it plans, takes the server over
 and saves root's certificate here.
+
+RESTORE=1 (with NET=onlink): then the VM is powered off and the same disk boots as if restored
+from a snapshot onto a new cloud VM: a new MAC, no DHCP to rely on, and a NoCloud cidata disc
+(as CubePath and other Proxmox hosts give) naming a new address, 10.0.2.16. The port forwards go
+to that address only, so bia is reachable only if bia-net set it up from the disc.
 """
 import base64, hashlib, http.server, json, os, re, shutil, socket, socketserver, ssl, subprocess, sys, tempfile, threading, time, urllib.request
 
@@ -30,6 +35,9 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 LAND = bool(os.environ.get("LAND"))
 AGENT_LAND = os.environ.get("LAND") == "agent"
 DEPLOY = bool(os.environ.get("DEPLOY"))
+RESTORE = bool(os.environ.get("RESTORE"))
+# STREAM=1 (with a small MEM, e.g. 2G): the takeover must choose streaming, the rescue downloads the image
+STREAM = bool(os.environ.get("STREAM"))
 # DREAM=1: after the checks, the night work on long-term memory with the real brain: three
 # seeded past days are reflected (dream now), a changed fact is written as it is now, the live
 # context sheds the work; then a whole-memory rebuild after root's yes, answering a
@@ -362,6 +370,87 @@ def deploy_run():
     return p12, ca_pem, fp.group(1)
 
 
+NEW_MAC, NEW_IP = "52:54:00:7e:00:02", "10.0.2.16"
+
+
+def restore_stage(proc, shell, get, fsget, want):
+    """Power off, boot the same disk with a new MAC and a cidata disc naming a new address. → the new QEMU."""
+    if NET != "onlink":
+        die("RESTORE=1 needs NET=onlink (a static address that the restore must replace)")
+    say("restore: powering bia off")
+    shell("systemd-run --on-active=3 systemctl poweroff", timeout=20)  # the shell answers before it goes
+    try:
+        proc.wait(timeout=180)
+    except subprocess.TimeoutExpired:
+        die("bia did not power off")
+    disc = f"{TE}/cidata"
+    shutil.rmtree(disc, ignore_errors=True)
+    os.makedirs(disc)
+    # CubePath's disc for VPS 29887 (2026-11-27), with this VM's MAC and addresses; the MAC unquoted as there
+    open(f"{disc}/network-config", "w").write(f"""network:
+  version: 2
+  ethernets:
+    public:
+      match:
+        macaddress: {NEW_MAC}
+      accept-ra: false
+      addresses:
+      - {NEW_IP}/32
+      routes:
+      - to: default
+        via: 10.0.2.2
+        on-link: true
+      nameservers:
+        addresses:
+        - 10.0.2.3
+""")
+    open(f"{disc}/meta-data", "w").write("instance-id: restore-e2e\nlocal-hostname: restored\n")
+    open(f"{disc}/user-data", "w").write("#cloud-config\n")
+    iso = f"{TE}/cidata.iso"
+    subprocess.run(["mkisofs", "-quiet", "-V", "cidata", "-J", "-r", "-o", iso, disc], check=True)
+    cmd2, skip = [], False
+    for a in cmd:
+        if skip:
+            skip = False
+            continue
+        if a == "-smbios":  # Ubuntu's cloud-init seed: not part of a restored machine
+            skip = True
+            continue
+        if a.startswith("user,id=n0,"):
+            a = f"user,id=n0,hostfwd=tcp:127.0.0.1:{WEB_PORT}-{NEW_IP}:443"
+        a = a.replace("mac=52:54:00:7e:00:01", f"mac={NEW_MAC}")
+        cmd2.append(a)
+    cmd2 += ["-drive", f"if=none,id=cd,media=cdrom,readonly=on,file={iso}",
+             "-device", "virtio-scsi-pci,id=scsi0", "-device", "scsi-cd,drive=cd,bus=scsi0.0"]
+    mark = len(ANSI.sub("", serial())) if os.path.exists(LOG) else 0
+    say(f"restore: booting the same disk with MAC {NEW_MAC} and a cidata disc for {NEW_IP}")
+    proc = subprocess.Popen(cmd2, stdout=subprocess.DEVNULL, stderr=open(f"{TE}/qemu-restore.err", "w"))
+    end = time.time() + 15 * 60
+    while True:
+        try:
+            root.cookie = None
+            st, _ = get("/v1/whoami")
+            if st == 200:
+                break
+        except Exception:
+            pass
+        if time.time() > end:
+            want(False, f"bia answers at its new address {NEW_IP} after the restore")
+            return proc
+        time.sleep(5)
+    want(True, f"bia answers at its new address {NEW_IP} after the restore")
+    st, net = fsget("/etc/network/interfaces")
+    want(st == 200 and b"5254007e0002 (cidata disc)" in net and f"address {NEW_IP}/32".encode() in net
+         and b"route replace default via 10.0.2.2 dev" in net and b"onlink" in net,
+         "bia-net configured the new MAC from the cidata disc (static /32, on-link gateway)")
+    want(b"5254007e0001: no interface" in net, "the carried old MAC is noted and not used")
+    st, rc = fsget("/etc/resolv.conf")
+    want(st == 200 and b"nameserver 10.0.2.3" in rc, "name servers from the disc")
+    out, rc_ = shell("ip -4 -br addr show scope global; ip -4 route show default")
+    want(NEW_IP in out and "10.0.2.15" not in out, f"only the new address is up ({' '.join(out.split())[:120]})")
+    return proc
+
+
 def dream_stage(shell, get, fsget, want, cctx):
     """DREAM: night memory work on the running bia (real brain from ./fmm.json). `cctx` is
     root's signed-in credentials (webbus.Cred)."""
@@ -683,6 +772,10 @@ try:
             errs.append(msg)
 
     want(json.loads(body).get("identity") == "root", "root's key from the gate signs in (identity root)")
+    if STREAM:
+        log = ANSI.sub("", serial())
+        want("the image is streamed from http://10.0.2.2:" in log and "bia-rescue: network" in log,
+             f"the rescue streamed the image over the seeded network (MEM={MEM})")
     st, _ = get("/v1/pki/bootstrap/root", auth=False, method="POST")
     want(st == 409, f"first-time root certificate route is closed (HTTP {st})")
     st, ca_now = get("/v1/pki/ca", auth=False)
@@ -848,6 +941,8 @@ try:
     want(st == 200, "bia still runs after both refusals")
     if DREAM:
         dream_stage(shell, get, fsget, want, cctx)
+    if RESTORE:
+        proc = restore_stage(proc, shell, get, fsget, want)
     if errs:
         die(f"{len(errs)} check(s) failed")
     say("PASS takeover e2e")

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 pub const KNOWN: &[&str] = &[
     "version", "disk", "wipe", "os", "fmm", "network", "pki", "setup", "instructions", "lang", "self", "reboot",
-    "gate_port", "gate_wait", "land",
+    "gate_port", "gate_wait", "land", "stream",
 ];
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -57,6 +57,11 @@ pub struct Config {
     /// another bia to fly its agent here instead of starting a new one.
     #[serde(default)]
     pub land: Option<Value>,
+    /// How the rescue gets the image: `true` streams it from the release onto the disk (little RAM; the
+    /// network must work after the reboot), `false` loads it into memory first. Default: memory when there
+    /// is enough of it, else streaming.
+    #[serde(default)]
+    pub stream: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

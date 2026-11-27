@@ -116,6 +116,17 @@ pub fn missing_bytes(m: &Manifest, arch: &str) -> u64 {
     e.image.size.saturating_sub(have)
 }
 
+/// Where `arch`'s image of release `m` is downloaded from: its own tag, never `latest` (a takeover's rescue
+/// streams it minutes later, when `latest` may be another release).
+pub fn image_url(m: &Manifest, arch: &str) -> Result<String> {
+    let entry = m.os.get(arch).with_context(|| format!("release {} has no {arch} OS", m.tag))?;
+    let name = &entry.image.file;
+    if name.contains(['/', '\\']) || name.starts_with('.') {
+        bail!("{MANIFEST}: bad file name {name:?}");
+    }
+    Ok(format!("{}/{name}", base_url(&m.tag)))
+}
+
 /// Download (or reuse) the bia image for `arch` from release `m`.
 pub fn fetch(m: &Manifest, arch: &str, progress: &mut dyn FnMut(&str)) -> Result<OsImage> {
     let entry = m

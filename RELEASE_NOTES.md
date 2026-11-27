@@ -5,6 +5,12 @@ release newer than the version it ran before, tells the user what changed (**Cha
 does the **For bia** steps itself. Write both for that reader: Changes in plain words for the
 owner, For bia as concrete steps with tool names. Keep each item to one line.
 
+## 2.5.7
+
+### Changes
+- Taking over a server now works with much less memory (about 1.7 GB instead of 4.6 GB): when the server cannot hold bia's image in memory, bia's installer downloads it straight onto the disk after the reboot, over the server's own network. Servers with enough memory are taken over as before.
+- A bia restored from a snapshot onto a new cloud server (a new network card and a new address) now comes up on its new address by itself: it reads the network settings the cloud puts on a small disc (Proxmox-based hosts such as CubePath, which have no DHCP). The settings carried over at takeover still win for the original network card.
+
 ## 2.5.6
 
 ### Changes

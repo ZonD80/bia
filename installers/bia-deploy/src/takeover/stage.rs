@@ -124,8 +124,16 @@ pub struct ImageOnDisk<'a> {
     pub path: &'a str,
 }
 
-/// `/bia-takeover/info`, sourced by the rescue (only hex, digits and a plain path in it).
-pub fn info(disk_ptuuid: &str, disk_size: u64, raw_size: u64, raw_sha256: &str, xz_sha256: &str, arch: &str, img: Option<ImageOnDisk>) -> Result<String> {
+/// Where the image is when it is too big for this machine's memory: the rescue brings up the network
+/// (`/bia-takeover/net`, net::rescue_lines) and streams it from this URL straight onto the disk.
+pub fn stream_url_ok(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://"))
+        && url.len() < 2000
+        && url.chars().all(|c| c.is_ascii_alphanumeric() || ":/._-~%?=&+@,".contains(c))
+}
+
+/// `/bia-takeover/info`, sourced by the rescue (only hex, digits, a plain path and a single-quoted URL in it).
+pub fn info(disk_ptuuid: &str, disk_size: u64, raw_size: u64, raw_sha256: &str, xz_sha256: &str, arch: &str, img: Option<ImageOnDisk>, stream: Option<&str>) -> Result<String> {
     let hex = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
     if !hex(disk_ptuuid) || !hex(raw_sha256) || !hex(xz_sha256) || !matches!(arch, "x86_64" | "arm64") {
         bail!("takeover info: unexpected value");
@@ -142,6 +150,12 @@ pub fn info(disk_ptuuid: &str, disk_size: u64, raw_size: u64, raw_sha256: &str, 
             bail!("takeover info: the staging path {:?} has characters the rescue does not take; pass --staging", i.path);
         }
         s.push_str(&format!("IMG_FS_UUID={}\nIMG_PATH={}\n", i.fs_uuid.to_ascii_lowercase(), i.path));
+    }
+    if let Some(u) = stream {
+        if !stream_url_ok(u) {
+            bail!("takeover info: the image URL {u:?} has characters the rescue does not take");
+        }
+        s.push_str(&format!("IMG_URL='{u}'\n"));
     }
     Ok(s)
 }
@@ -172,9 +186,10 @@ menuentry "bia takeover" --id bia-takeover {{
     )
 }
 
-/// grub.cfg next to shim on the old ESP: boot the takeover entry right away.
-pub fn grub_cfg_uefi(rel: &str, id: &str) -> String {
-    format!("set timeout=1\nset default=bia-takeover\n{}", grub_entry(rel, id, true))
+/// grub.cfg next to shim on the old ESP: boot the takeover entry right away. `image_initrd`: false when the
+/// rescue streams the image instead (too little memory to hold it).
+pub fn grub_cfg_uefi(rel: &str, id: &str, image_initrd: bool) -> String {
+    format!("set timeout=1\nset default=bia-takeover\n{}", grub_entry(rel, id, image_initrd))
 }
 
 /// Prepended to a Debian GRUB's own `EFI/debian/grub.cfg` on the old ESP: Debian's signed
@@ -239,18 +254,24 @@ mod tests {
 
     #[test]
     fn grub_and_info() {
-        let e = grub_cfg_uefi("/@/bia-takeover", "takeover-ab12.id");
+        let e = grub_cfg_uefi("/@/bia-takeover", "takeover-ab12.id", true);
         assert!(e.contains("--file /@/bia-takeover/takeover-ab12.id"));
         assert!(e.contains("newc:bia-takeover/bia.img.xz:($bia_tk)/@/bia-takeover/bia.img.xz"));
         assert!(e.contains("rdinit=/bia-rescue/init bia.takeover=1 panic=30"));
         assert!(e.contains("then\n    boot\n  fi") && e.contains("reboot\n}"), "never boots without its initrds");
         assert!(e.starts_with("set timeout=1\nset default=bia-takeover\n"));
-        let i = info("1a2b3c4d-0000-1111-2222-333344445555", 10, 5, "ab", "cd", "x86_64", None).unwrap();
+        let i = info("1a2b3c4d-0000-1111-2222-333344445555", 10, 5, "ab", "cd", "x86_64", None, None).unwrap();
         assert!(i.contains("DISK_PTUUID=1a2b3c4d-0000-1111-2222-333344445555\n") && !i.contains("IMG_"));
-        assert!(info("$(rm -rf /)", 1, 1, "ab", "cd", "x86_64", None).is_err());
-        let b = info("ab", 1, 1, "ab", "cd", "x86_64", Some(ImageOnDisk { fs_uuid: "0e4b-ff", path: "/bia-takeover/bia.img.xz" })).unwrap();
+        assert!(info("$(rm -rf /)", 1, 1, "ab", "cd", "x86_64", None, None).is_err());
+        let u = "https://github.com/zond80/bia/releases/download/v2.5.7/bia-x86_64.img.xz";
+        assert!(info("ab", 1, 1, "ab", "cd", "x86_64", None, Some(u)).unwrap().ends_with(&format!("IMG_URL='{u}'\n")));
+        assert!(info("ab", 1, 1, "ab", "cd", "x86_64", None, Some("https://x/a'; rm -rf /")).is_err());
+        assert!(info("ab", 1, 1, "ab", "cd", "x86_64", None, Some("file:///etc/passwd")).is_err());
+        let b = info("ab", 1, 1, "ab", "cd", "x86_64", Some(ImageOnDisk { fs_uuid: "0e4b-ff", path: "/bia-takeover/bia.img.xz" }), None).unwrap();
         assert!(b.contains("IMG_FS_UUID=0e4b-ff\nIMG_PATH=/bia-takeover/bia.img.xz\n"));
-        assert!(info("ab", 1, 1, "ab", "cd", "x86_64", Some(ImageOnDisk { fs_uuid: "0e", path: "/a b;x" })).is_err());
+        assert!(info("ab", 1, 1, "ab", "cd", "x86_64", Some(ImageOnDisk { fs_uuid: "0e", path: "/a b;x" }), None).is_err());
+        let streamed = grub_cfg_uefi("/bia-takeover", "t.id", false);
+        assert!(!streamed.contains("newc:") && streamed.contains("seed.cpio; then"), "the streamed image is no initrd");
         let bios = grub_entry("/bia-takeover", "t.id", false);
         assert!(!bios.contains("newc:") && bios.contains("seed.cpio; then"), "{bios}");
         assert!(grub_hook("t.id").contains("configfile ($bia_hook)/EFI/bia-takeover/grub.cfg"));

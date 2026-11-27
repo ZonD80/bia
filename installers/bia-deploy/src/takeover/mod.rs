@@ -236,6 +236,30 @@ fn detect() -> Result<Machine> {
     Ok(Machine { arch, uefi, secure_boot, ram, disk, disk_note, display })
 }
 
+/// The live network for the rescue (net::rescue_lines), with each interface's kernel driver.
+fn rescue_network() -> Result<String> {
+    let j = |args: &[&str]| -> Result<Value> { Ok(serde_json::from_str(&run_cmd("ip", args)?).unwrap_or(Value::Array(vec![]))) };
+    let addr = j(&["-j", "addr", "show"])?;
+    let r4 = j(&["-j", "route", "show", "default"])?;
+    let r6 = j(&["-j", "-6", "route", "show", "default"]).unwrap_or(Value::Array(vec![]));
+    let mut dns = fs::read_to_string("/run/systemd/resolve/resolv.conf").map(|t| net::parse_resolv(&t)).unwrap_or_default();
+    if dns.is_empty() {
+        dns = fs::read_to_string("/etc/resolv.conf").map(|t| net::parse_resolv(&t)).unwrap_or_default();
+    }
+    if dns.is_empty() {
+        dns = vec!["1.1.1.1".into(), "8.8.8.8".into()]; // the rescue only needs to find the release host
+    }
+    let mut drivers = std::collections::HashMap::new();
+    for l in addr.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        if let Some(n) = l["ifname"].as_str() {
+            if let Ok(t) = fs::read_link(format!("/sys/class/net/{n}/device/driver")) {
+                drivers.insert(n.to_string(), t.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default());
+            }
+        }
+    }
+    net::rescue_lines(&addr, &r4, &r6, &dns, &drivers)
+}
+
 fn capture_network() -> Result<(Vec<net::Iface>, Vec<String>)> {
     let j = |args: &[&str]| -> Result<Value> { Ok(serde_json::from_str(&run_cmd("ip", args)?).unwrap_or(Value::Array(vec![]))) };
     let link = j(&["-j", "-d", "link", "show"])?;
@@ -600,6 +624,7 @@ fn takeover(a: Args) -> Result<()> {
     rows.push(Row("disk".into(), format!("{disk} {} {}", mib(disk_size), model.trim()), src("disk", "detected (holds /)")));
 
     // ---- release and every check, before anything changes ----
+    let mut image_url = None;
     let (image_path, raw_size, raw_sha, xz_size, xz_sha, version) = match &a.os_image {
         Some(p) => {
             let raw = crate::image::raw_size(p)?;
@@ -616,6 +641,7 @@ fn takeover(a: Args) -> Result<()> {
             }
             let e = man.os.get(&mach.arch).with_context(|| format!("release {} has no {} image", man.tag, mach.arch))?;
             let (r, rs, x, xs) = (e.image.raw_size, e.image.raw_sha256.clone(), e.image.size, e.image.sha256.clone());
+            image_url = Some(crate::release::image_url(&man, &mach.arch)?);
             (None, r, rs, x, xs, format!("bia {} ({})", man.version, man.tag))
         }
     };
@@ -626,15 +652,28 @@ fn takeover(a: Args) -> Result<()> {
     let boot_extra = 200 << 20; // kernel, initramfs, rescue, seeds (generous)
     // UEFI: GRUB loads the image as an initrd, which the kernel copies once more while
     // unpacking. Legacy BIOS: the rescue copies it from the disk into RAM once.
-    let need_ram = if mach.uefi { 2 * (xz_size + boot_extra) } else { xz_size + 2 * boot_extra } + RESCUE_RAM + RAM_MARGIN;
+    let need_mem = if mach.uefi { 2 * (xz_size + boot_extra) } else { xz_size + 2 * boot_extra } + RESCUE_RAM + RAM_MARGIN;
+    // Streaming: only the boot files go into memory; the rescue downloads the image straight onto the disk.
+    let need_stream = 2 * boot_extra + RESCUE_RAM + RAM_MARGIN;
+    let stream = match cfg.stream {
+        Some(s) => s,
+        None => mach.ram < need_mem && image_url.is_some(),
+    };
+    let need_ram = if stream { need_stream } else { need_mem };
+    if stream && image_url.is_none() {
+        bail!("a local image (--os-image) cannot be streamed by the rescue; it needs {} of RAM, this machine has {}", mib(need_mem), mib(mach.ram));
+    }
     if mach.ram < need_ram {
         bail!(
-            "this machine has {} of RAM; taking it over needs about {} (the image is loaded into memory before the disk is written)",
+            "this machine has {} of RAM; taking it over needs about {} ({})",
             mib(mach.ram),
-            mib(need_ram)
+            mib(need_ram),
+            if stream { "bia's rescue system and its boot files" } else { "the image is loaded into memory before the disk is written; without --no-stream the rescue streams it instead" }
         );
     }
-    let staging = staging_dir(xz_size + boot_extra + (64 << 20), a.staging.as_deref(), !mach.uefi)?;
+    // the rescue's network, as it is now (it boots on this system's network): checked before anything changes
+    let rescue_net = if stream { Some(rescue_network()?) } else { None };
+    let staging = staging_dir(xz_size + boot_extra + (64 << 20), a.staging.as_deref(), !mach.uefi && !stream)?;
     let (stage_dir, rel) = (staging.dir.clone(), staging.rel.clone());
     if mach.uefi {
         if !have("efibootmgr") {
@@ -652,6 +691,20 @@ fn takeover(a: Args) -> Result<()> {
     }
     rows.push(Row("staging".into(), format!("{} (as {rel} for the boot loader)", stage_dir.display()), "detected".into()));
     rows.push(Row("RAM".into(), format!("{} of {} needed", mib(mach.ram), mib(need_ram)), "checked".into()));
+    rows.push(Row(
+        "image".into(),
+        if stream {
+            format!("streamed by the rescue from {} onto the disk after the reboot (needs this network then)", image_url.as_deref().unwrap_or(""))
+        } else {
+            "loaded into memory, then written".into()
+        },
+        match cfg.stream {
+            Some(true) => src("stream", "config"),
+            Some(false) => src("stream", "config"),
+            None if stream => format!("too little RAM to hold it ({} needed)", mib(need_mem)),
+            None => "enough RAM".into(),
+        },
+    ));
 
     // ---- summary ----
     event(
@@ -783,11 +836,15 @@ fn takeover(a: Args) -> Result<()> {
     let mut cpio = stage::Cpio::new();
     cpio.dir("bia-takeover");
     let img_path = format!("{}/bia.img.xz", rel.trim_end_matches('/'));
-    let on_disk = (!mach.uefi).then(|| stage::ImageOnDisk { fs_uuid: &staging.fs_uuid, path: &img_path });
-    if !mach.uefi && staging.fs_uuid.is_empty() {
+    let on_disk = (!mach.uefi && !stream).then(|| stage::ImageOnDisk { fs_uuid: &staging.fs_uuid, path: &img_path });
+    if on_disk.is_some() && staging.fs_uuid.is_empty() {
         bail!("cannot tell the UUID of the filesystem holding {}", stage_dir.display());
     }
-    cpio.file("bia-takeover/info", stage::info(&ptuuid, disk_size, raw_size, &raw_sha, &xz_sha, &mach.arch, on_disk)?.as_bytes(), 0o600);
+    let url = image_url.as_deref().filter(|_| stream);
+    cpio.file("bia-takeover/info", stage::info(&ptuuid, disk_size, raw_size, &raw_sha, &xz_sha, &mach.arch, on_disk, url)?.as_bytes(), 0o600);
+    if let Some(n) = &rescue_net {
+        cpio.file("bia-takeover/net", n.as_bytes(), 0o600);
+    }
     stage::add_tree(&mut cpio, &esp, "bia-takeover/esp")?;
     let mut tk = [0u8; 4];
     getrandom::getrandom(&mut tk).ok();
@@ -884,7 +941,7 @@ fn takeover(a: Args) -> Result<()> {
 
     // ---- one-shot boot entry ----
     if mach.uefi {
-        install_uefi(&mach.arch, &boot, &rel, &id)?;
+        install_uefi(&mach.arch, &boot, &rel, &id, !stream)?;
     } else {
         install_bios(&rel, &id)?;
     }
@@ -893,7 +950,11 @@ fn takeover(a: Args) -> Result<()> {
         None if ask.interactive() => ask.line("Reboot into the takeover now? (yes/no)", "yes")?.starts_with('y'),
         None => false,
     };
-    say!("\n== ready. At the next boot bia's rescue writes bia onto {disk} from memory (a few minutes), then bia starts.");
+    if stream {
+        say!("\n== ready. At the next boot bia's rescue downloads bia and writes it onto {disk} (a few minutes), then bia starts.");
+    } else {
+        say!("\n== ready. At the next boot bia's rescue writes bia onto {disk} from memory (a few minutes), then bia starts.");
+    }
     if land_code.is_some() {
         say!("   It then waits in land mode for a flight with the land secret.");
     } else {
@@ -991,14 +1052,14 @@ fn grub_dir() -> Result<PathBuf> {
 
 /// UEFI: shim + bia's GRUB in EFI/bia-takeover on the old ESP, a boot entry for it and
 /// BootNext (shim is signed by Microsoft, so this works under Secure Boot).
-fn install_uefi(arch: &str, boot: &stage::BootFiles, rel: &str, id: &str) -> Result<()> {
+fn install_uefi(arch: &str, boot: &stage::BootFiles, rel: &str, id: &str, image_initrd: bool) -> Result<()> {
     let esp = esp_mount()?;
     let dir = esp.join("EFI/bia-takeover");
     fs::create_dir_all(&dir)?;
     for (name, data) in &boot.efi {
         stage::write_file(&dir.join(name), data)?;
     }
-    stage::write_file(&dir.join("grub.cfg"), stage::grub_cfg_uefi(rel, id).as_bytes())?;
+    stage::write_file(&dir.join("grub.cfg"), stage::grub_cfg_uefi(rel, id, image_initrd).as_bytes())?;
     stage::write_file(&dir.join(id), b"bia takeover\n")?;
     // bia's (Debian's) signed GRUB reads EFI/debian/grub.cfg first when it exists
     for other in ["EFI/debian/grub.cfg", "boot/grub/grub.cfg"] {

@@ -1127,7 +1127,8 @@ bia is `carry_update`'s job.
 Everything is checked before anything changes: architecture, firmware (UEFI,
 Secure Boot, BIOS with GRUB 2 reading `custom.cfg`), the disk holding `/` (no
 RAID, crypt or multi-disk LVM unless `--disk`), RAM (`2 × (image + boot files) +
-768 MiB + 512 MiB`, because the image goes through the initrd), a staging
+768 MiB + 512 MiB`, because the image goes through the initrd; with less, the rescue
+streams it instead and needs only `2 × boot files + 768 MiB + 512 MiB`), a staging
 directory on a filesystem GRUB reads (`/boot/bia-takeover` or `/bia-takeover`, as
 GRUB sees it on btrfs subvolumes). The network is read from `ip -j` (DHCP,
 static, on-link gateways, IPv6 static or SLAAC) and stored per MAC (without colons:
@@ -1149,6 +1150,12 @@ the kernel gets `panic=30`, so a failure never leaves the server hanging. GRUB l
 rescue overlay, `seed.cpio` (`/bia-takeover/info` + the ESP seeds) and the image
 with `newc:bia-takeover/bia.img.xz:…`. The rescue (`bia.takeover=1`, `rescue/takeover`)
 checks the image in RAM, finds the disk by partition-table id and size, writes it,
+or, streaming (`IMG_URL` in `info`; config `stream`, `--stream`/`--no-stream`, by default
+only when RAM is short), brings up the old system's network from `/bia-takeover/net`
+(`net::rescue_lines`: the live addresses, DHCP leases included since the same MAC still
+holds its lease, on-link routes, DNS, the card's driver), checks the first bytes of the
+release's tagged image URL before writing anything, and pipes `curl | tee (sha256) | xz
+-dc | dd` onto the disk, starting again when the download or the read-back fails;
 reads it back against `raw_sha256`, copies the seeds onto the new ESP, adds a UEFI
 entry for bia first in BootOrder and reboots. Until the write starts a failure
 leaves the old system bootable.
@@ -1158,7 +1165,11 @@ On first boot `bia-seed` moves `EFI/bia/seed/{pki,setup.md,net}` into
 the ESP. `bia-net` writes `/etc/network/interfaces` on every boot from those
 stanzas, matching MACs (names differ: `net.ifnames=0`), with DHCP on any other
 wired interface; `bia-net-fallback` runs DHCP everywhere when there is no default
-route after 120 s. The agent hands `setup.md` to the model in the boot notice once
+route after 120 s. `bia-cidata` also reads a cloud's NoCloud disc (label `cidata`,
+cloud-init `network-config` v1 or v2; Proxmox hosts such as CubePath give one, with no
+DHCP) into the same stanza form; those apply to MACs the takeover did not carry. A bia
+restored from a snapshot onto a new VM (new MAC, new address) comes up on the address
+the disc names; a carried MAC keeps its carried configuration. The agent hands `setup.md` to the model in the boot notice once
 (then `setup.done.md`). Without a display device `bia-session` starts Xorg with
 the dummy driver (`xorg-dummy.conf`), so x11vnc and the web display work.
 

@@ -295,6 +295,13 @@ enum Cmd {
         /// Stage everything but add no boot entry.
         #[arg(long)]
         dry_run: bool,
+        /// The rescue streams the image from the release onto the disk after the reboot (little RAM; needs the
+        /// network then). Default: only when there is too little RAM to load it into memory first.
+        #[arg(long, conflicts_with = "no_stream")]
+        stream: bool,
+        /// Always load the image into memory first (needs about twice its size in RAM on UEFI).
+        #[arg(long)]
+        no_stream: bool,
         /// Land mode: bia waits for one of your bias to fly its agent here over the
         /// internet (no keys or certificates are made here). Prints a land secret.
         #[arg(long)]
@@ -534,6 +541,8 @@ fn run() -> Result<()> {
             show_secrets,
             no_test,
             dry_run,
+            stream,
+            no_stream,
             land,
             land_secret,
             events,
@@ -604,6 +613,9 @@ fn run() -> Result<()> {
             }
             if reboot {
                 put("reboot", true.into());
+            }
+            if stream || no_stream {
+                put("stream", stream.into());
             }
             if let Some(sec) = land_secret {
                 put("land", serde_json::json!({"secret": sec}));

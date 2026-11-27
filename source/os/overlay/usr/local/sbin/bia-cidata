@@ -1,0 +1,227 @@
+#!/usr/bin/python3 -I
+"""The network a cloud gives this machine on a NoCloud disc (volume label cidata), as bia-net's stanza files.
+
+Proxmox-based hosts (CubePath among them) hand every VM a small CD-ROM with its address: there is no DHCP. A bia
+restored from a snapshot onto a new VM has a new MAC and a new address, which only this disc knows; the network a
+takeover carried (/etc/bia/net) is the old one. Reads network-config in cloud-init's v1 or v2 (netplan) format.
+
+    bia-cidata <dir>     writes <mac>.conf (ifupdown stanzas with @IF@, like the takeover's) and resolv.conf into
+                         <dir>; exit 0 when it wrote at least one interface, 1 when there is no usable disc
+
+BIA_CIDATA_DIR: read the disc's files from this folder instead of finding and mounting it (tests).
+"""
+
+import ipaddress
+import os
+import subprocess
+import sys
+import tempfile
+
+import yaml
+
+
+class TextLoader(yaml.SafeLoader):
+    """Plain values stay text: YAML 1.1 reads an unquoted all-digit MAC (52:54:00:12:34:56) as a base-60 number."""
+
+
+TextLoader.yaml_implicit_resolvers = {
+    k: [(tag, rx) for tag, rx in v if tag == "tag:yaml.org,2002:null"]
+    for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
+
+def log(msg):
+    print(f"bia-cidata: {msg}", file=sys.stderr)
+
+
+def read_disc():
+    """→ the network-config text, or None."""
+    folder = os.environ.get("BIA_CIDATA_DIR")
+    if folder:
+        try:
+            return open(os.path.join(folder, "network-config"), encoding="utf-8").read()
+        except OSError:
+            return None
+    for label in ("cidata", "CIDATA"):
+        r = subprocess.run(["blkid", "-c", "/dev/null", "-l", "-t", f"LABEL={label}", "-o", "device"], capture_output=True, text=True)
+        dev = r.stdout.strip()
+        if not dev:
+            continue
+        with tempfile.TemporaryDirectory(prefix="bia-cidata-") as mnt:
+            if subprocess.run(["mount", "-o", "ro", dev, mnt], capture_output=True).returncode != 0:
+                log(f"cannot mount {dev}")
+                continue
+            try:
+                return open(os.path.join(mnt, "network-config"), encoding="utf-8").read()
+            except OSError:
+                return None
+            finally:
+                subprocess.run(["umount", mnt], capture_output=True)
+    return None
+
+
+def truthy(v):
+    return v is True or str(v).lower() in ("true", "yes", "on", "1")
+
+
+def mac_key(mac):
+    return str(mac).replace(":", "").replace("-", "").lower()
+
+
+def with_prefix(address, netmask=None, prefix=None):
+    """'1.2.3.4' + netmask/prefix → '1.2.3.4/24'; a bare address is a single one (/32, /128)."""
+    a = str(address).strip()
+    if "/" in a:
+        return str(ipaddress.ip_interface(a))
+    ip = ipaddress.ip_address(a)
+    if prefix is None and netmask is not None:
+        nm = str(netmask)
+        prefix = ipaddress.ip_network(f"0.0.0.0/{nm}").prefixlen if "." in nm else int(nm)
+    return f"{ip}/{prefix if prefix is not None else ip.max_prefixlen}"
+
+
+class Iface:
+    def __init__(self, mac):
+        self.mac, self.dhcp4, self.auto6, self.addresses, self.dns, self.mtu = mac, False, False, [], [], None
+        self.gateway4 = self.gateway6 = None
+        self.onlink4 = False
+
+    def add_gateway(self, gw, onlink=False):
+        ip = ipaddress.ip_address(str(gw))
+        if ip.version == 4:
+            self.gateway4, self.onlink4 = str(ip), self.onlink4 or truthy(onlink)
+        else:
+            self.gateway6 = str(ip)
+
+    def settle(self):
+        # a gateway outside every local IPv4 subnet (a /32) can only be reached on-link
+        if self.gateway4 and not self.onlink4:
+            gw = ipaddress.ip_address(self.gateway4)
+            nets = [ipaddress.ip_interface(a).network for a in self.addresses if ":" not in a]
+            self.onlink4 = not any(gw in n for n in nets)
+
+
+def parse_v2(net):
+    out, dns = [], []
+    for _, e in (net.get("ethernets") or {}).items():
+        e = e or {}
+        mac = (e.get("match") or {}).get("macaddress")
+        if not mac:
+            continue  # matched by name only: bia names interfaces differently
+        i = Iface(mac_key(mac))
+        i.dhcp4, i.auto6 = truthy(e.get("dhcp4")), truthy(e.get("dhcp6")) or truthy(e.get("accept-ra"))
+        for a in e.get("addresses") or []:
+            i.addresses.append(with_prefix(next(iter(a)) if isinstance(a, dict) else a))
+        if e.get("gateway4"):
+            i.add_gateway(e["gateway4"])
+        if e.get("gateway6"):
+            i.add_gateway(e["gateway6"])
+        for r in e.get("routes") or []:
+            if str(r.get("to")) in ("default", "0.0.0.0/0", "::/0") and r.get("via"):
+                i.add_gateway(r["via"], r.get("on-link"))
+        i.dns = [str(d) for d in (e.get("nameservers") or {}).get("addresses") or []]
+        i.mtu = e.get("mtu")
+        out.append(i)
+    return out, dns
+
+
+def parse_v1(net):
+    out, dns = [], []
+    for c in net.get("config") or []:
+        if c.get("type") == "nameserver":
+            dns += [str(d) for d in c.get("address") or []]
+            continue
+        if c.get("type") != "physical" or not c.get("mac_address"):
+            continue
+        i = Iface(mac_key(c["mac_address"]))
+        i.mtu = c.get("mtu")
+        for s in c.get("subnets") or []:
+            t = str(s.get("type", ""))
+            if t in ("dhcp", "dhcp4"):
+                i.dhcp4 = True
+            elif t in ("dhcp6", "ipv6_slaac", "ipv6_dhcpv6-stateless", "ipv6_dhcpv6-stateful"):
+                i.auto6 = True
+            elif t in ("static", "static6") and s.get("address"):
+                i.addresses.append(with_prefix(s["address"], s.get("netmask"), s.get("prefix")))
+                if s.get("gateway"):
+                    i.add_gateway(s["gateway"])
+                i.dns += [str(d) for d in s.get("dns_nameservers") or []]
+            for r in s.get("routes") or []:
+                if str(r.get("network")) in ("0.0.0.0", "::") and r.get("gateway"):
+                    i.add_gateway(r["gateway"])
+        out.append(i)
+    return out, dns
+
+
+def stanza(i):
+    """ifupdown stanzas, as the takeover writes them (installers/bia-deploy/src/takeover/net.rs stanza())."""
+    v4 = [a for a in i.addresses if ":" not in a]
+    v6 = [a for a in i.addresses if ":" in a]
+    s = "auto @IF@\n"
+    if i.dhcp4 and not v4:
+        s += "iface @IF@ inet dhcp\n"
+    elif v4:
+        s += f"iface @IF@ inet static\n    address {v4[0]}\n"
+        if i.mtu:
+            s += f"    mtu {int(i.mtu)}\n"
+        for a in v4[1:]:
+            s += f"    post-up ip addr add {a} dev @IF@\n"
+        if i.gateway4:
+            if i.onlink4:
+                s += f"    post-up ip route replace {i.gateway4} dev @IF@\n"
+                s += f"    post-up ip route replace default via {i.gateway4} dev @IF@ onlink\n"
+            else:
+                s += f"    post-up ip route replace default via {i.gateway4} dev @IF@\n"
+    if v6:
+        s += f"iface @IF@ inet6 static\n    address {v6[0]}\n"
+        for a in v6[1:]:
+            s += f"    post-up ip -6 addr add {a} dev @IF@ || true\n"
+        if i.gateway6:
+            if i.gateway6.lower().startswith("fe80:"):
+                s += f"    post-up ip -6 route replace default via {i.gateway6} dev @IF@ || true\n"
+            else:
+                s += f"    post-up ip -6 route replace {i.gateway6} dev @IF@ || true\n"
+                s += f"    post-up ip -6 route replace default via {i.gateway6} dev @IF@ onlink || true\n"
+    elif i.auto6:
+        s += "iface @IF@ inet6 auto\n"
+    return s
+
+
+def main():
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    out_dir = sys.argv[1]
+    text = read_disc()
+    if text is None:
+        return 1
+    try:
+        doc = yaml.load(text, Loader=TextLoader) or {}
+        net = doc.get("network", doc) if isinstance(doc, dict) else {}
+        ifaces, dns = (parse_v1 if str(net.get("version")) == "1" else parse_v2)(net)
+        for i in ifaces:
+            i.settle()
+    except Exception as e:  # noqa: BLE001 - a broken disc must never stop the boot
+        log(f"unreadable network-config: {e}")
+        return 1
+    ifaces = [i for i in ifaces if i.dhcp4 or i.addresses or i.auto6]
+    if not ifaces:
+        return 1
+    os.makedirs(out_dir, exist_ok=True)
+    for i in ifaces:
+        with open(os.path.join(out_dir, f"{i.mac}.conf"), "w") as f:
+            f.write(stanza(i))
+        log(f"{i.mac}: {' '.join(i.addresses) or ('dhcp' if i.dhcp4 else 'auto6')}"
+            f"{f' via {i.gateway4}' if i.gateway4 else ''}{' (on-link)' if i.onlink4 else ''}")
+    seen = []
+    for d in [d for i in ifaces for d in i.dns] + dns:
+        if d not in seen:
+            seen.append(d)
+    if seen:
+        with open(os.path.join(out_dir, "resolv.conf"), "w") as f:
+            f.write("".join(f"nameserver {d}\n" for d in seen[:3]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

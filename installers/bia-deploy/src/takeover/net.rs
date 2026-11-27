@@ -249,6 +249,78 @@ pub fn capture(link: &Value, addr: &Value, route4: &Value, route6: &Value, dns: 
     Ok((out, warn))
 }
 
+/// The network as it is right now, for bia's rescue when it streams the image (it boots on the old system's
+/// network, whatever bia's own will be). Unlike `capture`, DHCP leases count as plain addresses: the rescue
+/// starts seconds after the reboot, while the same MAC still holds its lease, so it needs no DHCP client.
+/// Lines the rescue reads one by one (`if <mac>` starts an interface):
+/// `mod <driver>`, `mtu <n>`, `addr <cidr>`, `route4 <gw> onlink|via`, `route6 <gw>`, `dns <ip>`.
+/// `drivers`: interface name → kernel driver (from /sys/class/net/<if>/device/driver).
+pub fn rescue_lines(addr: &Value, route4: &Value, route6: &Value, dns: &[String], drivers: &std::collections::HashMap<String, String>) -> Result<String> {
+    let mut s = String::new();
+    let mut have_v4 = false;
+    for l in addr.as_array().map(Vec::as_slice).unwrap_or(&[]) {
+        let name = l["ifname"].as_str().unwrap_or("");
+        let mac = l["address"].as_str().unwrap_or("").to_ascii_lowercase();
+        if name.is_empty() || name == "lo" || l["link_type"].as_str() != Some("ether") {
+            continue;
+        }
+        let ok_mac = mac.len() == 17 && mac.split(':').all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()));
+        let mut lines = vec![];
+        let mut v4 = vec![];
+        for a in l["addr_info"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            if a["scope"].as_str() != Some("global") {
+                continue;
+            }
+            let ip: IpAddr = match a["local"].as_str().unwrap_or("").parse() {
+                Ok(ip) => ip,
+                Err(_) => continue,
+            };
+            let plen = a["prefixlen"].as_u64().unwrap_or(if ip.is_ipv4() { 32 } else { 128 }).min(128);
+            // SLAAC/DHCPv6 addresses come back by themselves (router advertisements); v4 leases do not
+            if ip.is_ipv6() && (a["dynamic"].as_bool().unwrap_or(false) || a["mngtmpaddr"].as_bool().unwrap_or(false)) {
+                continue;
+            }
+            if ip.is_ipv4() {
+                v4.push(format!("{ip}/{plen}"));
+            }
+            lines.push(format!("addr {ip}/{plen}"));
+        }
+        if lines.is_empty() || !ok_mac {
+            continue;
+        }
+        let on = |r: &Value| -> Vec<Value> { r.as_array().map(|a| a.iter().filter(|x| x["dev"].as_str() == Some(name)).cloned().collect()).unwrap_or_default() };
+        if let Some(g) = on(route4).first().and_then(|r| {
+            let g: std::net::Ipv4Addr = r["gateway"].as_str()?.parse().ok()?;
+            let flagged = r["flags"].as_array().is_some_and(|f| f.iter().any(|x| x == "onlink"));
+            Some((g, flagged || !v4.iter().any(|a| in_subnet(a, &g.to_string()))))
+        }) {
+            lines.push(format!("route4 {} {}", g.0, if g.1 { "onlink" } else { "via" }));
+            have_v4 |= !v4.is_empty();
+        }
+        if let Some(g) = on(route6).first().and_then(|r| r["gateway"].as_str()?.parse::<std::net::Ipv6Addr>().ok()) {
+            lines.push(format!("route6 {g}"));
+        }
+        s.push_str(&format!("if {mac}\n"));
+        if let Some(d) = drivers.get(name).filter(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')) {
+            s.push_str(&format!("mod {d}\n"));
+        }
+        if let Some(m) = l["mtu"].as_u64().filter(|m| (576..=65535).contains(m)) {
+            s.push_str(&format!("mtu {m}\n"));
+        }
+        for x in lines {
+            s.push_str(&x);
+            s.push('\n');
+        }
+    }
+    if !have_v4 {
+        bail!("no interface with an IPv4 address and a default route: the rescue could not download bia's image");
+    }
+    for d in dns.iter().filter_map(|d| d.parse::<IpAddr>().ok()).take(3) {
+        s.push_str(&format!("dns {d}\n"));
+    }
+    Ok(s)
+}
+
 fn in_subnet(cidr: &str, ip: &str) -> bool {
     let (Some((net, p)), Ok(ip)) = (cidr.split_once('/'), ip.parse::<std::net::Ipv4Addr>()) else {
         return false;
@@ -264,6 +336,32 @@ fn in_subnet(cidr: &str, ip: &str) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The rescue's network: a DHCP lease counts as an address, the /32's gateway is on-link, SLAAC is left out.
+    #[test]
+    fn rescue_lines_from_the_live_network() {
+        let addr = json!([
+            {"ifname": "lo", "link_type": "loopback", "address": "00:00:00:00:00:00", "addr_info": [{"family": "inet", "local": "127.0.0.1", "prefixlen": 8, "scope": "host"}]},
+            {"ifname": "ens3", "link_type": "ether", "address": "02:FB:73:41:0F:40", "mtu": 1500, "addr_info": [
+                {"family": "inet", "local": "45.90.237.105", "prefixlen": 32, "scope": "global"},
+                {"family": "inet6", "local": "2607:a2c0::b7", "prefixlen": 128, "scope": "global"},
+                {"family": "inet6", "local": "2a01:4f8::1234", "prefixlen": 64, "scope": "global", "dynamic": true},
+                {"family": "inet6", "local": "fe80::1", "prefixlen": 64, "scope": "link"}]},
+            {"ifname": "ens4", "link_type": "ether", "address": "52:54:00:12:34:56", "addr_info": [
+                {"family": "inet", "local": "10.1.2.3", "prefixlen": 24, "scope": "global", "dynamic": true}]}
+        ]);
+        let r4 = json!([{"dst": "default", "gateway": "45.90.237.1", "dev": "ens3", "flags": ["onlink"]}]);
+        let r6 = json!([{"dst": "default", "gateway": "fe80::1", "dev": "ens3", "flags": []}]);
+        let drivers = std::collections::HashMap::from([("ens3".to_string(), "virtio_net".to_string()), ("ens4".to_string(), "bad driver;".to_string())]);
+        let s = rescue_lines(&addr, &r4, &r6, &["1.1.1.1".into(), "x".into()], &drivers).unwrap();
+        assert_eq!(s, "if 02:fb:73:41:0f:40\nmod virtio_net\nmtu 1500\naddr 45.90.237.105/32\naddr 2607:a2c0::b7/128\nroute4 45.90.237.1 onlink\nroute6 fe80::1\n\
+                       if 52:54:00:12:34:56\naddr 10.1.2.3/24\ndns 1.1.1.1\n");
+        // a gateway outside the address's subnet is on-link even without the flag
+        let r4 = json!([{"dst": "default", "gateway": "172.31.1.1", "dev": "ens3", "flags": []}]);
+        assert!(rescue_lines(&addr, &r4, &json!([]), &[], &Default::default()).unwrap().contains("route4 172.31.1.1 onlink\n"));
+        // no IPv4 default route: nothing to download with
+        assert!(rescue_lines(&addr, &json!([]), &r6, &[], &Default::default()).is_err());
+    }
 
     /// Hetzner-style: a /32 with an on-link gateway, static IPv6 with fe80::1.
     #[test]

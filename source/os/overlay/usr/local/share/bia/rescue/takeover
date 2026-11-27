@@ -6,6 +6,12 @@
 # more. This writes the image over the whole disk, checks it, puts the seeds on the new
 # ESP and boots bia. Until the write starts, a failure leaves the old system as it was:
 # the one-shot boot entry is used up, so a reboot starts it again.
+#
+# Streaming (IMG_URL in info; a machine with too little RAM to hold the image): the
+# rescue brings up the old system's network from /bia-takeover/net (as it was before the
+# reboot: the same MAC still holds its address), checks that the image can be downloaded,
+# and only then downloads it straight onto the disk, checking the image's and the disk's
+# sha256 and starting again when a download breaks.
 TK=/bia-takeover
 NEWESP_MNT=/mnt/newesp
 wrote=0
@@ -29,9 +35,73 @@ say "takeover: replacing this machine's system with bia"
 [ -f "$TK/info" ] || tdie "takeover" "no $TK/info: the boot loader did not load the takeover files"
 # info: DISK_PTUUID DISK_SIZE RAW_SIZE RAW_SHA256 XZ_SHA256 ARCH, and on legacy BIOS
 # IMG_FS_UUID IMG_PATH (hex, digits, a plain path; written by bia-deploy takeover)
-IMG_FS_UUID= IMG_PATH=
+IMG_FS_UUID= IMG_PATH= IMG_URL=
 . "$TK/info"
-if [ ! -f "$TK/bia.img.xz" ] && [ -n "$IMG_FS_UUID" ]; then
+CA=/bia-rescue/ca.crt
+
+# The seeded network: drivers first, then each interface by its MAC.
+stream_net() {
+  local k a b cur n i
+  [ -f "$TK/net" ] || tdie "network" "no $TK/net: the takeover seeded no network for streaming the image"
+  while read -r k a b; do
+    if [ "$k" = mod ]; then
+      modprobe -q "$a" 2>/dev/null || insmod "/bia-rescue/mod/$a.ko" 2>/dev/null
+    fi
+  done < "$TK/net"
+  rm -f /etc/resolv.conf
+  mkdir -p /etc
+  : > /etc/resolv.conf
+  cur=
+  while read -r k a b; do
+    case $k in
+      if)
+        cur=
+        i=0
+        while [ "$i" -lt 40 ]; do
+          for n in /sys/class/net/*; do
+            [ "$(cat "$n/address" 2>/dev/null)" = "$a" ] && cur=$(basename "$n")
+          done
+          [ -n "$cur" ] && break
+          sleep 0.5
+          i=$((i + 1))
+        done
+        if [ -z "$cur" ]; then
+          say "no network interface with MAC $a"
+          continue
+        fi
+        ip link set "$cur" up
+        ;;
+      mtu) [ -n "$cur" ] && ip link set "$cur" mtu "$a" ;;
+      addr) [ -n "$cur" ] && ip addr add "$a" dev "$cur" ;;
+      route4)
+        [ -n "$cur" ] || continue
+        if [ "$b" = onlink ]; then
+          ip route replace "$a" dev "$cur"
+          ip route replace default via "$a" dev "$cur" onlink
+        else
+          ip route replace default via "$a" dev "$cur"
+        fi
+        ;;
+      route6) [ -n "$cur" ] && { ip -6 route replace default via "$a" dev "$cur" 2>/dev/null || true; } ;;
+      dns) echo "nameserver $a" >> /etc/resolv.conf ;;
+    esac
+  done < "$TK/net"
+  ip -4 route show default | grep -q via || tdie "network" "no IPv4 default route came up (see above); nothing was written"
+  say "network: $(ip -4 -br addr show scope global | tr -s ' ' | tr '\n' ' ')via $(ip -4 route show default | awk '{ print $3; exit }')"
+  # the link may need a moment: try for two minutes before giving up (nothing written yet)
+  i=0
+  # the first bytes only (and they must be xz's magic): a server that ignores Range is cut off by head
+  until [ "$(curl -sSL --cacert "$CA" --connect-timeout 20 -r 0-4095 "$IMG_URL" 2>/dev/null | head -c 6 | od -An -tx1 | tr -d ' \n')" = fd377a585a00 ]; do
+    i=$((i + 1))
+    [ "$i" -ge 12 ] && tdie "network" "cannot download $IMG_URL; nothing was written"
+    sleep 10
+  done
+  ok "network"
+}
+
+if [ -n "$IMG_URL" ]; then
+  say "the image is streamed from $IMG_URL (too little memory to hold it)"
+elif [ ! -f "$TK/bia.img.xz" ] && [ -n "$IMG_FS_UUID" ]; then
   # Legacy BIOS GRUB keeps initrds in low memory, too little for the image: read it
   # from the old system's filesystem (read-only) into RAM here.
   say "loading the image from the old system's disk into memory"
@@ -42,12 +112,13 @@ if [ ! -f "$TK/bia.img.xz" ] && [ -n "$IMG_FS_UUID" ]; then
   cp "/mnt/oldfs$IMG_PATH" "$TK/bia.img.xz" || { umount /mnt/oldfs; tdie "image" "cannot copy $IMG_PATH into memory (not enough RAM?)"; }
   umount /mnt/oldfs || tdie "image" "cannot unmount the old system's filesystem"
 fi
-[ -f "$TK/bia.img.xz" ] || tdie "takeover" "no $TK/bia.img.xz: the boot loader did not load the image (not enough RAM?)"
-
-say "checking the image in memory"
-got=$(sha256sum "$TK/bia.img.xz" | awk '{ print $1 }')
-[ "$got" = "$XZ_SHA256" ] || tdie "image" "bia.img.xz in memory has sha256 $got, expected $XZ_SHA256"
-ok "image"
+if [ -z "$IMG_URL" ]; then
+  [ -f "$TK/bia.img.xz" ] || tdie "takeover" "no $TK/bia.img.xz: the boot loader did not load the image (not enough RAM?)"
+  say "checking the image in memory"
+  got=$(sha256sum "$TK/bia.img.xz" | awk '{ print $1 }')
+  [ "$got" = "$XZ_SHA256" ] || tdie "image" "bia.img.xz in memory has sha256 $got, expected $XZ_SHA256"
+  ok "image"
+fi
 
 # The disk: same partition table id and size as when the takeover was prepared.
 disk=
@@ -77,21 +148,60 @@ for p in /sys/block/"$(basename "$disk")"/"$(basename "$disk")"*; do
   if grep -q "^$n " /proc/mounts; then umount "$n" 2>/dev/null; fi
 done
 
-say "writing bia onto $disk"
-wrote=1
-xz -dc "$TK/bia.img.xz" | dd of="$disk" bs=4M iflag=fullblock oflag=direct conv=fsync status=progress
-rc=$?
-[ "$rc" -eq 0 ] || tdie "writing" "writing the image exited $rc"
-sync
-ok "writing"
+disk_sha() {
+  blockdev --flushbufs "$disk" 2>/dev/null
+  echo 3 > /proc/sys/vm/drop_caches
+  head -c "$RAW_SIZE" "$disk" | sha256sum | awk '{ print $1 }'
+}
 
-say "verifying what is on the disk"
-blockdev --flushbufs "$disk" 2>/dev/null
-echo 3 > /proc/sys/vm/drop_caches
-got=$(head -c "$RAW_SIZE" "$disk" | sha256sum | awk '{ print $1 }')
-[ "$got" = "$RAW_SHA256" ] || tdie "verifying" "the disk reads back sha256 $got, expected $RAW_SHA256"
-ok "verifying"
-rm -f "$TK/bia.img.xz"
+if [ -n "$IMG_URL" ]; then
+  stream_net
+  attempt=0
+  while :; do
+    attempt=$((attempt + 1))
+    say "downloading bia and writing it onto $disk (attempt $attempt)"
+    wrote=1
+    rm -f /tmp/xz.fifo /tmp/xz.sum
+    mkfifo /tmp/xz.fifo
+    sha256sum < /tmp/xz.fifo | awk '{ print $1 }' > /tmp/xz.sum &
+    sp=$!
+    curl -fsSL --cacert "$CA" --connect-timeout 30 --speed-limit 4096 --speed-time 120 "$IMG_URL" \
+      | tee /tmp/xz.fifo | xz -dc | dd of="$disk" bs=4M iflag=fullblock oflag=direct conv=fsync status=progress
+    rc="${PIPESTATUS[*]}"
+    wait "$sp"
+    sync
+    got=$(cat /tmp/xz.sum 2>/dev/null)
+    if [ "$rc" = "0 0 0 0" ] && [ "$got" = "$XZ_SHA256" ]; then
+      ok "writing"
+      say "verifying what is on the disk"
+      got=$(disk_sha)
+      if [ "$got" = "$RAW_SHA256" ]; then
+        ok "verifying"
+        break
+      fi
+      say "the disk reads back sha256 $got, expected $RAW_SHA256"
+    else
+      say "attempt $attempt failed (curl, tee, xz, dd exited $rc; image sha256 ${got:-none})"
+    fi
+    [ "$attempt" -ge 10 ] && tdie "writing" "bia could not be downloaded and written in $attempt attempts"
+    say "trying again in $((attempt * 20)) s"
+    sleep $((attempt * 20))
+  done
+else
+  say "writing bia onto $disk"
+  wrote=1
+  xz -dc "$TK/bia.img.xz" | dd of="$disk" bs=4M iflag=fullblock oflag=direct conv=fsync status=progress
+  rc=$?
+  [ "$rc" -eq 0 ] || tdie "writing" "writing the image exited $rc"
+  sync
+  ok "writing"
+
+  say "verifying what is on the disk"
+  got=$(disk_sha)
+  [ "$got" = "$RAW_SHA256" ] || tdie "verifying" "the disk reads back sha256 $got, expected $RAW_SHA256"
+  ok "verifying"
+  rm -f "$TK/bia.img.xz"
+fi
 
 # The new ESP is partition 1 of the image.
 blockdev --rereadpt "$disk" 2>/dev/null || partx -u "$disk" 2>/dev/null

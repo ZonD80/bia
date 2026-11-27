@@ -193,6 +193,7 @@ for stage in "$@"; do
       run venv venv_default
       run biaconfig biaconfig
       run release-publish bash tests/integration/release-publish-test.sh
+      run bia-net bash tests/integration/bia-net-test.sh
       run web-markdown node tests/integration/web-md-test.js
       run web-link node tests/integration/web-link-test.js
       run web-keys bash -c 'd=$(mktemp -d) && python3 -I tests/integration/web-keys-fixtures.py "$d" && node tests/integration/web-keys-test.js "$d"'

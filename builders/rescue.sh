@@ -23,6 +23,7 @@ BINS=(
   sync sleep cat cp mv rm mkdir ln ls chmod stat df du date tr head tail wc sort cut
   awk sed grep cmp dirname basename readlink tee uname dmesg insmod
   xz dd sha256sum blockdev partx
+  ip curl mkfifo od modprobe
 )
 
 rm -rf "$STAGE"
@@ -55,7 +56,10 @@ done
 # Do not rely on the main initramfs for these (MODULES=most may leave them out).
 kver=$(ls "$ROOT/lib/modules" | sort -V | tail -1)
 MDIR=$ROOT/lib/modules/$kver
-WANT=(ext4 vfat nls_cp437 nls_ascii nls_utf8 nls_iso8859-1 efivarfs)
+WANT=(ext4 vfat nls_cp437 nls_ascii nls_utf8 nls_iso8859-1 efivarfs
+  # network cards of clouds and common servers: a takeover on a machine with little RAM streams the image
+  # (udev loads the right one when the main initramfs has it; these are the fallback)
+  virtio_pci virtio_net e1000 e1000e igb ixgbe i40e vmxnet3 hv_netvsc ena gve r8169 tg3 bnxt_en xen_netfront)
 declare -A SEEN=()
 : > "$STAGE/bia-rescue/mod/order"
 add_mod() {
@@ -79,6 +83,8 @@ add_mod() {
 for m in "${WANT[@]}"; do add_mod "${m//-/_}"; done
 
 install -m 0755 "$SRC/init" "$STAGE/bia-rescue/init"
+# CA certificates for curl (a streamed takeover downloads the image over https)
+install -m 0644 "$ROOT/etc/ssl/certs/ca-certificates.crt" "$STAGE/bia-rescue/ca.crt"
 install -m 0755 "$SRC/rescue" "$STAGE/bia-rescue/rescue"
 install -m 0644 "$SRC/takeover" "$STAGE/bia-rescue/takeover"
 install -m 0755 "$ROOT/usr/local/sbin/bia-rescue-hook" "$STAGE/bia-rescue/bia-rescue-hook"

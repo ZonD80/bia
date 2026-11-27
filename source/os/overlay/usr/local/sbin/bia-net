@@ -5,7 +5,13 @@
 #   resolv.conf   name servers (for static configurations)
 # Interface names differ between the old system and bia (net.ifnames=0), the MAC does
 # not. Writes /etc/network/interfaces on every boot: the matched interfaces, and DHCP
-# on every other wired interface. Without /etc/bia/net nothing changes.
+# on every other wired interface.
+#
+# A cloud's NoCloud disc (label cidata, Proxmox-based hosts such as CubePath; no DHCP
+# there) is read too, by bia-cidata, for MACs the takeover did not carry: a bia restored
+# from a snapshot onto a new VM has a new MAC and address that only the disc knows. A
+# carried configuration wins for its own MAC. Without /etc/bia/net and without a disc
+# naming one of this machine's interfaces, nothing changes.
 #
 #   bia-net             before networking.service
 #   bia-net --fallback  after it: no default route within 120 s → DHCP everywhere
@@ -13,13 +19,26 @@ set -u
 NET=${BIA_NET_DIR:-/etc/bia/net}
 SYS=${BIA_NET_SYS:-/sys/class/net}
 OUT=${BIA_NET_OUT:-/etc/network/interfaces}
-[ -d "$NET" ] || exit 0
+CI=${BIA_NET_CIDATA:-/run/bia-net/cidata}
+CIDATA=${BIA_CIDATA_BIN:-/usr/local/sbin/bia-cidata}
 
-confs() { # the per-MAC stanza files (not resolv.conf)
+stanzas() { # the per-MAC stanza files of one folder (not resolv.conf)
   local f
-  for f in "$NET"/*.conf; do
+  for f in "$1"/*.conf; do
     [ -f "$f" ] || continue
     [ "$(basename "$f")" = resolv.conf ] && continue
+    echo "$f"
+  done
+}
+macof() { basename "$1" .conf | tr -d ':' | tr 'A-F' 'a-f'; }
+confs() { # carried stanzas, then the disc's for MACs the takeover did not carry
+  local f carried=" "
+  for f in $(stanzas "$NET"); do
+    carried+="$(macof "$f") "
+    echo "$f"
+  done
+  for f in $(stanzas "$CI"); do
+    case $carried in *" $(macof "$f") "*) continue ;; esac
     echo "$f"
   done
 }
@@ -65,6 +84,17 @@ wired() { # names of wired (Ethernet, not wireless, not virtual) interfaces
   done
 }
 
+if [ "${1:-}" != --fallback ]; then
+  rm -rf "$CI"
+  # the cloud's CD-ROM may still be appearing this early in boot
+  [ -n "${BIA_NET_SYS:-}" ] || udevadm settle --timeout=10 2>/dev/null || true
+  if [ -w /dev/console ] && [ -z "${BIA_NET_SYS:-}" ]; then
+    "$CIDATA" "$CI" 2>/dev/console || true
+  else
+    "$CIDATA" "$CI" || true
+  fi
+fi
+
 if [ "${1:-}" = --fallback ]; then
   i=0
   while [ "$i" -lt 120 ]; do
@@ -82,7 +112,9 @@ if [ "${1:-}" = --fallback ]; then
   exit 0
 fi
 
-# NIC drivers may still be loading: wait up to 15 s for every configured address
+# nothing carried and no disc: a bia installed some other way, nothing to do
+[ -d "$NET" ] || [ -n "$(stanzas "$CI")" ] || exit 0
+
 have_mac() {
   local d
   for d in "$SYS"/*; do
@@ -90,26 +122,39 @@ have_mac() {
   done
   return 1
 }
+all_present() { # every stanza of a folder has its interface here (and there is at least one)
+  local f n=0
+  for f in $(stanzas "$1"); do
+    have_mac "$(macof "$f")" || return 1
+    n=$((n + 1))
+  done
+  [ "$n" -gt 0 ]
+}
+# NIC drivers may still be loading: wait up to 15 s for every carried address, or for
+# the disc's (a restored VM never gets the carried MAC back)
 i=0
 while [ "$i" -lt 30 ]; do
-  missing=0
-  for f in $(confs); do
-    have_mac "$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')" || missing=1
-  done
-  [ "$missing" = 0 ] && break
+  all_present "$NET" && break
+  all_present "$CI" && break
   sleep 0.5
   i=$((i + 1))
 done
+if [ ! -d "$NET" ]; then # no takeover: only a disc that names one of our interfaces changes anything
+  any=0
+  for f in $(stanzas "$CI"); do have_mac "$(macof "$f")" && any=1; done
+  [ "$any" = 1 ] || exit 0
+fi
 
 [ -f "$OUT.bia-orig" ] || { [ -f "$OUT" ] && cp "$OUT" "$OUT.bia-orig"; }
 tmp=$OUT.tmp
 {
-  echo "# written by bia-net from $NET (takeover); the original is $OUT.bia-orig"
+  echo "# written by bia-net from $NET (takeover) and the cloud's cidata disc; the original is $OUT.bia-orig"
   echo "auto lo"
   echo "iface lo inet loopback"
   matched=" "
+  from_disc=0
   for f in $(confs); do
-    mac=$(basename "$f" .conf | tr -d ':' | tr 'A-F' 'a-f')
+    mac=$(macof "$f")
     name=
     for d in "$SYS"/*; do
       if [ -r "$d/address" ] && [ "$(tr -d ':' < "$d/address" | tr 'A-F' 'a-f')" = "$mac" ]; then
@@ -121,9 +166,13 @@ tmp=$OUT.tmp
       echo "# $mac: no interface with this address on this machine"
       continue
     fi
+    case $matched in *" $name "*) echo "# $mac: $name is configured already"; continue ;; esac
     matched+="$name "
     echo
-    echo "# $mac"
+    case $f in
+      "$CI"/*) from_disc=1; echo "# $mac (cidata disc)" ;;
+      *) echo "# $mac" ;;
+    esac
     render "$f" "$name"
   done
   for n in $(wired); do
@@ -134,7 +183,11 @@ tmp=$OUT.tmp
   done
 } > "$tmp"
 mv "$tmp" "$OUT"
-if [ -s "$NET/resolv.conf" ] && [ -z "${BIA_NET_SYS:-}" ]; then
-  cp "$NET/resolv.conf" /etc/resolv.conf
+# name servers: the disc's when an interface is set up from it, else the carried ones
+RES=${BIA_NET_RESOLV:-/etc/resolv.conf}
+if [ "$from_disc" = 1 ] && [ -s "$CI/resolv.conf" ]; then
+  cp "$CI/resolv.conf" "$RES"
+elif [ -s "$NET/resolv.conf" ] && { [ -z "${BIA_NET_SYS:-}" ] || [ -n "${BIA_NET_RESOLV:-}" ]; }; then
+  cp "$NET/resolv.conf" "$RES"
 fi
 exit 0

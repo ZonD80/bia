@@ -21,6 +21,9 @@
 # DEPLOY=1: this computer's `bia-deploy server` takes Ubuntu over through ssh (password login
 # as ubuntu, sudo with that password) instead of cloud-init running takeover.sh.
 # NET=onlink: Ubuntu runs on a static /32 with an on-link gateway before the takeover.
+# STREAM=1 MEM=2G: too little RAM for the image: the rescue streams it over the network the takeover seeded.
+# RESTORE=1 (with NET=onlink): then the disk boots as restored onto a new VM: new MAC, no usable
+# DHCP, a cidata disc naming a new address (Proxmox hosts such as CubePath); bia must answer there.
 # FIRMWARE=bios (ARCH=x86_64): SeaBIOS, the takeover goes through GRUB custom.cfg + grub-reboot.
 #
 # Env: ARCH (arm64), MEM (6G), CPUS (4), XZ_LEVEL (1), DISK_GB (16), TIMEOUT (minutes, 40).
@@ -101,7 +104,7 @@ do_run() {
   [ -z "${DEPLOY:-}" ] || cargo build --release -q -p bia-deploy
   rm -f "$TE/disk.qcow2"
   qemu-img create -q -f qcow2 -F qcow2 -b "$TE/cache/$UBUNTU" "$TE/disk.qcow2" "${DISK_GB:-16}G"
-  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} DEPLOY=${DEPLOY:-} DREAM=${DREAM:-} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
+  ARCH=$ARCH TE=$TE LE=$TE UBUNTU=$UBUNTU LAND=${LAND:-} DEPLOY=${DEPLOY:-} DREAM=${DREAM:-} RESTORE=${RESTORE:-} STREAM=${STREAM:-} MEM=${MEM:-6G} NET=${NET:-dhcp} FIRMWARE=${FIRMWARE:-uefi} python3 tests/e2e/takeover-e2e-drive.py
 }
 
 case ${1:-all} in
